@@ -201,25 +201,19 @@ char* valtype_to_name(ValueType vt) {
 
 /* ===== 接口/trait 系统实现 ===== */
 
-static InterfaceDef* g_interfaces = NULL;
-static int g_ninterfaces = 0;
-static int g_interfaces_cap = 0;
+/* 接口表用红黑树存储，键为接口名，class_name 为 NULL */
+static RBTree* g_interfaces_tree = NULL;
 
-int interface_register(const char* name, void* methods, const char* parent) {
+InterfaceDef* interface_register(const char* name, void* methods, const char* parent) {
+    if(!g_interfaces_tree) g_interfaces_tree = rbtree_create();
     /* 检查是否已存在 */
-    for(int i = 0; i < g_ninterfaces; i++) {
-        if(strcmp(g_interfaces[i].name, name) == 0) {
-            return i; /* 已存在，返回原下标 */
-        }
+    InterfaceDef* existing = (InterfaceDef*)rbtree_find(g_interfaces_tree, NULL, name);
+    if(existing) {
+        return existing; /* 已存在，返回原指针 */
     }
 
-    /* 扩容 */
-    if(g_ninterfaces >= g_interfaces_cap) {
-        g_interfaces_cap = g_interfaces_cap ? g_interfaces_cap * 2 : 16;
-        g_interfaces = (InterfaceDef*)realloc(g_interfaces, (size_t)g_interfaces_cap * sizeof(InterfaceDef));
-    }
-
-    InterfaceDef* idef = &g_interfaces[g_ninterfaces];
+    /* 创建新的接口定义 */
+    InterfaceDef* idef = (InterfaceDef*)calloc(1, sizeof(InterfaceDef));
     idef->name = strdup(name);
     idef->methods = NULL;
     idef->nmethods = 0;
@@ -229,13 +223,10 @@ int interface_register(const char* name, void* methods, const char* parent) {
     int parent_methods_count = 0;
     InterfaceMethod* parent_methods = NULL;
     if(parent) {
-        int pidx = interface_lookup(parent);
-        if(pidx >= 0) {
-            InterfaceDef* pdef = interface_get(pidx);
-            if(pdef && pdef->nmethods > 0) {
-                parent_methods_count = pdef->nmethods;
-                parent_methods = pdef->methods;
-            }
+        InterfaceDef* pdef = interface_lookup(parent);
+        if(pdef && pdef->nmethods > 0) {
+            parent_methods_count = pdef->nmethods;
+            parent_methods = pdef->methods;
         }
     }
 
@@ -266,19 +257,42 @@ int interface_register(const char* name, void* methods, const char* parent) {
         idef->nmethods = total_count;
     }
 
-    return g_ninterfaces++;
+    /* 插入到红黑树 */
+    rbtree_insert(g_interfaces_tree, NULL, name, idef);
+    return idef;
 }
 
-int interface_lookup(const char* name) {
-    for(int i = 0; i < g_ninterfaces; i++) {
-        if(strcmp(g_interfaces[i].name, name) == 0) return i;
-    }
-    return -1;
+InterfaceDef* interface_lookup(const char* name) {
+    if(!g_interfaces_tree || !name) return NULL;
+    return (InterfaceDef*)rbtree_find(g_interfaces_tree, NULL, name);
 }
 
+/* interface_get 已废弃，请使用 interface_lookup 按名称查找 */
 InterfaceDef* interface_get(int idx) {
-    if(idx < 0 || idx >= g_ninterfaces) return NULL;
-    return &g_interfaces[idx];
+    (void)idx;
+    return NULL;
+}
+
+/* interface_foreach 的包装函数上下文 */
+typedef struct {
+    void (*cb)(const char*, InterfaceDef*, void*);
+    void* ud;
+} InterfaceForeachCtx;
+
+/* interface_foreach 的包装函数 */
+static void interface_foreach_wrapper(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    InterfaceForeachCtx* ctx = (InterfaceForeachCtx*)user_data;
+    ctx->cb(method_name, (InterfaceDef*)data, ctx->ud);
+}
+
+/* 遍历所有接口（红黑树中序遍历） */
+void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, void* user_data), void* user_data)
+{
+    if(!g_interfaces_tree) return;
+    InterfaceForeachCtx ctx = { callback, user_data };
+    rbtree_foreach(g_interfaces_tree, interface_foreach_wrapper, &ctx);
 }
 
 /* ===== struct 注册 ===== */
@@ -503,11 +517,8 @@ struct AstNode* class_find_method(const char* class_name, const char* method_nam
 
 int type_implements_interface(const char* type_name, const char* interface_name) {
     /* 鸭子类型检查：类型是否有接口要求的所有方法 */
-    int iidx = interface_lookup(interface_name);
-    if(iidx < 0) return 0; /* 接口不存在 */
-
-    InterfaceDef* idef = interface_get(iidx);
-    if(!idef) return 0;
+    InterfaceDef* idef = interface_lookup(interface_name);
+    if(!idef) return 0; /* 接口不存在 */
 
     /* 查找类型定义 */
     TypeDef* tdef = type_lookup(type_name);
@@ -531,11 +542,8 @@ int type_implements_interface(const char* type_name, const char* interface_name)
 /* 检查 class 是否实现了接口中定义的所有方法（包括继承的方法）
    返回 1=实现了所有方法，0=缺少方法，-1=接口不存在或class不存在 */
 int class_check_interface_implementation(const char* class_name, const char* interface_name) {
-    int iidx = interface_lookup(interface_name);
-    if(iidx < 0) return -1; /* 接口不存在 */
-
-    InterfaceDef* idef = interface_get(iidx);
-    if(!idef) return -1;
+    InterfaceDef* idef = interface_lookup(interface_name);
+    if(!idef) return -1; /* 接口不存在 */
 
     TypeDef* td = class_lookup(class_name);
     if(!td) return -1; /* class不存在 */

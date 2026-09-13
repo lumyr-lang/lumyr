@@ -85,10 +85,13 @@ typedef struct {
     char* parent;            // 父接口名（NULL=无父接口）
 } InterfaceDef;
 
-// 注册 / 查找（返回下标，-1 未找到）
-int interface_register(const char* name, void* methods, const char* parent);
-int interface_lookup(const char* name);
+// 注册 / 查找（返回 InterfaceDef*，NULL 未找到）
+InterfaceDef* interface_register(const char* name, void* methods, const char* parent);
+InterfaceDef* interface_lookup(const char* name);
+/* interface_get 已废弃，请使用 interface_lookup 按名称查找 */
 InterfaceDef* interface_get(int idx);
+/* 遍历所有接口（红黑树中序遍历） */
+void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, void* user_data), void* user_data);
 
 // struct 注册（字段用精确 CastKind 类型）
 TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops);

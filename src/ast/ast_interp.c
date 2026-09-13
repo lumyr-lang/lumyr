@@ -82,9 +82,7 @@ static Value ast_eval_binop(AstNode* node, EvalCtx* ctx, StackFrame* frame)
             if(node->u.bin.op == OP_IMPLEMENTS) {
                 if(rv.type != VAL_STRING) return make_bool(0);
                 const char* iface_name = lumyr_str_cstr(&rv);
-                int iidx = interface_lookup(iface_name);
-                if(iidx < 0) return make_bool(0);
-                InterfaceDef* idef = interface_get(iidx);
+                InterfaceDef* idef = interface_lookup(iface_name);
                 if(!idef) return make_bool(0);
                 /* 检查对象是否有接口要求的所有方法（属性） */
                 if(lv.type != VAL_MAP) return make_bool(0);
