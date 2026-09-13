@@ -1711,6 +1711,20 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(stderr, "codegen: 未定义函数: %s\n", nm);
                     exit(EXIT_FAILURE);
                 }
+                /* 检查函数名是否是某个 class 的方法 */
+                int is_class_method_call = 0;
+                for(int _ti = 0; _ti < type_count(); _ti++) {
+                    TypeDef* _td = type_get(_ti);
+                    if(_td && _td->is_class) {
+                        for(int _mi = 0; _mi < _td->nmethods; _mi++) {
+                            if(strcmp(_td->method_names[_mi], nm) == 0) {
+                                is_class_method_call = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if(is_class_method_call) break;
+                }
                 /* 生成器函数调用：创建状态机实例，包装成 VAL_GENERATOR */
                 if(callee->is_generator) {
                     int gargc = in.b;
@@ -1773,15 +1787,72 @@ void emit_insns(BytecodeFunc* fn)
                     }
                     if(fixed > 0) fprintf(out, ", ");
                     fprintf(out, "__rest);\n");
-                } else {
-                    /* class 方法使用 classname_methodname_paramcount 的命名方式 */
-                    const char* call_func_name = nm;
-                    static char call_class_func_name[256];
-                    if(callee->class_name) {
-                        snprintf(call_class_func_name, sizeof(call_class_func_name), "%s_%s_%d", callee->class_name, nm, callee->param_cnt);
-                        call_func_name = call_class_func_name;
+                } else if(is_class_method_call) {
+                    /* class 方法：动态分派，生成 if-else 链来判断 self 的 __classname__，然后调用相应的方法 */
+                    fprintf(out, "        /* class 方法动态分派 */\n");
+                    fprintf(out, "        Value __self = __args[0];\n");
+                    fprintf(out, "        if(__self.type == VAL_MAP && lumyr_map_has(__self, lumyr_make_string(\"__classname__\"))) {\n");
+                    fprintf(out, "            Value __cn = lumyr_map_get(__self, lumyr_make_string(\"__classname__\"));\n");
+                    fprintf(out, "            if(__cn.type == VAL_STRING) {\n");
+                    /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
+                    int first_class = 1;
+                    for(int _ci = 0; _ci < type_count(); _ci++) {
+                        TypeDef* _ctd = type_get(_ci);
+                        if(_ctd && _ctd->is_class) {
+                            /* 检查这个 class 或其父类是否有这个方法（继承链查找） */
+                            TypeDef* _method_class = NULL;
+                            TypeDef* _cur = _ctd;
+                            while(_cur) {
+                                int has_method = 0;
+                                for(int _mi = 0; _mi < _cur->nmethods; _mi++) {
+                                    if(strcmp(_cur->method_names[_mi], nm) == 0) {
+                                        has_method = 1;
+                                        break;
+                                    }
+                                }
+                                if(has_method) {
+                                    _method_class = _cur;
+                                    break;
+                                }
+                                /* 查找父类 */
+                                if(_cur->parent) {
+                                    _cur = class_lookup(_cur->parent);
+                                } else {
+                                    _cur = NULL;
+                                }
+                            }
+                            if(_method_class) {
+                                if(first_class) {
+                                    fprintf(out, "                if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", _ctd->name);
+                                    first_class = 0;
+                                } else {
+                                    fprintf(out, "                else if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", _ctd->name);
+                                }
+                                /* 生成调用这个 class 方法的代码（可能是父类的方法） */
+                                fprintf(out, "                    __stk[__sp++] = lumyr_func_%s_%s_%d(", _method_class->name, nm, fixed);
+                                for(int k = 0; k < fixed; k++) {
+                                    if(k) fprintf(out, ", ");
+                                    if(k < nbind) fprintf(out, "__args[%d]", k);
+                                    else fprintf(out, "val_none()");
+                                }
+                                fprintf(out, ");\n");
+                                fprintf(out, "                }\n");
+                            }
+                        }
                     }
-                    fprintf(out, "        __stk[__sp++] = lumyr_func_%s(", call_func_name);
+                    /* 如果没有匹配的 class，报错 */
+                    fprintf(out, "                else {\n");
+                    fprintf(out, "                    runtime_error(\"未找到方法: %s\");\n", nm);
+                    fprintf(out, "                }\n");
+                    fprintf(out, "            } else {\n");
+                    fprintf(out, "                runtime_error(\"__classname__ 不是字符串\");\n");
+                    fprintf(out, "            }\n");
+                    fprintf(out, "        } else {\n");
+                    fprintf(out, "            runtime_error(\"self 不是 class 实例\");\n");
+                    fprintf(out, "        }\n");
+                } else {
+                    /* 普通函数调用 */
+                    fprintf(out, "        __stk[__sp++] = lumyr_func_%s(", nm);
                     for(int k = 0; k < fixed; k++) {
                         if(k) fprintf(out, ", ");
                         if(k < nbind) {

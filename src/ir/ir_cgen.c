@@ -832,9 +832,9 @@ void emit_main(BytecodeFunc* main_fn)
         if(td && td->is_class && td->nprops > 0) {
             fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
             fprintf(out, "struct lumyr_class_%s {\n", td->name);
-            /* 如果有父类，父类结构体作为第一个字段 */
+            /* 如果有父类，父类结构体作为第一个字段，字段名为 super */
             if(td->parent) {
-                fprintf(out, "    lumyr_class_%s parent;\n", td->parent);
+                fprintf(out, "    lumyr_class_%s super;\n", td->parent);
             }
             for(int fi = 0; fi < td->nprops; fi++) {
                 int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;

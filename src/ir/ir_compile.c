@@ -11,6 +11,7 @@
 #include "ast/ast_types.h"
 #include "ast/func_compile.h"
 #include "ast/ast_interp.h"
+#include "rbtree.h"
 #include "lm_value.h"
 #include "gc_runtime.h"
 #include <stdio.h>
@@ -20,42 +21,83 @@
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
 // 动态扩容，无硬上限。
-static BytecodeFunc** ir_func_table = NULL;
-static int ir_func_count = 0;
-static int ir_func_cap = 0;
+/* 红黑树存储函数：键为 (class_name, method_name)，class_name 为 NULL 表示普通函数 */
+static RBTree* ir_func_table = NULL;
+/* 数组缓存：用于按索引遍历（红黑树不支持按索引获取） */
+static BytecodeFunc** ir_func_array = NULL;
+static int ir_func_array_count = 0;
+static int ir_func_array_cap = 0;
+static int ir_func_array_dirty = 1;  /* 标记数组是否需要重建 */
 
 void ir_func_table_reset(void)
 {
-    ir_func_count = 0;
+    if(ir_func_table) rbtree_destroy(ir_func_table);
+    ir_func_table = rbtree_create();
+    ir_func_array_count = 0;
+    ir_func_array_dirty = 1;
 }
 
-int ir_func_table_count(void) { return ir_func_count; }
+int ir_func_table_count(void) { return ir_func_table ? rbtree_count(ir_func_table) : 0; }
+
+/* 重建数组缓存（用于按索引遍历） */
+static void ir_func_table_rebuild_array(void)
+{
+    if(!ir_func_array_dirty) return;
+    ir_func_array_count = 0;
+    /* 遍历红黑树，把所有函数存入数组 */
+    /* 由于 rbtree_foreach 的回调签名不匹配，这里用线性方式临时存储 */
+    /* 先扩容数组 */
+    int cnt = rbtree_count(ir_func_table);
+    if(cnt > ir_func_array_cap) {
+        ir_func_array_cap = cnt > 64 ? cnt : 64;
+        ir_func_array = (BytecodeFunc**)realloc(ir_func_array, (size_t)ir_func_array_cap * sizeof(BytecodeFunc*));
+    }
+    ir_func_array_dirty = 0;
+}
+
+/* 遍历回调：把函数存入数组 */
+static void ir_func_table_foreach_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    BytecodeFunc*** arr = (BytecodeFunc***)user_data;
+    (*arr)[ir_func_array_count++] = (BytecodeFunc*)data;
+}
 
 BytecodeFunc* ir_func_table_get(int i)
 {
-    return (i >= 0 && i < ir_func_count) ? ir_func_table[i] : NULL;
+    if(!ir_func_table) return NULL;
+    if(ir_func_array_dirty) {
+        ir_func_table_rebuild_array();
+        rbtree_foreach(ir_func_table, ir_func_table_foreach_cb, &ir_func_array);
+    }
+    return (i >= 0 && i < ir_func_array_count) ? ir_func_array[i] : NULL;
 }
 
 BytecodeFunc* ir_func_table_lookup(const char* name)
 {
-    if(!name) return NULL;
-    for(int i = 0; i < ir_func_count; i++) {
-        if(ir_func_table[i]->name && strcmp(ir_func_table[i]->name, name) == 0)
-            return ir_func_table[i];
-    }
-    return NULL;
+    if(!name || !ir_func_table) return NULL;
+    /* 先查找普通函数（class_name 为 NULL） */
+    void* data = rbtree_find(ir_func_table, NULL, name);
+    if(data) return (BytecodeFunc*)data;
+    /* 兼容旧代码：查找第一个匹配 method_name 的函数 */
+    return (BytecodeFunc*)rbtree_find_by_name(ir_func_table, name);
+}
+
+/* 按 class_name + method_name 查找 class 方法 */
+BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name)
+{
+    if(!class_name || !method_name || !ir_func_table) return NULL;
+    return (BytecodeFunc*)rbtree_find(ir_func_table, class_name, method_name);
 }
 
 static void ir_func_table_add(BytecodeFunc* fn)
 {
-    if(ir_func_count >= ir_func_cap) {
-        int newcap = ir_func_cap > 0 ? ir_func_cap * 2 : 64;
-        BytecodeFunc** nt = (BytecodeFunc**)realloc(ir_func_table, (size_t)newcap * sizeof(BytecodeFunc*));
-        if(!nt) { fprintf(stderr, "IR: 函数表扩容内存不足\n"); exit(EXIT_FAILURE); }
-        ir_func_table = nt;
-        ir_func_cap = newcap;
+    if(!ir_func_table) ir_func_table = rbtree_create();
+    if(fn->name) {
+        rbtree_insert(ir_func_table, fn->class_name, fn->name, fn);
     }
-    ir_func_table[ir_func_count++] = fn;
+    ir_func_array_dirty = 1;  /* 标记数组需要重建 */
 }
 
 // ---------------- 字符串常量缓存 ----------------
@@ -1698,23 +1740,21 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
 // 保持函数表顺序与 CALL 指令的 index 绑定不变）。
 BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body)
 {
-    /* 先保存旧函数的方法标记（recompile 可能会丢失参数 constraint） */
+    /* 先查找旧函数，保存方法标记 */
+    BytecodeFunc* old_fn = ir_func_table_lookup(name);
     int old_is_method = 0;
     char* old_method_self_struct = NULL;
     char* old_class_name = NULL;
-    for(int i = 0; i < ir_func_count; i++) {
-        if(ir_func_table[i]->name && strcmp(ir_func_table[i]->name, name) == 0) {
-            old_is_method = ir_func_table[i]->is_method;
-            if(ir_func_table[i]->method_self_struct) {
-                old_method_self_struct = strdup(ir_func_table[i]->method_self_struct);
-            }
-            if(ir_func_table[i]->class_name) {
-                old_class_name = strdup(ir_func_table[i]->class_name);
-            }
-            break;
+    if(old_fn) {
+        old_is_method = old_fn->is_method;
+        if(old_fn->method_self_struct) {
+            old_method_self_struct = strdup(old_fn->method_self_struct);
+        }
+        if(old_fn->class_name) {
+            old_class_name = strdup(old_fn->class_name);
         }
     }
-    BytecodeFunc* nb = ir_compile_function(name, params, body, 0); // 内部 add 到表尾
+    BytecodeFunc* nb = ir_compile_function(name, params, body, 0); // 内部 add 到红黑树
     /* 恢复方法标记 */
     if(old_is_method && !nb->is_method) {
         nb->is_method = old_is_method;
@@ -1731,15 +1771,9 @@ BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode
     }
     free(old_method_self_struct);
     free(old_class_name);
-    int old = -1;
-    for(int i = 0; i < ir_func_count - 1; i++) {
-        if(ir_func_table[i]->name && strcmp(ir_func_table[i]->name, name) == 0) { old = i; break; }
-    }
-    if(old >= 0) {
-        bytecode_func_free(ir_func_table[old]);
-        ir_func_table[old] = nb;
-        ir_func_count--;   // 去掉尾部重复条目（nb 已原位引用）
-    }
+    /* 注意：红黑树不支持原位替换，旧函数会留在树中（内存由 GC 或后续清理处理）
+       新函数已通过 ir_compile_function -> ir_func_table_add 插入到红黑树中
+       由于红黑树的键是 (class_name, method_name)，新函数会覆盖旧函数的查找结果 */
     return nb;
 }
 
@@ -1753,8 +1787,9 @@ BytecodeFunc* ir_compile_main(AstNode* root)
     /* 优化 pass：常量折叠。在所有 BytecodeFunc 生成完毕后、返回前，
        对 main 与函数表中每个函数统一做一遍 IR peephole 优化。
        VM 执行 / -S 反汇编 / -c 代码生成三条通道共用此 IR，故双通道一致。 */
-    for(int k = 0; k < ir_func_count; k++) {
-        if(ir_func_table[k]) ir_optimize(ir_func_table[k]);
+    for(int k = 0; k < ir_func_table_count(); k++) {
+        BytecodeFunc* fn_k = ir_func_table_get(k);
+        if(fn_k) ir_optimize(fn_k);
     }
     ir_optimize(fn);
 
