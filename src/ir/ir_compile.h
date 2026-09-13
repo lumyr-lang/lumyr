@@ -14,11 +14,11 @@ BytecodeFunc* ir_compile_main(AstNode* root);
 
 // 全局函数表（ir_compile_function / ir_compile_main 注册；ir_cgen 遍历用）
 void ir_func_table_reset(void);
-int ir_func_table_count(void);
-BytecodeFunc* ir_func_table_get(int i);
 BytecodeFunc* ir_func_table_lookup(const char* name);
 /* 按 class_name + method_name 查找 class 方法（红黑树快速查找） */
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name);
+/* 遍历所有函数（红黑树中序遍历） */
+void ir_func_table_foreach(void (*callback)(const char* class_name, const char* method_name, void* data, void* user_data), void* user_data);
 
 // 字符串常量缓存（编译期全局去重，避免重复分配；编译完成后调用 reset 清理）
 void string_cache_reset(void);

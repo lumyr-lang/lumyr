@@ -34,6 +34,13 @@ static void default_basename(const char* path, char* out, int size) {
     if(dot) *dot = '\0';
 }
 
+/* 反汇编回调函数：用于红黑树遍历反汇编所有函数 */
+static void disasm_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name; (void)method_name;
+    bc_disasm((FILE*)user_data, (BytecodeFunc*)data);
+}
+
 int main(int argc, char** argv) {
     int codegen_mode = 0;
     int only_emit_c = 0;
@@ -137,9 +144,8 @@ int main(int argc, char** argv) {
             if(only_emit_c) {
                 // -S：输出字节码指令文本（反汇编）
                 BytecodeFunc* main_fn = ir_compile_main(root);
-                for(int k = 0; k < ir_func_table_count(); k++) {
-                    bc_disasm(stdout, ir_func_table_get(k));
-                }
+                /* 用红黑树遍历反汇编所有函数 */
+                ir_func_table_foreach(disasm_cb, stdout);
                 bc_disasm(stdout, main_fn);
                 bytecode_func_free(main_fn);
                 ret = 0;

@@ -310,12 +310,10 @@ const char* cell_ptr_expr(const char* name)
     return buf;
 }
 
-// 按函数名查函数表索引（用于 lum_wrap_N / RuntimeFunc.entry）
-int func_table_idx(const char* name)
+// 按函数名查找函数（用于 lum_wrap / RuntimeFunc.entry）
+BytecodeFunc* func_table_lookup(const char* name)
 {
-    for(int fi = 0; fi < ir_func_table_count(); fi++)
-        if(strcmp(ir_func_table_get(fi)->name, name) == 0) return fi;
-    return -1;
+    return ir_func_table_lookup(name);
 }
 
 // 判断函数是否为有捕获的 lambda
@@ -732,69 +730,133 @@ void emit_func_def(BytecodeFunc* fn)
     fprintf(out, "}\n\n");
 }
 
+/* emit_func_wraps 的回调函数：用红黑树遍历生成 lum_wrap_<函数名> */
+/* 用于记录已经生成过 wrap 函数的函数名，避免重复定义 */
+#define MAX_WRAP_NAMES 1024
+static char* wrap_names[MAX_WRAP_NAMES];
+static int wrap_name_count = 0;
+
+static int wrap_name_exists(const char* name)
+{
+    for(int i = 0; i < wrap_name_count; i++) {
+        if(strcmp(wrap_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void wrap_name_add(const char* name)
+{
+    if(wrap_name_count < MAX_WRAP_NAMES) {
+        wrap_names[wrap_name_count++] = strdup(name);
+    }
+}
+
+static void emit_func_wrap_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* 避免同名函数重复定义 */
+    if(wrap_name_exists(fn->name)) return;
+    wrap_name_add(fn->name);
+    FILE* out = (FILE*)user_data;
+    int has_caps = lambda_has_captures(fn->name);
+    fprintf(out, "static Value lum_wrap_%s(Value* a, int n, void* __ctx)\n{\n", fn->name);
+    for(int k = 0; k < fn->param_cnt; k++)
+        fprintf(out, "    Value p%d = (n > %d) ? a[%d] : val_none();\n", k, k, k);
+    if(fn->has_variadic) {
+        fprintf(out, "    Value __rest = val_array(n > %d ? n - %d : 0);\n", fn->param_cnt, fn->param_cnt);
+        fprintf(out, "    for(int __k = 0; __k < __rest.v.array->len; __k++) { gc_write_barrier(a[%d + __k]); __rest.v.array->items[__k] = a[%d + __k]; }\n", fn->param_cnt, fn->param_cnt);
+    }
+    if(fn->is_generator) {
+        fprintf(out, "    lumyr_gen_%s* __gen = lumyr_gen_%s_create(", fn->name, fn->name);
+        for(int k = 0; k < fn->param_cnt; k++) {
+            if(k) fprintf(out, ", ");
+            fprintf(out, "p%d", k);
+        }
+        fprintf(out, ");\n");
+        fprintf(out, "    Value __gv; __gv.type = VAL_GENERATOR; __gv.v.generator = (void*)__gen;\n");
+        fprintf(out, "    return __gv;\n}\n\n");
+    } else {
+        fprintf(out, "    Value __wrap_ret = lumyr_func_%s(", fn->name);
+        int total = fn->param_cnt + (fn->has_variadic ? 1 : 0);
+        if(has_caps)
+            fprintf(out, "(Value**)__ctx");
+        for(int k = 0; k < total; k++) {
+            if(has_caps || k) fprintf(out, ", ");
+            if(k < fn->param_cnt) {
+                if(fn->param_is_ref && fn->param_is_ref[k])
+                    fprintf(out, "&p%d", k);
+                else
+                    fprintf(out, "p%d", k);
+            }
+            else {
+                fprintf(out, "__rest");
+            }
+        }
+        fprintf(out, ");\n");
+        for(int k = 0; k < fn->param_cnt; k++) {
+            if(fn->param_is_ref && fn->param_is_ref[k]) {
+                fprintf(out, "    if(n > %d) a[%d] = p%d;\n", k, k, k);
+            }
+        }
+        fprintf(out, "    return __wrap_ret;\n}\n\n");
+    }
+    fprintf(out, "static RuntimeFunc lum_wrap_%s_rf = { (FuncEntry*)lum_wrap_%s, %d, %d, NULL, 0 };\n\n",
+            fn->name, fn->name, fn->param_cnt, fn->has_variadic ? 1 : 0);
+}
+
+/* 回调函数：用于红黑树遍历生成函数原型 */
+static void emit_func_proto_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    emit_func_proto((BytecodeFunc*)data);
+}
+
+/* 回调函数：用于红黑树遍历生成函数定义 */
+static void emit_func_def_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    emit_func_def((BytecodeFunc*)data);
+}
+
+/* 回调函数：用于红黑树遍历生成 lum_wrap_<name> 前置声明 */
+static void emit_wrap_proto_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* 避免同名函数重复声明 */
+    if(wrap_name_exists(fn->name)) return;
+    FILE* out = (FILE*)user_data;
+    fprintf(out, "static Value lum_wrap_%s(Value*, int, void*);\n", fn->name);
+}
+
+/* 回调函数：用于红黑树遍历生成 lum_wrap_<name>_rf 前置声明 */
+static void emit_wrap_rf_proto_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    (void)method_name;
+    BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* 避免同名函数重复声明 */
+    if(wrap_name_exists(fn->name)) return;
+    FILE* out = (FILE*)user_data;
+    fprintf(out, "static RuntimeFunc lum_wrap_%s_rf;\n", fn->name);
+}
+
 // 生成统一签名包装（Value(*)(Value*, int, void*)）与函数表：高阶函数调用入口
-// 第三参数 __ctx：闭包实例传入 captures（Value**）；普通函数传 NULL 并忽略。
 void emit_func_wraps(void)
 {
-    int cnt = ir_func_table_count();
-    for(int i = 0; i < cnt; i++) {
-        BytecodeFunc* fn = ir_func_table_get(i);
-        int has_caps = lambda_has_captures(fn->name);
-        fprintf(out, "static Value lum_wrap_%d(Value* a, int n, void* __ctx)\n{\n", i);
-        for(int k = 0; k < fn->param_cnt; k++)
-            fprintf(out, "    Value p%d = (n > %d) ? a[%d] : val_none();\n", k, k, k);
-        if(fn->has_variadic) {
-            // 变参打包：n - fixed 个尾部实参进数组（动态调用经 wrap 时实参在 a[]）
-            fprintf(out, "    Value __rest = val_array(n > %d ? n - %d : 0);\n", fn->param_cnt, fn->param_cnt);
-            fprintf(out, "    for(int __k = 0; __k < __rest.v.array->len; __k++) { gc_write_barrier(a[%d + __k]); __rest.v.array->items[__k] = a[%d + __k]; }\n", fn->param_cnt, fn->param_cnt);
-        }
-        /* 生成器函数：创建状态机实例，包装成 VAL_GENERATOR */
-        if(fn->is_generator) {
-            fprintf(out, "    lumyr_gen_%s* __gen = lumyr_gen_%s_create(", fn->name, fn->name);
-            for(int k = 0; k < fn->param_cnt; k++) {
-                if(k) fprintf(out, ", ");
-                fprintf(out, "p%d", k);
-            }
-            fprintf(out, ");\n");
-            fprintf(out, "    Value __gv; __gv.type = VAL_GENERATOR; __gv.v.generator = (void*)__gen;\n");
-            fprintf(out, "    return __gv;\n}\n\n");
-        } else {
-            fprintf(out, "    Value __wrap_ret = lumyr_func_%s(", fn->name);
-            int total = fn->param_cnt + (fn->has_variadic ? 1 : 0);
-            if(has_caps)
-                fprintf(out, "(Value**)__ctx");
-            for(int k = 0; k < total; k++) {
-                if(has_caps || k) fprintf(out, ", ");
-                if(k < fn->param_cnt) {
-                    /* ref 参数：传递指针（引用传递） */
-                    if(fn->param_is_ref && fn->param_is_ref[k])
-                        fprintf(out, "&p%d", k);
-                    else
-                        fprintf(out, "p%d", k);
-                }
-                else {
-                    fprintf(out, "__rest");
-                }
-            }
-            fprintf(out, ");\n");
-            /* ref 参数：函数返回后把修改写回 a[] 数组 */
-            for(int k = 0; k < fn->param_cnt; k++) {
-                if(fn->param_is_ref && fn->param_is_ref[k]) {
-                    fprintf(out, "    if(n > %d) a[%d] = p%d;\n", k, k, k);
-                }
-            }
-            fprintf(out, "    return __wrap_ret;\n}\n\n");
-        }
-        /* 静态 RuntimeFunc 包装：GC 扫描 VAL_FUNC 时读取 captures/capture_count，
-         * 直接把 C 函数指针当 RuntimeFunc* 会读到代码字节 → UAF。
-         * 用静态 RuntimeFunc（captures=NULL, capture_count=0）确保 GC 安全跳过。 */
-        fprintf(out, "static RuntimeFunc lum_wrap_%d_rf = { (FuncEntry*)lum_wrap_%d, %d, %d, NULL, 0 };\n\n",
-                i, i, fn->param_cnt, fn->has_variadic ? 1 : 0);
+    /* 重置函数名集合 */
+    for(int i = 0; i < wrap_name_count; i++) {
+        free(wrap_names[i]);
     }
-    fprintf(out, "static Value (*const lumyr_cfunc_tbl[])(Value*, int, void*) = {\n");
-    for(int i = 0; i < cnt; i++)
-        fprintf(out, "    lum_wrap_%d,\n", i);
-    fprintf(out, "};\n\n");
+    wrap_name_count = 0;
+    /* 用红黑树遍历生成所有 lum_wrap_<函数名> */
+    ir_func_table_foreach(emit_func_wrap_cb, out);
+    /* 注意：lumyr_cfunc_tbl 数组不再需要，因为改用函数名直接引用 */
 }
 
 void emit_main(BytecodeFunc* main_fn)
@@ -871,23 +933,15 @@ void emit_main(BytecodeFunc* main_fn)
     // 常见系统头文件已在文件开头 include，覆盖大部分 C 标准库函数
 
     // 函数原型（前向引用/递归）
-    for(int i = 0; i < ir_func_table_count(); i++) {
-        emit_func_proto(ir_func_table_get(i));
-    }
+    ir_func_table_foreach(emit_func_proto_cb, out);
     // 高阶包装前置声明（函数体内 GETFUNC 先于 wraps 定义使用）
-    for(int i = 0; i < ir_func_table_count(); i++) {
-        fprintf(out, "static Value lum_wrap_%d(Value*, int, void*);\n", i);
-    }
-    // RuntimeFunc 包装变量前置声明（GETFUNC 引用 &lum_wrap_N_rf，定义在 emit_func_wraps）
-    for(int i = 0; i < ir_func_table_count(); i++) {
-        fprintf(out, "static RuntimeFunc lum_wrap_%d_rf;\n", i);
-    }
+    ir_func_table_foreach(emit_wrap_proto_cb, out);
+    // RuntimeFunc 包装变量前置声明（GETFUNC 引用 &lum_wrap_<name>_rf，定义在 emit_func_wraps）
+    ir_func_table_foreach(emit_wrap_rf_proto_cb, out);
     fprintf(out, "\n");
 
     // 函数定义
-    for(int i = 0; i < ir_func_table_count(); i++) {
-        emit_func_def(ir_func_table_get(i));
-    }
+    ir_func_table_foreach(emit_func_def_cb, out);
 
     // 高阶函数统一调用包装 + 函数表（VM 端 VAL_FUNC 指向 RuntimeFunc，C 端指向此包装）
     emit_func_wraps();

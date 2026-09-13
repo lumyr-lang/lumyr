@@ -23,55 +23,11 @@
 // 动态扩容，无硬上限。
 /* 红黑树存储函数：键为 (class_name, method_name)，class_name 为 NULL 表示普通函数 */
 static RBTree* ir_func_table = NULL;
-/* 数组缓存：用于按索引遍历（红黑树不支持按索引获取） */
-static BytecodeFunc** ir_func_array = NULL;
-static int ir_func_array_count = 0;
-static int ir_func_array_cap = 0;
-static int ir_func_array_dirty = 1;  /* 标记数组是否需要重建 */
 
 void ir_func_table_reset(void)
 {
     if(ir_func_table) rbtree_destroy(ir_func_table);
     ir_func_table = rbtree_create();
-    ir_func_array_count = 0;
-    ir_func_array_dirty = 1;
-}
-
-int ir_func_table_count(void) { return ir_func_table ? rbtree_count(ir_func_table) : 0; }
-
-/* 重建数组缓存（用于按索引遍历） */
-static void ir_func_table_rebuild_array(void)
-{
-    if(!ir_func_array_dirty) return;
-    ir_func_array_count = 0;
-    /* 遍历红黑树，把所有函数存入数组 */
-    /* 由于 rbtree_foreach 的回调签名不匹配，这里用线性方式临时存储 */
-    /* 先扩容数组 */
-    int cnt = rbtree_count(ir_func_table);
-    if(cnt > ir_func_array_cap) {
-        ir_func_array_cap = cnt > 64 ? cnt : 64;
-        ir_func_array = (BytecodeFunc**)realloc(ir_func_array, (size_t)ir_func_array_cap * sizeof(BytecodeFunc*));
-    }
-    ir_func_array_dirty = 0;
-}
-
-/* 遍历回调：把函数存入数组 */
-static void ir_func_table_foreach_cb(const char* class_name, const char* method_name, void* data, void* user_data)
-{
-    (void)class_name;
-    (void)method_name;
-    BytecodeFunc*** arr = (BytecodeFunc***)user_data;
-    (*arr)[ir_func_array_count++] = (BytecodeFunc*)data;
-}
-
-BytecodeFunc* ir_func_table_get(int i)
-{
-    if(!ir_func_table) return NULL;
-    if(ir_func_array_dirty) {
-        ir_func_table_rebuild_array();
-        rbtree_foreach(ir_func_table, ir_func_table_foreach_cb, &ir_func_array);
-    }
-    return (i >= 0 && i < ir_func_array_count) ? ir_func_array[i] : NULL;
 }
 
 BytecodeFunc* ir_func_table_lookup(const char* name)
@@ -91,13 +47,18 @@ BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* met
     return (BytecodeFunc*)rbtree_find(ir_func_table, class_name, method_name);
 }
 
+/* 遍历所有函数（红黑树中序遍历） */
+void ir_func_table_foreach(void (*callback)(const char* class_name, const char* method_name, void* data, void* user_data), void* user_data)
+{
+    if(ir_func_table) rbtree_foreach(ir_func_table, callback, user_data);
+}
+
 static void ir_func_table_add(BytecodeFunc* fn)
 {
     if(!ir_func_table) ir_func_table = rbtree_create();
     if(fn->name) {
         rbtree_insert(ir_func_table, fn->class_name, fn->name, fn);
     }
-    ir_func_array_dirty = 1;  /* 标记数组需要重建 */
 }
 
 // ---------------- 字符串常量缓存 ----------------
@@ -1777,6 +1738,13 @@ BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode
     return nb;
 }
 
+/* 优化回调函数：用于红黑树遍历优化所有函数 */
+static void optimize_cb(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name; (void)method_name; (void)user_data;
+    ir_optimize((BytecodeFunc*)data);
+}
+
 BytecodeFunc* ir_compile_main(AstNode* root)
 {
     BytecodeFunc* fn = bytecode_func_new(NULL, 1);
@@ -1787,10 +1755,8 @@ BytecodeFunc* ir_compile_main(AstNode* root)
     /* 优化 pass：常量折叠。在所有 BytecodeFunc 生成完毕后、返回前，
        对 main 与函数表中每个函数统一做一遍 IR peephole 优化。
        VM 执行 / -S 反汇编 / -c 代码生成三条通道共用此 IR，故双通道一致。 */
-    for(int k = 0; k < ir_func_table_count(); k++) {
-        BytecodeFunc* fn_k = ir_func_table_get(k);
-        if(fn_k) ir_optimize(fn_k);
-    }
+    /* 用红黑树遍历优化所有函数 */
+    ir_func_table_foreach(optimize_cb, NULL);
     ir_optimize(fn);
 
     /* 编译完成：清理字符串常量缓存（长字符串已 gc_pin，由 GC 回收） */

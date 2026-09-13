@@ -74,7 +74,7 @@ extern const char* cvar_ptr(const char* name);
 extern const char* cell_ptr_expr(const char* name);
 
 /* 函数表 */
-extern int func_table_idx(const char* name);
+extern BytecodeFunc* func_table_lookup(const char* name);
 
 /* 常量发射 */
 extern void emit_c_string_lit(FILE* f, const char* s);

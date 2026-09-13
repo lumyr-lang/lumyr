@@ -299,10 +299,7 @@ void emit_insns(BytecodeFunc* fn)
                             fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(vnm));
                         } else if(val_in.op == OPC_GETFUNC) {
                             const char* vnm = (val_in.a >= 0 && val_in.a < fn->sym_cnt) ? fn->syms[val_in.a] : NULL;
-                            int fidx = -1;
-                            for(int fi = 0; fi < ir_func_table_count(); fi++)
-                                if(strcmp(ir_func_table_get(fi)->name, vnm) == 0) { fidx = fi; break; }
-                            fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%d_rf; __stk[__sp++] = __f; }\n", fidx);
+                            fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%s_rf; __stk[__sp++] = __f; }\n", vnm ? vnm : "unknown");
                         } else {
                             /* 不支持的值表达式类型：回退到正常处理（不应发生，分析阶段已过滤） */
                             fprintf(out, "    __stk[__sp++] = val_none(); /* scalar-repl fallback */\n");
@@ -344,11 +341,8 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, ";\n");
                 break;
             case OPC_GETFUNC: {
-                int fidx = -1;
-                for(int fi = 0; fi < ir_func_table_count(); fi++)
-                    if(strcmp(ir_func_table_get(fi)->name, nm) == 0) { fidx = fi; break; }
-                if(fidx < 0) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
-                fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%d_rf; __stk[__sp++] = __f; }\n", fidx);
+                if(!ir_func_table_lookup(nm)) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
+                fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%s_rf; __stk[__sp++] = __f; }\n", nm);
                 break;
             }
             case OPC_MKCLOSURE: {
@@ -356,14 +350,13 @@ void emit_insns(BytecodeFunc* fn)
                  * captures 为 Value** cell 指针数组（末尾 NULL 哨兵），capture_count=-2。
                  * cell 指针来源：本函数装箱局部/参数 → lmloc_<name>；
                  *               本 lambda 自身透传的外层捕获 → __caps[idx]。 */
-                int fidx = func_table_idx(nm);
-                if(fidx < 0) {
+                BytecodeFunc* lfn = ir_func_table_lookup(nm);
+                if(!lfn) {
                     fprintf(stderr, "codegen: 未定义闭包函数: %s\n", nm);
                     exit(EXIT_FAILURE);
                 }
-                BytecodeFunc* lfn = ir_func_table_get(fidx);
                 int ncap = lambda_capture_count(nm);
-                fprintf(out, "    { /* closure %s (fidx=%d) */\n", nm, fidx);
+                fprintf(out, "    { /* closure %s */\n", nm);
                 fprintf(out, "        int __ncap = %d;\n", ncap);
                 fprintf(out, "        Value** __cc = (Value**)malloc(sizeof(Value*) * (%d + 1));\n", ncap);
                 for(int j = 0; j < ncap; j++) {
@@ -372,7 +365,7 @@ void emit_insns(BytecodeFunc* fn)
                 }
                 fprintf(out, "        __cc[%d] = NULL;\n", ncap);
                 fprintf(out, "        RuntimeFunc* __rf = (RuntimeFunc*)malloc(sizeof(RuntimeFunc));\n");
-                fprintf(out, "        __rf->entry = (FuncEntry*)lum_wrap_%d;\n", fidx);
+                fprintf(out, "        __rf->entry = (FuncEntry*)lum_wrap_%s;\n", nm);
                 fprintf(out, "        __rf->param_count = %d;\n", lfn->param_cnt);
                 fprintf(out, "        __rf->has_variadic = %d;\n", lfn->has_variadic ? 1 : 0);
                 fprintf(out, "        __rf->captures = (Value*)__cc;\n");
