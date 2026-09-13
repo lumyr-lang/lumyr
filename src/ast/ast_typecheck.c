@@ -14,28 +14,14 @@
 // ---------------- 作用域快照 ----------------
 // static_sym 是全局单表；检查函数体前保存、检查后恢复，
 // 使函数参数/局部变量不泄漏到顶层，且参数能遮蔽同名全局。
-static SymStaticEntry* saved_table = NULL;
-static int saved_count = 0;
-static int saved_cap = 0;
 
-/* 作用域快照：保存当前表（仅前 count 项），检查函数体后恢复。
- * 嵌套深度无硬上限：每次进入分配 saved_count 项副本。 */
+/* 作用域快照：保存当前作用域层级，检查函数体后恢复。 */
 static void sym_save(void) {
-    saved_count = static_sym_count;
-    if(saved_cap < saved_count) {
-        SymStaticEntry* nt = (SymStaticEntry*)realloc(saved_table, (size_t)saved_count * sizeof(SymStaticEntry));
-        if(!nt) { fprintf(stderr, "作用域快照内存不足\n"); exit(EXIT_FAILURE); }
-        saved_table = nt;
-        saved_cap = saved_count;
-    }
-    memcpy(saved_table, static_sym_table, (size_t)saved_count * sizeof(SymStaticEntry));
+    static_sym_save();
 }
 
 static void sym_restore(void) {
-    for (int i = saved_count; i < static_sym_count; ++i) {
-        free(static_sym_table[i].name);
-    }
-    static_sym_count = saved_count;
+    static_sym_restore();
 }
 
 // 函数体递归深度：>0 表示正在检查某函数体，其内的嵌套 func 定义跳过

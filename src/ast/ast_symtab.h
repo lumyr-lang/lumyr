@@ -5,20 +5,19 @@
 
 #define STATIC_SYM_INITIAL_CAP 128
 
-typedef struct {
+typedef struct SymStaticEntry {
     char* name;
     ValueType ty;
+    struct SymStaticEntry* next;  /* 符号栈，用于变量遮蔽 */
 } SymStaticEntry;
 
-/* 静态符号表：动态扩容，无硬上限 */
-extern SymStaticEntry* static_sym_table;
-extern int static_sym_count;
-extern int static_sym_cap;
-
-void static_sym_ensure(int need);
-
+/* 静态符号表：用红黑树存储 */
 void static_sym_reset(void);
 int static_sym_put(const char* name, ValueType ty);
 int static_sym_get(const char* name, ValueType* out_ty);
+
+/* 作用域保存/恢复 */
+void static_sym_save(void);
+void static_sym_restore(void);
 
 #endif

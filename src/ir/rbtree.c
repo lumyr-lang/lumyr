@@ -197,10 +197,127 @@ void rbtree_destroy(RBTree* tree) {
     free(tree);
 }
 
-/* 删除节点（简化实现，暂不使用） */
+/* 查找节点（返回节点指针，用于删除操作） */
+static RBNode* rbtree_find_node(RBTree* tree, const char* class_name, const char* method_name) {
+    RBNode* x = tree->root;
+    while(x != tree->nil) {
+        int cmp = rbtree_compare(class_name, method_name, x->class_name, x->method_name);
+        if(cmp == 0) return x;
+        else if(cmp < 0) x = x->left;
+        else x = x->right;
+    }
+    return NULL;
+}
+
+/* 查找最小值节点 */
+static RBNode* rbtree_minimum(RBTree* tree, RBNode* x) {
+    while(x->left != tree->nil) x = x->left;
+    return x;
+}
+
+/* 移植节点（用 v 替换 u） */
+static void rbtree_transplant(RBTree* tree, RBNode* u, RBNode* v) {
+    if(u->parent == tree->nil) tree->root = v;
+    else if(u == u->parent->left) u->parent->left = v;
+    else u->parent->right = v;
+    v->parent = u->parent;
+}
+
+/* 删除修复 */
+static void rbtree_delete_fixup(RBTree* tree, RBNode* x) {
+    while(x != tree->root && x->color == BLACK) {
+        if(x == x->parent->left) {
+            RBNode* w = x->parent->right;
+            if(w->color == RED) {
+                w->color = BLACK;
+                x->parent->color = RED;
+                rbtree_left_rotate(tree, x->parent);
+                w = x->parent->right;
+            }
+            if(w->left->color == BLACK && w->right->color == BLACK) {
+                w->color = RED;
+                x = x->parent;
+            } else {
+                if(w->right->color == BLACK) {
+                    w->left->color = BLACK;
+                    w->color = RED;
+                    rbtree_right_rotate(tree, w);
+                    w = x->parent->right;
+                }
+                w->color = x->parent->color;
+                x->parent->color = BLACK;
+                w->right->color = BLACK;
+                rbtree_left_rotate(tree, x->parent);
+                x = tree->root;
+            }
+        } else {
+            RBNode* w = x->parent->left;
+            if(w->color == RED) {
+                w->color = BLACK;
+                x->parent->color = RED;
+                rbtree_right_rotate(tree, x->parent);
+                w = x->parent->left;
+            }
+            if(w->right->color == BLACK && w->left->color == BLACK) {
+                w->color = RED;
+                x = x->parent;
+            } else {
+                if(w->left->color == BLACK) {
+                    w->right->color = BLACK;
+                    w->color = RED;
+                    rbtree_left_rotate(tree, w);
+                    w = x->parent->left;
+                }
+                w->color = x->parent->color;
+                x->parent->color = BLACK;
+                w->left->color = BLACK;
+                rbtree_right_rotate(tree, x->parent);
+                x = tree->root;
+            }
+        }
+    }
+    x->color = BLACK;
+}
+
+/* 删除节点 */
 void rbtree_delete(RBTree* tree, const char* class_name, const char* method_name) {
-    /* 暂不实现，当前项目不需要删除操作 */
-    (void)tree;
-    (void)class_name;
-    (void)method_name;
+    RBNode* z = rbtree_find_node(tree, class_name, method_name);
+    if(!z) return;  /* 节点不存在 */
+
+    RBNode* y = z;
+    RBNode* x;
+    int y_original_color = y->color;
+
+    if(z->left == tree->nil) {
+        x = z->right;
+        rbtree_transplant(tree, z, z->right);
+    } else if(z->right == tree->nil) {
+        x = z->left;
+        rbtree_transplant(tree, z, z->left);
+    } else {
+        y = rbtree_minimum(tree, z->right);
+        y_original_color = y->color;
+        x = y->right;
+        if(y->parent == z) {
+            x->parent = y;
+        } else {
+            rbtree_transplant(tree, y, y->right);
+            y->right = z->right;
+            y->right->parent = y;
+        }
+        rbtree_transplant(tree, z, y);
+        y->left = z->left;
+        y->left->parent = y;
+        y->color = z->color;
+    }
+
+    if(y_original_color == BLACK) {
+        rbtree_delete_fixup(tree, x);
+    }
+
+    /* 释放节点内存（不释放 data，由调用方负责） */
+    if(z->class_name) free(z->class_name);
+    if(z->method_name) free(z->method_name);
+    free(z);
+    tree->count--;
 }
