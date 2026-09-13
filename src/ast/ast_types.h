@@ -36,7 +36,7 @@ typedef struct {
 } TypeDef;
 
 /* class 注册（属性用 ValueType 类型） */
-int class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces);
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -53,11 +53,14 @@ void* class_get_constructor_func(const char* class_name);
 /* 前向声明 AstNode */
 struct AstNode;
 
-// 注册 / 查找（返回下标，-1 未找到）
-int type_register(const char* name, char** props, ValueType* ptypes, int nprops, char** generic_params, int generic_param_count, char** interfaces, int ninterfaces);
-int type_lookup(const char* name);
+// 注册 / 查找（返回 TypeDef*，NULL 未找到）
+TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int nprops, char** generic_params, int generic_param_count, char** interfaces, int ninterfaces);
+TypeDef* type_lookup(const char* name);
+/* type_get 已废弃，请使用 type_lookup 按名称查找 */
 TypeDef* type_get(int idx);
 int type_count(void);
+/* 遍历所有类型（红黑树中序遍历） */
+void type_foreach(void (*callback)(const char* name, TypeDef* td, void* user_data), void* user_data);
 
 // 属性类型名（string/int/double/bool/char/ascii/byte）→ ValueType；未知返回 VAL_NONE
 ValueType type_name_to_valtype(const char* tname);
@@ -88,7 +91,7 @@ int interface_lookup(const char* name);
 InterfaceDef* interface_get(int idx);
 
 // struct 注册（字段用精确 CastKind 类型）
-int struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops);
+TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops);
 // 查找是否是 struct（返回 TypeDef* 或 NULL）
 TypeDef* struct_lookup(const char* name);
 // 添加 struct 方法

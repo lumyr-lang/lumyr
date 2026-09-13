@@ -1,103 +1,103 @@
 // ast_types.c —— type 声明类型表（编译期全局注册）
 #include "ast_types.h"
 #include "ir/ir_compile.h"
+#include "ir/rbtree.h"
 #include "ast_node.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "func_compile.h"
 
-static TypeDef* g_types = NULL;
-static int g_types_n = 0;
-static int g_types_cap = 0;
+/* 类型表用红黑树存储，键为类型名，class_name 为 NULL */
+static RBTree* g_types_tree = NULL;
 
-int type_register(const char* name, char** props, ValueType* ptypes, int nprops, char** generic_params, int generic_param_count, char** interfaces, int ninterfaces)
+TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int nprops, char** generic_params, int generic_param_count, char** interfaces, int ninterfaces)
 {
+    if(!g_types_tree) g_types_tree = rbtree_create();
     // 重名：覆盖（后声明优先，与变量赋值一致）
-    int i = type_lookup(name);
-    if(i < 0) {
-        if(g_types_n >= g_types_cap) {
-            int nc = g_types_cap > 0 ? g_types_cap * 2 : 8;
-            TypeDef* nt = (TypeDef*)realloc(g_types, (size_t)nc * sizeof(TypeDef));
-            if(!nt) { fprintf(stderr, "type 表扩容内存不足\n"); exit(EXIT_FAILURE); }
-            g_types = nt;
-            g_types_cap = nc;
-        }
-        i = g_types_n++;
-        g_types[i].name = strdup(name);
-        g_types[i].props = NULL;
-        g_types[i].ptypes = NULL;
-        g_types[i].nprops = 0;
-        g_types[i].generic_params = NULL;
-        g_types[i].generic_param_count = 0;
-        g_types[i].interfaces = NULL;
-        g_types[i].ninterfaces = 0;
-        g_types[i].is_struct = 0;
-        g_types[i].is_class = 0;
-        g_types[i].parent = NULL;
-        g_types[i].field_cast_kinds = NULL;
-        g_types[i].field_struct_names = NULL;
-        g_types[i].field_offsets = NULL;
-        g_types[i].method_names = NULL;
-        g_types[i].method_nodes = NULL;
-        g_types[i].nmethods = 0;
+    TypeDef* td = (TypeDef*)rbtree_find(g_types_tree, NULL, name);
+    if(!td) {
+        td = (TypeDef*)calloc(1, sizeof(TypeDef));
+        td->name = strdup(name);
+        rbtree_insert(g_types_tree, NULL, name, td);
     }
     // 释放旧属性（重声明覆盖）
-    if(g_types[i].props) {
-        for(int k = 0; k < g_types[i].nprops; k++) free(g_types[i].props[k]);
-        free(g_types[i].props);
-        free(g_types[i].ptypes);
+    if(td->props) {
+        for(int k = 0; k < td->nprops; k++) free(td->props[k]);
+        free(td->props);
+        free(td->ptypes);
     }
-    if(g_types[i].generic_params) {
-        for(int k = 0; k < g_types[i].generic_param_count; k++) free(g_types[i].generic_params[k]);
-        free(g_types[i].generic_params);
+    if(td->generic_params) {
+        for(int k = 0; k < td->generic_param_count; k++) free(td->generic_params[k]);
+        free(td->generic_params);
     }
-    if(g_types[i].interfaces) {
-        for(int k = 0; k < g_types[i].ninterfaces; k++) free(g_types[i].interfaces[k]);
-        free(g_types[i].interfaces);
+    if(td->interfaces) {
+        for(int k = 0; k < td->ninterfaces; k++) free(td->interfaces[k]);
+        free(td->interfaces);
     }
-    if(g_types[i].field_cast_kinds) free(g_types[i].field_cast_kinds);
-    if(g_types[i].field_offsets) free(g_types[i].field_offsets);
-    g_types[i].props = (char**)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(char*));
-    g_types[i].ptypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
+    if(td->field_cast_kinds) free(td->field_cast_kinds);
+    if(td->field_offsets) free(td->field_offsets);
+    td->props = (char**)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(char*));
+    td->ptypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
     for(int k = 0; k < nprops; k++) {
-        g_types[i].props[k] = strdup(props[k]);
-        g_types[i].ptypes[k] = ptypes[k];
+        td->props[k] = strdup(props[k]);
+        td->ptypes[k] = ptypes[k];
     }
-    g_types[i].nprops = nprops;
+    td->nprops = nprops;
     // 泛型参数
     if(generic_params && generic_param_count > 0) {
-        g_types[i].generic_params = (char**)malloc((size_t)generic_param_count * sizeof(char*));
+        td->generic_params = (char**)malloc((size_t)generic_param_count * sizeof(char*));
         for(int k = 0; k < generic_param_count; k++) {
-            g_types[i].generic_params[k] = strdup(generic_params[k]);
+            td->generic_params[k] = strdup(generic_params[k]);
         }
-        g_types[i].generic_param_count = generic_param_count;
+        td->generic_param_count = generic_param_count;
     } else {
-        g_types[i].generic_params = NULL;
-        g_types[i].generic_param_count = 0;
-        g_types[i].interfaces = NULL;
-        g_types[i].ninterfaces = 0;
+        td->generic_params = NULL;
+        td->generic_param_count = 0;
+        td->interfaces = NULL;
+        td->ninterfaces = 0;
     }
-    return i;
+    return td;
 }
 
-int type_lookup(const char* name)
+TypeDef* type_lookup(const char* name)
 {
-    for(int i = 0; i < g_types_n; i++) {
-        if(strcmp(g_types[i].name, name) == 0) return i;
-    }
-    return -1;
+    if(!g_types_tree || !name) return NULL;
+    return (TypeDef*)rbtree_find(g_types_tree, NULL, name);
 }
 
+/* type_get 已废弃，请使用 type_lookup 按名称查找 */
 TypeDef* type_get(int idx)
 {
-    if(idx < 0 || idx >= g_types_n) return NULL;
-    return &g_types[idx];
+    (void)idx;
+    return NULL;
 }
 
 int type_count(void)
 {
-    return g_types_n;
+    return g_types_tree ? rbtree_count(g_types_tree) : 0;
+}
+
+/* type_foreach 的包装函数上下文 */
+typedef struct {
+    void (*cb)(const char*, TypeDef*, void*);
+    void* ud;
+} TypeForeachCtx;
+
+/* type_foreach 的包装函数 */
+static void type_foreach_wrapper(const char* class_name, const char* method_name, void* data, void* user_data)
+{
+    (void)class_name;
+    TypeForeachCtx* ctx = (TypeForeachCtx*)user_data;
+    ctx->cb(method_name, (TypeDef*)data, ctx->ud);
+}
+
+/* 遍历所有类型（红黑树中序遍历） */
+void type_foreach(void (*callback)(const char* name, TypeDef* td, void* user_data), void* user_data)
+{
+    if(!g_types_tree) return;
+    TypeForeachCtx ctx = { callback, user_data };
+    rbtree_foreach(g_types_tree, type_foreach_wrapper, &ctx);
 }
 
 ValueType type_name_to_valtype(const char* tname)
@@ -282,34 +282,34 @@ InterfaceDef* interface_get(int idx) {
 }
 
 /* ===== struct 注册 ===== */
-int struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops)
+TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops)
 {
     // 先注册为普通 type（用 ValueType，从 CastKind 转换）
     ValueType* vtypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
     for(int k = 0; k < nprops; k++) {
         vtypes[k] = castkind_to_valtype(cast_kinds[k]);
     }
-    int idx = type_register(name, props, vtypes, nprops, NULL, 0, NULL, 0);
+    TypeDef* td = type_register(name, props, vtypes, nprops, NULL, 0, NULL, 0);
     free(vtypes);
 
     // 标记为 struct 并保存精确 CastKind 类型
-    g_types[idx].is_struct = 1;
-    g_types[idx].field_cast_kinds = (int*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(int));
-    g_types[idx].field_struct_names = (char**)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(char*));
+    td->is_struct = 1;
+    td->field_cast_kinds = (int*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(int));
+    td->field_struct_names = (char**)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(char*));
     for(int k = 0; k < nprops; k++) {
-        g_types[idx].field_cast_kinds[k] = cast_kinds[k];
+        td->field_cast_kinds[k] = cast_kinds[k];
         if(struct_names && struct_names[k]) {
-            g_types[idx].field_struct_names[k] = strdup(struct_names[k]);
+            td->field_struct_names[k] = strdup(struct_names[k]);
         }
     }
-    g_types[idx].field_offsets = NULL; // 编译通道计算偏移时填充
-    g_types[idx].method_names = NULL;
-    g_types[idx].method_nodes = NULL;
-    g_types[idx].method_funcs = NULL;
-    g_types[idx].nmethods = 0;
-    g_types[idx].constructor = NULL;
-    g_types[idx].constructor_func = NULL;
-    return idx;
+    td->field_offsets = NULL; // 编译通道计算偏移时填充
+    td->method_names = NULL;
+    td->method_nodes = NULL;
+    td->method_funcs = NULL;
+    td->nmethods = 0;
+    td->constructor = NULL;
+    td->constructor_func = NULL;
+    return td;
 }
 
 // 添加 struct 方法
@@ -341,14 +341,14 @@ struct AstNode* struct_find_method(const char* struct_name, const char* method_n
 // 查找是否是 struct（返回 TypeDef* 或 NULL）
 TypeDef* struct_lookup(const char* name)
 {
-    int idx = type_lookup(name);
-    if(idx < 0) return NULL;
-    if(!g_types[idx].is_struct) return NULL;
-    return &g_types[idx];
+    TypeDef* td = type_lookup(name);
+    if(!td) return NULL;
+    if(!td->is_struct) return NULL;
+    return td;
 }
 
 /* ===== class 注册 ===== */
-int class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
@@ -356,9 +356,8 @@ int class_register(const char* name, char** props, ValueType* ptypes, int nprops
     int merged_nprops = nprops;
 
     if(parent) {
-        int parent_idx = type_lookup(parent);
-        if(parent_idx >= 0) {
-            TypeDef* parent_td = &g_types[parent_idx];
+        TypeDef* parent_td = type_lookup(parent);
+        if(parent_td) {
             int parent_nprops = parent_td->nprops;
             if(parent_nprops > 0) {
                 // 分配合并后的数组
@@ -384,27 +383,27 @@ int class_register(const char* name, char** props, ValueType* ptypes, int nprops
     if(interfaces) {
         while(interfaces[nifaces]) nifaces++;
     }
-    int idx = type_register(name, merged_props, merged_ptypes, merged_nprops, NULL, 0, interfaces, nifaces);
+    TypeDef* td = type_register(name, merged_props, merged_ptypes, merged_nprops, NULL, 0, interfaces, nifaces);
 
     // 标记为 class 并保存父类
-    g_types[idx].is_class = 1;
-    g_types[idx].parent = parent ? strdup(parent) : NULL;
-    g_types[idx].method_names = NULL;
-    g_types[idx].method_nodes = NULL;
-    g_types[idx].method_funcs = NULL;
-    g_types[idx].nmethods = 0;
-    g_types[idx].constructor = NULL;
-    g_types[idx].constructor_func = NULL;
-    return idx;
+    td->is_class = 1;
+    td->parent = parent ? strdup(parent) : NULL;
+    td->method_names = NULL;
+    td->method_nodes = NULL;
+    td->method_funcs = NULL;
+    td->nmethods = 0;
+    td->constructor = NULL;
+    td->constructor_func = NULL;
+    return td;
 }
 
 // 查找是否是 class（返回 TypeDef* 或 NULL）
 TypeDef* class_lookup(const char* name)
 {
-    int idx = type_lookup(name);
-    if(idx < 0) return NULL;
-    if(!g_types[idx].is_class) return NULL;
-    return &g_types[idx];
+    TypeDef* td = type_lookup(name);
+    if(!td) return NULL;
+    if(!td->is_class) return NULL;
+    return td;
 }
 
 // 添加 class 方法（同时编译为 RuntimeFunc 存储）
@@ -511,11 +510,8 @@ int type_implements_interface(const char* type_name, const char* interface_name)
     if(!idef) return 0;
 
     /* 查找类型定义 */
-    int tidx = type_lookup(type_name);
-    if(tidx < 0) return 0; /* 类型不存在 */
-
-    TypeDef* tdef = type_get(tidx);
-    if(!tdef) return 0;
+    TypeDef* tdef = type_lookup(type_name);
+    if(!tdef) return 0; /* 类型不存在 */
 
     /* 检查类型是否有接口要求的所有方法（属性） */
     for(int i = 0; i < idef->nmethods; i++) {

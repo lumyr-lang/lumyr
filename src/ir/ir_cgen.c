@@ -859,6 +859,53 @@ void emit_func_wraps(void)
     /* 注意：lumyr_cfunc_tbl 数组不再需要，因为改用函数名直接引用 */
 }
 
+/* 生成 C struct 定义的回调函数 */
+static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    FILE* out = (FILE*)user_data;
+    if(td && td->is_struct && td->nprops > 0) {
+        fprintf(out, "typedef struct {\n");
+        for(int fi = 0; fi < td->nprops; fi++) {
+            int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
+            const char* ftype;
+            if(td->field_struct_names && td->field_struct_names[fi]) {
+                /* 嵌套 struct 字段，使用对应的 C struct 类型 */
+                static char sname[256];
+                snprintf(sname, sizeof(sname), "lumyr_struct_%s", td->field_struct_names[fi]);
+                ftype = sname;
+            } else {
+                ftype = castkind_to_c_type(ck);
+                if(!ftype) ftype = "int64_t";
+            }
+            fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
+        }
+        fprintf(out, "} lumyr_struct_%s;\n\n", td->name);
+    }
+}
+
+/* 生成 C class 结构体定义的回调函数 */
+static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    FILE* out = (FILE*)user_data;
+    if(td && td->is_class && td->nprops > 0) {
+        fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
+        fprintf(out, "struct lumyr_class_%s {\n", td->name);
+        /* 如果有父类，父类结构体作为第一个字段，字段名为 super */
+        if(td->parent) {
+            fprintf(out, "    lumyr_class_%s super;\n", td->parent);
+        }
+        for(int fi = 0; fi < td->nprops; fi++) {
+            int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
+            const char* ftype = castkind_to_c_type(ck);
+            if(!ftype) ftype = "int64_t";
+            fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
+        }
+        fprintf(out, "};\n\n");
+    }
+}
+
 void emit_main(BytecodeFunc* main_fn)
 {
     g_main_fn = main_fn;  // 保存 main 函数，用于全局变量类型查找
@@ -866,47 +913,10 @@ void emit_main(BytecodeFunc* main_fn)
     emit_gen_wrapper_support();
 
     // 生成 C struct 定义（所有已注册的 struct 类型）
-    for(int si = 0; si < type_count(); si++) {
-        TypeDef* td = type_get(si);
-        if(td && td->is_struct && td->nprops > 0) {
-            fprintf(out, "typedef struct {\n");
-            for(int fi = 0; fi < td->nprops; fi++) {
-                int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
-                const char* ftype;
-                if(td->field_struct_names && td->field_struct_names[fi]) {
-                    /* 嵌套 struct 字段，使用对应的 C struct 类型 */
-                    static char sname[256];
-                    snprintf(sname, sizeof(sname), "lumyr_struct_%s", td->field_struct_names[fi]);
-                    ftype = sname;
-                } else {
-                    ftype = castkind_to_c_type(ck);
-                    if(!ftype) ftype = "int64_t";
-                }
-                fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
-            }
-            fprintf(out, "} lumyr_struct_%s;\n\n", td->name);
-        }
-    }
+    type_foreach(emit_struct_def_cb, out);
 
     // 生成 C class 结构体定义（所有已注册的 class 类型）
-    for(int si = 0; si < type_count(); si++) {
-        TypeDef* td = type_get(si);
-        if(td && td->is_class && td->nprops > 0) {
-            fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
-            fprintf(out, "struct lumyr_class_%s {\n", td->name);
-            /* 如果有父类，父类结构体作为第一个字段，字段名为 super */
-            if(td->parent) {
-                fprintf(out, "    lumyr_class_%s super;\n", td->parent);
-            }
-            for(int fi = 0; fi < td->nprops; fi++) {
-                int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
-                const char* ftype = castkind_to_c_type(ck);
-                if(!ftype) ftype = "int64_t";
-                fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
-            }
-            fprintf(out, "};\n\n");
-        }
-    }
+    type_foreach(emit_class_def_cb, out);
 
     // 全局变量：main 指令流里的全部变量引用
     memset(&g_globals, 0, sizeof(g_globals));

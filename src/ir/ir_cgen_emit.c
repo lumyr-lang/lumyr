@@ -4,6 +4,83 @@
  */
 #include "ir_cgen_internal.h"
 
+/* 用于检查函数名是否是某个 class 的方法的回调函数 */
+typedef struct {
+    const char* method_name;
+    int found;
+} ClassMethodCheckCtx;
+
+static void check_class_method_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    ClassMethodCheckCtx* ctx = (ClassMethodCheckCtx*)user_data;
+    if(ctx->found) return;
+    if(td && td->is_class) {
+        for(int i = 0; i < td->nmethods; i++) {
+            if(strcmp(td->method_names[i], ctx->method_name) == 0) {
+                ctx->found = 1;
+                return;
+            }
+        }
+    }
+}
+
+/* 用于生成 class 方法动态分派 if-else 链的回调函数 */
+typedef struct {
+    FILE* out;
+    const char* method_name;
+    int fixed;
+    int nbind;
+    int* first_class;
+} ClassDispatchCtx;
+
+static void emit_class_dispatch_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    ClassDispatchCtx* ctx = (ClassDispatchCtx*)user_data;
+    if(td && td->is_class) {
+        /* 检查这个 class 或其父类是否有这个方法（继承链查找） */
+        TypeDef* method_class = NULL;
+        TypeDef* cur = td;
+        while(cur) {
+            int has_method = 0;
+            for(int i = 0; i < cur->nmethods; i++) {
+                if(strcmp(cur->method_names[i], ctx->method_name) == 0) {
+                    has_method = 1;
+                    break;
+                }
+            }
+            if(has_method) {
+                method_class = cur;
+                break;
+            }
+            /* 查找父类 */
+            if(cur->parent) {
+                cur = class_lookup(cur->parent);
+            } else {
+                cur = NULL;
+            }
+        }
+        if(method_class) {
+            if(*(ctx->first_class)) {
+                fprintf(ctx->out, "                if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", td->name);
+                *(ctx->first_class) = 0;
+            } else {
+                fprintf(ctx->out, "                else if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", td->name);
+            }
+            /* 生成调用这个 class 方法的代码（可能是父类的方法） */
+            fprintf(ctx->out, "                    __stk[__sp++] = lumyr_func_%s_%s_%d(", method_class->name, ctx->method_name, ctx->fixed);
+            for(int k = 0; k < ctx->fixed; k++) {
+                if(k) fprintf(ctx->out, ", ");
+                if(k < ctx->nbind) fprintf(ctx->out, "__args[%d]", k);
+                else fprintf(ctx->out, "val_none()");
+            }
+            fprintf(ctx->out, ");\n");
+            fprintf(ctx->out, "                }\n");
+        }
+    }
+}
+
 static int g_nested_ptr_counter = 0;
 
 /* 前向声明 */
@@ -1705,19 +1782,9 @@ void emit_insns(BytecodeFunc* fn)
                     exit(EXIT_FAILURE);
                 }
                 /* 检查函数名是否是某个 class 的方法 */
-                int is_class_method_call = 0;
-                for(int _ti = 0; _ti < type_count(); _ti++) {
-                    TypeDef* _td = type_get(_ti);
-                    if(_td && _td->is_class) {
-                        for(int _mi = 0; _mi < _td->nmethods; _mi++) {
-                            if(strcmp(_td->method_names[_mi], nm) == 0) {
-                                is_class_method_call = 1;
-                                break;
-                            }
-                        }
-                    }
-                    if(is_class_method_call) break;
-                }
+                ClassMethodCheckCtx check_ctx = { nm, 0 };
+                type_foreach(check_class_method_cb, &check_ctx);
+                int is_class_method_call = check_ctx.found;
                 /* 生成器函数调用：创建状态机实例，包装成 VAL_GENERATOR */
                 if(callee->is_generator) {
                     int gargc = in.b;
@@ -1789,50 +1856,8 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "            if(__cn.type == VAL_STRING) {\n");
                     /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
                     int first_class = 1;
-                    for(int _ci = 0; _ci < type_count(); _ci++) {
-                        TypeDef* _ctd = type_get(_ci);
-                        if(_ctd && _ctd->is_class) {
-                            /* 检查这个 class 或其父类是否有这个方法（继承链查找） */
-                            TypeDef* _method_class = NULL;
-                            TypeDef* _cur = _ctd;
-                            while(_cur) {
-                                int has_method = 0;
-                                for(int _mi = 0; _mi < _cur->nmethods; _mi++) {
-                                    if(strcmp(_cur->method_names[_mi], nm) == 0) {
-                                        has_method = 1;
-                                        break;
-                                    }
-                                }
-                                if(has_method) {
-                                    _method_class = _cur;
-                                    break;
-                                }
-                                /* 查找父类 */
-                                if(_cur->parent) {
-                                    _cur = class_lookup(_cur->parent);
-                                } else {
-                                    _cur = NULL;
-                                }
-                            }
-                            if(_method_class) {
-                                if(first_class) {
-                                    fprintf(out, "                if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", _ctd->name);
-                                    first_class = 0;
-                                } else {
-                                    fprintf(out, "                else if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", _ctd->name);
-                                }
-                                /* 生成调用这个 class 方法的代码（可能是父类的方法） */
-                                fprintf(out, "                    __stk[__sp++] = lumyr_func_%s_%s_%d(", _method_class->name, nm, fixed);
-                                for(int k = 0; k < fixed; k++) {
-                                    if(k) fprintf(out, ", ");
-                                    if(k < nbind) fprintf(out, "__args[%d]", k);
-                                    else fprintf(out, "val_none()");
-                                }
-                                fprintf(out, ");\n");
-                                fprintf(out, "                }\n");
-                            }
-                        }
-                    }
+                    ClassDispatchCtx dispatch_ctx = { out, nm, fixed, nbind, &first_class };
+                    type_foreach(emit_class_dispatch_cb, &dispatch_ctx);
                     /* 如果没有匹配的 class，报错 */
                     fprintf(out, "                else {\n");
                     fprintf(out, "                    runtime_error(\"未找到方法: %s\");\n", nm);

@@ -844,10 +844,10 @@ static void c_expr(Ctx* c, AstNode* node)
                     break;
                 }
             }
-            int ti = type_lookup(node->u.call.name);
-            if(ti >= 0) {
+            TypeDef* td = type_lookup(node->u.call.name);
+            if(td) {
                 /* 类型构造调用：Person(a, b) → map 字面量（属性按序强转） */
-                AstNode* ml = build_type_ctor(node, type_get(ti));
+                AstNode* ml = build_type_ctor(node, td);
                 c_expr(c, ml);
                 ast_free(ml);
                 break;

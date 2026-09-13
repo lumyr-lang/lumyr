@@ -1253,7 +1253,7 @@ primary
         { $$ = new_cast_node(valuetype_to_castkind($4), ast_map_lit($7)); }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
           /* 泛型自定义类型：<Person>[e1,e2] → [Person(e1), Person(e2)]（形状构造） */
-          if(type_lookup($2) >= 0) {
+          if(type_lookup($2) != NULL) {
               $$ = L(ast_array_lit(wrap_type_list($2, $5)));
               free($2);
           } else {
