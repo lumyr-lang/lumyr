@@ -1588,9 +1588,9 @@ void emit_insns(BytecodeFunc* fn)
                     continue;
                 }
                 /* __super_ctor_<当前类名>(self, args...)：CC 模式编译期静态绑定 */
-                if(nm && strncmp(nm, "__super_ctor_", 14) == 0) {
+                if(nm && strncmp(nm, "__super_ctor_", 13) == 0) {
                     /* 解析函数名，获取当前类名 */
-                    const char* current_class_name = nm + 14;
+                    const char* current_class_name = nm + 13;
                     /* 根据当前类名查找父类 */
                     const char* parent_name = NULL;
                     if(current_class_name[0]) {
@@ -1605,7 +1605,7 @@ void emit_insns(BytecodeFunc* fn)
                         fprintf(out, "        for (int __k = 0; __k < %d; __k++) __super_ctor_args[__k] = __stk[__sp - %d + __k];\n", arg_count, arg_count);
                         fprintf(out, "        __sp -= %d;\n", in.b);
                         /* 调用父类构造函数：lumyr_func_<父类名>___init__<参数个数>(self, args...) */
-                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s___init__(%d", parent_name, arg_count);
+                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s___init__%d(", parent_name, arg_count);
                         for(int ak = 0; ak < arg_count; ak++) {
                             fprintf(out, ", __super_ctor_args[%d]", ak);
                         }

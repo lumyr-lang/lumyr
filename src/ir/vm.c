@@ -2329,7 +2329,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     runtime_error("super 调用失败：无法找到父类方法");
                 }
                 /* __super_ctor_<当前类名>(self, args...)：调用父类构造函数（编译期静态绑定） */
-                if(strncmp(fname, "__super_ctor_", 14) == 0 && argc >= 1) {
+                if(strncmp(fname, "__super_ctor_", 13) == 0 && argc >= 1) {
                     /* 解析函数名，获取当前类名 */
                     const char* current_class_name = fname + 14;
                     /* 根据当前类名查找父类 */
