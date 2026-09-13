@@ -63,10 +63,10 @@ static void emit_class_dispatch_cb(const char* name, TypeDef* td, void* user_dat
         }
         if(method_class) {
             if(*(ctx->first_class)) {
-                fprintf(ctx->out, "                if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", td->name);
+                fprintf(ctx->out, "                if(strcmp(__cn_str, \"%s\") == 0) {\n", td->name);
                 *(ctx->first_class) = 0;
             } else {
-                fprintf(ctx->out, "                else if(strcmp(lumyr_str_cstr(&__cn), \"%s\") == 0) {\n", td->name);
+                fprintf(ctx->out, "                else if(strcmp(__cn_str, \"%s\") == 0) {\n", td->name);
             }
             /* 生成调用这个 class 方法的代码（可能是父类的方法） */
             fprintf(ctx->out, "                    __stk[__sp++] = lumyr_func_%s_%s_%d(", method_class->name, ctx->method_name, ctx->fixed);
@@ -110,9 +110,31 @@ static const char* emit_get_var_struct_name(const BytecodeFunc* fn, const char* 
     return NULL;
 }
 
+/* 解析变量的结构体类型：
+   - 如果名字以 "class:" 开头，说明是 class 类型，返回 1，type_name 指向 class 名
+   - 否则是 struct 类型，返回 0，type_name 指向 struct 名
+   返回的 type_name 指向原始字符串中的名字部分（不需要释放） */
+static int emit_parse_struct_type(const char* name, const char** type_name) {
+    if(!name) { *type_name = NULL; return 0; }
+    if(strncmp(name, "class:", 6) == 0) {
+        *type_name = name + 6;
+        return 1;  /* class 类型 */
+    }
+    *type_name = name;
+    return 0;  /* struct 类型 */
+}
+
 /* 生成把 C struct 转换为 Value(Map) 的代码 */
 void emit_struct_to_value(const char* struct_name, const char* var_expr) {
-    TypeDef* td = struct_lookup(struct_name);
+    /* 处理 class: 前缀：class 类型用 type_lookup，struct 类型用 struct_lookup */
+    const char* type_name = struct_name;
+    TypeDef* td = NULL;
+    if(struct_name && strncmp(struct_name, "class:", 6) == 0) {
+        type_name = struct_name + 6;
+        td = type_lookup(type_name);
+    } else {
+        td = struct_lookup(struct_name);
+    }
     if(!td || td->nprops <= 0) {
         fprintf(out, "    { Value __v = {0}; __stk[__sp++] = __v; }\n");
         return;
@@ -200,6 +222,7 @@ static const char* emit_tag_to_ctype(int tag) {
         case CAST_FLOAT: return "float";
         case CAST_DOUBLE: case CAST_LONG_DOUBLE: return "double";
         case CAST_BOOL: return "int";
+        case CAST_STRING: return "char*";
         default: return NULL;
     }
 }
@@ -456,11 +479,14 @@ void emit_insns(BytecodeFunc* fn)
                 const char* _sname = emit_get_var_struct_name(fn, nm);
                 int _vidx = bf_sym(fn, nm);
                 /* struct 局部变量转换成 Value(map)，包含所有字段，用于无类型标注的参数传递；
-                   OPC_LOAD_FIELD 高性能路径不受影响（直接用 lmvar_p->x，不经过栈） */
-                if(_sname && _vidx >= fn->param_cnt) {
+                   OPC_LOAD_FIELD 高性能路径不受影响（直接用 lmvar_p->x，不经过栈）
+                   注意：class 类型是引用类型，直接传递 VAL_STRUCT_PTR Value，不转换成 map */
+                if(_sname && _vidx >= fn->param_cnt && strncmp(_sname, "class:", 6) != 0) {
                     /* struct 局部变量转换成 Value(map)，VAL_STRUCT_PTR 通过 v.struct_ptr 访问 */
+                    const char* _type_name = _sname;
+                    const char* _struct_prefix = "lumyr_struct_";
                     char _load_buf[256];
-                    snprintf(_load_buf, sizeof(_load_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", _sname, cvar_rw(nm));
+                    snprintf(_load_buf, sizeof(_load_buf), "((%s%s*)%s.v.struct_ptr)", _struct_prefix, _type_name, cvar_rw(nm));
                     emit_struct_to_value(_sname, _load_buf);
                 } else if(_sname) {
                     /* struct 参数（self）：直接传递 Value */
@@ -481,9 +507,15 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             case OPC_LOAD_STRUCT_PTR: {
-                /* 加载 struct 变量的指针（用于方法 self 参数），传递指针整数 */
+                /* 加载 struct 变量的指针（用于方法 self 参数）
+                   class 类型：直接传递 VAL_STRUCT_PTR 类型的 Value（引用类型）
+                   struct 类型：传递指针整数（值类型，旧设计） */
                 const char* _sname = emit_get_var_struct_name(fn, nm);
-                if(_sname) {
+                if(_sname && strncmp(_sname, "class:", 6) == 0) {
+                    /* class 类型：直接传递 Value，类型是 VAL_STRUCT_PTR */
+                    fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
+                } else if(_sname) {
+                    /* struct 类型：传递指针整数 */
                     fprintf(out, "    { Value __pv = {0}; __pv.type = VAL_INT; __pv.v.i = (long long)%s.v.struct_ptr; __stk[__sp++] = __pv; }\n", cvar_rw(nm));
                 } else {
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
@@ -492,7 +524,14 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_STORE_VAR: {
                 const char* _sname = emit_get_var_struct_name(fn, nm);
-                if(_sname) {
+                /* 检查是否是 class 类型（以 class: 开头），class 是引用类型，直接赋值 Value */
+                int _is_class = 0;
+                const char* _pure_name = _sname;
+                if(_sname && strncmp(_sname, "class:", 6) == 0) {
+                    _is_class = 1;
+                    _pure_name = _sname + 6;
+                }
+                if(_sname && !_is_class) {
                     fprintf(out, "    { Value __v = __stk[--__sp];\n");
                     char _store_buf[256];
                     snprintf(_store_buf, sizeof(_store_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", _sname, cvar_rw(nm));
@@ -615,8 +654,10 @@ void emit_insns(BytecodeFunc* fn)
                 const char* sname = emit_get_var_struct_name(fn, vname);
                 /* 方法 self 参数：self 的值是指针地址，转换为指针再访问字段 */
                 if(sname && strcmp(vname, "self") == 0) {
-                    const char* ss = sname;
-                    TypeDef* td = struct_lookup(ss);
+                    const char* ss;
+                    int is_class = emit_parse_struct_type(sname, &ss);
+                    const char* struct_prefix = is_class ? "lumyr_class_" : "lumyr_struct_";
+                    TypeDef* td = is_class ? type_lookup(ss) : struct_lookup(ss);
                     int ck = CAST_LONGLONG;
                     if(td) {
                         for(int fi = 0; fi < td->nprops; fi++) {
@@ -626,22 +667,38 @@ void emit_insns(BytecodeFunc* fn)
                             }
                         }
                     }
-                    if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)((lumyr_struct_%s*)lmloc_self.v.struct_ptr)->%s);\n", ss, fname);
-                    } else if(ck == CAST_STRING) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_string(((lumyr_struct_%s*)lmloc_self.v.struct_ptr)->%s);\n", ss, fname);
-                    } else if(ck == CAST_BOOL) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_bool((int)((lumyr_struct_%s*)lmloc_self.v.struct_ptr)->%s);\n", ss, fname);
-                    } else {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)((lumyr_struct_%s*)lmloc_self.v.struct_ptr)->%s);\n", ss, fname);
+                    {
+                        /* 判断是否是父类字段 */
+                        int _is_pf = 0;
+                        if(td && td->parent) {
+                            TypeDef* _ptd = type_lookup(td->parent);
+                            if(_ptd) {
+                                for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                }
+                            }
+                        }
+                        const char* _pf = _is_pf ? "super." : "";
+                        if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
+                        } else if(ck == CAST_STRING) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
+                        } else if(ck == CAST_BOOL) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_bool((int)((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
+                        } else {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
+                        }
                     }
                     break;
                 }
                 if(sname && (!(in.a < fn->param_cnt && !fn->is_method) ||
                               (in.a < fn->param_cnt && fn->param_is_ref && fn->param_is_ref[in.a]))) {
-                    /* struct 局部变量、方法 self 参数、ref 参数 用高性能指针访问；
+                    /* struct/class 局部变量、方法 self 参数、ref 参数 用高性能指针访问；
                        普通函数参数传递的是 Value(map)，回退到 lumyr_index_get */
-                    TypeDef* td = struct_lookup(sname);
+                    const char* ss;
+                    int is_class = emit_parse_struct_type(sname, &ss);
+                    const char* struct_prefix = is_class ? "lumyr_class_" : "lumyr_struct_";
+                    TypeDef* td = is_class ? type_lookup(ss) : struct_lookup(ss);
                     int ck = CAST_LONGLONG;
                     if(td) {
                         for(int fi = 0; fi < td->nprops; fi++) {
@@ -667,9 +724,9 @@ void emit_insns(BytecodeFunc* fn)
                     int _is_ref_param = (in.a < fn->param_cnt && fn->param_is_ref && fn->param_is_ref[in.a]);
                     const char* _var_access = cvar_rw(vname);
                     if(_is_ref_param) {
-                        snprintf(_struct_access_buf, sizeof(_struct_access_buf), "((lumyr_struct_%s*)(%s).v.struct_ptr)", sname, _var_access);
+                        snprintf(_struct_access_buf, sizeof(_struct_access_buf), "((%s%s*)(%s).v.struct_ptr)", struct_prefix, ss, _var_access);
                     } else {
-                        snprintf(_struct_access_buf, sizeof(_struct_access_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", sname, _var_access);
+                        snprintf(_struct_access_buf, sizeof(_struct_access_buf), "((%s%s*)%s.v.struct_ptr)", struct_prefix, ss, _var_access);
                     }
                     _struct_access = _struct_access_buf;
                     if(nested_sname) {
@@ -678,14 +735,27 @@ void emit_insns(BytecodeFunc* fn)
                         snprintf(tmp_ptr, sizeof(tmp_ptr), "__nested_load_%s_%d", fname, g_nested_ptr_counter++);
                         fprintf(out, "    lumyr_struct_%s* %s = &%s->%s;\n", nested_sname, tmp_ptr, _struct_access, fname);
                         emit_struct_to_value(nested_sname, tmp_ptr);
-                    } else if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)%s->%s);\n", _struct_access, fname);
-                    } else if(ck == CAST_STRING) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_string(%s->%s);\n", _struct_access, fname);
-                    } else if(ck == CAST_BOOL) {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_bool((int)%s->%s);\n", _struct_access, fname);
                     } else {
-                        fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)%s->%s);\n", _struct_access, fname);
+                        /* 判断是否是父类字段 */
+                        int _is_pf = 0;
+                        if(td && td->parent) {
+                            TypeDef* _ptd = type_lookup(td->parent);
+                            if(_ptd) {
+                                for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                }
+                            }
+                        }
+                        const char* _pf = _is_pf ? "super." : "";
+                        if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)%s->%s%s);\n", _struct_access, _pf, fname);
+                        } else if(ck == CAST_STRING) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_string(%s->%s%s);\n", _struct_access, _pf, fname);
+                        } else if(ck == CAST_BOOL) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_bool((int)%s->%s%s);\n", _struct_access, _pf, fname);
+                        } else {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)%s->%s%s);\n", _struct_access, _pf, fname);
+                        }
                     }
                 } else {
                     fprintf(out, "    { Value __c = %s; __stk[__sp++] = lumyr_index_get(__c, lumyr_make_string(\"%s\")); }\n", cvar_rw(vname), fname);
@@ -698,8 +768,10 @@ void emit_insns(BytecodeFunc* fn)
                 const char* sname = emit_get_var_struct_name(fn, vname);
                 /* 方法 self 参数：self 的值是指针地址，转换为指针再写入字段 */
                 if(sname && strcmp(vname, "self") == 0) {
-                    const char* ss = sname;
-                    TypeDef* td = struct_lookup(ss);
+                    const char* ss;
+                    int is_class = emit_parse_struct_type(sname, &ss);
+                    const char* struct_prefix = is_class ? "lumyr_class_" : "lumyr_struct_";
+                    TypeDef* td = is_class ? type_lookup(ss) : struct_lookup(ss);
                     int ck = CAST_LONGLONG;
                     if(td) {
                         for(int fi = 0; fi < td->nprops; fi++) {
@@ -712,23 +784,39 @@ void emit_insns(BytecodeFunc* fn)
                     const char* ctype = emit_tag_to_ctype(ck);
                     if(!ctype) ctype = "int64_t";
                     fprintf(out, "    { Value __v = __stk[--__sp]; Value __self = lmloc_self;\n");
-                    if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
-                        fprintf(out, "        ((lumyr_struct_%s*)__self.v.struct_ptr)->%s = (%s)__v.v.d;\n", ss, fname, ctype);
-                    } else if(ck == CAST_STRING) {
-                        fprintf(out, "        ((lumyr_struct_%s*)__self.v.struct_ptr)->%s = (%s)lumyr_str_cstr(&__v);\n", ss, fname, ctype);
-                    } else if(ck == CAST_BOOL) {
-                        fprintf(out, "        ((lumyr_struct_%s*)__self.v.struct_ptr)->%s = (%s)__v.v.b;\n", ss, fname, ctype);
-                    } else {
-                        fprintf(out, "        ((lumyr_struct_%s*)__self.v.struct_ptr)->%s = (%s)__v.v.i;\n", ss, fname, ctype);
+                    {
+                        /* 判断是否是父类字段 */
+                        int _is_pf = 0;
+                        if(td && td->parent) {
+                            TypeDef* _ptd = type_lookup(td->parent);
+                            if(_ptd) {
+                                for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                }
+                            }
+                        }
+                        const char* _pf = _is_pf ? "super." : "";
+                        if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
+                            fprintf(out, "        ((%s%s*)__self.v.struct_ptr)->%s%s = (%s)__v.v.d;\n", struct_prefix, ss, _pf, fname, ctype);
+                        } else if(ck == CAST_STRING) {
+                            fprintf(out, "        ((%s%s*)__self.v.struct_ptr)->%s%s = strdup(lumyr_str_cstr(&__v));\n", struct_prefix, ss, _pf, fname);
+                        } else if(ck == CAST_BOOL) {
+                            fprintf(out, "        ((%s%s*)__self.v.struct_ptr)->%s%s = (%s)__v.v.b;\n", struct_prefix, ss, _pf, fname, ctype);
+                        } else {
+                            fprintf(out, "        ((%s%s*)__self.v.struct_ptr)->%s%s = (%s)__v.v.i;\n", struct_prefix, ss, _pf, fname, ctype);
+                        }
                     }
                     fprintf(out, "        __stk[__sp++] = __v;\n    }\n");
                     break;
                 }
                 if(sname && (!(in.a < fn->param_cnt && !fn->is_method) ||
                               (in.a < fn->param_cnt && fn->param_is_ref && fn->param_is_ref[in.a]))) {
-                    /* struct 局部变量、方法 self 参数、ref 参数 用高性能指针访问；
+                    /* struct/class 局部变量、方法 self 参数、ref 参数 用高性能指针访问；
                        普通函数参数传递的是 Value(map)，回退到 lumyr_array_set */
-                    TypeDef* td = struct_lookup(sname);
+                    const char* ss;
+                    int is_class = emit_parse_struct_type(sname, &ss);
+                    const char* struct_prefix = is_class ? "lumyr_class_" : "lumyr_struct_";
+                    TypeDef* td = is_class ? type_lookup(ss) : struct_lookup(ss);
                     int ck = CAST_LONGLONG;
                     if(td) {
                         for(int fi = 0; fi < td->nprops; fi++) {
@@ -747,20 +835,33 @@ void emit_insns(BytecodeFunc* fn)
                     int _is_ref_param = (in.a < fn->param_cnt && fn->param_is_ref && fn->param_is_ref[in.a]);
                     const char* _var_access = cvar_rw(vname);
                     if(_is_ref_param) {
-                        snprintf(_store_access_buf, sizeof(_store_access_buf), "((lumyr_struct_%s*)(%s).v.struct_ptr)", sname, _var_access);
+                        snprintf(_store_access_buf, sizeof(_store_access_buf), "((%s%s*)(%s).v.struct_ptr)", struct_prefix, ss, _var_access);
                     } else {
-                        snprintf(_store_access_buf, sizeof(_store_access_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", sname, _var_access);
+                        snprintf(_store_access_buf, sizeof(_store_access_buf), "((%s%s*)%s.v.struct_ptr)", struct_prefix, ss, _var_access);
                     }
                     _store_access = _store_access_buf;
                     fprintf(out, "    { Value __v = __stk[--__sp];\n");
-                    if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
-                        fprintf(out, "        %s->%s = (%s)__v.v.d;\n", _store_access, fname, ctype);
-                    } else if(ck == CAST_STRING) {
-                        fprintf(out, "        %s->%s = (%s)lumyr_str_cstr(&__v);\n", _store_access, fname, ctype);
-                    } else if(ck == CAST_BOOL) {
-                        fprintf(out, "        %s->%s = (%s)__v.v.b;\n", _store_access, fname, ctype);
-                    } else {
-                        fprintf(out, "        %s->%s = (%s)__v.v.i;\n", _store_access, fname, ctype);
+                    {
+                        /* 判断是否是父类字段 */
+                        int _is_pf = 0;
+                        if(td && td->parent) {
+                            TypeDef* _ptd = type_lookup(td->parent);
+                            if(_ptd) {
+                                for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                }
+                            }
+                        }
+                        const char* _pf = _is_pf ? "super." : "";
+                        if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
+                            fprintf(out, "        %s->%s%s = (%s)__v.v.d;\n", _store_access, _pf, fname, ctype);
+                        } else if(ck == CAST_STRING) {
+                            fprintf(out, "        %s->%s%s = strdup(lumyr_str_cstr(&__v));\n", _store_access, _pf, fname);
+                        } else if(ck == CAST_BOOL) {
+                            fprintf(out, "        %s->%s%s = (%s)__v.v.b;\n", _store_access, _pf, fname, ctype);
+                        } else {
+                            fprintf(out, "        %s->%s%s = (%s)__v.v.i;\n", _store_access, _pf, fname, ctype);
+                        }
                     }
                     fprintf(out, "        __stk[__sp++] = __v;\n    }\n");
                 } else {
@@ -1539,6 +1640,72 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_JMP_IF_NULL:
                 fprintf(out, "    if (__stk[--__sp].type == VAL_NONE) goto L%d;\n", in.a);
                 break;
+            case OPC_CLASS_NEW: {
+                /* 创建 class 实例（C 结构体）：malloc + 清零 + 设置 __classname__ + 用参数初始化字段 + 包装成 Value */
+                const char* class_name = fn->syms[in.a];
+                int argc = in.b;
+                fprintf(out, "    {\n");
+                fprintf(out, "        lumyr_class_%s* __obj = (lumyr_class_%s*)malloc(sizeof(lumyr_class_%s));\n", class_name, class_name, class_name);
+                fprintf(out, "        memset(__obj, 0, sizeof(lumyr_class_%s));\n", class_name);
+                {
+                    /* 子类结构体的 __classname__ 在 super 中，父类结构体直接有 __classname__ */
+                    TypeDef* _td = type_lookup(class_name);
+                    if(_td && _td->parent) {
+                        fprintf(out, "        __obj->super.__classname__ = \"%s\";\n", class_name);
+                    } else {
+                        fprintf(out, "        __obj->__classname__ = \"%s\";\n", class_name);
+                    }
+                }
+                if(argc > 0) {
+                    /* 有参数：从栈上弹出参数并按顺序初始化字段
+                       参数压栈顺序是从左到右，所以第一个参数在栈底，最后一个参数在栈顶
+                       需要先把所有参数取出来（从栈顶到栈底），然后按顺序初始化字段 */
+                    TypeDef* td = type_lookup(class_name);
+                    if(td && td->nprops > 0) {
+                        int n = argc < td->nprops ? argc : td->nprops;
+                        /* 先从栈上弹出所有参数，保存到局部数组 */
+                        fprintf(out, "        Value __ctor_args[%d];\n", n);
+                        fprintf(out, "        for(int __i = %d; __i >= 0; __i--) { __ctor_args[__i] = __stk[--__sp]; }\n", n - 1);
+                        /* 按顺序初始化字段（父类字段用 super 前缀） */
+                        for(int fi = 0; fi < n; fi++) {
+                            const char* fname = td->props[fi];
+                            int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
+                            /* 判断是否是父类字段 */
+                            int is_parent_field = 0;
+                            if(td->parent) {
+                                TypeDef* parent_td = type_lookup(td->parent);
+                                if(parent_td) {
+                                    for(int pfi = 0; pfi < parent_td->nprops; pfi++) {
+                                        if(strcmp(parent_td->props[pfi], fname) == 0) {
+                                            is_parent_field = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            const char* field_access = is_parent_field ? "super." : "";
+                            if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
+                                fprintf(out, "        __obj->%s%s = (double)__ctor_args[%d].v.d;\n", field_access, fname, fi);
+                            } else if(ck == CAST_STRING) {
+                                fprintf(out, "        __obj->%s%s = strdup(lumyr_str_cstr(&__ctor_args[%d]));\n", field_access, fname, fi);
+                            } else if(ck == CAST_BOOL) {
+                                fprintf(out, "        __obj->%s%s = (int)__ctor_args[%d].v.b;\n", field_access, fname, fi);
+                            } else {
+                                fprintf(out, "        __obj->%s%s = (long long)__ctor_args[%d].v.i;\n", field_access, fname, fi);
+                            }
+                        }
+                    } else {
+                        /* 没有找到类型定义，直接弹出参数丢弃 */
+                        fprintf(out, "        __sp -= %d;\n", argc);
+                    }
+                }
+                fprintf(out, "        Value __val = {0};\n");
+                fprintf(out, "        __val.type = VAL_STRUCT_PTR;\n");
+                fprintf(out, "        __val.v.struct_ptr = __obj;\n");
+                fprintf(out, "        __stk[__sp++] = __val;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
             case OPC_CALL: {
                 /* STW 安全点：函数调用前检查 GC，避免参数弹出期间并发标记读到 torn Value */
                 fprintf(out, "    gc_stw_check_fast();\n");
@@ -1852,19 +2019,22 @@ void emit_insns(BytecodeFunc* fn)
                     /* class 方法：动态分派，生成 if-else 链来判断 self 的 __classname__，然后调用相应的方法 */
                     fprintf(out, "        /* class 方法动态分派 */\n");
                     fprintf(out, "        Value __self = __args[0];\n");
+                    fprintf(out, "        const char* __cn_str = NULL;\n");
                     fprintf(out, "        if(__self.type == VAL_MAP && lumyr_map_has(__self, lumyr_make_string(\"__classname__\"))) {\n");
                     fprintf(out, "            Value __cn = lumyr_map_get(__self, lumyr_make_string(\"__classname__\"));\n");
-                    fprintf(out, "            if(__cn.type == VAL_STRING) {\n");
+                    fprintf(out, "            if(__cn.type == VAL_STRING) __cn_str = lumyr_str_cstr(&__cn);\n");
+                    fprintf(out, "        } else if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
+                    fprintf(out, "            /* C 结构体实例：__classname__ 是第一个字段，直接通过指针获取 */\n");
+                    fprintf(out, "            __cn_str = *(const char**)__self.v.struct_ptr;\n");
+                    fprintf(out, "        }\n");
+                    fprintf(out, "        if(__cn_str) {\n");
                     /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
                     int first_class = 1;
                     ClassDispatchCtx dispatch_ctx = { out, nm, fixed, nbind, &first_class };
                     type_foreach(emit_class_dispatch_cb, &dispatch_ctx);
                     /* 如果没有匹配的 class，报错 */
-                    fprintf(out, "                else {\n");
-                    fprintf(out, "                    runtime_error(\"未找到方法: %s\");\n", nm);
-                    fprintf(out, "                }\n");
-                    fprintf(out, "            } else {\n");
-                    fprintf(out, "                runtime_error(\"__classname__ 不是字符串\");\n");
+                    fprintf(out, "            else {\n");
+                    fprintf(out, "                runtime_error(\"未找到方法: %s\");\n", nm);
                     fprintf(out, "            }\n");
                     fprintf(out, "        } else {\n");
                     fprintf(out, "            runtime_error(\"self 不是 class 实例\");\n");

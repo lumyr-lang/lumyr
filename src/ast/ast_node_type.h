@@ -209,6 +209,11 @@ struct AstNode {
         struct {
             AstNode* expr;       // 被展开的表达式（数组或 map）
         } spread;
+        struct {
+            char* class_name;    // class 名字符串
+            int argc;            // 构造函数参数数量
+            AstNode* args;       // 构造函数参数列表（AST_SEQ 树）
+        } class_new;
     } u;
 };
 

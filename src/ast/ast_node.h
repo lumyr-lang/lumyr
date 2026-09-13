@@ -66,6 +66,7 @@ AstNode* ast_index(AstNode* arr, AstNode* idx);
 AstNode* ast_index_assign(AstNode* arr, AstNode* idx, AstNode* value);
 AstNode* ast_array_lit(AstNode* elems);
 AstNode* ast_map_lit(AstNode* entries);
+AstNode* ast_class_new(char* class_name, int argc, AstNode* args);
 AstNode* ast_try(AstNode* body, char* catch_var, AstNode* catch_body, AstNode* finally_body);
 AstNode* ast_try_multi(AstNode* body, CatchClause* catches, int catch_count, AstNode* finally_body);
 AstNode* ast_throw(AstNode* expr);

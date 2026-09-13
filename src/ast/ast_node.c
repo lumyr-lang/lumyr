@@ -611,6 +611,14 @@ AstNode* ast_map_lit(AstNode* entries) {
     return n;
 }
 
+AstNode* ast_class_new(char* class_name, int argc, AstNode* args) {
+    AstNode* n = ast_new(AST_CLASS_NEW);
+    n->u.class_new.class_name = class_name;
+    n->u.class_new.argc = argc;
+    n->u.class_new.args = args;
+    return n;
+}
+
 AstNode* ast_try(AstNode* body, char* catch_var, AstNode* catch_body, AstNode* finally_body) {
     AstNode* n = ast_new(AST_TRY);
     n->u.trynode.body = body;

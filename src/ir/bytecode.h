@@ -46,6 +46,7 @@ typedef enum {
     OPC_JMP_IF_FALSE, // a=目标pc；弹条件，假则跳
     OPC_JMP_IF_TRUE,  // a=目标pc；弹条件，真则跳
     OPC_JMP_IF_NULL,  // a=目标pc；弹值，为 VAL_NONE 则跳
+    OPC_CLASS_NEW,    // a=class名符号下标：创建 C 结构体实例并包装成 Value
     OPC_CALL,         // a=函数名符号下标，b=实参个数
     OPC_CALLV,        // 动态调用链：栈顶下一位=函数值（b=实参个数），栈顶 b 个为实参
     OPC_MKCLOSURE,    // a=lambda 符号下标：沿当前帧装箱捕获变量，压入新闭包函数值

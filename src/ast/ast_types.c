@@ -402,6 +402,13 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int n
     // 标记为 class 并保存父类
     td->is_class = 1;
     td->parent = parent ? strdup(parent) : NULL;
+    /* 设置 field_cast_kinds：根据 ValueType 转换成 CastKind，用于 C 代码生成时生成精确的字段类型 */
+    td->field_cast_kinds = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+    td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
+    for(int k = 0; k < merged_nprops; k++) {
+        td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);
+    }
+    td->field_offsets = NULL; // 编译通道计算偏移时填充
     td->method_names = NULL;
     td->method_nodes = NULL;
     td->method_funcs = NULL;
@@ -425,6 +432,16 @@ void class_add_method(const char* class_name, const char* method_name, struct As
 {
     TypeDef* td = class_lookup(class_name);
     if(!td) return;
+    // 给 self 参数设置 constraint（class:<类名>），让编译时自动给 self 打上 class 类型标记
+    if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.params) {
+        AstNode* self_param = method_node->u.func_def.params;
+        if(self_param->u.param.name && strcmp(self_param->u.param.name, "self") == 0) {
+            if(self_param->u.param.constraint) free(self_param->u.param.constraint);
+            size_t marked_len = strlen(class_name) + 7; /* "class:" + 类名 + \0 */
+            self_param->u.param.constraint = (char*)malloc(marked_len);
+            snprintf(self_param->u.param.constraint, marked_len, "class:%s", class_name);
+        }
+    }
     // 编译方法为 RuntimeFunc
     RuntimeFunc* rf = compile_func_from_ast(method_node);
     // 设置 class_name 字段（用于 CC 模式方法命名，避免命名冲突）
@@ -434,6 +451,32 @@ void class_add_method(const char* class_name, const char* method_name, struct As
         if(pl && pl->bytecode) {
             if(pl->bytecode->class_name) free(pl->bytecode->class_name);
             pl->bytecode->class_name = strdup(class_name);
+            /* 给 self 参数打上 class 类型标记，让 self.x 访问生成 OPC_LOAD_FIELD（C 结构体直接偏移访问） */
+            BytecodeFunc* bfn = pl->bytecode;
+            if(bfn->is_method && bfn->param_cnt > 0) {
+                /* self 是第一个参数，查找它在符号表中的索引 */
+                int self_idx = -1;
+                for(int i = 0; i < bfn->sym_cnt; i++) {
+                    if(bfn->syms[i] && strcmp(bfn->syms[i], "self") == 0) {
+                        self_idx = i;
+                        break;
+                    }
+                }
+                if(self_idx >= 0) {
+                    /* 确保 var_struct_names 被分配 */
+                    if(!bfn->var_struct_names) {
+                        bfn->var_struct_names = (char**)calloc(bfn->sym_cnt > 16 ? bfn->sym_cnt : 16, sizeof(char*));
+                    }
+                    /* 用 class: 前缀标记这是 class 类型 */
+                    size_t marked_len = strlen(class_name) + 7; /* "class:" + 类名 + \0 */
+                    char* marked_name = (char*)malloc(marked_len);
+                    snprintf(marked_name, marked_len, "class:%s", class_name);
+                    if(bfn->var_struct_names[self_idx]) free(bfn->var_struct_names[self_idx]);
+                    bfn->var_struct_names[self_idx] = marked_name;
+                    if(bfn->method_self_struct) free(bfn->method_self_struct);
+                    bfn->method_self_struct = strdup(marked_name);
+                }
+            }
         }
     }
     // 检查是否已有同名方法（方法重写）

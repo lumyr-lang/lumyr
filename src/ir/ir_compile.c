@@ -330,36 +330,33 @@ static AstNode* build_type_ctor(AstNode* call, TypeDef* t)
         call->u.call.args = NULL;
         return m;
     }
-    /* class 有自定义构造函数（__init__）：创建空对象后调用构造函数 */
+    /* class 有自定义构造函数（__init__）：创建 C 结构体实例后调用构造函数 */
     if(t->is_class && t->constructor) {
-        /* 1. 创建带有 __mapname__/__structname__/__classname__ 属性的空 map 对象 */
-        items = ast_seq(items, ast_map_entry(ast_string(strdup("__mapname__")),
-                                             ast_string(strdup(t->name))));
-        items = ast_seq(items, ast_map_entry(ast_string(strdup("__structname__")),
-                                             ast_string(strdup(t->name))));
-        items = ast_seq(items, ast_map_entry(ast_string(strdup("__classname__")),
-                                             ast_string(strdup(t->name))));
-        AstNode* obj = ast_map_lit(items);
+        /* 1. 创建 C 结构体实例（AST_CLASS_NEW 节点，编译时生成 malloc 代码）
+           有自定义构造函数时 argc=0，参数传递给构造函数 */
+        AstNode* obj = ast_class_new(strdup(t->name), 0, NULL);
         /* 2. 调用 <类名>___init__(obj, args...)：构造函数名作为函数名，obj 作为第一个参数 */
         AstNode* ctor_args = ast_seq(obj, args);
         char* ctor_name = (char*)malloc(strlen(t->name) + 10);
         sprintf(ctor_name, "%s___init__", t->name);
         AstNode* ctor_call = ast_call(ctor_name, ctor_args);
         call->u.call.args = NULL;
-        /* 3. 用一个临时变量保存对象，调用构造函数后返回对象 */
-        /* 简化处理：直接返回构造函数调用（构造函数修改 self 后返回 self） */
+        /* 3. 直接返回构造函数调用（构造函数修改 self 后返回 self） */
         return ctor_call;
     }
-    /* 默认构造函数：生成 map 字面量初始化所有属性 */
+    /* 默认构造函数 */
+    if(t->is_class) {
+        /* class 类型：创建 C 结构体实例（AST_CLASS_NEW 节点，带参数）
+           OPC_CLASS_NEW 会用参数初始化字段 */
+        call->u.call.args = NULL;  /* 参数节点已移入 AST_CLASS_NEW，摘空原链防双 free */
+        return ast_class_new(strdup(t->name), argc, args);
+    }
+    /* struct/type 类型：生成 map 字面量初始化所有属性 */
     /* 首项注入只读类名属性：__mapname__ / __structname__ / __classname__ = 类型名 */
     items = ast_seq(items, ast_map_entry(ast_string(strdup("__mapname__")),
                                          ast_string(strdup(t->name))));
     items = ast_seq(items, ast_map_entry(ast_string(strdup("__structname__")),
                                          ast_string(strdup(t->name))));
-    if(t->is_class) {
-        items = ast_seq(items, ast_map_entry(ast_string(strdup("__classname__")),
-                                             ast_string(strdup(t->name))));
-    }
     int n = argc < t->nprops ? argc : t->nprops;
     for(int k = 0; k < n; k++) {
         int cur = 0;
@@ -644,6 +641,39 @@ static void c_expr(Ctx* c, AstNode* node)
                             free(c->fn->var_struct_names[var_idx]);
                         }
                         c->fn->var_struct_names[var_idx] = strdup(fname);
+                    }
+                    /* 检测 class 构造调用：Animal("Cat", 3) → 变量是 Animal class 类型；
+                       或者 Animal___init__(obj, args...) → 变量也是 Animal class 类型 */
+                    else if(fname) {
+                        TypeDef* td = type_lookup(fname);
+                        if(td && td->is_class) {
+                            /* Animal("Cat", 3) 形式：直接检测 class 类型 */
+                            if(c->fn->var_struct_names[var_idx]) {
+                                free(c->fn->var_struct_names[var_idx]);
+                            }
+                            size_t flen = strlen(fname);
+                            char* marked_name = (char*)malloc(flen + 7);
+                            snprintf(marked_name, flen + 7, "class:%s", fname);
+                            c->fn->var_struct_names[var_idx] = marked_name;
+                        } else {
+                            /* Animal___init__(obj, args...) 形式：检测 ___init__ 后缀 */
+                            size_t flen = strlen(fname);
+                            if(flen >= 9 && strcmp(fname + flen - 9, "___init__") == 0) {
+                                char* class_name = (char*)malloc(flen - 8);
+                                strncpy(class_name, fname, flen - 9);
+                                class_name[flen - 9] = '\0';
+                                TypeDef* td2 = type_lookup(class_name);
+                                if(td2 && td2->is_class) {
+                                    if(c->fn->var_struct_names[var_idx]) {
+                                        free(c->fn->var_struct_names[var_idx]);
+                                    }
+                                    char* marked_name = (char*)malloc(flen);
+                                    snprintf(marked_name, flen, "class:%s", class_name);
+                                    c->fn->var_struct_names[var_idx] = marked_name;
+                                }
+                                free(class_name);
+                            }
+                        }
                     }
                 }
                 /* 检测右侧是 struct 类型变量：copy = original → 推断 copy 也是 struct 类型 */
@@ -994,7 +1024,13 @@ static void c_expr(Ctx* c, AstNode* node)
                     if(strcmp(vname, "self") == 0 && c->fn->method_self_struct) {
                         is_field = 1; /* 方法内 self 字段访问，直接信任 */
                     } else {
-                        TypeDef* td = struct_lookup(sname);
+                        /* 支持 struct 和 class 两种类型：class 类型的 sname 以 "class:" 前缀 */
+                        TypeDef* td = NULL;
+                        if(strncmp(sname, "class:", 6) == 0) {
+                            td = type_lookup(sname + 6);
+                        } else {
+                            td = struct_lookup(sname);
+                        }
                         if(td) {
                             for(int fi = 0; fi < td->nprops; fi++) {
                                 if(strcmp(td->props[fi], fname) == 0) { is_field = 1; break; }
@@ -1097,6 +1133,15 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_MAP_LIT, 0, 0);
                 compile_map_entries_spread(c, node->u.map_lit.entries);
             }
+            break;
+        }
+        case AST_CLASS_NEW: {
+            /* 创建 class 实例（C 结构体）：先编译参数压栈，然后发射 OPC_CLASS_NEW */
+            int argc = node->u.class_new.argc;
+            if(argc > 0 && node->u.class_new.args) {
+                c_args(c, node->u.class_new.args, &(int){0});
+            }
+            emit(c, OPC_CLASS_NEW, bf_sym(c->fn, node->u.class_new.class_name), argc);
             break;
         }
         case AST_PRINT: {
@@ -1672,6 +1717,25 @@ static void compile_params(BytecodeFunc* fn, AstNode* params)
     fn->param_cnt = idx - (fn->has_variadic ? 1 : 0);
 }
 
+
+/* 方法 self 类型标记查找上下文 */
+typedef struct {
+    const char* func_name;
+    size_t func_len;
+    char* class_name;
+} MethodSelfLookupCtx;
+
+/* type_foreach 回调：查找函数名匹配的 class 类型 */
+static void method_self_lookup_cb(const char* name, TypeDef* td, void* user_data)
+{
+    MethodSelfLookupCtx* ctx = (MethodSelfLookupCtx*)user_data;
+    if(ctx->class_name || !td->is_class || !name) return;
+    size_t tlen = strlen(name);
+    if(ctx->func_len > tlen + 1 && strncmp(ctx->func_name, name, tlen) == 0 && ctx->func_name[tlen] == '_') {
+        ctx->class_name = strdup(name);
+    }
+}
+
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator)
 {
     BytecodeFunc* fn = bytecode_func_new(name, 0);
@@ -1680,13 +1744,52 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     /* 方法标记：第一个参数名是 "self" 时，标记为方法，self 传递 struct 指针 */
     if(params && params->u.param.name && strcmp(params->u.param.name, "self") == 0) {
         fn->is_method = 1;
-        if(params->u.param.constraint) {
-            fn->method_self_struct = strdup(params->u.param.constraint);
+        const char* self_type = params->u.param.constraint;
+        /* 构造函数和普通方法：从函数名中提取 class 名，自动给 self 打上 class 类型标记 */
+        if(!self_type && name) {
+            size_t nlen = strlen(name);
+            char* class_name = NULL;
+            /* 先尝试构造函数：函数名以 ___init__ 结尾 */
+            if(nlen >= 9 && strcmp(name + nlen - 9, "___init__") == 0) {
+                /* 提取 class 名：去掉 ___init__ 后缀 */
+                class_name = (char*)malloc(nlen - 8);
+                strncpy(class_name, name, nlen - 9);
+                class_name[nlen - 9] = '\0';
+            } else {
+                /* 普通方法：遍历所有 class 类型，看看函数名是否以 <类名>_ 开头 */
+                MethodSelfLookupCtx ctx = { name, nlen, NULL };
+                type_foreach(method_self_lookup_cb, &ctx);
+                class_name = ctx.class_name;
+            }
+            if(class_name) {
+                TypeDef* td = type_lookup(class_name);
+                if(td && td->is_class) {
+                    /* 用 class: 前缀标记这是 class 类型 */
+                    size_t marked_len = strlen(class_name) + 7; /* "class:" + 类名 + \0 */
+                    char* marked_name = (char*)malloc(marked_len);
+                    snprintf(marked_name, marked_len, "class:%s", class_name);
+                    self_type = marked_name;
+                    fn->method_self_struct = marked_name;
+                }
+                free(class_name);
+            }
+        }
+        if(self_type) {
+            if(!fn->method_self_struct) {
+                fn->method_self_struct = strdup(self_type);
+            }
             /* 把 self 参数添加到 var_struct_names，让 self.x 访问生成 OPC_LOAD_FIELD */
             int self_idx = bf_sym(fn, "self");
             if(fn->var_struct_names) {
-                fn->var_struct_names[self_idx] = strdup(params->u.param.constraint);
+                fn->var_struct_names[self_idx] = strdup(self_type);
             }
+        }
+    }
+
+    /* 把参数添加到符号表中（确保 self 等参数在编译函数体之前就存在于符号表中） */
+    for(int pi = 0; pi < fn->param_cnt; pi++) {
+        if(fn->params && fn->params[pi]) {
+            bf_sym(fn, fn->params[pi]);
         }
     }
 

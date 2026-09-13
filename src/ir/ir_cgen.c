@@ -102,6 +102,7 @@ static const char* castkind_to_c_type(int ck) {
         case CAST_DOUBLE: return "double";
         case CAST_LONG_DOUBLE: return "long double";
         case CAST_BOOL: return "int";
+        case CAST_STRING: return "char*";
         case CAST_SIZE_T: return "size_t";
         case CAST_SSIZE_T: return "ssize_t";
         default: return NULL;  // 其他类型保持 Value
@@ -892,11 +893,28 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
     if(td && td->is_class && td->nprops > 0) {
         fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
         fprintf(out, "struct lumyr_class_%s {\n", td->name);
-        /* 如果有父类，父类结构体作为第一个字段，字段名为 super */
+        /* 如果有父类，父类结构体作为第一个字段（包含 __classname__），字段名为 super
+           如果没有父类，定义 __classname__ 字段：用于运行时动态分派，保存 class 名字符串 */
         if(td->parent) {
             fprintf(out, "    lumyr_class_%s super;\n", td->parent);
+        } else {
+            fprintf(out, "    const char* __classname__;\n");
         }
         for(int fi = 0; fi < td->nprops; fi++) {
+            /* 跳过父类已经定义的字段（避免重复定义，父类字段通过 super 访问） */
+            int is_parent_field = 0;
+            if(td->parent) {
+                TypeDef* parent_td = type_lookup(td->parent);
+                if(parent_td) {
+                    for(int pfi = 0; pfi < parent_td->nprops; pfi++) {
+                        if(strcmp(parent_td->props[pfi], td->props[fi]) == 0) {
+                            is_parent_field = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            if(is_parent_field) continue;
             int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
             const char* ftype = castkind_to_c_type(ck);
             if(!ftype) ftype = "int64_t";
@@ -924,8 +942,17 @@ void emit_main(BytecodeFunc* main_fn)
     for(int i = 0; i < g_globals.count; i++) {
         const char* sname = get_var_struct_name(main_fn, g_globals.names[i]);
         if(sname) {
-            /* struct 类型全局变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在静态存储区 */
-            fprintf(out, "static lumyr_struct_%s lmvar_%s__s;\n", sname, g_globals.names[i]);
+            /* struct/class 类型全局变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在静态存储区 */
+            const char* type_name = sname;
+            const char* struct_prefix = "lumyr_struct_";
+            if(strncmp(sname, "class:", 6) == 0) {
+                type_name = sname + 6;
+                struct_prefix = "lumyr_class_";
+            }
+            /* class 类型是引用类型，实例通过 OPC_CLASS_NEW 动态创建，不需要静态结构体 */
+            if(strncmp(sname, "class:", 6) != 0) {
+                fprintf(out, "static %s%s lmvar_%s__s;\n", struct_prefix, type_name, g_globals.names[i]);
+            }
             fprintf(out, "static Value lmvar_%s;\n", g_globals.names[i]);
         } else {
             int tt = get_var_type_tag(main_fn, g_globals.names[i]);
@@ -974,9 +1001,10 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "    Value __stk[%d];\n", maxd + 2);
     fprintf(out, "    int __sp = 0;\n");
     /* 全局 struct 变量初始化：VAL_STRUCT_PTR，零拷贝传递 */
+    /* 注意：class 类型（以 class: 开头）是引用类型，实例通过 OPC_CLASS_NEW 动态创建，不需要静态初始化 */
     for(int gi = 0; gi < g_globals.count; gi++) {
         const char* gsname = get_var_struct_name(main_fn, g_globals.names[gi]);
-        if(gsname) {
+        if(gsname && strncmp(gsname, "class:", 6) != 0) {
             fprintf(out, "    lmvar_%s = lumyr_make_struct_ptr(&lmvar_%s__s);\n", g_globals.names[gi], g_globals.names[gi]);
         }
     }

@@ -2266,6 +2266,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_JMP_IF_NULL:
                 if(stack[--sp].type == VAL_NONE) pc = in.a;
                 break;
+            case OPC_CLASS_NEW: {
+                /* VM 模式下创建 class 实例：创建带有 __mapname__/__structname__/__classname__ 属性的空 map 对象 */
+                const char* class_name = bf->syms[in.a];
+                Value obj = val_map();
+                lumyr_map_set(&obj, lumyr_make_string("__mapname__"), lumyr_make_string(class_name));
+                lumyr_map_set(&obj, lumyr_make_string("__structname__"), lumyr_make_string(class_name));
+                lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
+                stack[sp++] = obj;
+                break;
+            }
             case OPC_CALL: {
                 const char* fname = bf->syms[in.a];
                 int argc = in.b;

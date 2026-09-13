@@ -165,6 +165,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;                // 弹 b 元素，压 1 数组
         case OPC_MAP_LIT:
             return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
+        case OPC_CLASS_NEW:
+            return 1;                        // 压 1 class 实例
         case OPC_INDEX_GET:
             return -1;                       // 弹2压1
         case OPC_INDEX_SET:
@@ -322,6 +324,7 @@ static const char* opc_name(OpCode op)
         case OPC_CAST_FLOAT: return "CAST_FLOAT";
         case OPC_ARRAY_LIT: return "ARRAY_LIT";
         case OPC_MAP_LIT: return "MAP_LIT";
+        case OPC_CLASS_NEW: return "CLASS_NEW";
         case OPC_INDEX_GET: return "INDEX_GET";
         case OPC_INDEX_SET: return "INDEX_SET";
         case OPC_BUILTIN: return "BUILTIN";
