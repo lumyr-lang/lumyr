@@ -1472,6 +1472,87 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_CALL: {
                 /* STW 安全点：函数调用前检查 GC，避免参数弹出期间并发标记读到 torn Value */
                 fprintf(out, "    gc_stw_check_fast();\n");
+
+                /* __super_call_<当前类名>_<方法名>(self, args...)：CC 模式编译期静态绑定 */
+                if(nm && strncmp(nm, "__super_call_", 13) == 0) {
+                    /* 解析函数名，获取当前类名和方法名 */
+                    const char* rest = nm + 13;
+                    char current_class_name[128] = {0};
+                    char method_name[128] = {0};
+                    const char* underscore = strchr(rest, '_');
+                    if(underscore) {
+                        int class_len = underscore - rest;
+                        if(class_len > 0 && class_len < 127) {
+                            strncpy(current_class_name, rest, class_len);
+                            current_class_name[class_len] = '\0';
+                        }
+                        strncpy(method_name, underscore + 1, 127);
+                        method_name[127] = '\0';
+                    }
+                    /* 根据当前类名查找父类 */
+                    const char* parent_name = NULL;
+                    if(current_class_name[0]) {
+                        TypeDef* td = class_lookup(current_class_name);
+                        if(td && td->parent) parent_name = td->parent;
+                    }
+                    /* 生成直接的父类方法调用：lumyr_func_<父类名>_<方法名>_<参数个数>(self, args...) */
+                    int arg_count = in.b;  /* 实际参数个数（包括 self） */
+                    if(parent_name && method_name[0]) {
+                        fprintf(out, "    {\n");
+                        fprintf(out, "        Value __super_args[%d];\n", arg_count > 0 ? arg_count : 1);
+                        fprintf(out, "        for (int __k = 0; __k < %d; __k++) __super_args[__k] = __stk[__sp - %d + __k];\n", arg_count, arg_count);
+                        fprintf(out, "        __sp -= %d;\n", in.b);
+                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s_%s_%d(", parent_name, method_name, arg_count);
+                        for(int ak = 0; ak < arg_count; ak++) {
+                            if(ak > 0) fprintf(out, ", ");
+                            fprintf(out, "__super_args[%d]", ak);
+                        }
+                        fprintf(out, ");\n");
+                        fprintf(out, "    }\n");
+                    } else {
+                        fprintf(out, "    {\n");
+                        fprintf(out, "        runtime_error(\"super 调用失败：无法找到父类方法\");\n");
+                        fprintf(out, "    }\n");
+                    }
+                    i++;
+                    continue;
+                }
+                /* __super_ctor_<当前类名>(self, args...)：CC 模式编译期静态绑定 */
+                if(nm && strncmp(nm, "__super_ctor_", 14) == 0) {
+                    /* 解析函数名，获取当前类名 */
+                    const char* current_class_name = nm + 14;
+                    /* 根据当前类名查找父类 */
+                    const char* parent_name = NULL;
+                    if(current_class_name[0]) {
+                        TypeDef* td = class_lookup(current_class_name);
+                        if(td && td->parent) parent_name = td->parent;
+                    }
+                    /* 生成直接的父类构造函数调用 */
+                    int arg_count = in.b;  /* 实际参数个数（包括 self） */
+                    if(parent_name) {
+                        fprintf(out, "    {\n");
+                        fprintf(out, "        Value __super_ctor_args[%d];\n", arg_count > 0 ? arg_count : 1);
+                        fprintf(out, "        for (int __k = 0; __k < %d; __k++) __super_ctor_args[__k] = __stk[__sp - %d + __k];\n", arg_count, arg_count);
+                        fprintf(out, "        __sp -= %d;\n", in.b);
+                        /* 调用父类构造函数：lumyr_func_<父类名>___init__<参数个数>(self, args...) */
+                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s___init__(%d", parent_name, arg_count);
+                        for(int ak = 0; ak < arg_count; ak++) {
+                            fprintf(out, ", __super_ctor_args[%d]", ak);
+                        }
+                        fprintf(out, ");\n");
+                        fprintf(out, "    }\n");
+                    } else {
+                        /* 如果没有自定义构造函数，直接返回 self */
+                        fprintf(out, "    {\n");
+                        fprintf(out, "        Value __super_self = __stk[__sp - 1];\n");
+                        fprintf(out, "        __sp -= %d;\n", in.b);
+                        fprintf(out, "        __stk[__sp++] = __super_self;\n");
+                        fprintf(out, "    }\n");
+                    }
+                    i++;
+                    continue;
+                }
+
                 /* 帧链优先（VM 语义）：名字是局部/全局变量时按函数值动态调用，
                    与具名全局函数冲突时以变量为准（局部闭包遮蔽全局函数） */
                 int is_var = (g_cur_fn && (fn_has_param(g_cur_fn, nm) || ns_has(&fn_locals, nm) ||

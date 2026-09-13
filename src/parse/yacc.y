@@ -1298,14 +1298,14 @@ postfix_expr
     | postfix_expr MINUSMINUS { $$ = ast_unary(OP_POST_DEC, $1); }
     /* 调用链 f(1)(2)：callee 为表达式（函数值），动态调用 */
     | postfix_expr LPAREN arg_list RPAREN {
-          /* super(args)：调用父类构造函数，转换为 super_method_call("__init__", current_class, self, args) */
+          /* super(args)：调用父类构造函数，转换为 __super_ctor_<当前类名>(self, args) */
           if($1->type == AST_VAR && strcmp($1->u.varname, "super") == 0) {
               AstNode* self_arg = L(ast_var(strdup("self")));
               AstNode* all_args = $3 ? ast_seq_front($3, self_arg) : self_arg;
-              AstNode* class_name_arg = ast_string(strdup(g_current_class_name ? g_current_class_name : ""));
-              AstNode* method_name_arg = ast_string(strdup("__init__"));
-              AstNode* call_args = ast_seq(method_name_arg, ast_seq(class_name_arg, all_args));
-              $$ = L(ast_call(strdup("super_method_call"), call_args));
+              /* 生成特殊的函数名：__super_ctor_<当前类名> */
+              char ctor_name[256];
+              snprintf(ctor_name, sizeof(ctor_name), "__super_ctor_%s", g_current_class_name ? g_current_class_name : "unknown");
+              $$ = L(ast_call(strdup(ctor_name), all_args));
           } else {
               $$ = L(ast_dyn_call($1, $3));
           }
@@ -1329,14 +1329,13 @@ postfix_expr
               free($3);
               $$ = L(ast_dyn_call(fn, margs));
           } else if(recv->type == AST_VAR && strcmp(recv->u.varname, "super") == 0) {
-              /* super.method(args)：调用父类方法，转换为 super_method_call("method", current_class, self, args) */
+              /* super.method(args)：调用父类方法，转换为 __super_call_<当前类名>_<方法名>(self, args) */
               AstNode* self_arg = L(ast_var(strdup("self")));
               AstNode* all_args = margs ? ast_seq_front(margs, self_arg) : self_arg;
-              /* 方法名作为第一个参数，当前类名作为第二个参数，self 作为第三个参数 */
-              AstNode* method_name_arg = ast_string(strdup($3));
-              AstNode* class_name_arg = ast_string(strdup(g_current_class_name ? g_current_class_name : ""));
-              AstNode* call_args = ast_seq(method_name_arg, ast_seq(class_name_arg, all_args));
-              $$ = L(ast_call(strdup("super_method_call"), call_args));
+              /* 生成特殊的函数名：__super_call_<当前类名>_<方法名> */
+              char super_call_name[256];
+              snprintf(super_call_name, sizeof(super_call_name), "__super_call_%s_%s", g_current_class_name ? g_current_class_name : "unknown", $3);
+              $$ = L(ast_call(strdup(super_call_name), all_args));
           } else {
               $$ = L(ast_call($3, margs ? ast_seq_front(margs, recv) : recv));
           }

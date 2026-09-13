@@ -2269,6 +2269,115 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_CALL: {
                 const char* fname = bf->syms[in.a];
                 int argc = in.b;
+                /* __super_call_<当前类名>_<方法名>(self, args...)：调用父类方法（编译期静态绑定） */
+                if(strncmp(fname, "__super_call_", 13) == 0 && argc >= 1) {
+                    /* 解析函数名，获取当前类名和方法名 */
+                    const char* rest = fname + 13;
+                    char current_class_name[128] = {0};
+                    char method_name[128] = {0};
+                    const char* underscore = strchr(rest, '_');
+                    if(underscore) {
+                        int class_len = underscore - rest;
+                        if(class_len > 0 && class_len < 127) {
+                            strncpy(current_class_name, rest, class_len);
+                            current_class_name[class_len] = '\0';
+                        }
+                        strncpy(method_name, underscore + 1, 127);
+                        method_name[127] = '\0';
+                    }
+                    /* 根据当前类名查找父类 */
+                    const char* parent_name = NULL;
+                    if(current_class_name[0]) {
+                        TypeDef* td = class_lookup(current_class_name);
+                        if(td && td->parent) parent_name = td->parent;
+                    }
+                    Value self_val = stack[sp - argc];
+                    if(self_val.type == VAL_MAP && parent_name && method_name[0]) {
+                        void* rf = class_find_method_func(parent_name, method_name);
+                        if(rf) {
+                            /* 调用父类方法：使用和 super_method_call 相同的方式 */
+                            RuntimeFunc* rf_ptr = (RuntimeFunc*)rf;
+                            Value* eval_args = &stack[sp - argc];  /* 从 self 开始 */
+                            int call_argc = argc;
+                            StackFrame* callee = stackframe_new(frame);
+                            if(interp_func_is_payload(rf_ptr)) {
+                                int pcnt = interp_func_param_cnt(rf_ptr);
+                                for(int i = 0; i < pcnt; i++) {
+                                    const char* pname = interp_func_param_name(rf_ptr, i);
+                                    Value bound = (i < call_argc) ? eval_args[i] : val_none();
+                                    stackframe_bind(callee, pname, bound);
+                                }
+                            }
+                            closure_bind_cells(rf_ptr, callee);
+                            RuntimeFunc* prev_rf = interp_set_current_rf(rf_ptr);
+                            int saved_break = ctx->hit_break;
+                            int saved_cont = ctx->hit_continue;
+                            ctx->hit_break = 0;
+                            ctx->hit_continue = 0;
+                            g_trace_push(fname);
+                            Value ret = rf_ptr->entry(call_argc, eval_args, ctx, callee);
+                            if(g_trace_n > 0) g_trace_n--;
+                            ctx->hit_break = saved_break;
+                            ctx->hit_continue = saved_cont;
+                            interp_set_current_rf(prev_rf);
+                            stackframe_destroy(callee);
+                            sp -= argc;
+                            stack[sp++] = ret;
+                            break;
+                        }
+                    }
+                    runtime_error("super 调用失败：无法找到父类方法");
+                }
+                /* __super_ctor_<当前类名>(self, args...)：调用父类构造函数（编译期静态绑定） */
+                if(strncmp(fname, "__super_ctor_", 14) == 0 && argc >= 1) {
+                    /* 解析函数名，获取当前类名 */
+                    const char* current_class_name = fname + 14;
+                    /* 根据当前类名查找父类 */
+                    const char* parent_name = NULL;
+                    if(current_class_name[0]) {
+                        TypeDef* td = class_lookup(current_class_name);
+                        if(td && td->parent) parent_name = td->parent;
+                    }
+                    Value self_val = stack[sp - argc];
+                    if(self_val.type == VAL_MAP && parent_name) {
+                        /* 调用父类构造函数 */
+                        void* rf = class_find_method_func(parent_name, "__init__");
+                        if(rf) {
+                            RuntimeFunc* rf_ptr = (RuntimeFunc*)rf;
+                            Value* eval_args = &stack[sp - argc];
+                            int call_argc = argc;
+                            StackFrame* callee = stackframe_new(frame);
+                            if(interp_func_is_payload(rf_ptr)) {
+                                int pcnt = interp_func_param_cnt(rf_ptr);
+                                for(int i = 0; i < pcnt; i++) {
+                                    const char* pname = interp_func_param_name(rf_ptr, i);
+                                    Value bound = (i < call_argc) ? eval_args[i] : val_none();
+                                    stackframe_bind(callee, pname, bound);
+                                }
+                            }
+                            closure_bind_cells(rf_ptr, callee);
+                            RuntimeFunc* prev_rf = interp_set_current_rf(rf_ptr);
+                            int saved_break = ctx->hit_break;
+                            int saved_cont = ctx->hit_continue;
+                            ctx->hit_break = 0;
+                            ctx->hit_continue = 0;
+                            g_trace_push(fname);
+                            Value ret = rf_ptr->entry(call_argc, eval_args, ctx, callee);
+                            if(g_trace_n > 0) g_trace_n--;
+                            ctx->hit_break = saved_break;
+                            ctx->hit_continue = saved_cont;
+                            interp_set_current_rf(prev_rf);
+                            stackframe_destroy(callee);
+                            sp -= argc;
+                            stack[sp++] = ret;
+                            break;
+                        }
+                    }
+                    /* 如果没有自定义构造函数，直接返回 self */
+                    sp -= argc;
+                    stack[sp++] = self_val;
+                    break;
+                }
                 /* super_method_call(method_name, current_class, self, args...)：调用父类方法 */
                 if(strcmp(fname, "super_method_call") == 0 && argc >= 3) {
                     Value method_name_val = stack[sp - argc];
