@@ -2331,7 +2331,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* __super_ctor_<当前类名>(self, args...)：调用父类构造函数（编译期静态绑定） */
                 if(strncmp(fname, "__super_ctor_", 13) == 0 && argc >= 1) {
                     /* 解析函数名，获取当前类名 */
-                    const char* current_class_name = fname + 14;
+                    const char* current_class_name = fname + 13;
                     /* 根据当前类名查找父类 */
                     const char* parent_name = NULL;
                     if(current_class_name[0]) {
@@ -2341,7 +2341,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     Value self_val = stack[sp - argc];
                     if(self_val.type == VAL_MAP && parent_name) {
                         /* 调用父类构造函数 */
-                        void* rf = class_find_method_func(parent_name, "__init__");
+                        void* rf = class_get_constructor_func(parent_name);
                         if(rf) {
                             RuntimeFunc* rf_ptr = (RuntimeFunc*)rf;
                             Value* eval_args = &stack[sp - argc];
@@ -2440,8 +2440,10 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     snprintf(buf, sizeof(buf), "super 调用失败：无法找到父类方法");
                     runtime_error(buf);
                 }
-                /* __init__(obj, args...)：调用 class 构造函数 */
-                if(strcmp(fname, "__init__") == 0 && argc >= 1) {
+                /* <类名>___init__(obj, args...)：调用 class 构造函数 */
+                {
+                    size_t flen = strlen(fname);
+                    if(flen >= 9 && strcmp(fname + flen - 9, "___init__") == 0 && argc >= 1) {
                     Value self_val = stack[sp - argc];
                     if(self_val.type == VAL_MAP &&
                        lumyr_map_has(self_val, lumyr_make_string("__classname__"))) {
@@ -2491,10 +2493,11 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                             }
                         }
                     }
-                    /* 如果 __init__ 调用失败，报错 */
+                    /* 如果构造函数调用失败，报错 */
                     char buf[256];
-                    snprintf(buf, sizeof(buf), "__init__ 调用失败：无法找到构造函数");
+                    snprintf(buf, sizeof(buf), "构造函数调用失败：无法找到构造函数");
                     runtime_error(buf);
+                    }
                 }
                 // 1. 查函数：帧链 VAL_FUNC → 全局函数表 → class 方法表
                 Value func_val;

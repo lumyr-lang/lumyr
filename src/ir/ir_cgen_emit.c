@@ -1604,10 +1604,11 @@ void emit_insns(BytecodeFunc* fn)
                         fprintf(out, "        Value __super_ctor_args[%d];\n", arg_count > 0 ? arg_count : 1);
                         fprintf(out, "        for (int __k = 0; __k < %d; __k++) __super_ctor_args[__k] = __stk[__sp - %d + __k];\n", arg_count, arg_count);
                         fprintf(out, "        __sp -= %d;\n", in.b);
-                        /* 调用父类构造函数：lumyr_func_<父类名>___init__<参数个数>(self, args...) */
-                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s___init__%d(", parent_name, arg_count);
+                        /* 调用父类构造函数：lumyr_func_<父类名>___init__(self, args...) */
+                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s___init__(", parent_name);
                         for(int ak = 0; ak < arg_count; ak++) {
-                            fprintf(out, ", __super_ctor_args[%d]", ak);
+                            if(ak > 0) fprintf(out, ", ");
+                            fprintf(out, "__super_ctor_args[%d]", ak);
                         }
                         fprintf(out, ");\n");
                         fprintf(out, "    }\n");
@@ -1942,7 +1943,14 @@ void emit_insns(BytecodeFunc* fn)
                         /* 生成器函数：goto __gen_end（由 footer 设置 state=-1 并返回 null） */
                         fprintf(out, "    goto __gen_end;\n");
                     } else {
-                        fprintf(out, "    return val_none();\n");
+                        /* 构造函数：返回 self（第一个参数），而不是 val_none() */
+                        const char* ctor_fn_name = g_cur_fn ? g_cur_fn->name : NULL;
+                        size_t ctor_flen = ctor_fn_name ? strlen(ctor_fn_name) : 0;
+                        if(ctor_flen >= 9 && strcmp(ctor_fn_name + ctor_flen - 9, "___init__") == 0) {
+                            fprintf(out, "    return lmloc_self;\n");
+                        } else {
+                            fprintf(out, "    return val_none();\n");
+                        }
                     }
                 } else {
                     fprintf(out, "    gc_pop_cframe();\n");

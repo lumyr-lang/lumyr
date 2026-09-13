@@ -340,9 +340,11 @@ static AstNode* build_type_ctor(AstNode* call, TypeDef* t)
         items = ast_seq(items, ast_map_entry(ast_string(strdup("__classname__")),
                                              ast_string(strdup(t->name))));
         AstNode* obj = ast_map_lit(items);
-        /* 2. 调用 __init__(obj, args...)：构造函数名作为函数名，obj 作为第一个参数 */
+        /* 2. 调用 <类名>___init__(obj, args...)：构造函数名作为函数名，obj 作为第一个参数 */
         AstNode* ctor_args = ast_seq(obj, args);
-        AstNode* ctor_call = ast_call(strdup("__init__"), ctor_args);
+        char* ctor_name = (char*)malloc(strlen(t->name) + 10);
+        sprintf(ctor_name, "%s___init__", t->name);
+        AstNode* ctor_call = ast_call(ctor_name, ctor_args);
         call->u.call.args = NULL;
         /* 3. 用一个临时变量保存对象，调用构造函数后返回对象 */
         /* 简化处理：直接返回构造函数调用（构造函数修改 self 后返回 self） */

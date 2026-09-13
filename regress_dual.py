@@ -35,7 +35,6 @@ SKIP_LIST = {
     "lock_test2.lm", "threadlocal_test.lm", "gc_return_race.lm",
     "gc_promotion_test.lm", "gc_efficiency_diag.lm", "mem_leak_test.lm",
     "closure_test.lm",  # CC模式暂不支持闭包捕获
-    "class_constructor_test.lm", "class_multi_param_test.lm", "class_super_ctor_test.lm", "class_comprehensive_test.lm", "class_interface_test.lm", "class_interface_full_test.lm", "class_interface_missing_test.lm",  # CC模式暂不支持
 }
 
 
@@ -156,7 +155,8 @@ def run_test(fullpath, base, name, tmp_dir):
         cc_norm = timestamp_pattern.sub(b'[TIMESTAMP]', cc_data)
 
         # Filter out FFI Warning lines and other runtime warnings (VM vs CC difference)
-        warning_pattern = re.compile(rb'^.*(FFI Warning|Warning:|Runtime Warning).*$\n?', re.MULTILINE)
+        # "警告：" 的 UTF-8 编码是 \xe8\xad\xa6\xe5\x91\x8a\xef\xbc\x9a
+        warning_pattern = re.compile(rb'^.*(FFI Warning|Warning:|Runtime Warning|\xe8\xad\xa6\xe5\x91\x8a\xef\xbc\x9a).*$\n?', re.MULTILINE)
         vm_norm = warning_pattern.sub(b'', vm_norm)
         cc_norm = warning_pattern.sub(b'', cc_norm)
 

@@ -1444,6 +1444,11 @@ class_prop_list
             $2->u.func_def.is_class_method = 1;
             /* __init__ 方法作为构造函数，不加入方法表，单独保存 */
             if(strcmp($2->u.func_def.name, "__init__") == 0) {
+                /* 给构造函数一个唯一的名字 <类名>___init__，避免 CC 模式下多个类的构造函数冲突 */
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
+                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                free($2->u.func_def.name);
+                $2->u.func_def.name = ctor_name;
                 g_class_constructor = $2;
             } else {
                 g_class_method_push($2);
