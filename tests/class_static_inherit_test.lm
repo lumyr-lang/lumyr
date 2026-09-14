@@ -1,0 +1,49 @@
+// 测试带继承和接口的 class 静态方法
+print("=== 带继承和接口的 Class 静态方法测试 ===");
+
+interface Shape {
+    func area(): double;
+}
+
+class Base {
+    static func base_static() {
+        return "base_static";
+    }
+
+    func base_method(self) {
+        return "base_method";
+    }
+}
+
+class Circle extends Base implements Shape {
+    radius: double
+
+    static func circle_static() {
+        return "circle_static";
+    }
+
+    func __init__(self, radius) {
+        self.radius = radius;
+    }
+
+    func area(self) {
+        return 3.14159 * self.radius * self.radius;
+    }
+}
+
+// 测试基类的静态方法
+print("测试1 - Base_base_static(): ", Base_base_static());
+
+// 测试子类的静态方法
+print("测试2 - Circle_circle_static(): ", Circle_circle_static());
+
+// 测试子类的实例方法
+c = Circle(5.0);
+print("测试3 - c.area(): ", c.area());
+print("测试4 - c.base_method(): ", c.base_method());
+
+// 测试静态方法可以像普通函数一样使用
+result = Circle_circle_static();
+print("测试5 - 变量存储结果: ", result);
+
+print("=== 带继承和接口的 Class 静态方法测试完成 ===");

@@ -335,7 +335,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %token TOK_INT TOK_DOUBLE TOK_CHAR TOK_STRING TOK_BOOL TOK_ASCII TOK_BYTE
 %token TOK_INT8 TOK_INT16 TOK_INT32 TOK_INT64 TOK_UINT8 TOK_UINT16 TOK_UINT32 TOK_UINT64 TOK_UINT TOK_LONG TOK_LONGLONG TOK_FLOAT TOK_ULONG TOK_UCHAR TOK_SHORT TOK_USHORT TOK_SIZE_T TOK_SSIZE_T TOK_VOID TOK_LONG_DOUBLE TOK_PTR
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
-%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER
+%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
 %token SWITCH CASE DEFAULT BREAK RETURN TRY CATCH THROW FINALLY
@@ -605,11 +605,12 @@ closed_stmt
       }
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
+          char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, NULL);
-          /* 添加方法到 class 方法表 */
+          /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF) {
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
@@ -622,7 +623,22 @@ closed_stmt
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：直接编译并注册到全局符号表 */
+                  g_current_class_name = NULL;  // 临时设置为 NULL，以便注册到全局符号表
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;  // 恢复
+              } else {
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              }
           }
           if(g_class_constructor) {
               method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
@@ -634,11 +650,12 @@ closed_stmt
       }
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
+          char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, NULL);
-          /* 添加方法到 class 方法表 */
+          /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF) {
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
@@ -651,7 +668,10 @@ closed_stmt
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              /* 静态方法已经在语法分析阶段编译并注册了，这里跳过 */
+              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              }
           }
           if(g_class_constructor) {
               method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
@@ -664,11 +684,12 @@ closed_stmt
       }
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
+          char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, g_class_interfaces);
-          /* 添加方法到 class 方法表 */
+          /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF) {
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
@@ -681,7 +702,10 @@ closed_stmt
           AstNode* method_list2 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
+              /* 静态方法已经在语法分析阶段编译并注册了，这里跳过 */
+              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+                  method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
+              }
           }
           if(g_class_constructor) {
               method_list2 = method_list2 ? ast_seq(method_list2, g_class_constructor) : g_class_constructor;
@@ -704,10 +728,10 @@ closed_stmt
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
-          /* 添加方法到 class 方法表 */
+          /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF) {
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
@@ -1465,6 +1489,30 @@ class_prop_list
             }
         }
         $$ = ast_seq($1, $2);
+      }
+    | class_prop_list TOK_STATIC func_def  {
+        /* class 静态方法定义：生成一个全局函数，函数名加上 class 名前缀 */
+        if($3 && $3->type == AST_FUNC_DEF) {
+            /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
+            char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
+            sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
+            free($3->u.func_def.name);
+            $3->u.func_def.name = static_name;
+            /* 标记为静态方法 */
+            $3->u.func_def.is_class_method = 0;  // 不标记为 class 方法，作为普通全局函数处理
+            $3->u.func_def.is_static_method = 1;
+            /* 立即注册到符号表，以便语义检查阶段能找到 */
+            RuntimeFunc* rf = compile_func_from_ast($3);
+            if(rf) {
+                Value fv;
+                fv.type = VAL_FUNC;
+                fv.v.func.ffi_func = NULL;
+                fv.v.func.is_ffi = 0;
+                fv.v.func.func_obj = (void*)rf;
+                sym_set($3->u.func_def.name, fv);
+            }
+        }
+        $$ = ast_seq($1, $3);
       }
     ;
 class_prop

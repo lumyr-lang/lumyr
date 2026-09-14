@@ -113,6 +113,7 @@ static int is_expr_end(int t)
 "ptr"           { LEX_RET(TOK_PTR); }
 "pointer"       { LEX_RET(TOK_PTR); }
 "handle"        { LEX_RET(TOK_PTR); }
+"static"        { LEX_RET(TOK_STATIC); }
 
 "..."           { LEX_RET(ELLIPSIS); }
 

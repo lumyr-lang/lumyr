@@ -1,0 +1,41 @@
+// 测试 class 静态方法
+print("=== Class 静态方法测试 ===");
+
+class MathUtils {
+    // 静态方法：不需要实例就可以调用
+    static func add(a, b) {
+        return a + b;
+    }
+
+    static func multiply(a, b) {
+        return a * b;
+    }
+
+    static func max(a, b) {
+        if (a > b) {
+            return a;
+        } else {
+            return b;
+        }
+    }
+
+    // 实例方法
+    func get_name(self) {
+        return "MathUtils";
+    }
+}
+
+// 测试静态方法调用（通过类名直接调用）
+print("测试1 - MathUtils_add(3, 5): ", MathUtils_add(3, 5));
+print("测试2 - MathUtils_multiply(4, 6): ", MathUtils_multiply(4, 6));
+print("测试3 - MathUtils_max(10, 20): ", MathUtils_max(10, 20));
+
+// 测试静态方法可以像普通函数一样使用
+result = MathUtils_add(10, 20);
+print("测试4 - 变量存储结果: ", result);
+
+// 测试实例方法仍然正常工作
+m = MathUtils();
+print("测试5 - 实例方法: ", m.get_name());
+
+print("=== Class 静态方法测试完成 ===");

@@ -438,9 +438,12 @@ static int typecheck_call(AstNode* node)
                        不在全局符号表中，运行时根据对象类型动态查找，所以编译期不报错 */
                     int nargs = typecheck_arg_count(node->u.call.args);
                     if(nargs == 0) {
-                        /* 无参数的函数调用，不可能是方法调用，报错 */
-                        fprintf(stderr,"语义错误(第%d行)：调用未定义函数 %s\n", node->line, node->u.call.name);
-                        err = 1;
+                        /* 无参数的函数调用，不可能是方法调用，报错
+                           但是静态方法的函数名是 <类名>_<方法名>，包含 _，跳过检查 */
+                        if(strchr(node->u.call.name, '_') == NULL) {
+                            fprintf(stderr,"语义错误(第%d行)：调用未定义函数 %s\n", node->line, node->u.call.name);
+                            err = 1;
+                        }
                     }
                     /* 有参数的函数调用，可能是方法调用，不报错，运行时查找 */
                 }
