@@ -5,6 +5,7 @@
  */
 #include "ir_cgen_internal.h"
 #include "rbtree.h"
+#include "lumyr_debug.h"
 
 
 
@@ -33,6 +34,25 @@ typedef struct {
 } MethodDefCountCtx;
 
 /* 统计方法定义数量的回调函数 */
+/* 统一的函数名生成函数：所有需要计算最终函数名的地方都调用这个函数
+ * 规则：
+ * 1. 构造函数（函数名以 ___init__ 结尾）：直接返回 fn->name（已经包含类名前缀）
+ * 2. class 方法（fn->class_name 存在）：返回 "<class_name>_<name>_<param_cnt>"
+ * 3. 普通函数：直接返回 fn->name
+ */
+static const char* get_final_func_name(BytecodeFunc* fn)
+{
+    static char final_name_buf[256];
+    /* 构造函数的函数名已经是 <类名>___init__ 格式，不需要再加 class_name 前缀 */
+    size_t name_len = strlen(fn->name);
+    _Bool is_constructor = (name_len >= 9 && strcmp(fn->name + name_len - 9, "___init__") == 0);
+    if(fn->class_name && !is_constructor) {
+        snprintf(final_name_buf, sizeof(final_name_buf), "%s_%s_%d", fn->class_name, fn->name, fn->param_cnt);
+        return final_name_buf;
+    }
+    return fn->name;
+}
+
 static void count_method_def_cb(const char* name, TypeDef* td, void* user_data)
 {
     (void)name;
@@ -531,12 +551,7 @@ void emit_func_proto(BytecodeFunc* fn)
 
     int has_caps = lambda_has_captures(fn->name);
     /* class 方法使用 classname_methodname_paramcount 的命名方式，避免命名冲突 */
-    const char* func_name = fn->name;
-    static char class_func_name[256];
-    if(fn->class_name) {
-        snprintf(class_func_name, sizeof(class_func_name), "%s_%s_%d", fn->class_name, fn->name, fn->param_cnt);
-        func_name = class_func_name;
-    }
+    const char* func_name = get_final_func_name(fn);
     fprintf(out, "static Value lumyr_func_%s(", func_name);
     if(has_caps) fprintf(out, "Value** __caps");
     int total = fn->param_cnt + (fn->has_variadic ? 1 : 0);
@@ -570,12 +585,9 @@ static void mark_def_generated(const char* name) {
 void emit_func_def(BytecodeFunc* fn)
 {
     /* 计算最终的函数名（包含 class 前缀和参数个数） */
-    const char* final_name_def = fn->name;
-    static char final_class_name_def[256];
-    if(fn->class_name) {
-        snprintf(final_class_name_def, sizeof(final_class_name_def), "%s_%s_%d", fn->class_name, fn->name, fn->param_cnt);
-        final_name_def = final_class_name_def;
-    }
+    const char* final_name_def = get_final_func_name(fn);
+    LUMYR_DBG("emit_func_def: name=%s, class_name=%s, final_name=%s, param_cnt=%d",
+              fn->name, fn->class_name ? fn->class_name : "(null)", final_name_def, fn->param_cnt);
     /* 如果已经生成过定义，跳过 */
     if(is_def_generated(final_name_def)) return;
     mark_def_generated(final_name_def);
@@ -637,12 +649,7 @@ void emit_func_def(BytecodeFunc* fn)
     }
     int has_caps = lambda_has_captures(fn->name);
     /* class 方法使用 classname_methodname_paramcount 的命名方式，避免命名冲突 */
-    const char* func_name = fn->name;
-    static char class_func_name[256];
-    if(fn->class_name) {
-        snprintf(class_func_name, sizeof(class_func_name), "%s_%s_%d", fn->class_name, fn->name, fn->param_cnt);
-        func_name = class_func_name;
-    }
+    const char* func_name = get_final_func_name(fn);
     fprintf(out, "static Value lumyr_func_%s(", func_name);
     if(has_caps) fprintf(out, "Value** __caps");
     int total = fn->param_cnt + (fn->has_variadic ? 1 : 0);
@@ -842,6 +849,8 @@ static void emit_func_wrap_cb(const char* class_name, const char* method_name, v
     (void)class_name;
     (void)method_name;
     BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* 计算最终的函数名（包含 class 前缀和参数个数），与 emit_func_def 保持一致 */
+    const char* final_func_name = get_final_func_name(fn);
     /* 避免同名函数重复定义 */
     if(wrap_name_exists(fn->name)) return;
     wrap_name_add(fn->name);
@@ -864,7 +873,7 @@ static void emit_func_wrap_cb(const char* class_name, const char* method_name, v
         fprintf(out, "    Value __gv; __gv.type = VAL_GENERATOR; __gv.v.generator = (void*)__gen;\n");
         fprintf(out, "    return __gv;\n}\n\n");
     } else {
-        fprintf(out, "    Value __wrap_ret = lumyr_func_%s(", fn->name);
+        fprintf(out, "    Value __wrap_ret = lumyr_func_%s(", final_func_name);
         int total = fn->param_cnt + (fn->has_variadic ? 1 : 0);
         if(has_caps)
             fprintf(out, "(Value**)__ctx");
@@ -905,7 +914,10 @@ static void emit_func_def_cb(const char* class_name, const char* method_name, vo
 {
     (void)class_name;
     (void)method_name;
-    emit_func_def((BytecodeFunc*)data);
+    BytecodeFunc* fn = (BytecodeFunc*)data;
+    LUMYR_DBG("emit_func_def_cb called: name=%s, class_name=%s",
+              fn->name, fn->class_name ? fn->class_name : "(null)");
+    emit_func_def(fn);
 }
 
 /* 回调函数：用于红黑树遍历生成 lum_wrap_<name> 前置声明 */
@@ -1348,7 +1360,9 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "\n");
 
     // 函数定义
+    LUMYR_DBG("Before ir_func_table_foreach(emit_func_def_cb)");
     ir_func_table_foreach(emit_func_def_cb, out);
+    LUMYR_DBG("After ir_func_table_foreach(emit_func_def_cb)");
 
     // 高阶函数统一调用包装 + 函数表（VM 端 VAL_FUNC 指向 RuntimeFunc，C 端指向此包装）
     emit_func_wraps();
@@ -1499,11 +1513,14 @@ void emit_main(BytecodeFunc* main_fn)
 
 void ir_cgen_file(const char* out_c_path, BytecodeFunc* main_fn)
 {
+    LUMYR_DBG("ir_cgen_file called: out_c_path=%s, main_fn=%p", out_c_path, (void*)main_fn);
     out = fopen(out_c_path, "w");
     if(!out) {
         perror("open output c file failed");
+        LUMYR_DBG("ir_cgen_file: failed to open output file");
         return;
     }
+    LUMYR_DBG("ir_cgen_file: output file opened successfully");
 
     // 大项目架构：生成代码只包含业务逻辑，runtime 通过链接静态库提供
     fprintf(out, "#include <stdio.h>\n");
@@ -1535,6 +1552,9 @@ void ir_cgen_file(const char* out_c_path, BytecodeFunc* main_fn)
      * 提供 gc_runtime.c 引用的 lumyr_interp_scan_captures 弱定义桩，避免链接缺失符号。 */
     fprintf(out, "\n__attribute__((weak)) void lumyr_interp_scan_captures(const RuntimeFunc* rf, void (*mark)(Value)) { (void)rf; (void)mark; }\n\n");
 
+    LUMYR_DBG("ir_cgen_file: before emit_main");
     emit_main(main_fn);
+    LUMYR_DBG("ir_cgen_file: after emit_main");
     fclose(out);
+    LUMYR_DBG("ir_cgen_file: done");
 }

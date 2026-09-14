@@ -646,9 +646,6 @@ closed_stmt
                   method_list = method_list ? ast_seq(method_list, mnode) : mnode;
               }
           }
-          if(g_class_constructor) {
-              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
-          }
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
@@ -696,9 +693,6 @@ closed_stmt
                   method_list = method_list ? ast_seq(method_list, mnode) : mnode;
               }
           }
-          if(g_class_constructor) {
-              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
-          }
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
@@ -724,9 +718,6 @@ closed_stmt
               if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
                   method_list = method_list ? ast_seq(method_list, mnode) : mnode;
               }
-          }
-          if(g_class_constructor) {
-              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
           }
           g_class_method_clear();
           type_prop_clear();
@@ -758,9 +749,6 @@ closed_stmt
                   method_list = method_list ? ast_seq(method_list, mnode) : mnode;
               }
           }
-          if(g_class_constructor) {
-              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
-          }
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
@@ -787,9 +775,6 @@ closed_stmt
               if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
                   method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
               }
-          }
-          if(g_class_constructor) {
-              method_list2 = method_list2 ? ast_seq(method_list2, g_class_constructor) : g_class_constructor;
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
               class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
@@ -828,9 +813,6 @@ closed_stmt
               if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
                   method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
               }
-          }
-          if(g_class_constructor) {
-              method_list2 = method_list2 ? ast_seq(method_list2, g_class_constructor) : g_class_constructor;
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
@@ -874,9 +856,6 @@ closed_stmt
                   abs_method_list = abs_method_list ? ast_seq(abs_method_list, mnode) : mnode;
               }
           }
-          if(g_class_constructor) {
-              abs_method_list = abs_method_list ? ast_seq(abs_method_list, g_class_constructor) : g_class_constructor;
-          }
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
@@ -900,9 +879,6 @@ closed_stmt
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
-          }
-          if(g_class_constructor) {
-              method_list3 = method_list3 ? ast_seq(method_list3, g_class_constructor) : g_class_constructor;
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
               class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
@@ -937,9 +913,6 @@ closed_stmt
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
-          }
-          if(g_class_constructor) {
-              method_list3 = method_list3 ? ast_seq(method_list3, g_class_constructor) : g_class_constructor;
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {

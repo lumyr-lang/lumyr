@@ -57,6 +57,21 @@ static void ir_func_table_add(BytecodeFunc* fn)
 {
     if(!ir_func_table) ir_func_table = rbtree_create();
     if(fn->name) {
+        /* 跳过原始名字的构造函数注册：构造函数会被改名成 <类名>___init__ 后再注册 */
+        size_t _name_len = strlen(fn->name);
+        _Bool _is_raw_constructor = (_name_len == 8 && strcmp(fn->name, "__init__") == 0 && !fn->class_name);
+        if(_is_raw_constructor) {
+            return;
+        }
+        /* DEBUG: 记录函数注册 */
+        {
+            FILE* __dbg = fopen("debug_func_table.txt", "a");
+            if(__dbg) {
+                fprintf(__dbg, "[ir_func_table_add] name=%s, class_name=%s, param_cnt=%d\n",
+                        fn->name, fn->class_name ? fn->class_name : "(null)", fn->param_cnt);
+                fclose(__dbg);
+            }
+        }
         rbtree_insert(ir_func_table, fn->class_name, fn->name, fn);
     }
 }
@@ -906,7 +921,8 @@ static void c_expr(Ctx* c, AstNode* node)
             /* 引用语义：修改型内置直接原地修改，无需自动 DUP+STORE 回变量 */
             int argc = 0;
             /* 方法调用：self 参数如果是 struct 变量，用 OPC_LOAD_STRUCT_PTR 传递指针 */
-            BytecodeFunc* _callee = ir_func_table_lookup(node->u.call.name);
+            const char* _actual_call_name = node->u.call.name;
+            BytecodeFunc* _callee = ir_func_table_lookup(_actual_call_name);
             if(_callee && _callee->is_method && node->u.call.args) {
                 /* 参数列表可能是 AST_SEQ（多参数）或直接是参数值（单参数） */
                 AstNode* _first_arg = node->u.call.args;
@@ -930,7 +946,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 }
             } else {
                 /* 查找被调用函数，获取 param_is_ref 数组 */
-                BytecodeFunc* _callee_fn = ir_func_table_lookup(node->u.call.name);
+                BytecodeFunc* _callee_fn = ir_func_table_lookup(_actual_call_name);
                 int* _call_param_is_ref = (_callee_fn && _callee_fn->param_is_ref) ? _callee_fn->param_is_ref : NULL;
                 int _call_ref_idx = 0;
                 c_args_ref(c, node->u.call.args, &argc, _call_param_is_ref, &_call_ref_idx);
@@ -938,7 +954,7 @@ static void c_expr(Ctx* c, AstNode* node)
             // 用户函数优先；否则内置函数（len/type/input/range/substr）
             static const char* bnames[BUILTIN_COUNT] = {"len", "type", "input", "range", "substr", "toupper", "tolower", "split", "del", "insert", "floor", "ceil", "abs", "sqrt", "max", "min", "join", "contains", "repeat", "replace", "sum", "avg", "format", "sort", "reverse", "map", "filter", "reduce", "strip", "startswith", "endswith", "read_file", "write_file", "file_exists", "keys", "values", "thread", "thread_join", "mutex", "rmutex", "rwlock", "spinlock", "lock", "unlock", "trylock", "rdlock", "wrlock", "tryrdlock", "trywrlock", "condvar", "cond_wait", "cond_wait_timeout", "cond_signal", "cond_broadcast", "threadlocal_get", "threadlocal_set", "get", "post", "put", "delete", "head", "patch", "json", "stringify", "add", "remove", "clear", "indexOf", "arr_get", "set", "first", "last", "has", "flat", "qs", "addAll", "bytes", "str", "encode", "decode", "encodeURL", "decodeURL", "md5", "encodeBase64", "decodeBase64", "regex_match", "regex_search", "regex_replace", "now", "timestamp", "timestamp_ms", "sleep", "date", "time", "datetime", "format_time", "debug", "info", "warn", "error", "fatal", "gc_count", "gc_bytes", "gc_collect", "gc_stw_ns", "next", "send", "receive", "close", "GenThrow", "chain", "zip", "skip", "take", "enumerate"};
             int bid = -1;
-            if(!ir_func_table_lookup(node->u.call.name)) {
+            if(!ir_func_table_lookup(_actual_call_name)) {
                 for(int k = 0; k < BUILTIN_COUNT; k++) {
                     if(strcmp(node->u.call.name, bnames[k]) == 0) { bid = k; break; }
                 }
@@ -946,7 +962,7 @@ static void c_expr(Ctx* c, AstNode* node)
             if(bid >= 0) {
                 emit(c, OPC_BUILTIN, bid, argc);
             }
-            else emit(c, OPC_CALL, bf_sym(c->fn, node->u.call.name), argc);
+            else emit(c, OPC_CALL, bf_sym(c->fn, _actual_call_name), argc);
             break;
         }
         case AST_DYN_CALL: {
@@ -1789,6 +1805,8 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
                     snprintf(marked_name, marked_len, "class:%s", class_name);
                     self_type = marked_name;
                     fn->method_self_struct = marked_name;
+                    /* 设置 fn->class_name 字段，用于红黑树查找 class 方法 */
+                    fn->class_name = strdup(class_name);
                 }
                 free(class_name);
             }
