@@ -1071,6 +1071,41 @@ static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
     }
 }
 
+/* 生成 class 注册代码的回调函数（把字段信息表注册到运行时红黑树） */
+static void emit_class_register_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    FILE* out = (FILE*)user_data;
+    if(td && td->is_class) {
+        /* 计算字段数量（包括父类的字段，不包括 __classname__） */
+        int nfields = 0;
+        TypeDef* cur = td;
+        while(cur) {
+            for(int fi = 0; fi < cur->nprops; fi++) {
+                if(strcmp(cur->props[fi], "__classname__") != 0) {
+                    /* 检查是否已经计数过（去重） */
+                    int exists = 0;
+                    TypeDef* check = td;
+                    while(check && check != cur) {
+                        for(int cfi = 0; cfi < check->nprops; cfi++) {
+                            if(strcmp(check->props[cfi], cur->props[fi]) == 0) {
+                                exists = 1;
+                                break;
+                            }
+                        }
+                        if(exists) break;
+                        check = check->parent ? type_lookup(check->parent) : NULL;
+                    }
+                    if(!exists) nfields++;
+                }
+            }
+            cur = cur->parent ? type_lookup(cur->parent) : NULL;
+        }
+        fprintf(out, "    lumyr_class_register(\"%s\", %d, lumyr_class_%s_fields, (void*)&lumyr_class_%s_vtable);\n",
+                td->name, nfields, td->name, td->name);
+    }
+}
+
 /* 生成 C class 结构体定义的回调函数 */
 static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
 {
@@ -1110,6 +1145,74 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
             const char* ftype = castkind_to_c_type(ck);
             if(!ftype) ftype = "int64_t";
             fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
+        }
+        fprintf(out, "};\n\n");
+        /* 生成 class 字段信息表（用于运行时属性访问，专门针对 class 的函数）
+           对于每个字段，从子类开始向上遍历继承链，找到第一个"自己定义了这个字段"的类
+           判断一个字段是否是类自己的：检查它是否不在直接父类的 nprops 中 */
+        fprintf(out, "/* class %s 字段信息表 */\n", td->name);
+        fprintf(out, "static ClassFieldInfo lumyr_class_%s_fields[] = {\n", td->name);
+        /* 收集所有字段（去重），并计算每个字段的访问路径 */
+        {
+            /* 先收集所有字段名（去重），从子类开始遍历整个继承链 */
+            char* all_fields[128];
+            int all_field_types[128];
+            int n_all_fields = 0;
+            TypeDef* cur_class = td;
+            while(cur_class && n_all_fields < 128) {
+                for(int fi = 0; fi < cur_class->nprops; fi++) {
+                    if(strcmp(cur_class->props[fi], "__classname__") == 0) continue;
+                    int exists = 0;
+                    for(int j = 0; j < n_all_fields; j++) {
+                        if(strcmp(all_fields[j], cur_class->props[fi]) == 0) {
+                            exists = 1;
+                            break;
+                        }
+                    }
+                    if(!exists) {
+                        all_fields[n_all_fields] = cur_class->props[fi];
+                        int ck = cur_class->field_cast_kinds ? cur_class->field_cast_kinds[fi] : CAST_LONGLONG;
+                        all_field_types[n_all_fields] = ck;
+                        n_all_fields++;
+                    }
+                }
+                cur_class = cur_class->parent ? type_lookup(cur_class->parent) : NULL;
+            }
+            /* 辅助函数：判断一个字段是否是某个类自己的（不在直接父类的 nprops 中） */
+            /* 对于每个字段，从子类开始向上遍历继承链，找到第一个自己定义这个字段的类 */
+            for(int fi = 0; fi < n_all_fields; fi++) {
+                const char* fname = all_fields[fi];
+                int ftype = all_field_types[fi];
+                int depth = 0;  /* 0 表示子类自己的字段，没有 super 前缀 */
+                TypeDef* find_cur = td;
+                while(find_cur) {
+                    /* 检查这个字段是否是 find_cur 自己的（不在直接父类的 nprops 中） */
+                    int is_own = 1;
+                    if(find_cur->parent) {
+                        TypeDef* find_parent = type_lookup(find_cur->parent);
+                        if(find_parent) {
+                            for(int pfi = 0; pfi < find_parent->nprops; pfi++) {
+                                if(strcmp(find_parent->props[pfi], fname) == 0) {
+                                    is_own = 0;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if(is_own) break;  /* 找到了第一个自己定义这个字段的类 */
+                    depth++;
+                    find_cur = find_cur->parent ? type_lookup(find_cur->parent) : NULL;
+                }
+                /* 生成字段类型 */
+                const char* ftype_str = "CLASS_FIELD_INT";
+                if(ftype == CAST_DOUBLE || ftype == CAST_FLOAT || ftype == CAST_LONG_DOUBLE) ftype_str = "CLASS_FIELD_DOUBLE";
+                else if(ftype == CAST_STRING) ftype_str = "CLASS_FIELD_STRING";
+                else if(ftype == CAST_BOOL) ftype_str = "CLASS_FIELD_BOOL";
+                /* 生成字段信息表项 */
+                fprintf(out, "    {\"%s\", offsetof(lumyr_class_%s, ", fname, td->name);
+                for(int d = 0; d < depth; d++) fprintf(out, "super.");
+                fprintf(out, "%s), %s},\n", fname, ftype_str);
+            }
         }
         fprintf(out, "};\n\n");
     }
@@ -1217,6 +1320,10 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "int main(void){\n");
     fprintf(out, "    Value __stk[%d];\n", maxd + 2);
     fprintf(out, "    int __sp = 0;\n");
+    // 注册所有 class 的字段信息表到运行时红黑树（用于运行时属性访问）
+    fprintf(out, "    /* 注册 class 字段信息表到运行时红黑树 */\n");
+    type_foreach(emit_class_register_cb, out);
+    fprintf(out, "\n");
     /* 全局 struct 变量初始化：VAL_STRUCT_PTR，零拷贝传递 */
     /* 注意：class 类型（以 class: 开头）是引用类型，实例通过 OPC_CLASS_NEW 动态创建，不需要静态初始化 */
     for(int gi = 0; gi < g_globals.count; gi++) {
@@ -1362,7 +1469,8 @@ void ir_cgen_file(const char* out_c_path, BytecodeFunc* main_fn)
     fprintf(out, "#include \"lm_regex.h\"\n");
     fprintf(out, "#include \"lm_time.h\"\n");
     fprintf(out, "#include \"lm_qs.h\"\n");
-    fprintf(out, "#include \"lumyr_value.h\"\n\n");
+    fprintf(out, "#include \"lumyr_value.h\"\n");
+    fprintf(out, "#include \"lm_class.h\"\n\n");
     /* 生成器相关全局变量：当前生成器实例的 send 值（receive() 返回） */
     fprintf(out, "static Value __g_gen_send_val = {0};\n");
     fprintf(out, "static int __g_gen_in_generator = 0;\n\n");

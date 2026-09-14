@@ -1,5 +1,6 @@
 #include "lm_value.h"
 #include "lm_json.h"
+#include "lm_class.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -298,18 +299,14 @@ Value lumyr_index_get(Value c, Value idx) {
         return lumyr_map_get(c, idx);
     }
     /* VAL_STRUCT_PTR（C 结构体实例，class 的 C 结构体优化）：
-       支持 __classname__ 只读属性访问（通过固定偏移量 sizeof(void*) 访问，
-       因为无论继承链有多深，__classname__ 字段总是在 vtable 指针之后） */
+       所有属性访问都走专门的 lumyr_class_get_field 函数（通过红黑树查找字段信息，然后通过偏移量直接访问 C 结构体字段）
+       这样即使没有类型标记（如函数参数），也能正确访问 class 的属性 */
     if(c.type == VAL_STRUCT_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            if(strcmp(idxcs, "__classname__") == 0 && c.v.struct_ptr) {
-                /* __classname__ 字段的偏移量总是 sizeof(void*)（vtable 指针之后） */
-                const char** classname_ptr = (const char**)((char*)c.v.struct_ptr + sizeof(void*));
-                return lumyr_make_string(*classname_ptr ? *classname_ptr : "");
-            }
+            return lumyr_class_get_field(c, idxcs);
         }
-        runtime_error("结构体下标必须是字符串键");
+        runtime_error("class 属性访问必须是字符串键");
         return val_none();
     }
     if(c.type == VAL_ERROR) {
@@ -360,6 +357,7 @@ Value lumyr_type(Value v) {
         case VAL_MAP:    return lumyr_make_string("map");
         case VAL_ERROR:  return lumyr_make_string("error");
         case VAL_GENERATOR: return lumyr_make_string("generator");
+        case VAL_STRUCT_PTR: return lumyr_make_string("struct");
     }
     return lumyr_make_string("unknown");
 }
@@ -408,6 +406,16 @@ void lumyr_check_mapname_ro(Value arr, Value idx, const char* op)
 
 Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
+    /* VAL_STRUCT_PTR（class 的 C 结构体优化）：属性写入走专门的 lumyr_class_set_field 函数 */
+    if(arr.type == VAL_STRUCT_PTR) {
+        if(idx.type == VAL_STRING) {
+            const char* idxcs = lumyr_str_cstr(&idx);
+            lumyr_class_set_field(arr, idxcs, val);
+            return val;
+        }
+        runtime_error("class 属性写入必须是字符串键");
+        return val;
+    }
     if(arr.type != VAL_ARRAY) runtime_error("下标访问的对象不是数组");
     long long i = array_index_of(idx);
     if(i < 0 || i >= arr.v.array->len) {

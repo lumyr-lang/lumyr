@@ -82,6 +82,7 @@ endif
 # 这些文件不再单独编译，避免重复定义
 RUNTIME_SRCS := $(RUNTIME_DIR)/src/lm_runtime.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_value.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_class.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_map.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_thread.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_lock.c
