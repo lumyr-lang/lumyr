@@ -719,7 +719,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
                 [OP_MOD] = OPC_MOD,
                 [OP_GT] = OPC_GT, [OP_LT] = OPC_LT, [OP_GE] = OPC_GE, [OP_LE] = OPC_LE,
-                [OP_EQ] = OPC_EQ, [OP_NE] = OPC_NE,
+                [OP_EQ] = OPC_EQ, [OP_NE] = OPC_NE, [OP_IMPLEMENTS] = OPC_IMPLEMENTS,
             };
             emit(c, map[bop], 0, 0);
             break;

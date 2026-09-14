@@ -402,3 +402,16 @@ int lumyr_obj_implements_interface(Value obj, const char* interface_name)
     if(!class_name) return 0;
     return lumyr_class_implements_interface(class_name, interface_name);
 }
+
+/* 通用的接口判断函数（可以处理 class 实例和 map 类型的对象）
+   用于 CC 模式的代码生成，避免使用编译器内部的 TypeDef 和 type_lookup */
+int lumyr_implements_interface(Value obj, const char* iface_name)
+{
+    if(!iface_name) return 0;
+    /* class 实例：通过 lumyr_obj_implements_interface 判断 */
+    if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr && lumyr_is_class_instance(obj)) {
+        return lumyr_obj_implements_interface(obj, iface_name);
+    }
+    /* 其他类型（包括 map）：暂时返回 0，后续可以在运行时添加 type 接口信息表 */
+    return 0;
+}

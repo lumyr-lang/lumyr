@@ -141,7 +141,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_THROW:
             return -1;
         case OPC_ADD: case OPC_SUB: case OPC_MUL: case OPC_DIV: case OPC_MOD:
-        case OPC_GT: case OPC_LT: case OPC_GE: case OPC_LE: case OPC_EQ: case OPC_NE:
+        case OPC_GT: case OPC_LT: case OPC_GE: case OPC_LE: case OPC_EQ: case OPC_NE: case OPC_IMPLEMENTS:
             return -1;                       // 弹2压1
         case OPC_NEG: case OPC_POS:
         case OPC_LOGIC_NOT:
@@ -297,6 +297,7 @@ static const char* opc_name(OpCode op)
         case OPC_LE: return "LE";
         case OPC_EQ: return "EQ";
         case OPC_NE: return "NE";
+        case OPC_IMPLEMENTS: return "IMPLEMENTS";
         case OPC_NEG: return "NEG";
         case OPC_POS: return "POS";
         case OPC_LOGIC_NOT: return "LOGIC_NOT";

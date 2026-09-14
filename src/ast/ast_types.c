@@ -54,6 +54,15 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
     } else {
         td->generic_params = NULL;
         td->generic_param_count = 0;
+    }
+    // 设置接口实现关系（不管 generic_params 是否存在都要设置）
+    if(interfaces && ninterfaces > 0) {
+        td->interfaces = (char**)malloc((size_t)ninterfaces * sizeof(char*));
+        for(int k = 0; k < ninterfaces; k++) {
+            td->interfaces[k] = strdup(interfaces[k]);
+        }
+        td->ninterfaces = ninterfaces;
+    } else {
         td->interfaces = NULL;
         td->ninterfaces = 0;
     }

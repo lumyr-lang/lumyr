@@ -566,6 +566,7 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_LE:  fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_le(__l, __r); __sp--; }\n"); break;
             case OPC_EQ:  fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_eq(__l, __r); __sp--; }\n"); break;
             case OPC_NE:  fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_ne(__l, __r); __sp--; }\n"); break;
+            case OPC_IMPLEMENTS: fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; _Bool __impl = 0; if(__r.type == VAL_STRING) { __impl = lumyr_implements_interface(__l, lumyr_str_cstr(&__r)); } __stk[__sp-2] = val_bool(__impl); __sp--; }\n"); break;
             case OPC_NEG: fprintf(out, "    { Value __v = __stk[__sp-1]; __stk[__sp-1] = lumyr_unary_minus(__v); }\n"); break;
             case OPC_POS: fprintf(out, "    { Value __v = __stk[__sp-1]; __stk[__sp-1] = lumyr_unary_plus(__v); }\n"); break;
             case OPC_PRE_INC:  fprintf(out, "    { Value* __vp = %s; __stk[__sp++] = lumyr_pre_inc(__vp); }\n", cvar_ptr(nm)); break;

@@ -14,7 +14,7 @@ typedef enum {
     OPC_LOAD_VAR_REF,   // a=符号表下标；加载 ref 参数（struct 不转 Map，直接传递 VAL_STRUCT_PTR）
     OPC_STORE_VAR,      // a=符号表下标；弹值写变量（深拷贝入帧），原值压回（表达式值）
     OPC_ADD, OPC_SUB, OPC_MUL, OPC_DIV, OPC_MOD,
-    OPC_GT, OPC_LT, OPC_GE, OPC_LE, OPC_EQ, OPC_NE,
+    OPC_GT, OPC_LT, OPC_GE, OPC_LE, OPC_EQ, OPC_NE, OPC_IMPLEMENTS,
     OPC_NEG, OPC_POS,
     OPC_LOGIC_NOT,   // 弹1压1 bool 取反
     OPC_PRE_INC, OPC_POST_INC, OPC_PRE_DEC, OPC_POST_DEC,  // a=符号表下标

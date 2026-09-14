@@ -64,6 +64,9 @@ int lumyr_class_implements_interface(const char* class_name, const char* interfa
 /* 判断对象是否实现了某个接口（对象必须是 class 实例） */
 int lumyr_obj_implements_interface(Value obj, const char* interface_name);
 
+/* 通用的接口判断函数（可以处理 class 实例和其他类型，用于 CC 模式代码生成） */
+int lumyr_implements_interface(Value obj, const char* iface_name);
+
 #ifdef __cplusplus
 }
 #endif
