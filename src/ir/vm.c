@@ -2267,12 +2267,26 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if(stack[--sp].type == VAL_NONE) pc = in.a;
                 break;
             case OPC_CLASS_NEW: {
-                /* VM 模式下创建 class 实例：创建带有 __mapname__/__structname__/__classname__ 属性的空 map 对象 */
+                /* VM 模式下创建 class 实例：创建带有 __mapname__/__structname__/__classname__ 属性的 map 对象，
+                   并用构造参数按顺序初始化字段 */
                 const char* class_name = bf->syms[in.a];
+                int argc = in.b;
                 Value obj = val_map();
                 lumyr_map_set(&obj, lumyr_make_string("__mapname__"), lumyr_make_string(class_name));
                 lumyr_map_set(&obj, lumyr_make_string("__structname__"), lumyr_make_string(class_name));
                 lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
+                /* 用构造参数按顺序初始化字段 */
+                if(argc > 0) {
+                    TypeDef* td = class_lookup(class_name);
+                    if(td && td->nprops > 0) {
+                        int n = argc < td->nprops ? argc : td->nprops;
+                        for(int i = 0; i < n; i++) {
+                            Value arg = stack[sp - argc + i];
+                            lumyr_map_set(&obj, lumyr_make_string(td->props[i]), arg);
+                        }
+                    }
+                    sp -= argc;
+                }
                 stack[sp++] = obj;
                 break;
             }
