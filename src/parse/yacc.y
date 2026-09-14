@@ -337,7 +337,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %token TOK_INT TOK_DOUBLE TOK_CHAR TOK_STRING TOK_BOOL TOK_ASCII TOK_BYTE
 %token TOK_INT8 TOK_INT16 TOK_INT32 TOK_INT64 TOK_UINT8 TOK_UINT16 TOK_UINT32 TOK_UINT64 TOK_UINT TOK_LONG TOK_LONGLONG TOK_FLOAT TOK_ULONG TOK_UCHAR TOK_SHORT TOK_USHORT TOK_SIZE_T TOK_SSIZE_T TOK_VOID TOK_LONG_DOUBLE TOK_PTR
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
-%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT
+%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
 %token SWITCH CASE DEFAULT BREAK RETURN TRY CATCH THROW FINALLY
@@ -370,7 +370,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
 %type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
-%type<ll> type_name builtin_type_name type_keyword
+%type<ll> type_name builtin_type_name type_keyword access_modifier
 %type<s> type_name_str
 %type <ch> char_lit
 %type<ll> INTEGER
@@ -1754,8 +1754,15 @@ class_prop_list
         $$ = ast_seq($1, $3);
       }
     ;
+access_modifier
+    : TOK_PUBLIC                   { $$ = 0LL; }  /* 0 = public */
+    | TOK_PRIVATE                  { $$ = 1LL; }  /* 1 = private */
+    | TOK_PROTECTED                { $$ = 2LL; }  /* 2 = protected */
+    ;
+
 class_prop
     : ID COLON type_name SEMI    { type_prop_push($1, $3); $$ = ast_none(); }
+    | access_modifier ID COLON type_name SEMI    { type_prop_push($2, $4); $$ = ast_none(); }
     ;
 builtin_type_name
     : TOK_STRING                 { $$ = CAST_STRING; }

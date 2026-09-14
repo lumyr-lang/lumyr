@@ -115,6 +115,9 @@ static int is_expr_end(int t)
 "handle"        { LEX_RET(TOK_PTR); }
 "static"        { LEX_RET(TOK_STATIC); }
 "abstract"      { LEX_RET(TOK_ABSTRACT); }
+"public"        { LEX_RET(TOK_PUBLIC); }
+"private"       { LEX_RET(TOK_PRIVATE); }
+"protected"     { LEX_RET(TOK_PROTECTED); }
 
 "..."           { LEX_RET(ELLIPSIS); }
 

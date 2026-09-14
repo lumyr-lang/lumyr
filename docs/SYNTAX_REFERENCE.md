@@ -319,10 +319,12 @@ print(mul_global(7));  // 21
 ## 4. 结构体（struct）
 
 ### 4.1 struct 定义
+**属性声明以分号 `;` 结尾。**
+
 ```lumyr
 struct Point {
-    x: int,
-    y: int,
+    x: int;
+    y: int;
     func distance(other: Point): <double> {
         return (x - other.x)^2 + (y - other.y)^2;
     }
@@ -348,8 +350,8 @@ d = p.distance(other);
 ### 4.5 struct 嵌套
 ```lumyr
 struct Rect {
-    top_left: Point,
-    bottom_right: Point,
+    top_left: Point;
+    bottom_right: Point;
 }
 
 r = Rect(Point(0, 0), Point(100, 100));
@@ -362,7 +364,131 @@ print(r.top_left.x);
 
 ---
 
-## 5. 类型别名（type）
+## 5. 类（class）
+
+### 5.1 class 定义
+**属性声明以分号 `;` 结尾。** class 是引用类型。
+
+```lumyr
+class Animal {
+    name: string;
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+    func speak(self) {
+        print("Animal speaks");
+    }
+}
+```
+
+### 5.2 class 构造
+```lumyr
+a = Animal("Dog", 3);
+```
+
+### 5.3 class 字段访问
+```lumyr
+print(a.name, a.age);
+a.name = "Cat";
+```
+
+### 5.4 class 方法调用
+```lumyr
+a.speak();
+```
+
+### 5.5 class 继承（extends）
+```lumyr
+class Dog extends Animal {
+    breed: string;
+    func __init__(self, name, age, breed) {
+        super(name, age);
+        self.breed = breed;
+    }
+    func speak(self) {
+        print("Dog barks");
+    }
+}
+```
+
+### 5.6 super 调用
+- `super(...)` — 调用父类构造函数
+- `super.method(...)` — 调用父类方法
+
+```lumyr
+class Puppy extends Dog {
+    func __init__(self, name, age, breed) {
+        super(name, age, breed);  // 调用父类构造函数
+    }
+    func speak(self) {
+        super.speak();  // 调用父类方法
+        print("Puppy yips");
+    }
+}
+```
+
+### 5.7 class 实现接口（implements）
+```lumyr
+interface Printable {
+    func to_string(): <string>;
+}
+
+class Point implements Printable {
+    x: int;
+    y: int;
+    func __init__(self, x, y) {
+        self.x = x;
+        self.y = y;
+    }
+    func to_string(self): <string> {
+        return "Point(" + self.x + ", " + self.y + ")";
+    }
+}
+```
+
+### 5.8 抽象类（abstract class）
+```lumyr
+abstract class Shape {
+    color: string;
+    func __init__(self, color) {
+        self.color = color;
+    }
+    abstract func area(self): <double>;
+}
+
+class Circle extends Shape {
+    radius: double;
+    func __init__(self, color, radius) {
+        super(color);
+        self.radius = radius;
+    }
+    func area(self): <double> {
+        return 3.14159 * self.radius * self.radius;
+    }
+}
+```
+
+### 5.9 class 静态方法
+```lumyr
+class MathUtil {
+    static func add(a, b) {
+        return a + b;
+    }
+}
+
+// 静态方法调用：类名_方法名
+print(MathUtil_add(3, 4));  // 7
+```
+
+### 5.10 class 只读属性
+- `__classname__` — class 类型名（只读）
+- `__superclassname__` — 父类类型名（只读）
+
+---
+
+## 6. 类型别名（type）
 
 ### 5.1 type 定义
 ```lumyr
@@ -858,8 +984,11 @@ extend String {
 
 ---
 
-## 14. 注解（annotation）
+## 15. 注解（annotation）
 
+注解以 `@` 开头，可以加在函数、class、class 属性、class 方法、静态方法等上面。
+
+### 15.1 函数注解
 ```lumyr
 // 无参数注解
 @deprecated
@@ -872,14 +1001,77 @@ func old_func() {
 func old_func2() {
     // ...
 }
-
-// 其他常用注解
-@log
-@test
-@cached
-@optimized
-@performance_critical
 ```
+
+### 15.2 class 类注解
+```lumyr
+@entity
+@table("users")
+class User {
+    name: string;
+    age: int;
+}
+```
+
+### 15.3 class 属性注解
+```lumyr
+class User {
+    @required
+    name: string;
+    @range(1, 100)
+    age: int;
+}
+```
+
+### 15.4 class 方法注解
+```lumyr
+class Calculator {
+    @deprecated
+    func old_method(self) {
+        // ...
+    }
+    @cache
+    func expensive_method(self) {
+        // ...
+    }
+}
+```
+
+### 15.5 静态方法注解
+```lumyr
+class MathUtil {
+    @pure
+    static func add(a, b) {
+        return a + b;
+    }
+}
+```
+
+### 15.6 多个注解
+```lumyr
+@log
+@validate
+@cache
+func complex_func() {
+    // ...
+}
+```
+
+### 15.7 常用注解
+- `@deprecated` — 标记为已废弃
+- `@log` — 记录日志
+- `@test` — 测试函数
+- `@cache` — 缓存结果
+- `@optimized` — 优化标记
+- `@performance_critical` — 性能关键
+- `@entity` — 实体类
+- `@table("name")` — 数据库表名
+- `@required` — 必填字段
+- `@range(min, max)` — 范围限制
+- `@pure` — 纯函数
+- `@validate` — 验证
+- `@timeout(ms)` — 超时
+- `@retry(n)` — 重试次数
 
 ---
 

@@ -1,0 +1,26 @@
+// 测试 class 的 public/private/protected 访问修饰符（只测试属性）
+print("=== Class Access Modifier Test ===");
+
+class User {
+    public name: string;
+    private age: int;
+    protected email: string;
+
+    func __init__(self, name, age, email) {
+        self.name = name;
+        self.age = age;
+        self.email = email;
+    }
+
+    func print_info(self) {
+        print("name:", self.name);
+        print("age:", self.age);
+        print("email:", self.email);
+    }
+}
+
+u = User("Alice", 25, "alice@example.com");
+print("name:", u.name);
+u.print_info();
+
+print("\n=== Class Access Modifier Test Done ===");
