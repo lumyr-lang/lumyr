@@ -524,6 +524,13 @@ AstNode* ast_type_annotation(int cast_type, AstNode* expr) {
     return n;
 }
 
+AstNode* ast_interface_annotation(char* interface_name, AstNode* expr) {
+    AstNode* n = ast_new(AST_INTERFACE_ANNOTATION);
+    n->u.interface_annotation.interface_name = interface_name;
+    n->u.interface_annotation.expr = expr;
+    return n;
+}
+
 AstNode* ast_yield(AstNode* value) {
     AstNode* n = ast_new(AST_YIELD);
     n->u.yieldnode.value = value;

@@ -54,6 +54,7 @@ typedef enum {
     AST_YIELD,         // yield 表达式（生成器函数中）
     AST_EXTERN_FUNC,   // FFI 外部函数声明 extern func f(a): ret
     AST_TYPE_ANNOTATION, // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
+    AST_INTERFACE_ANNOTATION, // 接口类型标注 <Interface>expr：给变量打接口引用类型标记
     AST_CLASS_NEW,       // 创建 class 实例（C 结构体）：ClassNew("Animal")
 } AstType;
 

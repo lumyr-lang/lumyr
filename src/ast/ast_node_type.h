@@ -151,6 +151,11 @@ struct AstNode {
         } type_annotation;
 
         struct {
+            char* interface_name; // 接口名
+            AstNode* expr;        // 被标注的表达式
+        } interface_annotation;
+
+        struct {
             char* name;
             int is_ellipsis; // 1=...args可变参数，只能最后一个
             AstNode* default_val; // 默认值表达式，NULL=无默认值

@@ -441,6 +441,46 @@ print(d implements Serializable);   // false
 print(c implements Printable);      // true
 print(c implements Serializable);   // true
 
+### 6.4 接口类型标注（接口引用）
+
+使用 `<Interface>expr` 语法将变量标记为接口引用类型。接口引用可以指向任何实现了该接口的对象，通过接口引用调用方法时走动态分派。
+
+```lumyr
+interface Printable {
+    func to_string(): <string>;
+}
+
+class Dog implements Printable {
+    name: string,
+    func to_string(self): <string> {
+        return "Dog(" + self.name + ")";
+    }
+}
+
+class Cat implements Printable {
+    name: string,
+    func to_string(self): <string> {
+        return "Cat(" + self.name + ")";
+    }
+}
+
+// 接口类型标注：变量 p 被标记为 Printable 接口引用类型
+p = <Printable>Dog("Buddy");
+print(p.to_string());  // Dog(Buddy)
+
+// 接口引用可以指向任何实现了该接口的对象
+p = <Printable>Cat("Whiskers");
+print(p.to_string());  // Cat(Whiskers)
+
+// implements 运算符检查对象的实际类型
+print(p implements Printable);  // true
+```
+
+**说明：**
+- `<>` 是类型声明/标注，`()` 是类型转换
+- 接口引用类型的变量在 VM 模式和 CC 模式下都走普通的 Value 变量路径
+- 方法调用通过对象的实际类型进行动态分派
+
 // 在 if 语句中使用
 if(d implements Printable) {
     print(d.to_string());

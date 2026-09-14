@@ -50,6 +50,7 @@ AstNode* ast_func_def(char* name, AstNode* params, AstNode* body);
 AstNode* ast_extern_func(char* name, AstNode* params, char* ret_type_name, char* libname);
 // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
 AstNode* ast_type_annotation(int cast_type, AstNode* expr);
+AstNode* ast_interface_annotation(char* interface_name, AstNode* expr);
 // 形参；is_ellipsis=1代表 ...args
 AstNode* ast_param(char* name, int is_ellipsis, AstNode* default_val);
 AstNode* ast_param_append(AstNode* list, AstNode* p);

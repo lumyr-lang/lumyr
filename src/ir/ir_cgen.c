@@ -683,13 +683,14 @@ void emit_func_def(BytecodeFunc* fn)
                     fn_locals.names[i], fn_locals.names[i]);
         } else {
             const char* sname = get_var_struct_name(fn, fn_locals.names[i]);
-            if(sname) {
-                /* struct 类型局部变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在栈上 */
+            if(sname && strncmp(sname, "interface:", 10) != 0) {
+                /* struct/class 类型局部变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在栈上 */
                 fprintf(out, "    lumyr_struct_%s lmloc_%s__s;\n", sname, fn_locals.names[i]);
                 /* 初始化 __structname__ 只读属性（用于运行时获取类型名，struct 隔离） */
                 fprintf(out, "    lmloc_%s__s.__structname__ = \"%s\";\n", fn_locals.names[i], sname);
                 fprintf(out, "    Value lmloc_%s = lumyr_make_struct_ptr(&lmloc_%s__s);\n", fn_locals.names[i], fn_locals.names[i]);
             } else {
+                /* 接口类型或普通类型：生成普通的 Value 变量 */
                 int tt = get_var_type_tag(fn, fn_locals.names[i]);
                 const char* ctype = (tt >= 0) ? castkind_to_c_type(tt) : NULL;
                 if(ctype) {
@@ -1293,7 +1294,7 @@ void emit_main(BytecodeFunc* main_fn)
     scan_var_refs(main_fn, &g_globals, 1);
     for(int i = 0; i < g_globals.count; i++) {
         const char* sname = get_var_struct_name(main_fn, g_globals.names[i]);
-        if(sname) {
+        if(sname && strncmp(sname, "interface:", 10) != 0) {
             /* struct/class 类型全局变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在静态存储区 */
             const char* type_name = sname;
             const char* struct_prefix = "lumyr_struct_";
@@ -1307,6 +1308,7 @@ void emit_main(BytecodeFunc* main_fn)
             }
             fprintf(out, "static Value lmvar_%s;\n", g_globals.names[i]);
         } else {
+            /* 接口类型或普通类型：生成普通的 Value 变量 */
             int tt = get_var_type_tag(main_fn, g_globals.names[i]);
             const char* ctype = (tt >= 0) ? castkind_to_c_type(tt) : NULL;
             if(ctype) {
@@ -1376,7 +1378,7 @@ void emit_main(BytecodeFunc* main_fn)
     /* 注意：class 类型（以 class: 开头）是引用类型，实例通过 OPC_CLASS_NEW 动态创建，不需要静态初始化 */
     for(int gi = 0; gi < g_globals.count; gi++) {
         const char* gsname = get_var_struct_name(main_fn, g_globals.names[gi]);
-        if(gsname && strncmp(gsname, "class:", 6) != 0) {
+        if(gsname && strncmp(gsname, "class:", 6) != 0 && strncmp(gsname, "interface:", 10) != 0) {
             /* 初始化 __structname__ 只读属性（用于运行时获取类型名，struct 隔离） */
             fprintf(out, "    lmvar_%s__s.__structname__ = \"%s\";\n", g_globals.names[gi], gsname);
             fprintf(out, "    lmvar_%s = lumyr_make_struct_ptr(&lmvar_%s__s);\n", g_globals.names[gi], g_globals.names[gi]);

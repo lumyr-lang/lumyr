@@ -128,6 +128,10 @@ static int emit_parse_struct_type(const char* name, const char** type_name) {
         *type_name = name + 6;
         return 1;  /* class 类型 */
     }
+    if(strncmp(name, "interface:", 10) == 0) {
+        *type_name = name + 10;
+        return 2;  /* 接口类型 */
+    }
     *type_name = name;
     return 0;  /* struct 类型 */
 }
@@ -516,10 +520,11 @@ void emit_insns(BytecodeFunc* fn)
                 if(_sname && strncmp(_sname, "class:", 6) == 0) {
                     /* class 类型：直接传递 Value，类型是 VAL_STRUCT_PTR */
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
-                } else if(_sname) {
+                } else if(_sname && strncmp(_sname, "interface:", 10) != 0) {
                     /* struct 类型：传递指针整数 */
                     fprintf(out, "    { Value __pv = {0}; __pv.type = VAL_INT; __pv.v.i = (long long)%s.v.struct_ptr; __stk[__sp++] = __pv; }\n", cvar_rw(nm));
                 } else {
+                    /* 接口类型或普通类型：直接传递 Value */
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
                 }
                 break;
@@ -533,7 +538,7 @@ void emit_insns(BytecodeFunc* fn)
                     _is_class = 1;
                     _pure_name = _sname + 6;
                 }
-                if(_sname && !_is_class) {
+                if(_sname && !_is_class && strncmp(_sname, "interface:", 10) != 0) {
                     fprintf(out, "    { Value __v = __stk[--__sp];\n");
                     char _store_buf[256];
                     snprintf(_store_buf, sizeof(_store_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", _sname, cvar_rw(nm));
@@ -545,6 +550,7 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "        }\n");
                     fprintf(out, "        __stk[__sp++] = __v;\n    }\n");
                 } else {
+                    /* 接口类型或普通类型：生成普通的 Value 赋值代码 */
                     int _tag = emit_get_var_tag(fn, nm);
                     if(_tag >= 0 && emit_tag_to_ctype(_tag)) {
                         fprintf(out, "    { Value __v = __stk[--__sp]; %s = %s; __stk[__sp++] = __v; }\n",

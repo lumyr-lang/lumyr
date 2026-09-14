@@ -629,6 +629,19 @@ static void c_expr(Ctx* c, AstNode* node)
                     /* 数组/map字面量的类型标注不设置变量类型标记 */
                     c->fn->var_type_tags[var_idx] = -1;
                 }
+            } else if(node->u.assign.expr && node->u.assign.expr->type == AST_INTERFACE_ANNOTATION) {
+                /* 接口类型标注：<Printable>expr → 变量是接口引用类型 */
+                const char* iface_name = node->u.assign.expr->u.interface_annotation.interface_name;
+                if(iface_name) {
+                    if(c->fn->var_struct_names[var_idx]) {
+                        free(c->fn->var_struct_names[var_idx]);
+                    }
+                    size_t flen = strlen(iface_name);
+                    char* marked_name = (char*)malloc(flen + 11);
+                    snprintf(marked_name, flen + 11, "interface:%s", iface_name);
+                    c->fn->var_struct_names[var_idx] = marked_name;
+                }
+                c->fn->var_type_tags[var_idx] = -1;
             } else {
                 /* 无类型标注的赋值：清除之前的类型标记，回退到动态 Value 类型 */
                 c->fn->var_type_tags[var_idx] = -1;
@@ -785,6 +798,12 @@ static void c_expr(Ctx* c, AstNode* node)
             } else {
                 emit(c, cmap[node->u.cast.cast_type], 0, 0);
             }
+            break;
+        }
+        case AST_INTERFACE_ANNOTATION: {
+            /* 接口类型标注 <Interface>expr：给变量打接口引用类型标记
+               只需要编译内部的表达式即可（不需要做类型转换） */
+            c_expr(c, node->u.interface_annotation.expr);
             break;
         }
         case AST_TYPE_ANNOTATION: {

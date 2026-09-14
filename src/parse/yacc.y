@@ -1249,6 +1249,16 @@ primary
        <string,V>{k:v} map 值强转（键固定 string） */
     | TOK_TYPE_ANNOT unary_expr
         { $$ = ast_type_annotation($1, $2); }
+    | LT ID GT unary_expr {
+          /* 接口类型标注：<Printable>expr → 接口引用类型 */
+          if(interface_lookup($2) != NULL) {
+              $$ = ast_interface_annotation($2, $4);
+          } else {
+              /* 非接口类型：暂时当作普通表达式处理（后续可扩展自定义类型标注） */
+              $$ = $4;
+              free($2);
+          }
+      }
     | LT type_name COMMA type_name GT MAP_OPEN map_items RBRACE
         { $$ = new_cast_node(valuetype_to_castkind($4), ast_map_lit($7)); }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
@@ -1621,6 +1631,11 @@ class_header_implements: TOK_CLASS ID TOK_IMPLEMENTS interface_list LBRACE {
               }
               _iface = _iface->u.param.next;
           }
+          /* 添加 NULL 终止符，因为 class_register 函数通过 while(interfaces[nifaces]) nifaces++ 来计算接口数量 */
+          if(g_class_interfaces) {
+              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+              g_class_interfaces[g_class_ninterfaces] = NULL;
+          }
           $$ = NULL;
       }
     ;
@@ -1638,6 +1653,11 @@ class_header_inherit_implements: TOK_CLASS ID TOK_EXTENDS ID TOK_IMPLEMENTS inte
                   g_class_interfaces[g_class_ninterfaces++] = strdup(_iface->u.param.name);
               }
               _iface = _iface->u.param.next;
+          }
+          /* 添加 NULL 终止符，因为 class_register 函数通过 while(interfaces[nifaces]) nifaces++ 来计算接口数量 */
+          if(g_class_interfaces) {
+              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+              g_class_interfaces[g_class_ninterfaces] = NULL;
           }
           $$ = NULL;
       }
