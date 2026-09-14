@@ -948,50 +948,6 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.is_ffi = 0;
           try_register_global_func($2, func_val); /* class内部不注册全局符号表 */
         }
-        | annotation_list FUNC ID LPAREN param_list RPAREN block_stmt {
-          $$ = ast_func_def($3, $5, $7);
-          $$->u.func_def.annotations = $1;
-          annotate_self_if_in_struct($$);
-          /* 把注解信息注册到注解注册表中 */
-          AstNode* ann = $1;
-          while(ann) {
-              if(ann->type == AST_ANNOTATION && ann->u.annotation.name) {
-                  int type_marks = ANNOTATION_TYPE_FUNC;
-                  if(g_current_class_name) {
-                      type_marks |= ANNOTATION_TYPE_CLASS;
-                  }
-                  int category = annotation_is_system(ann->u.annotation.name) ? ANNOTATION_CATEGORY_SYSTEM : ANNOTATION_CATEGORY_USER;
-                  annotation_register(ann->u.annotation.name, type_marks, category,
-                                      ann->u.annotation.args,
-                                      g_current_class_name, $3, NULL);
-                  /* 检查是否是 @abstract 注解 */
-                  if(strcmp(ann->u.annotation.name, "abstract") == 0) {
-                      $$->u.func_def.is_abstract_method = 1;
-                  }
-                  /* 检查是否是 @override 注解 */
-                  if(strcmp(ann->u.annotation.name, "override") == 0) {
-                      $$->u.func_def.is_override_method = 1;
-                  }
-              }
-              ann = ann->u.seq.second;
-          }
-          /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
-          RuntimeFunc* rf = compile_func_from_ast($$);
-          Value func_val = {0};
-          func_val.type = VAL_FUNC;
-          func_val.v.func.func_obj = rf;
-          func_val.v.func.ffi_func = NULL;
-          func_val.v.func.is_ffi = 0;
-          try_register_global_func($3, func_val); /* class内部不注册全局符号表 */
-        }
-        | annotation_list FUNC ID LPAREN param_list RPAREN ';' {
-          /* 抽象方法：只有声明，没有实现，子类必须实现 */
-          $$ = ast_func_def($3, $5, L(ast_none()));
-          $$->u.func_def.annotations = $1;
-          $$->u.func_def.is_abstract_method = 1;
-          annotate_self_if_in_struct($$);
-          /* 不编译抽象方法（没有函数体），只注册到符号表 */
-        }
         | CONST FUNC ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
           $$->u.func_def.annotations = NULL;
