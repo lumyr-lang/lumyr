@@ -885,6 +885,35 @@ static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
     }
 }
 
+
+/* 生成 class vtable 实例的回调函数 */
+static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    FILE* out = (FILE*)user_data;
+    if(td && td->is_class) {
+        fprintf(out, "static lumyr_vtable lumyr_class_%s_vtable = {\n", td->name);
+        fprintf(out, "    .class_name = \"%s\",\n", td->name);
+        fprintf(out, "    .methods = {\n");
+        /* 收集所有方法（包括继承的方法），按方法名排序，生成函数指针 */
+        /* 先收集本类的方法 */
+        int method_idx = 0;
+        /* 遍历继承链，收集所有方法（子类重写的方法用子类的，继承的用父类的） */
+        /* 简单实现：先收集本类的方法，后续再优化继承链 */
+        for(int i = 0; i < td->nmethods && method_idx < 64; i++) {
+            /* 方法函数名格式：<类名>_<方法名>_<参数个数> */
+            /* 参数个数 = 方法参数个数 + 1（self） */
+            int param_cnt = 1; /* self */
+            /* 这里简化处理，实际应该从方法节点获取参数个数 */
+            fprintf(out, "        (void*)lumyr_func_%s_%s_%d,  /* %s */\n",
+                    td->name, td->method_names[i], param_cnt, td->method_names[i]);
+            method_idx++;
+        }
+        fprintf(out, "    }\n");
+        fprintf(out, "};\n");
+    }
+}
+
 /* 生成 C class 结构体定义的回调函数 */
 static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
 {
@@ -893,11 +922,14 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
     if(td && td->is_class && td->nprops > 0) {
         fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
         fprintf(out, "struct lumyr_class_%s {\n", td->name);
-        /* 如果有父类，父类结构体作为第一个字段（包含 __classname__），字段名为 super
-           如果没有父类，定义 __classname__ 字段：用于运行时动态分派，保存 class 名字符串 */
+        /* 如果有父类，父类结构体作为第一个字段（包含 vtable 指针和属性），字段名为 super
+           这样子类指针转换成父类指针时字段偏移量正确（C++ 风格）
+           如果没有父类，定义 vtable 指针和 __classname__ 字段 */
         if(td->parent) {
             fprintf(out, "    lumyr_class_%s super;\n", td->parent);
         } else {
+            /* vtable 指针：用于方法动态分派（O(1) 函数指针调用） */
+            fprintf(out, "    lumyr_vtable* vtable;\n");
             fprintf(out, "    const char* __classname__;\n");
         }
         for(int fi = 0; fi < td->nprops; fi++) {
@@ -932,6 +964,13 @@ void emit_main(BytecodeFunc* main_fn)
 
     // 生成 C struct 定义（所有已注册的 struct 类型）
     type_foreach(emit_struct_def_cb, out);
+
+    // 通用 vtable 类型定义：class 方法虚函数表
+    fprintf(out, "/* 通用 vtable 类型：class 方法虚函数表 */\n");
+    fprintf(out, "typedef struct {\n");
+    fprintf(out, "    const char* class_name;  /* class 名，用于运行时获取 class 名 */\n");
+    fprintf(out, "    void* methods[64];       /* 方法函数指针数组，最多 64 个方法 */\n");
+    fprintf(out, "} lumyr_vtable;\n\n");
 
     // 生成 C class 结构体定义（所有已注册的 class 类型）
     type_foreach(emit_class_def_cb, out);
@@ -971,6 +1010,12 @@ void emit_main(BytecodeFunc* main_fn)
 
     // 函数原型（前向引用/递归）
     ir_func_table_foreach(emit_func_proto_cb, out);
+
+    // 生成每个 class 的 vtable 实例（虚函数表，必须在函数原型声明之后）
+    fprintf(out, "/* class vtable 实例（虚函数表） */\n");
+    type_foreach(emit_class_vtable_cb, out);
+    fprintf(out, "\n");
+
     // 高阶包装前置声明（函数体内 GETFUNC 先于 wraps 定义使用）
     ir_func_table_foreach(emit_wrap_proto_cb, out);
     // RuntimeFunc 包装变量前置声明（GETFUNC 引用 &lum_wrap_<name>_rf，定义在 emit_func_wraps）

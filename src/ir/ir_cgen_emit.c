@@ -1648,6 +1648,17 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "        lumyr_class_%s* __obj = (lumyr_class_%s*)malloc(sizeof(lumyr_class_%s));\n", class_name, class_name, class_name);
                 fprintf(out, "        memset(__obj, 0, sizeof(lumyr_class_%s));\n", class_name);
                 {
+                    /* 初始化 vtable 指针和 __classname__：
+                       有父类的 class，vtable 和 __classname__ 在 super 中
+                       没有父类的 class，vtable 和 __classname__ 直接在结构体中 */
+                    TypeDef* _td_vt = type_lookup(class_name);
+                    if(_td_vt && _td_vt->parent) {
+                        fprintf(out, "        __obj->super.vtable = &lumyr_class_%s_vtable;\n", class_name);
+                    } else {
+                        fprintf(out, "        __obj->vtable = &lumyr_class_%s_vtable;\n", class_name);
+                    }
+                }
+                {
                     /* 子类结构体的 __classname__ 在 super 中，父类结构体直接有 __classname__ */
                     TypeDef* _td = type_lookup(class_name);
                     if(_td && _td->parent) {
@@ -2024,8 +2035,8 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "            Value __cn = lumyr_map_get(__self, lumyr_make_string(\"__classname__\"));\n");
                     fprintf(out, "            if(__cn.type == VAL_STRING) __cn_str = lumyr_str_cstr(&__cn);\n");
                     fprintf(out, "        } else if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
-                    fprintf(out, "            /* C 结构体实例：__classname__ 是第一个字段，直接通过指针获取 */\n");
-                    fprintf(out, "            __cn_str = *(const char**)__self.v.struct_ptr;\n");
+                    fprintf(out, "            /* C 结构体实例：vtable 是第一个字段，通过 vtable 获取 class 名 */\n");
+                    fprintf(out, "            __cn_str = ((lumyr_vtable*)*(void**)__self.v.struct_ptr)->class_name;\n");
                     fprintf(out, "        }\n");
                     fprintf(out, "        if(__cn_str) {\n");
                     /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
