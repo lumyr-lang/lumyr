@@ -7,6 +7,7 @@
 #include "ast_node_type.h"
 #include "ast_types.h"
 #include "lm_map.h"
+#include "lm_class.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -650,6 +651,22 @@ Value ast_eval_ctx(AstNode* node, EvalCtx* ctx, StackFrame* frame)
         // ---- 函数调用：新建栈帧 → 参数绑定 → 调用entry → 销毁栈帧 ----
         case AST_CALL: {
             char* fname = node->u.call.name;
+
+            // 特殊处理：lumyr_interface_cast 内置函数（接口类型转换）
+            if(strcmp(fname, "lumyr_interface_cast") == 0) {
+                int argc = 0;
+                arg_list_count(node->u.call.args, &argc);
+                Value* args = NULL;
+                if(argc > 0) {
+                    args = (Value*)malloc(sizeof(Value) * (size_t)argc);
+                    int idx = 0;
+                    arg_list_collect(node->u.call.args, args, &idx, ctx, frame);
+                }
+                const char* iface_name = (argc >= 2 && args[1].type == VAL_STRING) ? lumyr_str_cstr(&args[1]) : "";
+                Value ret = lumyr_interface_cast(args[0], iface_name);
+                free(args);
+                return ret;
+            }
 
             // 1. 查函数：先查栈帧链（求值时注册的），再查全局符号表（parse期yacc注册的）
             Value func_val;

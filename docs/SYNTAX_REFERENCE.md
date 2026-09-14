@@ -481,6 +481,40 @@ print(p implements Printable);  // true
 - 接口引用类型的变量在 VM 模式和 CC 模式下都走普通的 Value 变量路径
 - 方法调用通过对象的实际类型进行动态分派
 
+### 6.5 接口类型转换
+
+使用内置函数 `lumyr_interface_cast(obj, "InterfaceName")` 将对象转换为接口引用类型。如果对象没有实现该接口，则运行时报错。
+
+```lumyr
+interface Printable {
+    func to_string(): <string>;
+}
+
+class Dog implements Printable {
+    name: string,
+    func to_string(self): <string> {
+        return "Dog(" + self.name + ")";
+    }
+}
+
+d = Dog("Buddy");
+p = lumyr_interface_cast(d, "Printable");  // 正常转换
+print(p.to_string());  // Dog(Buddy)
+
+// 转换失败的情况（对象没有实现接口）
+try {
+    x = lumyr_interface_cast(d, "Serializable");  // Dog 没有实现 Serializable
+} catch(e) {
+    print("转换失败: ", e);
+}
+```
+
+**说明：**
+- 接口类型转换在运行时检查对象是否实现了接口
+- 如果对象没有实现该接口，则运行时报错（可被 try-catch 捕获）
+- 转换成功后返回对象本身，不做拷贝
+- 由于 `(Interface)obj` 语法会与基本类型转换冲突，因此使用内置函数方式
+
 // 在 if 语句中使用
 if(d implements Printable) {
     print(d.to_string());

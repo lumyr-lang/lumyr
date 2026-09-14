@@ -2339,6 +2339,63 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_CALL: {
                 const char* fname = bf->syms[in.a];
                 int argc = in.b;
+                /* 特殊处理：lumyr_interface_cast 内置函数（接口类型转换） */
+                if(strcmp(fname, "lumyr_interface_cast") == 0 && argc >= 2) {
+                    Value obj = stack[sp - argc];
+                    Value iface_val = stack[sp - argc + 1];
+                    const char* iface_name = (iface_val.type == VAL_STRING) ? lumyr_str_cstr(&iface_val) : "";
+                    _Bool impl = 0;
+                    /* class 实例（VAL_STRUCT_PTR）：通过 lumyr_obj_implements_interface 判断 */
+                    if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr && lumyr_is_class_instance(obj)) {
+                        impl = lumyr_obj_implements_interface(obj, iface_name);
+                    }
+                    /* map（type/class 类型）：通过 type_lookup 和 TypeDef 的 interfaces 字段判断 */
+                    else if(obj.type == VAL_MAP) {
+                        const char* type_name = NULL;
+                        if(lumyr_map_has(obj, lumyr_make_string("__classname__"))) {
+                            Value cn = lumyr_map_get(obj, lumyr_make_string("__classname__"));
+                            if(cn.type == VAL_STRING) type_name = lumyr_str_cstr(&cn);
+                        }
+                        if(!type_name && lumyr_map_has(obj, lumyr_make_string("__mapname__"))) {
+                            Value mn = lumyr_map_get(obj, lumyr_make_string("__mapname__"));
+                            if(mn.type == VAL_STRING) {
+                                const char* mn_str = lumyr_str_cstr(&mn);
+                                if(strncmp(mn_str, "class:", 6) == 0) {
+                                    type_name = mn_str + 6;
+                                } else {
+                                    type_name = mn_str;
+                                }
+                            }
+                        }
+                        if(type_name) {
+                            TypeDef* td = type_lookup(type_name);
+                            if(td && td->interfaces) {
+                                for(int ii = 0; ii < td->ninterfaces; ii++) {
+                                    if(td->interfaces[ii] && strcmp(td->interfaces[ii], iface_name) == 0) {
+                                        impl = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if(impl) {
+                        sp -= argc;
+                        stack[sp++] = obj;
+                    } else {
+                        const char* type_name = "unknown";
+                        if(obj.type == VAL_MAP) {
+                            if(lumyr_map_has(obj, lumyr_make_string("__classname__"))) {
+                                Value cn = lumyr_map_get(obj, lumyr_make_string("__classname__"));
+                                if(cn.type == VAL_STRING) type_name = lumyr_str_cstr(&cn);
+                            }
+                        }
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "接口类型转换失败：类型 \"%s\" 未实现接口 \"%s\"", type_name, iface_name);
+                        runtime_error(msg);
+                    }
+                    break;
+                }
                 /* __super_call_<当前类名>_<方法名>(self, args...)：调用父类方法（编译期静态绑定） */
                 if(strncmp(fname, "__super_call_", 13) == 0 && argc >= 1) {
                     /* 解析函数名，获取当前类名和方法名 */

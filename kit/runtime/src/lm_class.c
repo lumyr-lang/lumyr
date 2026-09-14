@@ -1,6 +1,7 @@
 #include "lm_class.h"
 #include "lm_value.h"
 #include "lm_runtime.h"
+#include "lm_struct.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -414,4 +415,33 @@ int lumyr_implements_interface(Value obj, const char* iface_name)
     }
     /* 其他类型（包括 map）：暂时返回 0，后续可以在运行时添加 type 接口信息表 */
     return 0;
+}
+
+/* 接口类型转换：检查对象是否实现了接口，如果没有实现则报错，否则返回对象本身 */
+Value lumyr_interface_cast(Value obj, const char* iface_name) {
+    if(!iface_name) {
+        runtime_error("接口类型转换：接口名为空");
+        return val_none();
+    }
+    if(lumyr_implements_interface(obj, iface_name)) {
+        return obj;
+    }
+    /* 获取对象的类型名，用于错误信息 */
+    const char* type_name = "unknown";
+    if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr) {
+        if(lumyr_is_class_instance(obj)) {
+            type_name = lumyr_class_get_name(obj);
+        } else {
+            type_name = lumyr_struct_get_name(obj);
+        }
+    } else if(obj.type == VAL_MAP) {
+        Value cn = lumyr_map_get(obj, lumyr_make_string("__mapname__"));
+        if(cn.type == VAL_STRING) {
+            type_name = lumyr_str_cstr(&cn);
+        }
+    }
+    char msg[256];
+    snprintf(msg, sizeof(msg), "接口类型转换失败：类型 \"%s\" 未实现接口 \"%s\"", type_name, iface_name);
+    runtime_error(msg);
+    return val_none();
 }

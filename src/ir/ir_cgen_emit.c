@@ -2065,6 +2065,20 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "    }\n");
                     break;
                 }
+                /* 特殊处理：lumyr_interface_cast 内置函数（接口类型转换） */
+                if(nm && strcmp(nm, "lumyr_interface_cast") == 0) {
+                    int argc = in.b;
+                    fprintf(out, "    {\n");
+                    fprintf(out, "        int __lmin_argc = %d;\n", argc);
+                    fprintf(out, "        Value __args[%d];\n", argc > 0 ? argc : 1);
+                    fprintf(out, "        for (int __k = 0; __k < __lmin_argc; __k++) __args[__k] = __stk[__sp - __lmin_argc + __k];\n");
+                    fprintf(out, "        __sp -= __lmin_argc;\n");
+                    fprintf(out, "        const char* __iface_name = (__lmin_argc >= 2 && __args[1].type == VAL_STRING) ? lumyr_str_cstr(&__args[1]) : \"\";\n");
+                    fprintf(out, "        Value __ret = lumyr_interface_cast(__args[0], __iface_name);\n");
+                    fprintf(out, "        __stk[__sp++] = __ret;\n");
+                    fprintf(out, "    }\n");
+                    break;
+                }
                 BytecodeFunc* callee = ir_func_table_lookup(nm);
                 if(!callee) {
                     fprintf(stderr, "codegen: 未定义函数: %s\n", nm);
