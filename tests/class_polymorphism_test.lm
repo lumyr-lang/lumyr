@@ -2,7 +2,7 @@
 print("=== Class Polymorphism Test ===");
 
 class Animal {
-    name: string
+    name: string;
     func speak(self) {
         print("Animal speaks");
     }
@@ -12,14 +12,14 @@ class Animal {
 }
 
 class Dog extends Animal {
-    breed: string
+    breed: string;
     func speak(self) {
         print("Dog barks");
     }
 }
 
 class Cat extends Animal {
-    color: string
+    color: string;
     func speak(self) {
         print("Cat meows");
     }

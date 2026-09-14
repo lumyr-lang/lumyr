@@ -1,5 +1,5 @@
 // struct_vs_map_param_test.lm — 验证 struct 参数值传递，map 参数引用传递
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 
 func modify_struct(p) {
     p.x = 999;

@@ -10,8 +10,8 @@ interface Serializable {
 }
 
 class Dog implements Printable {
-    name: string,
-    age: int
+    name: string;
+    age: int;
     func __init__(self, name, age) {
         self.name = name;
         self.age = age;
@@ -22,7 +22,7 @@ class Dog implements Printable {
 }
 
 class Cat implements Printable, Serializable {
-    name: string
+    name: string;
     func __init__(self, name) {
         self.name = name;
     }
@@ -35,7 +35,7 @@ class Cat implements Printable, Serializable {
 }
 
 class Car {
-    brand: string
+    brand: string;
     func __init__(self, brand) {
         self.brand = brand;
     }

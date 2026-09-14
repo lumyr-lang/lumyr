@@ -3,8 +3,8 @@ print("=== Class Interface Test ===");
 
 // class 实现单个接口
 class Point implements Printable {
-    x: int,
-    y: int
+    x: int;
+    y: int;
     func __init__(self, x, y) {
         self.x = x;
         self.y = y;

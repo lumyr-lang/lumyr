@@ -2,8 +2,8 @@
 print("=== Class Super Test ===");
 
 class Animal {
-    name: string,
-    age: int
+    name: string;
+    age: int;
     func speak(self) {
         print("Animal speaks");
     }
@@ -13,7 +13,7 @@ class Animal {
 }
 
 class Dog extends Animal {
-    breed: string
+    breed: string;
     func speak(self) {
         print("Dog barks");
         super.speak();  // 调用父类方法

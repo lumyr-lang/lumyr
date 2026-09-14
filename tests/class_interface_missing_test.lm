@@ -8,8 +8,8 @@ interface Printable {
 
 // class 未实现接口中定义的所有方法
 class BadPoint implements Printable {
-    x: int,
-    y: int
+    x: int;
+    y: int;
     func __init__(self, x, y) {
         self.x = x;
         self.y = y;

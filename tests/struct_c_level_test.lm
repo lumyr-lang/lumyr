@@ -6,8 +6,8 @@
 print("=== Struct C-Level Features Test ===");
 
 struct Point {
-    x: int,
-    y: int
+    x: int;
+    y: int;
 }
 
 // ===== 1. struct 作为函数返回值 =====
@@ -66,8 +66,8 @@ print("original.x:", original.x, "copy.x:", copy.x);  // 期望 10 999（值拷�
 
 // 嵌套 struct 浅拷贝
 struct Rect {
-    top_left: Point,
-    width: int
+    top_left: Point;
+    width: int;
 }
 
 r1 = Rect(Point(1, 2), 100);

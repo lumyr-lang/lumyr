@@ -2,7 +2,7 @@
 print("=== Class Multi Param Test ===");
 
 class Animal {
-    name: string
+    name: string;
     func initialize(self, name, age) {
         self.name = name;
         print("Animal initialize called:", name, age);

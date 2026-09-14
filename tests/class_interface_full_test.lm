@@ -12,8 +12,8 @@ interface Drawable {
 
 // class 实现单个接口（正确实现）
 class Point implements Printable {
-    x: int,
-    y: int
+    x: int;
+    y: int;
     func __init__(self, x, y) {
         self.x = x;
         self.y = y;
@@ -25,9 +25,9 @@ class Point implements Printable {
 
 // class 实现多个接口（正确实现）
 class Circle implements Printable, Drawable {
-    x: int,
-    y: int,
-    radius: int
+    x: int;
+    y: int;
+    radius: int;
     func __init__(self, x, y, radius) {
         self.x = x;
         self.y = y;

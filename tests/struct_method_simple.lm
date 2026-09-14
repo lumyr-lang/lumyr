@@ -2,8 +2,8 @@
 print("=== Struct Method Test ===");
 
 struct Point {
-    x: int,
-    y: int
+    x: int;
+    y: int;
     func get_x(self) {
         return self.x;
     }

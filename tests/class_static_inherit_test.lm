@@ -16,7 +16,7 @@ class Base {
 }
 
 class Circle extends Base implements Shape {
-    radius: double
+    radius: double;
 
     static func circle_static() {
         return "circle_static";

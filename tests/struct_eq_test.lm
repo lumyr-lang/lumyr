@@ -1,5 +1,5 @@
 // struct_eq_test.lm — 测试 struct 相等比较
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 
 print("=== Struct Equality Test ===");
 

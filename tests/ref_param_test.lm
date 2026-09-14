@@ -1,5 +1,5 @@
 // ref_param_test.lm — 测试 ref 引用传递参数
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 
 // 值传递：函数内修改不影响外部
 func modify_by_value(<Point> p) {

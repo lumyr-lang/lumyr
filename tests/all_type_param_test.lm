@@ -27,7 +27,7 @@ func test_char(<char>x) { print("char:", x); }
 func test_byte(<byte>x) { print("byte:", x); }
 
 // 自定义类型
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 func test_point(<Point>p) { print("Point:", p.x, p.y); }
 
 // 多参数混合类型

@@ -1,7 +1,7 @@
 // struct 基础测试
 print("=== Struct Basic Test ===");
 
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 
 p = Point(10, 20);
 print("p.x:", p.x);

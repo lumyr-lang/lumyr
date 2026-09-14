@@ -1501,7 +1501,7 @@ type_prop
 struct_prop_list
     : %empty                     { $$ = NULL; }
     | struct_prop                { $$ = $1; }
-    | struct_prop_list COMMA struct_prop { $$ = ast_seq($1, $3); }
+    | struct_prop_list struct_prop { $$ = ast_seq($1, $2); }
     | struct_prop_list func_def  {
         /* struct 方法定义：保存到临时列表，struct 注册后再统一处理 */
         if($2 && $2->type == AST_FUNC_DEF) {
@@ -1522,8 +1522,8 @@ struct_prop_list
       }
     ;
 struct_prop
-    : ID COLON builtin_type_name { struct_prop_push($1, $3, NULL); $$ = ast_none(); }
-    | ID COLON ID {
+    : ID COLON builtin_type_name SEMI { struct_prop_push($1, $3, NULL); $$ = ast_none(); }
+    | ID COLON ID SEMI {
         /* 嵌套 struct 类型：struct Rect { top_left: Point } */
         if(struct_lookup($3)) {
             struct_prop_push($1, CAST_LONGLONG, $3);
@@ -1537,7 +1537,7 @@ struct_prop
 class_prop_list
     : %empty                     { $$ = NULL; }
     | class_prop                 { $$ = $1; }
-    | class_prop_list COMMA class_prop { $$ = ast_seq($1, $3); }
+    | class_prop_list class_prop { $$ = ast_seq($1, $2); }
     | class_prop_list annotation_list class_prop  {
         /* class 属性定义（支持注解）：注解暂时保存，后续可扩展语义处理 */
         $$ = ast_seq($1, $3);
@@ -1587,7 +1587,7 @@ class_prop_list
       }
     ;
 class_prop
-    : ID COLON type_name         { type_prop_push($1, $3); $$ = ast_none(); }
+    : ID COLON type_name SEMI    { type_prop_push($1, $3); $$ = ast_none(); }
     ;
 builtin_type_name
     : TOK_STRING                 { $$ = CAST_STRING; }

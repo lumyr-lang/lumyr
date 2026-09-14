@@ -1,5 +1,5 @@
 // 测试多个 struct 实例
-struct Point { x: int, y: int }
+struct Point { x: int; y: int; }
 
 print("start");
 p1 = Point(10, 20);
