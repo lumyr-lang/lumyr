@@ -164,7 +164,7 @@ static void ensure_class_tree(void)
 }
 
 /* 注册 class 信息（在代码生成时调用，把 class 的字段信息导出到运行时） */
-void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* fields, void* vtable)
+void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* fields, void* vtable, int ninterfaces, const char** interfaces)
 {
     if(!class_name) return;
     ensure_class_tree();
@@ -177,6 +177,8 @@ void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* f
             existing->value->nfields = nfields;
             existing->value->fields = fields;
             existing->value->vtable = vtable;
+            existing->value->ninterfaces = ninterfaces;
+            existing->value->interfaces = interfaces;
         }
         return;
     }
@@ -187,6 +189,8 @@ void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* f
     ci->nfields = nfields;
     ci->fields = fields;
     ci->vtable = vtable;
+    ci->ninterfaces = ninterfaces;
+    ci->interfaces = interfaces;
     /* 插入红黑树 */
     class_rb_insert(g_class_tree, class_name, ci);
 }
@@ -362,4 +366,39 @@ Value lumyr_class_call_method(Value obj, const char* method_name, int argc, Valu
        这个函数主要用于未来扩展，目前不需要实现 */
     runtime_error("class 方法调用：请使用 vtable 直接调用");
     return val_none();
+}
+
+/* 判断 class 是否实现了某个接口（包括父类实现的接口） */
+int lumyr_class_implements_interface(const char* class_name, const char* interface_name)
+{
+    if(!class_name || !interface_name) return 0;
+    ensure_class_tree();
+    const char* cur = class_name;
+    /* 沿继承链向上查找 */
+    while(cur) {
+        ClassRBNode* node = class_rb_find_node(g_class_tree, cur);
+        if(!node || !node->value) break;
+        ClassInfo* ci = (ClassInfo*)node->value;
+        /* 检查当前类实现的接口 */
+        for(int i = 0; i < ci->ninterfaces; i++) {
+            if(ci->interfaces[i] && strcmp(ci->interfaces[i], interface_name) == 0) {
+                return 1;
+            }
+        }
+        /* 检查父类（通过 vtable 获取父类名，或者通过其他方式）
+           目前 ClassInfo 没有记录父类名，暂时只检查当前类的接口
+           后续可以添加 parent_name 字段支持继承链查找 */
+        break;
+    }
+    return 0;
+}
+
+/* 判断对象是否实现了某个接口（对象必须是 class 实例） */
+int lumyr_obj_implements_interface(Value obj, const char* interface_name)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
+    if(!lumyr_is_class_instance(obj)) return 0;
+    const char* class_name = lumyr_class_get_name(obj);
+    if(!class_name) return 0;
+    return lumyr_class_implements_interface(class_name, interface_name);
 }

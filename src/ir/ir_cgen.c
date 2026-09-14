@@ -1133,8 +1133,20 @@ static void emit_class_register_cb(const char* name, TypeDef* td, void* user_dat
             }
             cur = cur->parent ? type_lookup(cur->parent) : NULL;
         }
-        fprintf(out, "    lumyr_class_register(\"%s\", %d, lumyr_class_%s_fields, (void*)&lumyr_class_%s_vtable);\n",
-                td->name, nfields, td->name, td->name);
+        /* 生成接口实现关系数组 */
+        if(td->ninterfaces > 0 && td->interfaces) {
+            fprintf(out, "    static const char* lumyr_class_%s_interfaces[] = {", td->name);
+            for(int ii = 0; ii < td->ninterfaces; ii++) {
+                if(ii > 0) fprintf(out, ", ");
+                fprintf(out, "\"%s\"", td->interfaces[ii]);
+            }
+            fprintf(out, "};\n");
+            fprintf(out, "    lumyr_class_register(\"%s\", %d, lumyr_class_%s_fields, (void*)&lumyr_class_%s_vtable, %d, lumyr_class_%s_interfaces);\n",
+                    td->name, nfields, td->name, td->name, td->ninterfaces, td->name);
+        } else {
+            fprintf(out, "    lumyr_class_register(\"%s\", %d, lumyr_class_%s_fields, (void*)&lumyr_class_%s_vtable, 0, NULL);\n",
+                    td->name, nfields, td->name, td->name);
+        }
     }
 }
 

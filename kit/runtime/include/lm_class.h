@@ -30,10 +30,12 @@ typedef struct {
     int nfields;                /* 字段数量 */
     ClassFieldInfo* fields;     /* 字段信息数组 */
     void* vtable;               /* vtable 指针（用于方法调用） */
+    int ninterfaces;            /* 实现的接口数量 */
+    const char** interfaces;    /* 实现的接口名数组 */
 } ClassInfo;
 
 /* 注册 class 信息（在代码生成时调用，把 class 的字段信息导出到运行时） */
-void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* fields, void* vtable);
+void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* fields, void* vtable, int ninterfaces, const char** interfaces);
 
 /* 查找 class 信息（通过 class 名） */
 ClassInfo* lumyr_class_lookup(const char* class_name);
@@ -55,6 +57,12 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value);
 
 /* class 方法调用（专门针对 class 的函数，通过 vtable 调用） */
 Value lumyr_class_call_method(Value obj, const char* method_name, int argc, Value* args);
+
+/* 判断 class 是否实现了某个接口（包括父类实现的接口） */
+int lumyr_class_implements_interface(const char* class_name, const char* interface_name);
+
+/* 判断对象是否实现了某个接口（对象必须是 class 实例） */
+int lumyr_obj_implements_interface(Value obj, const char* interface_name);
 
 #ifdef __cplusplus
 }
