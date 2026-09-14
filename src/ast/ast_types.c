@@ -1,8 +1,10 @@
 // ast_types.c —— type 声明类型表（编译期全局注册）
 #include "ast_types.h"
+#include "ast_runtime_sym.h"
 #include "ir/ir_compile.h"
 #include "ir/rbtree.h"
 #include "ast_node.h"
+#include "lm_class.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -437,6 +439,71 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     } else {
         td->prop_access_modifiers = NULL;
     }
+
+    /* 创建并注册 ClassVTable（VM 模式下使用结构体+虚表） */
+    {
+        ClassVTable* vt = (ClassVTable*)malloc(sizeof(ClassVTable));
+        memset(vt, 0, sizeof(ClassVTable));
+        vt->class_name = strdup(name);
+        vt->nfields = merged_nprops;
+        if(merged_nprops > 0) {
+            vt->field_names = (const char**)malloc((size_t)merged_nprops * sizeof(const char*));
+            vt->field_offsets = (int*)malloc((size_t)merged_nprops * sizeof(int));
+            vt->field_types = (ClassFieldType*)malloc((size_t)merged_nprops * sizeof(ClassFieldType));
+            int offset = 0;
+            for(int i = 0; i < merged_nprops; i++) {
+                vt->field_names[i] = strdup(merged_props[i]);
+                vt->field_offsets[i] = offset;
+                /* 根据 ValueType 转换为 ClassFieldType，并计算字段大小 */
+                switch(merged_ptypes[i]) {
+                    case VAL_INT:
+                        vt->field_types[i] = CLASS_FIELD_INT;
+                        offset += sizeof(long long);
+                        break;
+                    case VAL_DOUBLE:
+                        vt->field_types[i] = CLASS_FIELD_DOUBLE;
+                        offset += sizeof(double);
+                        break;
+                    case VAL_BOOL:
+                        vt->field_types[i] = CLASS_FIELD_BOOL;
+                        offset += sizeof(int);
+                        break;
+                    case VAL_STRING:
+                        vt->field_types[i] = CLASS_FIELD_STRING;
+                        offset += sizeof(char*);
+                        break;
+                    default:
+                        vt->field_types[i] = CLASS_FIELD_PTR;
+                        offset += sizeof(void*);
+                        break;
+                }
+            }
+            vt->instance_size = offset;
+        } else {
+            vt->field_names = NULL;
+            vt->field_offsets = NULL;
+            vt->field_types = NULL;
+            vt->instance_size = 0;
+        }
+        /* 方法表暂时为空，后续在编译阶段填充 */
+        vt->nmethods = 0;
+        vt->methods = NULL;
+        vt->method_names = NULL;
+        vt->parent = NULL;
+        /* 填充接口信息 */
+        vt->ninterfaces = td->ninterfaces;
+        if(td->ninterfaces > 0 && td->interfaces) {
+            vt->interfaces = (const char**)malloc((size_t)td->ninterfaces * sizeof(const char*));
+            for(int ii = 0; ii < td->ninterfaces; ii++) {
+                vt->interfaces[ii] = strdup(td->interfaces[ii]);
+            }
+        } else {
+            vt->interfaces = NULL;
+        }
+        /* 注册到运行时库的红黑树中 */
+        lumyr_class_vtable_register(vt);
+    }
+
     return td;
 }
 
@@ -454,6 +521,14 @@ void class_add_method(const char* class_name, const char* method_name, struct As
 {
     TypeDef* td = class_lookup(class_name);
     if(!td) return;
+    /* 跳过构造函数：构造函数已经通过 class_set_constructor 单独设置，
+       不需要再作为普通方法添加，否则会导致 class_name 重复设置和函数名冲突 */
+    if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.name) {
+        size_t name_len = strlen(method_node->u.func_def.name);
+        if(name_len >= 9 && strcmp(method_node->u.func_def.name + name_len - 9, "___init__") == 0) {
+            return;
+        }
+    }
     // 给 self 参数设置 constraint（class:<类名>），让编译时自动给 self 打上 class 类型标记
     if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.params) {
         AstNode* self_param = method_node->u.func_def.params;
@@ -466,6 +541,15 @@ void class_add_method(const char* class_name, const char* method_name, struct As
     }
     // 编译方法为 RuntimeFunc
     RuntimeFunc* rf = compile_func_from_ast(method_node);
+    // 把方法注册到全局符号表中，用 (class_name, method_name) 作为键（红黑树，支持扩展）
+    if(rf && method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.name) {
+        Value method_val;
+        method_val.type = VAL_FUNC;
+        method_val.v.func.func_obj = rf;
+        method_val.v.func.ffi_func = NULL;
+        method_val.v.func.is_ffi = 0;
+        sym_set_class(class_name, method_node->u.func_def.name, method_val);
+    }
     // 设置 class_name 字段（用于 CC 模式方法命名，避免命名冲突）
     // 通过 InterpFuncPayload 的 bytecode 字段设置 class_name 字段
     if(rf && rf->capture_count == -1) {

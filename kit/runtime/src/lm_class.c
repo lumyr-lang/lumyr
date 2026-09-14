@@ -629,6 +629,9 @@ void lumyr_class_vtable_register(ClassVTable* vtable)
         g_vtable_tree->count = 0;
     }
     vtable_rb_insert(g_vtable_tree, vtable->class_name, vtable);
+    /* 同时注册 class 信息到 g_class_tree，用于接口判断等 */
+    lumyr_class_register(vtable->class_name, vtable->nfields, NULL, vtable,
+                         vtable->ninterfaces, vtable->interfaces);
 }
 
 /* 查找 class 虚表（通过 class 名） */
@@ -643,8 +646,10 @@ Value lumyr_class_instance_new(const char* class_name)
 {
     ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
     if(!vt) {
-        /* 虚表未注册，暂时返回 map（兼容旧代码） */
+        /* 虚表未注册，返回 map（兼容旧代码） */
         Value obj = val_map();
+        lumyr_map_set(&obj, lumyr_make_string("__mapname__"), lumyr_make_string(class_name));
+        lumyr_map_set(&obj, lumyr_make_string("__structname__"), lumyr_make_string(class_name));
         lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
         return obj;
     }
@@ -664,6 +669,23 @@ Value lumyr_class_instance_new(const char* class_name)
     v.type = VAL_STRUCT_PTR;
     v.v.struct_ptr = ptr;
     return v;
+}
+
+/* 从 vtable 中查找方法（返回 FuncEntry* 或 NULL） */
+static FuncEntry* class_vtable_find_method(ClassVTable* vt, const char* method_name)
+{
+    if(!vt || !method_name) return NULL;
+    /* 先在当前类的方法表中查找 */
+    for(int i = 0; i < vt->nmethods; i++) {
+        if(vt->method_names && strcmp(vt->method_names[i], method_name) == 0) {
+            return vt->methods[i];
+        }
+    }
+    /* 再在父类的方法表中查找（递归） */
+    if(vt->parent) {
+        return class_vtable_find_method(vt->parent, method_name);
+    }
+    return NULL;
 }
 
 /* class 实例属性读取（按偏移量访问） */

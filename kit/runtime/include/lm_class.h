@@ -44,6 +44,8 @@ typedef struct ClassVTable {
     ClassFieldType* field_types;  /* 字段类型数组 */
     int instance_size;            /* 实例大小（字节） */
     struct ClassVTable* parent;   /* 父类虚表（用于继承链查找） */
+    int ninterfaces;              /* 实现的接口数量 */
+    const char** interfaces;      /* 实现的接口名数组 */
 } ClassVTable;
 
 /* class 实例内存布局（VM 模式下使用）
