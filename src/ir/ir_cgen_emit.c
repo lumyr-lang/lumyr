@@ -2261,7 +2261,8 @@ void emit_insns(BytecodeFunc* fn)
                         /* 生成器函数：保存返回值到栈顶，然后 goto __gen_end（由 footer 设置 state=-1 并返回） */
                         fprintf(out, "    { Value __v = __stk[--__sp]; gc_pop_cframe(); __stk[__sp++] = __v; goto __gen_end; }\n");
                     } else {
-                        fprintf(out, "    { Value __v = __stk[--__sp]; gc_pop_cframe(); gc_protect_push(__v); gc_protect_pop(); return __v; }\n");
+                        /* struct 类型返回值在堆上分配拷贝（避免返回指向局部变量的指针），class 是引用类型不需要拷贝 */
+                        fprintf(out, "    { Value __v = __stk[--__sp]; if(__v.type == VAL_STRUCT_PTR && !lumyr_is_class_instance(__v)) { __v = lumyr_struct_shallow_copy(__v); } gc_pop_cframe(); gc_protect_push(__v); gc_protect_pop(); return __v; }\n");
                     }
                 } else {
                     fprintf(out, "    gc_pop_cframe();\n");
