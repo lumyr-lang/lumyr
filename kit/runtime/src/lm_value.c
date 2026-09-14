@@ -540,9 +540,15 @@ Value lumyr_eq(Value a, Value b) {
         if(!am || !bm) return lumyr_make_bool(0);
         return lumyr_make_bool(strcmp(am, bm) == 0);
     }
-    /* VAL_STRUCT_PTR 类型：调用专门的 lumyr_struct_eq 按字段比较（隔离） */
+    /* VAL_STRUCT_PTR 类型：class 按引用比较，struct 按字段比较（隔离） */
     if(a.type == VAL_STRUCT_PTR || b.type == VAL_STRUCT_PTR) {
         if(a.type != VAL_STRUCT_PTR || b.type != VAL_STRUCT_PTR) return lumyr_make_bool(0);
+        if(!a.v.struct_ptr || !b.v.struct_ptr) return lumyr_make_bool(a.v.struct_ptr == b.v.struct_ptr);
+        /* class 是引用类型，按指针比较 */
+        if(lumyr_is_class_instance(a) || lumyr_is_class_instance(b)) {
+            return lumyr_make_bool(a.v.struct_ptr == b.v.struct_ptr);
+        }
+        /* struct 是值类型，按字段比较 */
         return lumyr_make_bool(lumyr_struct_eq(a, b));
     }
     if(a.type == VAL_MAP || b.type == VAL_MAP) {
