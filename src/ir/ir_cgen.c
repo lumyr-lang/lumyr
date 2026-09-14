@@ -686,6 +686,8 @@ void emit_func_def(BytecodeFunc* fn)
             if(sname) {
                 /* struct 类型局部变量：VAL_STRUCT_PTR，零拷贝传递，C结构体在栈上 */
                 fprintf(out, "    lumyr_struct_%s lmloc_%s__s;\n", sname, fn_locals.names[i]);
+                /* 初始化 __structname__ 只读属性（用于运行时获取类型名，struct 隔离） */
+                fprintf(out, "    lmloc_%s__s.__structname__ = \"%s\";\n", fn_locals.names[i], sname);
                 fprintf(out, "    Value lmloc_%s = lumyr_make_struct_ptr(&lmloc_%s__s);\n", fn_locals.names[i], fn_locals.names[i]);
             } else {
                 int tt = get_var_type_tag(fn, fn_locals.names[i]);
@@ -949,6 +951,8 @@ static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
     FILE* out = (FILE*)user_data;
     if(td && td->is_struct && td->nprops > 0) {
         fprintf(out, "typedef struct {\n");
+        /* __structname__ 只读属性：结构体的第一个字段，用于运行时获取类型名（struct 隔离） */
+        fprintf(out, "    const char* __structname__;\n");
         for(int fi = 0; fi < td->nprops; fi++) {
             int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
             const char* ftype;
@@ -964,6 +968,31 @@ static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
             fprintf(out, "    %s %s;\n", ftype, td->props[fi]);
         }
         fprintf(out, "} lumyr_struct_%s;\n\n", td->name);
+        /* 生成 struct 字段信息表（用于运行时属性访问，专门针对 struct 的函数，不依赖通用的 lumyr_index_get） */
+        fprintf(out, "/* struct %s 字段信息表（运行时属性访问用） */\n", td->name);
+        fprintf(out, "static StructFieldInfo lumyr_struct_%s_fields[] = {\n", td->name);
+        for(int fi = 0; fi < td->nprops; fi++) {
+            int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
+            const char* ftype = "STRUCT_FIELD_INT";
+            if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) ftype = "STRUCT_FIELD_DOUBLE";
+            else if(ck == CAST_STRING) ftype = "STRUCT_FIELD_STRING";
+            else if(ck == CAST_BOOL) ftype = "STRUCT_FIELD_BOOL";
+            else if(td->field_struct_names && td->field_struct_names[fi]) ftype = "STRUCT_FIELD_PTR";
+            fprintf(out, "    {\"%s\", offsetof(lumyr_struct_%s, %s), %s},\n",
+                    td->props[fi], td->name, td->props[fi], ftype);
+        }
+        fprintf(out, "};\n\n");
+    }
+}
+
+/* 生成 struct 注册代码的回调函数（把字段信息表注册到运行时红黑树） */
+static void emit_struct_register_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    FILE* out = (FILE*)user_data;
+    if(td && td->is_struct && td->nprops > 0) {
+        fprintf(out, "    lumyr_struct_register(\"%s\", %d, lumyr_struct_%s_fields);\n",
+                td->name, td->nprops, td->name);
     }
 }
 
@@ -1324,11 +1353,17 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "    /* 注册 class 字段信息表到运行时红黑树 */\n");
     type_foreach(emit_class_register_cb, out);
     fprintf(out, "\n");
+    // 注册所有 struct 的字段信息表到运行时红黑树（用于运行时属性访问，struct 隔离）
+    fprintf(out, "    /* 注册 struct 字段信息表到运行时红黑树 */\n");
+    type_foreach(emit_struct_register_cb, out);
+    fprintf(out, "\n");
     /* 全局 struct 变量初始化：VAL_STRUCT_PTR，零拷贝传递 */
     /* 注意：class 类型（以 class: 开头）是引用类型，实例通过 OPC_CLASS_NEW 动态创建，不需要静态初始化 */
     for(int gi = 0; gi < g_globals.count; gi++) {
         const char* gsname = get_var_struct_name(main_fn, g_globals.names[gi]);
         if(gsname && strncmp(gsname, "class:", 6) != 0) {
+            /* 初始化 __structname__ 只读属性（用于运行时获取类型名，struct 隔离） */
+            fprintf(out, "    lmvar_%s__s.__structname__ = \"%s\";\n", g_globals.names[gi], gsname);
             fprintf(out, "    lmvar_%s = lumyr_make_struct_ptr(&lmvar_%s__s);\n", g_globals.names[gi], g_globals.names[gi]);
         }
     }
@@ -1470,7 +1505,8 @@ void ir_cgen_file(const char* out_c_path, BytecodeFunc* main_fn)
     fprintf(out, "#include \"lm_time.h\"\n");
     fprintf(out, "#include \"lm_qs.h\"\n");
     fprintf(out, "#include \"lumyr_value.h\"\n");
-    fprintf(out, "#include \"lm_class.h\"\n\n");
+    fprintf(out, "#include \"lm_class.h\"\n");
+    fprintf(out, "#include \"lm_struct.h\"\n\n");
     /* 生成器相关全局变量：当前生成器实例的 send 值（receive() 返回） */
     fprintf(out, "static Value __g_gen_send_val = {0};\n");
     fprintf(out, "static int __g_gen_in_generator = 0;\n\n");

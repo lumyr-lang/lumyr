@@ -1,6 +1,7 @@
 #include "lm_value.h"
 #include "lm_json.h"
 #include "lm_class.h"
+#include "lm_struct.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -298,15 +299,20 @@ Value lumyr_index_get(Value c, Value idx) {
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
     }
-    /* VAL_STRUCT_PTR（C 结构体实例，class 的 C 结构体优化）：
-       所有属性访问都走专门的 lumyr_class_get_field 函数（通过红黑树查找字段信息，然后通过偏移量直接访问 C 结构体字段）
-       这样即使没有类型标记（如函数参数），也能正确访问 class 的属性 */
+    /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
+       自动判断是 class 还是 struct，调用对应的专门属性访问函数
+       class 通过 vtable 判断，struct 通过 __structname__ 字段获取类型名
+       这样即使没有类型标记（如函数参数），也能正确访问属性 */
     if(c.type == VAL_STRUCT_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            return lumyr_class_get_field(c, idxcs);
+            if(lumyr_is_class_instance(c)) {
+                return lumyr_class_get_field(c, idxcs);
+            } else {
+                return lumyr_struct_get_field(c, idxcs);
+            }
         }
-        runtime_error("class 属性访问必须是字符串键");
+        runtime_error("结构体属性访问必须是字符串键");
         return val_none();
     }
     if(c.type == VAL_ERROR) {
@@ -406,14 +412,19 @@ void lumyr_check_mapname_ro(Value arr, Value idx, const char* op)
 
 Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
-    /* VAL_STRUCT_PTR（class 的 C 结构体优化）：属性写入走专门的 lumyr_class_set_field 函数 */
+    /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
+       自动判断是 class 还是 struct，调用对应的专门属性写入函数 */
     if(arr.type == VAL_STRUCT_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            lumyr_class_set_field(arr, idxcs, val);
+            if(lumyr_is_class_instance(arr)) {
+                lumyr_class_set_field(arr, idxcs, val);
+            } else {
+                lumyr_struct_set_field(arr, idxcs, val);
+            }
             return val;
         }
-        runtime_error("class 属性写入必须是字符串键");
+        runtime_error("结构体属性写入必须是字符串键");
         return val;
     }
     if(arr.type != VAL_ARRAY) runtime_error("下标访问的对象不是数组");

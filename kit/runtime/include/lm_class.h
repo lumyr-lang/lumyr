@@ -44,6 +44,9 @@ ClassFieldInfo* lumyr_class_find_field(const char* class_name, const char* field
 /* 获取 class 实例的 class 名（通过 vtable 指针） */
 const char* lumyr_class_get_name(Value obj);
 
+/* 判断一个 VAL_STRUCT_PTR 是不是 class 实例（通过 vtable 指针和 class 红黑树判断） */
+int lumyr_is_class_instance(Value obj);
+
 /* class 属性读取（专门针对 class 的函数，不依赖通用的 lumyr_index_get） */
 Value lumyr_class_get_field(Value obj, const char* field_name);
 

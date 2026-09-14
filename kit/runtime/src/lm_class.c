@@ -228,6 +228,24 @@ const char* lumyr_class_get_name(Value obj)
     return *class_name_ptr;
 }
 
+/* 判断一个 VAL_STRUCT_PTR 是不是 class 实例（通过 vtable 指针和 class 红黑树判断）
+   class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name
+   struct 的第一个字段是 __structname__（直接是 const char*）
+   区分方法：尝试通过 vtable 获取 class 名，如果能在 class 红黑树中找到，就是 class */
+int lumyr_is_class_instance(Value obj)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
+    /* class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name */
+    void** vtable_ptr = (void**)obj.v.struct_ptr;
+    if(!*vtable_ptr) return 0;
+    const char** class_name_ptr = (const char**)*vtable_ptr;
+    if(!*class_name_ptr) return 0;
+    /* 检查这个 class 名是否在 class 红黑树中 */
+    ensure_class_tree();
+    ClassRBNode* node = class_rb_find_node(g_class_tree, *class_name_ptr);
+    return node ? 1 : 0;
+}
+
 /* class 属性读取（专门针对 class 的函数，不依赖通用的 lumyr_index_get） */
 Value lumyr_class_get_field(Value obj, const char* field_name)
 {
