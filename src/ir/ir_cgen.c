@@ -1202,6 +1202,7 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
             /* 先收集所有字段名（去重），从子类开始遍历整个继承链 */
             char* all_fields[128];
             int all_field_types[128];
+            int all_field_access_modifiers[128];
             int n_all_fields = 0;
             TypeDef* cur_class = td;
             while(cur_class && n_all_fields < 128) {
@@ -1218,6 +1219,8 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
                         all_fields[n_all_fields] = cur_class->props[fi];
                         int ck = cur_class->field_cast_kinds ? cur_class->field_cast_kinds[fi] : CAST_LONGLONG;
                         all_field_types[n_all_fields] = ck;
+                        int am = cur_class->prop_access_modifiers ? cur_class->prop_access_modifiers[fi] : 0;
+                        all_field_access_modifiers[n_all_fields] = am;
                         n_all_fields++;
                     }
                 }
@@ -1228,6 +1231,7 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
             for(int fi = 0; fi < n_all_fields; fi++) {
                 const char* fname = all_fields[fi];
                 int ftype = all_field_types[fi];
+                int fam = all_field_access_modifiers[fi];
                 int depth = 0;  /* 0 表示子类自己的字段，没有 super 前缀 */
                 TypeDef* find_cur = td;
                 while(find_cur) {
@@ -1256,7 +1260,7 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
                 /* 生成字段信息表项 */
                 fprintf(out, "    {\"%s\", offsetof(lumyr_class_%s, ", fname, td->name);
                 for(int d = 0; d < depth; d++) fprintf(out, "super.");
-                fprintf(out, "%s), %s},\n", fname, ftype_str);
+                fprintf(out, "%s), %s, %d},\n", fname, ftype_str, fam);
             }
         }
         fprintf(out, "};\n\n");
