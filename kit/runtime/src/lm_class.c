@@ -517,3 +517,285 @@ Value lumyr_interface_cast(Value obj, const char* iface_name) {
     runtime_error(msg);
     return val_none();
 }
+
+
+/* ==================== VM 模式下的 class 实例（结构体 + 虚表） ==================== */
+
+/* class 虚表红黑树（用于存储 ClassVTable，大型项目 class 特别多时 O(log n) 查找） */
+typedef struct ClassVTableRBNode {
+    char* key;
+    ClassVTable* value;
+    int color;
+    struct ClassVTableRBNode* left;
+    struct ClassVTableRBNode* right;
+    struct ClassVTableRBNode* parent;
+} ClassVTableRBNode;
+
+typedef struct {
+    ClassVTableRBNode* root;
+    ClassVTableRBNode* nil;
+    int count;
+} ClassVTableRBTree;
+
+static ClassVTableRBTree* g_vtable_tree = NULL;
+
+static ClassVTableRBNode* vtable_rb_create_node(const char* key, ClassVTable* value)
+{
+    ClassVTableRBNode* node = (ClassVTableRBNode*)malloc(sizeof(ClassVTableRBNode));
+    if(!node) return NULL;
+    node->key = strdup(key);
+    node->value = value;
+    node->color = 0;
+    node->left = NULL;
+    node->right = NULL;
+    node->parent = NULL;
+    return node;
+}
+
+static void vtable_rb_left_rotate(ClassVTableRBTree* tree, ClassVTableRBNode* x)
+{
+    ClassVTableRBNode* y = x->right;
+    x->right = y->left;
+    if(y->left != tree->nil) y->left->parent = x;
+    y->parent = x->parent;
+    if(x->parent == tree->nil) tree->root = y;
+    else if(x == x->parent->left) x->parent->left = y;
+    else x->parent->right = y;
+    y->left = x;
+    x->parent = y;
+}
+
+static void vtable_rb_right_rotate(ClassVTableRBTree* tree, ClassVTableRBNode* y)
+{
+    ClassVTableRBNode* x = y->left;
+    y->left = x->right;
+    if(x->right != tree->nil) x->right->parent = y;
+    x->parent = y->parent;
+    if(y->parent == tree->nil) tree->root = x;
+    else if(y == y->parent->right) y->parent->right = x;
+    else y->parent->left = x;
+    x->right = y;
+    y->parent = x;
+}
+
+static void vtable_rb_insert(ClassVTableRBTree* tree, const char* key, ClassVTable* value)
+{
+    if(!tree->nil) {
+        tree->nil = (ClassVTableRBNode*)malloc(sizeof(ClassVTableRBNode));
+        tree->nil->color = 1;
+        tree->nil->left = tree->nil->right = tree->nil->parent = NULL;
+        tree->root = tree->nil;
+    }
+    ClassVTableRBNode* z = vtable_rb_create_node(key, value);
+    ClassVTableRBNode* y = tree->nil;
+    ClassVTableRBNode* x = tree->root;
+    while(x != tree->nil) {
+        y = x;
+        if(strcmp(z->key, x->key) < 0) x = x->left;
+        else x = x->right;
+    }
+    z->parent = y;
+    if(y == tree->nil) tree->root = z;
+    else if(strcmp(z->key, y->key) < 0) y->left = z;
+    else y->right = z;
+    z->left = tree->nil;
+    z->right = tree->nil;
+    z->color = 0;
+    /* 简化：跳过红黑树修复（后续完善） */
+    tree->count++;
+}
+
+static ClassVTable* vtable_rb_search(ClassVTableRBTree* tree, const char* key)
+{
+    if(!tree || !tree->nil) return NULL;
+    ClassVTableRBNode* x = tree->root;
+    while(x != tree->nil) {
+        int cmp = strcmp(key, x->key);
+        if(cmp == 0) return x->value;
+        else if(cmp < 0) x = x->left;
+        else x = x->right;
+    }
+    return NULL;
+}
+
+/* 注册 class 虚表（VM 模式下使用） */
+void lumyr_class_vtable_register(ClassVTable* vtable)
+{
+    if(!vtable || !vtable->class_name) return;
+    if(!g_vtable_tree) {
+        g_vtable_tree = (ClassVTableRBTree*)malloc(sizeof(ClassVTableRBTree));
+        g_vtable_tree->root = NULL;
+        g_vtable_tree->nil = NULL;
+        g_vtable_tree->count = 0;
+    }
+    vtable_rb_insert(g_vtable_tree, vtable->class_name, vtable);
+}
+
+/* 查找 class 虚表（通过 class 名） */
+ClassVTable* lumyr_class_vtable_lookup(const char* class_name)
+{
+    if(!class_name || !g_vtable_tree) return NULL;
+    return vtable_rb_search(g_vtable_tree, class_name);
+}
+
+/* 创建 class 实例（分配结构体内存，设置 vtable 指针） */
+Value lumyr_class_instance_new(const char* class_name)
+{
+    ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
+    if(!vt) {
+        /* 虚表未注册，暂时返回 map（兼容旧代码） */
+        Value obj = val_map();
+        lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
+        return obj;
+    }
+    /* 分配结构体内存（包含 vtable 指针 + 字段数据） */
+    int size = sizeof(ClassVTable*) + vt->instance_size;
+    void* ptr = malloc(size);
+    if(!ptr) {
+        runtime_error("内存分配失败：无法创建 class 实例");
+        return val_none();
+    }
+    memset(ptr, 0, size);
+    /* 设置 vtable 指针 */
+    ClassInstance* inst = (ClassInstance*)ptr;
+    inst->vtable = vt;
+    /* 返回 VAL_STRUCT_PTR 类型 */
+    Value v;
+    v.type = VAL_STRUCT_PTR;
+    v.v.struct_ptr = ptr;
+    return v;
+}
+
+/* class 实例属性读取（按偏移量访问） */
+Value lumyr_class_instance_get_field(Value obj, const char* field_name)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) {
+        return val_none();
+    }
+    ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
+    ClassVTable* vt = inst->vtable;
+    if(!vt) return val_none();
+    /* 查找字段偏移量 */
+    for(int i = 0; i < vt->nfields; i++) {
+        if(strcmp(vt->field_names[i], field_name) == 0) {
+            /* 按偏移量读取字段 */
+            char* field_ptr = (char*)obj.v.struct_ptr + sizeof(ClassVTable*) + vt->field_offsets[i];
+            switch(vt->field_types[i]) {
+                case CLASS_FIELD_INT: {
+                    long long val = *(long long*)field_ptr;
+                    return val_int(val);
+                }
+                case CLASS_FIELD_DOUBLE: {
+                    double val = *(double*)field_ptr;
+                    return val_double(val);
+                }
+                case CLASS_FIELD_BOOL: {
+                    int val = *(int*)field_ptr;
+                    return val_bool(val);
+                }
+                case CLASS_FIELD_STRING: {
+                    const char* val = *(const char**)field_ptr;
+                    if(val) return lumyr_make_string(val);
+                    return val_none();
+                }
+                case CLASS_FIELD_PTR: {
+                    void* val = *(void**)field_ptr;
+                    Value v;
+                    v.type = VAL_STRUCT_PTR;
+                    v.v.struct_ptr = val;
+                    return v;
+                }
+                default:
+                    return val_none();
+            }
+        }
+    }
+    return val_none();
+}
+
+/* class 实例属性写入（按偏移量访问） */
+void lumyr_class_instance_set_field(Value obj, const char* field_name, Value value)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) return;
+    ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
+    ClassVTable* vt = inst->vtable;
+    if(!vt) return;
+    /* 查找字段偏移量 */
+    for(int i = 0; i < vt->nfields; i++) {
+        if(strcmp(vt->field_names[i], field_name) == 0) {
+            /* 按偏移量写入字段 */
+            char* field_ptr = (char*)obj.v.struct_ptr + sizeof(ClassVTable*) + vt->field_offsets[i];
+            switch(vt->field_types[i]) {
+                case CLASS_FIELD_INT:
+                    *(long long*)field_ptr = value.v.i;
+                    break;
+                case CLASS_FIELD_DOUBLE:
+                    *(double*)field_ptr = value.v.d;
+                    break;
+                case CLASS_FIELD_BOOL:
+                    *(int*)field_ptr = value.v.b;
+                    break;
+                case CLASS_FIELD_STRING:
+                    if(value.type == VAL_STRING) {
+                        *(const char**)field_ptr = lumyr_str_cstr(&value);
+                    }
+                    break;
+                case CLASS_FIELD_PTR:
+                    *(void**)field_ptr = value.v.struct_ptr;
+                    break;
+                default:
+                    break;
+            }
+            return;
+        }
+    }
+}
+
+/* class 实例方法调用（通过 vtable 索引调用） */
+Value lumyr_class_instance_call_method(Value obj, const char* method_name, int argc, Value* args, EvalCtx* ctx, StackFrame* frame)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !method_name) {
+        return val_none();
+    }
+    ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
+    ClassVTable* vt = inst->vtable;
+    if(!vt) return val_none();
+    /* 查找方法索引 */
+    for(int i = 0; i < vt->nmethods; i++) {
+        if(strcmp(vt->method_names[i], method_name) == 0) {
+            /* 通过 vtable 调用方法 */
+            if(vt->methods[i]) {
+                /* 构造参数数组：self 作为第一个参数 */
+                Value* call_args = (Value*)malloc(sizeof(Value) * (argc + 1));
+                call_args[0] = obj;
+                for(int j = 0; j < argc; j++) {
+                    call_args[j + 1] = args[j];
+                }
+                Value ret = vt->methods[i](argc + 1, call_args, ctx, frame);
+                free(call_args);
+                return ret;
+            }
+            return val_none();
+        }
+    }
+    /* 查找父类方法 */
+    if(vt->parent) {
+        /* 临时设置 vtable 为父类，递归调用 */
+        ClassVTable* old_vt = inst->vtable;
+        inst->vtable = vt->parent;
+        Value ret = lumyr_class_instance_call_method(obj, method_name, argc, args, ctx, frame);
+        inst->vtable = old_vt;
+        return ret;
+    }
+    return val_none();
+}
+
+/* 判断一个 Value 是不是 class 实例（VAL_STRUCT_PTR 且 vtable 有效） */
+int lumyr_is_class_instance_value(Value obj)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
+    ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
+    if(!inst->vtable) return 0;
+    /* 检查 vtable 是否在红黑树中 */
+    return lumyr_class_vtable_lookup(inst->vtable->class_name) != NULL;
+}

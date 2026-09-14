@@ -2116,7 +2116,19 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 _Bool fnd = 0;
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
-                stack[sp++] = lumyr_index_get(obj, fname);
+                /* 判断是否是 class 结构体实例 */
+                if(obj.type == VAL_STRUCT_PTR && lumyr_is_class_instance_value(obj)) {
+                    /* 结构体实例：用新的方式读取字段 */
+                    const char* field_name = lumyr_str_cstr(&fname);
+                    if(field_name) {
+                        stack[sp++] = lumyr_class_instance_get_field(obj, field_name);
+                    } else {
+                        stack[sp++] = val_none();
+                    }
+                } else {
+                    /* map 或其他类型：用旧的方式 */
+                    stack[sp++] = lumyr_index_get(obj, fname);
+                }
                 break;
             }
             case OPC_STORE_FIELD: {
@@ -2126,7 +2138,17 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 _Bool fnd = 0;
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
-                lumyr_array_set(obj, fname, val);
+                /* 判断是否是 class 结构体实例 */
+                if(obj.type == VAL_STRUCT_PTR && lumyr_is_class_instance_value(obj)) {
+                    /* 结构体实例：用新的方式写入字段 */
+                    const char* field_name = lumyr_str_cstr(&fname);
+                    if(field_name) {
+                        lumyr_class_instance_set_field(obj, field_name, val);
+                    }
+                } else {
+                    /* map 或其他类型：用旧的方式 */
+                    lumyr_array_set(obj, fname, val);
+                }
                 stack[sp++] = val;
                 break;
             }
@@ -2320,14 +2342,11 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if(stack[--sp].type == VAL_NONE) pc = in.a;
                 break;
             case OPC_CLASS_NEW: {
-                /* VM 模式下创建 class 实例：创建带有 __mapname__/__structname__/__classname__ 属性的 map 对象，
-                   并用构造参数按顺序初始化字段 */
+                /* VM 模式下创建 class 实例：优先用结构体方式（虚表），如果虚表未注册则回退到 map 方式 */
                 const char* class_name = bf->syms[in.a];
                 int argc = in.b;
-                Value obj = val_map();
-                lumyr_map_set(&obj, lumyr_make_string("__mapname__"), lumyr_make_string(class_name));
-                lumyr_map_set(&obj, lumyr_make_string("__structname__"), lumyr_make_string(class_name));
-                lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
+                /* 尝试用新的结构体方式创建实例 */
+                Value obj = lumyr_class_instance_new(class_name);
                 /* 用构造参数按顺序初始化字段 */
                 if(argc > 0) {
                     TypeDef* td = class_lookup(class_name);
@@ -2335,7 +2354,13 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         int n = argc < td->nprops ? argc : td->nprops;
                         for(int i = 0; i < n; i++) {
                             Value arg = stack[sp - argc + i];
-                            lumyr_map_set(&obj, lumyr_make_string(td->props[i]), arg);
+                            if(obj.type == VAL_STRUCT_PTR && lumyr_is_class_instance_value(obj)) {
+                                /* 结构体实例：用新的方式设置字段 */
+                                lumyr_class_instance_set_field(obj, td->props[i], arg);
+                            } else {
+                                /* map 实例：用旧的方式设置字段 */
+                                lumyr_map_set(&obj, lumyr_make_string(td->props[i]), arg);
+                            }
                         }
                     }
                     sp -= argc;

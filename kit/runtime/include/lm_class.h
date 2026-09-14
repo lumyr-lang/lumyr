@@ -32,6 +32,31 @@ typedef struct {
     int access_modifier;    /* 访问修饰符（0=public, 1=private, 2=protected） */
 } ClassFieldInfo;
 
+/* class 虚函数表（VM 模式下使用） */
+typedef struct ClassVTable {
+    const char* class_name;       /* class 名 */
+    int nmethods;                 /* 方法数量 */
+    FuncEntry** methods;          /* 方法指针数组 */
+    const char** method_names;    /* 方法名数组（用于调试和查找） */
+    int nfields;                  /* 字段数量 */
+    int* field_offsets;           /* 字段偏移量数组（字节） */
+    const char** field_names;     /* 字段名数组 */
+    ClassFieldType* field_types;  /* 字段类型数组 */
+    int instance_size;            /* 实例大小（字节） */
+    struct ClassVTable* parent;   /* 父类虚表（用于继承链查找） */
+} ClassVTable;
+
+/* class 实例内存布局（VM 模式下使用）
+ * [0]   vtable_ptr (ClassVTable*)
+ * [8]   field1
+ * [16]  field2
+ * ...
+ */
+typedef struct {
+    ClassVTable* vtable;    /* 虚表指针（必须在最前面） */
+    /* 字段数据紧随其后，按偏移量访问 */
+} ClassInstance;
+
 /* class 信息 */
 typedef struct {
     const char* class_name;     /* class 名 */
@@ -44,6 +69,29 @@ typedef struct {
 
 /* 注册 class 信息（在代码生成时调用，把 class 的字段信息导出到运行时） */
 void lumyr_class_register(const char* class_name, int nfields, ClassFieldInfo* fields, void* vtable, int ninterfaces, const char** interfaces);
+
+/* ==================== VM 模式下的 class 实例（结构体 + 虚表） ==================== */
+
+/* 注册 class 虚表（VM 模式下使用） */
+void lumyr_class_vtable_register(ClassVTable* vtable);
+
+/* 查找 class 虚表（通过 class 名） */
+ClassVTable* lumyr_class_vtable_lookup(const char* class_name);
+
+/* 创建 class 实例（分配结构体内存，设置 vtable 指针） */
+Value lumyr_class_instance_new(const char* class_name);
+
+/* class 实例属性读取（按偏移量访问） */
+Value lumyr_class_instance_get_field(Value obj, const char* field_name);
+
+/* class 实例属性写入（按偏移量访问） */
+void lumyr_class_instance_set_field(Value obj, const char* field_name, Value value);
+
+/* class 实例方法调用（通过 vtable 索引调用） */
+Value lumyr_class_instance_call_method(Value obj, const char* method_name, int argc, Value* args, EvalCtx* ctx, StackFrame* frame);
+
+/* 判断一个 Value 是不是 class 实例（VAL_STRUCT_PTR 且 vtable 有效） */
+int lumyr_is_class_instance_value(Value obj);
 
 /* 查找 class 信息（通过 class 名） */
 ClassInfo* lumyr_class_lookup(const char* class_name);
