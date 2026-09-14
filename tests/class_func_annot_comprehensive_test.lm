@@ -1,0 +1,94 @@
+// class_func_annot_comprehensive_test.lm - class 函数注解全面测试
+print("=== Class Function Annotation Comprehensive Test ===");
+
+// 1. 无参数注解
+print("\n--- 1. 无参数注解 ---");
+class Calc1 {
+    value: int;
+    func __init__(self, value) {
+        self.value = value;
+    }
+    @deprecated
+    func add(self, x) {
+        return self.value + x;
+    }
+    @cache
+    func multiply(self, x) {
+        return self.value * x;
+    }
+}
+c1 = Calc1(10);
+print("add(5):", c1.add(5));
+print("multiply(3):", c1.multiply(3));
+
+// 2. 带参数注解
+print("\n--- 2. 带参数注解 ---");
+class Calc2 {
+    value: int;
+    func __init__(self, value) {
+        self.value = value;
+    }
+    @timeout(5000)
+    func slow_op(self) {
+        return self.value * 2;
+    }
+    @retry(3)
+    func risky_op(self) {
+        return self.value + 100;
+    }
+}
+c2 = Calc2(20);
+print("slow_op():", c2.slow_op());
+print("risky_op():", c2.risky_op());
+
+// 3. 多个注解
+print("\n--- 3. 多个注解 ---");
+class Calc3 {
+    value: int;
+    func __init__(self, value) {
+        self.value = value;
+    }
+    @log
+    @validate
+    @cache
+    func complex_op(self, x) {
+        return self.value + x * 2;
+    }
+}
+c3 = Calc3(30);
+print("complex_op(5):", c3.complex_op(5));
+
+// 4. 注解和构造函数
+print("\n--- 4. 注解和构造函数 ---");
+class User {
+    name: string;
+    age: int;
+    @validate
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+    @log
+    func get_info(self) {
+        return self.name + " (" + self.age + ")";
+    }
+}
+u = User("Alice", 25);
+print("info:", u.get_info());
+
+// 5. 注解和静态方法
+print("\n--- 5. 注解和静态方法 ---");
+class MathUtil {
+    @pure
+    static func add(a, b) {
+        return a + b;
+    }
+    @pure
+    static func multiply(a, b) {
+        return a * b;
+    }
+}
+print("add(3, 4):", MathUtil_add(3, 4));
+print("multiply(3, 4):", MathUtil_multiply(3, 4));
+
+print("\n=== All Class Function Annotation Tests Passed ===");

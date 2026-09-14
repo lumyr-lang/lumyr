@@ -1,0 +1,41 @@
+// 测试 class 函数上加注解
+print("=== Class Function Annotation Test ===");
+
+class Calculator {
+    value: int;
+    func __init__(self, value) {
+        self.value = value;
+    }
+
+    @deprecated
+    func add(self, x) {
+        return self.value + x;
+    }
+
+    @cache
+    func multiply(self, x) {
+        return self.value * x;
+    }
+
+    @log
+    @validate
+    func divide(self, x) {
+        if (x == 0) {
+            return 0;
+        }
+        return self.value / x;
+    }
+
+    func get_value(self) {
+        return self.value;
+    }
+}
+
+c = Calculator(10);
+print("value:", c.get_value());
+print("add(5):", c.add(5));
+print("multiply(3):", c.multiply(3));
+print("divide(2):", c.divide(2));
+print("divide(0):", c.divide(0));
+
+print("\n=== Class Function Annotation Test Done ===");
