@@ -21,6 +21,57 @@ static RBTree* g_method_rbtree = NULL;
 static int g_method_count = 0;  /* 方法总数，用于分配新索引 */
 static char* g_method_names_by_idx[64];  /* 按索引排序的方法名数组，最多 64 个方法 */
 
+/* 非虚方法红黑树：存储没有被任何子类重写的方法（方法名 -> 定义这个方法的类名）
+   对于这些方法，可以直接调用对应类的实现，不需要 vtable 动态分派 */
+RBTree* g_nonvirtual_methods = NULL;
+
+/* 方法定义计数上下文：统计每个方法名被多少个 class 定义 */
+typedef struct {
+    const char* method_name;
+    int count;
+    const char* first_class;
+} MethodDefCountCtx;
+
+/* 统计方法定义数量的回调函数 */
+static void count_method_def_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    MethodDefCountCtx* ctx = (MethodDefCountCtx*)user_data;
+    if(!td || !td->is_class) return;
+    /* 检查这个 class 是否定义了这个方法 */
+    for(int i = 0; i < td->nmethods; i++) {
+        if(strcmp(td->method_names[i], ctx->method_name) == 0) {
+            ctx->count++;
+            if(ctx->count == 1) ctx->first_class = td->name;
+            break;
+        }
+    }
+}
+
+/* 分析方法是否被重写的回调函数
+   简化实现：统计每个方法名被多少个 class 定义
+   如果只有一个 class 定义了某个方法，那么这个方法肯定没有被重写，可以静态分派 */
+static void analyze_nonvirtual_methods_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    (void)user_data;
+    if(!td || !td->is_class) return;
+    /* 遍历这个 class 的每个方法，检查是否被多个 class 定义 */
+    for(int i = 0; i < td->nmethods; i++) {
+        const char* method_name = td->method_names[i];
+        /* 检查这个方法是否已经被加入非虚方法集合（避免重复处理） */
+        if(rbtree_find(g_nonvirtual_methods, NULL, method_name) != NULL) continue;
+        /* 统计这个方法名被多少个 class 定义 */
+        MethodDefCountCtx ctx = { method_name, 0, NULL };
+        type_foreach(count_method_def_cb, &ctx);
+        /* 如果只有一个 class 定义了这个方法，那么没有被重写，加入非虚方法集合 */
+        if(ctx.count == 1 && ctx.first_class) {
+            /* 键：方法名，值：定义这个方法的类名（用 intptr_t 存储类名指针） */
+            rbtree_insert(g_nonvirtual_methods, NULL, method_name, (void*)ctx.first_class);
+        }
+    }
+}
+
 /* 添加方法名到全局红黑树（去重），同时维护索引数组
    注意：索引从 1 开始，避免 (void*)(intptr_t)0 == NULL 导致 rbtree_find 返回 NULL 去重失败 */
 static void add_method_name(const char* name) {
@@ -1036,6 +1087,8 @@ void emit_main(BytecodeFunc* main_fn)
     g_method_rbtree = rbtree_create();
     g_method_count = 1;
     memset(g_method_names_by_idx, 0, sizeof(g_method_names_by_idx));
+    /* 初始化非虚方法红黑树（用于静态分派优化） */
+    g_nonvirtual_methods = rbtree_create();
     // 生成器组合操作（包装生成器）运行时支持
     emit_gen_wrapper_support();
 
@@ -1090,6 +1143,9 @@ void emit_main(BytecodeFunc* main_fn)
 
     // 收集所有 class 的所有方法到全局数组（用于 vtable 索引映射）
     type_foreach(collect_class_methods_cb, NULL);
+
+    // 分析每个方法是否被重写，把没有被重写的方法加入非虚方法集合（用于静态分派优化）
+    type_foreach(analyze_nonvirtual_methods_cb, NULL);
 
     // 生成每个 class 的 vtable 实例（虚函数表，必须在函数原型声明之后）
     fprintf(out, "/* class vtable 实例（虚函数表，按全局方法索引填充） */\n");

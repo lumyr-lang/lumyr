@@ -7,6 +7,11 @@
 /* 全局方法名到 vtable 索引的查找函数（定义在 ir_cgen.c 中） */
 int find_method_index(const char* name);
 
+/* 非虚方法红黑树（定义在 ir_cgen.c 中，用于静态分派优化） */
+extern struct RBTree* g_nonvirtual_methods;
+/* 红黑树查找函数（定义在 rbtree.c 中） */
+void* rbtree_find(struct RBTree* tree, const char* class_name, const char* method_name);
+
 /* 用于检查函数名是否是某个 class 的方法的回调函数 */
 typedef struct {
     const char* method_name;
@@ -2030,11 +2035,26 @@ void emit_insns(BytecodeFunc* fn)
                     if(fixed > 0) fprintf(out, ", ");
                     fprintf(out, "__rest);\n");
                 } else if(is_class_method_call) {
-                    /* class 方法：动态分派
-                       - VAL_STRUCT_PTR（C 结构体实例）：通过 vtable 函数指针直接调用（O(1)，不需要 strcmp）
-                       - VAL_MAP（旧的 map 实例）：通过 if-else 链 + strcmp 实现（向后兼容） */
-                    fprintf(out, "        /* class 方法动态分派 */\n");
-                    fprintf(out, "        Value __self = __args[0];\n");
+                    /* class 方法调用：
+                       - 静态分派优化：如果方法没有被重写，直接调用对应类的方法（连 vtable 都不需要）
+                       - 动态分派：VAL_STRUCT_PTR 通过 vtable 函数指针调用（O(1)），VAL_MAP 通过 if-else 链 */
+                    /* 检查方法是否是非虚方法（没有被任何子类重写） */
+                    void* _nonvirtual_class = rbtree_find(g_nonvirtual_methods, NULL, nm);
+                    if(_nonvirtual_class) {
+                        /* 静态分派：方法未被重写，直接调用对应类的方法 */
+                        const char* _nv_class_name = (const char*)_nonvirtual_class;
+                        fprintf(out, "        /* 静态分派：方法未被重写，直接调用 */\n");
+                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s_%s_%d(", _nv_class_name, nm, fixed);
+                        for(int k = 0; k < fixed; k++) {
+                            if(k) fprintf(out, ", ");
+                            if(k < nbind) fprintf(out, "__args[%d]", k);
+                            else fprintf(out, "val_none()");
+                        }
+                        fprintf(out, ");\n");
+                    } else {
+                        /* 动态分派 */
+                        fprintf(out, "        /* class 方法动态分派 */\n");
+                        fprintf(out, "        Value __self = __args[0];\n");
                     fprintf(out, "        if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
                     fprintf(out, "            /* C 结构体实例：通过 vtable 函数指针直接调用（O(1)） */\n");
                     /* 编译期查找方法名对应的 vtable 索引 */
@@ -2081,6 +2101,7 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "        } else {\n");
                     fprintf(out, "            runtime_error(\"self 不是 class 实例\");\n");
                     fprintf(out, "        }\n");
+                    }  /* end of dynamic dispatch */
                 } else {
                     /* 普通函数调用 */
                     fprintf(out, "        __stk[__sp++] = lumyr_func_%s(", nm);
