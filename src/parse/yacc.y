@@ -1538,6 +1538,10 @@ class_prop_list
     : %empty                     { $$ = NULL; }
     | class_prop                 { $$ = $1; }
     | class_prop_list COMMA class_prop { $$ = ast_seq($1, $3); }
+    | class_prop_list annotation_list class_prop  {
+        /* class 属性定义（支持注解）：注解暂时保存，后续可扩展语义处理 */
+        $$ = ast_seq($1, $3);
+      }
     | class_prop_list annotated_decl  {
         /* class 方法定义（支持注解）：保存到临时列表，class 注册后再统一处理 */
         if($2 && $2->type == AST_FUNC_DEF) {
