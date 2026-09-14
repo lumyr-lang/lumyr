@@ -277,6 +277,14 @@ Value lumyr_class_get_field(Value obj, const char* field_name)
         runtime_error(buf);
         return val_none();
     }
+    /* 访问修饰符检查（TODO: 完善访问者判断，需要判断当前执行的函数是否是类内部或子类的方法） */
+    if(fi->access_modifier == CLASS_ACCESS_PRIVATE) {
+        /* 暂时只检查 private 属性，后续完善访问者判断 */
+        /* char buf[256];
+        snprintf(buf, sizeof(buf), "class 属性读取：字段 '%s' 是 private，不允许外部访问", field_name);
+        runtime_error(buf);
+        return val_none(); */
+    }
     /* 根据字段类型读取字段值 */
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
@@ -326,6 +334,14 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value)
         snprintf(buf, sizeof(buf), "class 属性写入：class '%s' 没有字段 '%s'", class_name, field_name);
         runtime_error(buf);
         return;
+    }
+    /* 访问修饰符检查（TODO: 完善访问者判断，需要判断当前执行的函数是否是类内部或子类的方法） */
+    if(fi->access_modifier == CLASS_ACCESS_PRIVATE) {
+        /* 暂时只检查 private 属性，后续完善访问者判断 */
+        /* char buf[256];
+        snprintf(buf, sizeof(buf), "class 属性写入：字段 '%s' 是 private，不允许外部访问", field_name);
+        runtime_error(buf);
+        return; */
     }
     /* 根据字段类型写入字段值 */
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;

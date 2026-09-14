@@ -17,11 +17,19 @@ typedef enum {
     CLASS_FIELD_OTHER = 5     /* 其他类型 */
 } ClassFieldType;
 
+/* 访问修饰符枚举 */
+typedef enum {
+    CLASS_ACCESS_PUBLIC = 0,     /* public（默认） */
+    CLASS_ACCESS_PRIVATE = 1,    /* private */
+    CLASS_ACCESS_PROTECTED = 2   /* protected */
+} ClassAccessModifier;
+
 /* class 字段信息 */
 typedef struct {
     const char* name;       /* 字段名 */
     int offset;             /* 字段在 C 结构体中的偏移量（字节） */
     ClassFieldType type;    /* 字段类型 */
+    int access_modifier;    /* 访问修饰符（0=public, 1=private, 2=protected） */
 } ClassFieldInfo;
 
 /* class 信息 */

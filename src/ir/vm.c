@@ -2082,6 +2082,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_INDEX_GET: {
                 Value idx = stack[--sp];
                 Value c = stack[--sp];
+                /* 访问修饰符检查：如果对象是 class 实例，且索引是字符串（属性名），检查访问修饰符 */
+                /* TODO: 完善访问修饰符检查，需要判断访问者是否是类内部或子类 */
                 Value result = lumyr_index_get(c, idx);
                 /* 扩展方法：如果对象没有该属性，且属性名是字符串，查找全局符号表中的扩展方法 */
                 if(result.type == VAL_NONE && idx.type == VAL_STRING) {
@@ -2100,6 +2102,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value val = stack[--sp];
                 Value idx = stack[--sp];
                 Value arr = stack[--sp];
+                /* 访问修饰符检查：如果对象是 class 实例，且索引是字符串（属性名），检查访问修饰符 */
+                /* TODO: 完善访问修饰符检查，需要判断访问者是否是类内部或子类 */
                 stack[sp++] = lumyr_array_set(arr, idx, val);
                 break;
             }
