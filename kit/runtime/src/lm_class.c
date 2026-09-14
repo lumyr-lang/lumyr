@@ -24,6 +24,9 @@ typedef struct {
 
 static ClassRBTree* g_class_tree = NULL;
 
+/* 当前执行的函数所属的类名（NULL 表示全局函数或非类方法，用于访问修饰符检查） */
+static const char* g_current_class_name = NULL;
+
 static ClassRBNode* class_rb_create_node(const char* key, ClassInfo* value)
 {
     ClassRBNode* node = (ClassRBNode*)malloc(sizeof(ClassRBNode));
@@ -277,13 +280,23 @@ Value lumyr_class_get_field(Value obj, const char* field_name)
         runtime_error(buf);
         return val_none();
     }
-    /* 访问修饰符检查（TODO: 完善访问者判断，需要判断当前执行的函数是否是类内部或子类的方法） */
+    /* 访问修饰符检查 */
     if(fi->access_modifier == CLASS_ACCESS_PRIVATE) {
-        /* 暂时只检查 private 属性，后续完善访问者判断 */
-        /* char buf[256];
-        snprintf(buf, sizeof(buf), "class 属性读取：字段 '%s' 是 private，不允许外部访问", field_name);
-        runtime_error(buf);
-        return val_none(); */
+        /* private 属性：只有类内部的方法才能访问 */
+        if(!lumyr_is_accessor_inside_class(class_name)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "class 属性读取：字段 '%s' 是 private，不允许外部访问", field_name);
+            runtime_error(buf);
+            return val_none();
+        }
+    } else if(fi->access_modifier == CLASS_ACCESS_PROTECTED) {
+        /* protected 属性：类内部和子类的方法才能访问 */
+        if(!lumyr_is_accessor_inside_class(class_name) && !lumyr_is_accessor_subclass_of(class_name)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "class 属性读取：字段 '%s' 是 protected，不允许外部访问", field_name);
+            runtime_error(buf);
+            return val_none();
+        }
     }
     /* 根据字段类型读取字段值 */
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
@@ -335,13 +348,23 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value)
         runtime_error(buf);
         return;
     }
-    /* 访问修饰符检查（TODO: 完善访问者判断，需要判断当前执行的函数是否是类内部或子类的方法） */
+    /* 访问修饰符检查 */
     if(fi->access_modifier == CLASS_ACCESS_PRIVATE) {
-        /* 暂时只检查 private 属性，后续完善访问者判断 */
-        /* char buf[256];
-        snprintf(buf, sizeof(buf), "class 属性写入：字段 '%s' 是 private，不允许外部访问", field_name);
-        runtime_error(buf);
-        return; */
+        /* private 属性：只有类内部的方法才能访问 */
+        if(!lumyr_is_accessor_inside_class(class_name)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "class 属性写入：字段 '%s' 是 private，不允许外部访问", field_name);
+            runtime_error(buf);
+            return;
+        }
+    } else if(fi->access_modifier == CLASS_ACCESS_PROTECTED) {
+        /* protected 属性：类内部和子类的方法才能访问 */
+        if(!lumyr_is_accessor_inside_class(class_name) && !lumyr_is_accessor_subclass_of(class_name)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "class 属性写入：字段 '%s' 是 protected，不允许外部访问", field_name);
+            runtime_error(buf);
+            return;
+        }
     }
     /* 根据字段类型写入字段值 */
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
@@ -418,6 +441,39 @@ int lumyr_obj_implements_interface(Value obj, const char* interface_name)
     const char* class_name = lumyr_class_get_name(obj);
     if(!class_name) return 0;
     return lumyr_class_implements_interface(class_name, interface_name);
+}
+
+/* ==================== 访问者判断（用于访问修饰符检查） ==================== */
+
+/* 设置当前执行的函数所属的类名（NULL 表示全局函数或非类方法） */
+void lumyr_set_current_class(const char* class_name)
+{
+    g_current_class_name = class_name;
+}
+
+/* 获取当前执行的函数所属的类名（NULL 表示全局函数或非类方法） */
+const char* lumyr_get_current_class(void)
+{
+    return g_current_class_name;
+}
+
+/* 判断当前访问者是否是指定类的内部（即当前执行的函数是该类的方法） */
+int lumyr_is_accessor_inside_class(const char* class_name)
+{
+    if(!g_current_class_name || !class_name) return 0;
+    return strcmp(g_current_class_name, class_name) == 0;
+}
+
+/* 判断当前访问者是否是指定类的子类（即当前执行的函数是该类的子类的方法） */
+int lumyr_is_accessor_subclass_of(const char* class_name)
+{
+    if(!g_current_class_name || !class_name) return 0;
+    if(strcmp(g_current_class_name, class_name) == 0) return 0;  /* 自己不是自己的子类 */
+    /* 遍历当前类的继承链，看看是否继承自指定类 */
+    ClassInfo* ci = lumyr_class_lookup(g_current_class_name);
+    if(!ci) return 0;
+    /* TODO: 需要在 ClassInfo 中保存父类信息，目前暂时返回 0，后续完善 */
+    return 0;
 }
 
 /* 通用的接口判断函数（可以处理 class 实例和 map 类型的对象）

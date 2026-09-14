@@ -78,6 +78,20 @@ int lumyr_implements_interface(Value obj, const char* iface_name);
 /* 接口类型转换：检查对象是否实现了接口，如果没有实现则报错，否则返回对象本身 */
 Value lumyr_interface_cast(Value obj, const char* iface_name);
 
+/* ==================== 访问者判断（用于访问修饰符检查） ==================== */
+
+/* 设置当前执行的函数所属的类名（NULL 表示全局函数或非类方法） */
+void lumyr_set_current_class(const char* class_name);
+
+/* 获取当前执行的函数所属的类名（NULL 表示全局函数或非类方法） */
+const char* lumyr_get_current_class(void);
+
+/* 判断当前访问者是否是指定类的内部（即当前执行的函数是该类的方法） */
+int lumyr_is_accessor_inside_class(const char* class_name);
+
+/* 判断当前访问者是否是指定类的子类（即当前执行的函数是该类的子类的方法） */
+int lumyr_is_accessor_subclass_of(const char* class_name);
+
 #ifdef __cplusplus
 }
 #endif

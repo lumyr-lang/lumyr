@@ -1707,6 +1707,9 @@ Value gv; gv.type = VAL_GENERATOR; gv.v.generator = (void*)wg;
 
 static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
 {
+    /* 访问修饰符检查：保存旧的当前类名，设置为当前函数所属的类名 */
+    const char* old_current_class = lumyr_get_current_class();
+    lumyr_set_current_class(bf->class_name);
     /* 生成器上下文恢复：如果 s_current_gen 不为 NULL，从生成器对象恢复状态 */
     GeneratorObject* gen_ctx = s_current_gen;
     int is_generator = (gen_ctx != NULL);
@@ -2797,6 +2800,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if (!tls_skip_vm_unregister) gc_unregister_thread();
                 /* 设置 yield 结果并 longjmp 返回到 generator_resume */
                 s_gen_yield_result = v;
+                lumyr_set_current_class(old_current_class);
                 longjmp(gen_ctx->resume_point, 1);
             }
             case OPC_RETURN: {
@@ -2825,6 +2829,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     gc_protect_pop();
                 }
                 if(!is_generator) free(stack);
+                lumyr_set_current_class(old_current_class);
                 return v;
             }
             case OPC_RETURN_NIL:
@@ -2840,6 +2845,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 tls_vm_run_depth--;
                 if (tls_vm_run_depth > 0 || !tls_skip_vm_unregister) gc_unregister_thread();
                 if(!is_generator) free(stack);
+                lumyr_set_current_class(old_current_class);
                 return val_none();
             case OPC_HALT:
                 if(is_generator) {
@@ -2854,6 +2860,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 tls_vm_run_depth--;
                 if (tls_vm_run_depth > 0 || !tls_skip_vm_unregister) gc_unregister_thread();
                 if(!is_generator) free(stack);
+                lumyr_set_current_class(old_current_class);
                 return val_none();
             default:
                 runtime_error("vm: 未知指令");
