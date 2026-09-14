@@ -4,6 +4,7 @@
  * 未来并发编译需实例化；运行时多线程由 _Thread_local 执行器状态保证。
  */
 #include "ir_cgen_internal.h"
+#include "rbtree.h"
 
 
 
@@ -12,6 +13,36 @@ NameSet g_globals;      // 全局变量（main 指令流引用）
 BytecodeFunc* g_main_fn = NULL;  // main 函数（用于全局变量类型查找）
 NameSet fn_locals;      // 当前函数局部变量（非参数、非全局）
 BytecodeFunc* g_cur_fn; // 当前生成所在函数（NULL=main）
+
+/* 全局方法名红黑树：收集所有 class 的所有方法，用于 vtable 索引映射
+   使用红黑树实现 O(log n) 的插入和查找，和项目其他数据结构保持一致
+   同时维护一个按索引排序的数组，方便 vtable 填充时按索引访问 */
+static RBTree* g_method_rbtree = NULL;
+static int g_method_count = 0;  /* 方法总数，用于分配新索引 */
+static char* g_method_names_by_idx[64];  /* 按索引排序的方法名数组，最多 64 个方法 */
+
+/* 添加方法名到全局红黑树（去重），同时维护索引数组
+   注意：索引从 1 开始，避免 (void*)(intptr_t)0 == NULL 导致 rbtree_find 返回 NULL 去重失败 */
+static void add_method_name(const char* name) {
+    if(!name || !g_method_rbtree) return;
+    /* 先查找是否已存在（O(log n)） */
+    if(rbtree_find(g_method_rbtree, NULL, name) != NULL) return;  /* 已存在 */
+    /* 不存在，插入新节点，data 存索引（从 1 开始，用 intptr_t 转换） */
+    rbtree_insert(g_method_rbtree, NULL, name, (void*)(intptr_t)g_method_count);
+    /* 同时维护按索引排序的数组，方便 vtable 填充时按索引访问 */
+    if(g_method_count < 64) {
+        g_method_names_by_idx[g_method_count] = strdup(name);
+    }
+    g_method_count++;
+}
+
+/* 查找方法名对应的索引（O(log n)，全局函数，供 ir_cgen_emit.c 使用） */
+int find_method_index(const char* name) {
+    if(!name || !g_method_rbtree) return -1;
+    void* data = rbtree_find(g_method_rbtree, NULL, name);
+    if(data == NULL) return -1;
+    return (int)(intptr_t)data;
+}
 
 /* FFI 外部函数声明列表（编译通道用） */
 static FFIDecl* g_ffi_decls = NULL;
@@ -886,6 +917,27 @@ static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
 }
 
 
+/* 收集 class 所有方法的回调函数（包括继承的方法） */
+static void collect_class_methods_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    (void)user_data;
+    if(td && td->is_class) {
+        /* 遍历继承链，收集所有方法 */
+        TypeDef* cur = td;
+        while(cur) {
+            for(int i = 0; i < cur->nmethods; i++) {
+                add_method_name(cur->method_names[i]);
+            }
+            if(cur->parent) {
+                cur = type_lookup(cur->parent);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /* 生成 class vtable 实例的回调函数 */
 static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
 {
@@ -895,19 +947,39 @@ static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
         fprintf(out, "static lumyr_vtable lumyr_class_%s_vtable = {\n", td->name);
         fprintf(out, "    .class_name = \"%s\",\n", td->name);
         fprintf(out, "    .methods = {\n");
-        /* 收集所有方法（包括继承的方法），按方法名排序，生成函数指针 */
-        /* 先收集本类的方法 */
-        int method_idx = 0;
-        /* 遍历继承链，收集所有方法（子类重写的方法用子类的，继承的用父类的） */
-        /* 简单实现：先收集本类的方法，后续再优化继承链 */
-        for(int i = 0; i < td->nmethods && method_idx < 64; i++) {
-            /* 方法函数名格式：<类名>_<方法名>_<参数个数> */
-            /* 参数个数 = 方法参数个数 + 1（self） */
-            int param_cnt = 1; /* self */
-            /* 这里简化处理，实际应该从方法节点获取参数个数 */
-            fprintf(out, "        (void*)lumyr_func_%s_%s_%d,  /* %s */\n",
-                    td->name, td->method_names[i], param_cnt, td->method_names[i]);
-            method_idx++;
+        /* 第 0 个位置保留不用（方法索引从 1 开始，避免 0 == NULL 问题） */
+        fprintf(out, "        NULL,  /* reserved */\n");
+        /* 按照全局方法名索引数组填充 vtable（索引一致，方便 O(1) 方法调用）
+           子类重写的方法用子类的函数指针，继承的方法用父类的，没有的方法用 NULL */
+        /* 索引从 1 开始，和方法索引保持一致 */
+        for(int mi = 1; mi < g_method_count && mi < 64; mi++) {
+            const char* mname = g_method_names_by_idx[mi];
+            /* 在继承链中查找这个方法（从子类开始，找到第一个就是重写的） */
+            const char* method_class = NULL;
+            TypeDef* cur = td;
+            while(cur) {
+                int found = 0;
+                for(int i = 0; i < cur->nmethods; i++) {
+                    if(strcmp(cur->method_names[i], mname) == 0) {
+                        method_class = cur->name;
+                        found = 1;
+                        break;
+                    }
+                }
+                if(found) break;
+                if(cur->parent) {
+                    cur = type_lookup(cur->parent);
+                } else {
+                    break;
+                }
+            }
+            if(method_class) {
+                /* 方法函数名格式：<类名>_<方法名>_1（1 表示 self 参数） */
+                fprintf(out, "        (void*)lumyr_func_%s_%s_1,  /* %s */\n",
+                        method_class, mname, mname);
+            } else {
+                fprintf(out, "        NULL,  /* %s (not implemented) */\n", mname);
+            }
         }
         fprintf(out, "    }\n");
         fprintf(out, "};\n");
@@ -959,6 +1031,11 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
 void emit_main(BytecodeFunc* main_fn)
 {
     g_main_fn = main_fn;  // 保存 main 函数，用于全局变量类型查找
+    /* 初始化全局方法名红黑树
+       注意：g_method_count 初始化为 1，索引从 1 开始，避免 0 == NULL 的问题 */
+    g_method_rbtree = rbtree_create();
+    g_method_count = 1;
+    memset(g_method_names_by_idx, 0, sizeof(g_method_names_by_idx));
     // 生成器组合操作（包装生成器）运行时支持
     emit_gen_wrapper_support();
 
@@ -1011,8 +1088,11 @@ void emit_main(BytecodeFunc* main_fn)
     // 函数原型（前向引用/递归）
     ir_func_table_foreach(emit_func_proto_cb, out);
 
+    // 收集所有 class 的所有方法到全局数组（用于 vtable 索引映射）
+    type_foreach(collect_class_methods_cb, NULL);
+
     // 生成每个 class 的 vtable 实例（虚函数表，必须在函数原型声明之后）
-    fprintf(out, "/* class vtable 实例（虚函数表） */\n");
+    fprintf(out, "/* class vtable 实例（虚函数表，按全局方法索引填充） */\n");
     type_foreach(emit_class_vtable_cb, out);
     fprintf(out, "\n");
 

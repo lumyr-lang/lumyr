@@ -4,6 +4,9 @@
  */
 #include "ir_cgen_internal.h"
 
+/* 全局方法名到 vtable 索引的查找函数（定义在 ir_cgen.c 中） */
+int find_method_index(const char* name);
+
 /* 用于检查函数名是否是某个 class 的方法的回调函数 */
 typedef struct {
     const char* method_name;
@@ -2027,25 +2030,53 @@ void emit_insns(BytecodeFunc* fn)
                     if(fixed > 0) fprintf(out, ", ");
                     fprintf(out, "__rest);\n");
                 } else if(is_class_method_call) {
-                    /* class 方法：动态分派，生成 if-else 链来判断 self 的 __classname__，然后调用相应的方法 */
+                    /* class 方法：动态分派
+                       - VAL_STRUCT_PTR（C 结构体实例）：通过 vtable 函数指针直接调用（O(1)，不需要 strcmp）
+                       - VAL_MAP（旧的 map 实例）：通过 if-else 链 + strcmp 实现（向后兼容） */
                     fprintf(out, "        /* class 方法动态分派 */\n");
                     fprintf(out, "        Value __self = __args[0];\n");
-                    fprintf(out, "        const char* __cn_str = NULL;\n");
-                    fprintf(out, "        if(__self.type == VAL_MAP && lumyr_map_has(__self, lumyr_make_string(\"__classname__\"))) {\n");
+                    fprintf(out, "        if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
+                    fprintf(out, "            /* C 结构体实例：通过 vtable 函数指针直接调用（O(1)） */\n");
+                    /* 编译期查找方法名对应的 vtable 索引 */
+                    int method_idx = find_method_index(nm);
+                    if(method_idx >= 0) {
+                        fprintf(out, "            lumyr_vtable* __vt = (lumyr_vtable*)*(void**)__self.v.struct_ptr;\n");
+                        fprintf(out, "            if(__vt && __vt->methods[%d]) {\n", method_idx);
+                        /* 生成函数指针类型转换和调用 */
+                        fprintf(out, "                __stk[__sp++] = ((Value(*)(Value");
+                        for(int k = 1; k < fixed; k++) {
+                            fprintf(out, ", Value");
+                        }
+                        fprintf(out, "))__vt->methods[%d])(__self", method_idx);
+                        for(int k = 1; k < fixed; k++) {
+                            if(k < nbind) {
+                                fprintf(out, ", __args[%d]", k);
+                            } else {
+                                fprintf(out, ", val_none()");
+                            }
+                        }
+                        fprintf(out, ");\n");
+                        fprintf(out, "            } else {\n");
+                        fprintf(out, "                runtime_error(\"未找到方法: %s\");\n", nm);
+                        fprintf(out, "            }\n");
+                    } else {
+                        fprintf(out, "            runtime_error(\"未找到方法: %s\");\n", nm);
+                    }
+                    fprintf(out, "        } else if(__self.type == VAL_MAP && lumyr_map_has(__self, lumyr_make_string(\"__classname__\"))) {\n");
+                    fprintf(out, "            /* 旧的 map 实例：通过 if-else 链 + strcmp 实现（向后兼容） */\n");
                     fprintf(out, "            Value __cn = lumyr_map_get(__self, lumyr_make_string(\"__classname__\"));\n");
-                    fprintf(out, "            if(__cn.type == VAL_STRING) __cn_str = lumyr_str_cstr(&__cn);\n");
-                    fprintf(out, "        } else if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
-                    fprintf(out, "            /* C 结构体实例：vtable 是第一个字段，通过 vtable 获取 class 名 */\n");
-                    fprintf(out, "            __cn_str = ((lumyr_vtable*)*(void**)__self.v.struct_ptr)->class_name;\n");
-                    fprintf(out, "        }\n");
-                    fprintf(out, "        if(__cn_str) {\n");
+                    fprintf(out, "            const char* __cn_str = (__cn.type == VAL_STRING) ? lumyr_str_cstr(&__cn) : NULL;\n");
+                    fprintf(out, "            if(__cn_str) {\n");
                     /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
                     int first_class = 1;
                     ClassDispatchCtx dispatch_ctx = { out, nm, fixed, nbind, &first_class };
                     type_foreach(emit_class_dispatch_cb, &dispatch_ctx);
                     /* 如果没有匹配的 class，报错 */
-                    fprintf(out, "            else {\n");
-                    fprintf(out, "                runtime_error(\"未找到方法: %s\");\n", nm);
+                    fprintf(out, "                else {\n");
+                    fprintf(out, "                    runtime_error(\"未找到方法: %s\");\n", nm);
+                    fprintf(out, "                }\n");
+                    fprintf(out, "            } else {\n");
+                    fprintf(out, "                runtime_error(\"self 不是 class 实例\");\n");
                     fprintf(out, "            }\n");
                     fprintf(out, "        } else {\n");
                     fprintf(out, "            runtime_error(\"self 不是 class 实例\");\n");
