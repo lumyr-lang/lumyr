@@ -989,6 +989,39 @@ static void collect_class_methods_cb(const char* name, TypeDef* td, void* user_d
     }
 }
 
+/* 辅助函数：从方法的 AST 节点中获取参数个数（包括 self）
+   注意：方法的 AST 节点的参数链表中，第一个参数是 self，
+   所以参数链表中的节点个数就是方法的总参数个数（包括 self） */
+static int get_method_param_count(TypeDef* td, const char* method_name)
+{
+    if(!td || !method_name) return 1;  /* 默认只有 self */
+    /* 遍历这个 class 的方法，找到对应的方法节点 */
+    for(int i = 0; i < td->nmethods; i++) {
+        if(strcmp(td->method_names[i], method_name) == 0) {
+            AstNode* method_node = td->method_nodes[i];
+            if(method_node && method_node->type == AST_FUNC_DEF) {
+                /* 遍历参数链表，统计参数个数（第一个参数是 self） */
+                int count = 0;
+                AstNode* param = method_node->u.func_def.params;
+                while(param) {
+                    count++;
+                    param = param->u.param.next;
+                }
+                return count > 0 ? count : 1;  /* 至少有 self */
+            }
+            break;
+        }
+    }
+    /* 如果在这个 class 中没找到，去父类中找 */
+    if(td->parent) {
+        TypeDef* parent_td = type_lookup(td->parent);
+        if(parent_td) {
+            return get_method_param_count(parent_td, method_name);
+        }
+    }
+    return 1;  /* 默认只有 self */
+}
+
 /* 生成 class vtable 实例的回调函数 */
 static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
 {
@@ -1025,9 +1058,10 @@ static void emit_class_vtable_cb(const char* name, TypeDef* td, void* user_data)
                 }
             }
             if(method_class) {
-                /* 方法函数名格式：<类名>_<方法名>_1（1 表示 self 参数） */
-                fprintf(out, "        (void*)lumyr_func_%s_%s_1,  /* %s */\n",
-                        method_class, mname, mname);
+                /* 方法函数名格式：<类名>_<方法名>_<参数个数>（参数个数包括 self） */
+                int param_cnt = get_method_param_count(td, mname);
+                fprintf(out, "        (void*)lumyr_func_%s_%s_%d,  /* %s */\n",
+                        method_class, mname, param_cnt, mname);
             } else {
                 fprintf(out, "        NULL,  /* %s (not implemented) */\n", mname);
             }
@@ -1042,7 +1076,7 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
 {
     (void)name;
     FILE* out = (FILE*)user_data;
-    if(td && td->is_class && td->nprops > 0) {
+    if(td && td->is_class) {
         fprintf(out, "typedef struct lumyr_class_%s lumyr_class_%s;\n", td->name, td->name);
         fprintf(out, "struct lumyr_class_%s {\n", td->name);
         /* 如果有父类，父类结构体作为第一个字段（包含 vtable 指针和属性），字段名为 super
@@ -1070,6 +1104,8 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
                 }
             }
             if(is_parent_field) continue;
+            /* 跳过 __classname__ 属性，因为它已经被特殊处理了（在结构体开头定义） */
+            if(strcmp(td->props[fi], "__classname__") == 0) continue;
             int ck = td->field_cast_kinds ? td->field_cast_kinds[fi] : CAST_LONGLONG;
             const char* ftype = castkind_to_c_type(ck);
             if(!ftype) ftype = "int64_t";

@@ -297,6 +297,21 @@ Value lumyr_index_get(Value c, Value idx) {
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
     }
+    /* VAL_STRUCT_PTR（C 结构体实例，class 的 C 结构体优化）：
+       支持 __classname__ 只读属性访问（通过固定偏移量 sizeof(void*) 访问，
+       因为无论继承链有多深，__classname__ 字段总是在 vtable 指针之后） */
+    if(c.type == VAL_STRUCT_PTR) {
+        if(idx.type == VAL_STRING) {
+            const char* idxcs = lumyr_str_cstr(&idx);
+            if(strcmp(idxcs, "__classname__") == 0 && c.v.struct_ptr) {
+                /* __classname__ 字段的偏移量总是 sizeof(void*)（vtable 指针之后） */
+                const char** classname_ptr = (const char**)((char*)c.v.struct_ptr + sizeof(void*));
+                return lumyr_make_string(*classname_ptr ? *classname_ptr : "");
+            }
+        }
+        runtime_error("结构体下标必须是字符串键");
+        return val_none();
+    }
     if(c.type == VAL_ERROR) {
         if(idx.type != VAL_STRING) runtime_error("错误对象下标必须是字符串键");
         const char* idxcs = lumyr_str_cstr(&idx);

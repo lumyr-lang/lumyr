@@ -675,7 +675,19 @@ void emit_insns(BytecodeFunc* fn)
                             }
                         }
                     }
-                    {
+                    /* 特殊处理 __classname__ 属性 */
+                    if(strcmp(fname, "__classname__") == 0) {
+                        /* 计算继承链深度 */
+                        int _cn_depth2 = 0;
+                        TypeDef* _cn_cur2 = td;
+                        while(_cn_cur2 && _cn_cur2->parent) {
+                            _cn_depth2++;
+                            _cn_cur2 = type_lookup(_cn_cur2->parent);
+                        }
+                        fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)lmloc_self.v.struct_ptr)->", struct_prefix, ss);
+                        for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
+                        fprintf(out, "__classname__);\n");
+                    } else {
                         /* 判断是否是父类字段 */
                         int _is_pf = 0;
                         if(td && td->parent) {
@@ -696,7 +708,7 @@ void emit_insns(BytecodeFunc* fn)
                         } else {
                             fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
                         }
-                    }
+                    }  /* end of else (not __classname__) */
                     break;
                 }
                 if(sname && (!(in.a < fn->param_cnt && !fn->is_method) ||
@@ -715,6 +727,27 @@ void emit_insns(BytecodeFunc* fn)
                                 break;
                             }
                         }
+                    }
+                    /* 特殊处理 __classname__ 属性（class 的特殊只读属性） */
+                    if(is_class && strcmp(fname, "__classname__") == 0) {
+                        /* 计算继承链深度，__classname__ 在最顶层父类中 */
+                        int _cn_depth = 0;
+                        TypeDef* _cn_cur = td;
+                        while(_cn_cur && _cn_cur->parent) {
+                            _cn_depth++;
+                            _cn_cur = type_lookup(_cn_cur->parent);
+                        }
+                        /* 直接计算是否是 ref 参数（_is_ref_param 在后面才声明） */
+                        int _cn_is_ref = (in.a < fn->param_cnt && fn->param_is_ref && fn->param_is_ref[in.a]);
+                        const char* _var_acc = cvar_rw(vname);
+                        if(_cn_is_ref) {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)(%s).v.struct_ptr)->", struct_prefix, ss, _var_acc);
+                        } else {
+                            fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)%s.v.struct_ptr)->", struct_prefix, ss, _var_acc);
+                        }
+                        for(int _cnd = 0; _cnd < _cn_depth; _cnd++) fprintf(out, "super.");
+                        fprintf(out, "__classname__);\n");
+                        break;
                     }
                     const char* nested_sname = NULL;
                     if(td && td->field_struct_names) {
@@ -792,7 +825,19 @@ void emit_insns(BytecodeFunc* fn)
                     const char* ctype = emit_tag_to_ctype(ck);
                     if(!ctype) ctype = "int64_t";
                     fprintf(out, "    { Value __v = __stk[--__sp]; Value __self = lmloc_self;\n");
-                    {
+                    /* 特殊处理 __classname__ 属性 */
+                    if(strcmp(fname, "__classname__") == 0) {
+                        /* 计算继承链深度 */
+                        int _cn_depth2 = 0;
+                        TypeDef* _cn_cur2 = td;
+                        while(_cn_cur2 && _cn_cur2->parent) {
+                            _cn_depth2++;
+                            _cn_cur2 = type_lookup(_cn_cur2->parent);
+                        }
+                        fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)lmloc_self.v.struct_ptr)->", struct_prefix, ss);
+                        for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
+                        fprintf(out, "__classname__);\n");
+                    } else {
                         /* 判断是否是父类字段 */
                         int _is_pf = 0;
                         if(td && td->parent) {
@@ -849,7 +894,19 @@ void emit_insns(BytecodeFunc* fn)
                     }
                     _store_access = _store_access_buf;
                     fprintf(out, "    { Value __v = __stk[--__sp];\n");
-                    {
+                    /* 特殊处理 __classname__ 属性 */
+                    if(strcmp(fname, "__classname__") == 0) {
+                        /* 计算继承链深度 */
+                        int _cn_depth2 = 0;
+                        TypeDef* _cn_cur2 = td;
+                        while(_cn_cur2 && _cn_cur2->parent) {
+                            _cn_depth2++;
+                            _cn_cur2 = type_lookup(_cn_cur2->parent);
+                        }
+                        fprintf(out, "    __stk[__sp++] = lumyr_make_string(((%s%s*)lmloc_self.v.struct_ptr)->", struct_prefix, ss);
+                        for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
+                        fprintf(out, "__classname__);\n");
+                    } else {
                         /* 判断是否是父类字段 */
                         int _is_pf = 0;
                         if(td && td->parent) {
@@ -1650,6 +1707,9 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             case OPC_CLASS_NEW: {
                 /* 创建 class 实例（C 结构体）：malloc + 清零 + 设置 __classname__ + 用参数初始化字段 + 包装成 Value */
+                /* 辅助函数：获取 vtable 指针和 __classname__ 的访问路径（考虑多层继承）
+                   最顶层 class（无父类）：直接访问 __obj->vtable
+                   有父类的 class：通过 super 链访问，如 __obj->super.vtable 或 __obj->super.super.vtable */
                 const char* class_name = fn->syms[in.a];
                 int argc = in.b;
                 fprintf(out, "    {\n");
@@ -1660,19 +1720,37 @@ void emit_insns(BytecodeFunc* fn)
                        有父类的 class，vtable 和 __classname__ 在 super 中
                        没有父类的 class，vtable 和 __classname__ 直接在结构体中 */
                     TypeDef* _td_vt = type_lookup(class_name);
-                    if(_td_vt && _td_vt->parent) {
-                        fprintf(out, "        __obj->super.vtable = &lumyr_class_%s_vtable;\n", class_name);
-                    } else {
+                    /* 计算继承链深度，生成正确的 vtable 访问路径 */
+                    int _depth = 0;
+                    TypeDef* _cur = _td_vt;
+                    while(_cur && _cur->parent) {
+                        _depth++;
+                        _cur = type_lookup(_cur->parent);
+                    }
+                    if(_depth == 0) {
                         fprintf(out, "        __obj->vtable = &lumyr_class_%s_vtable;\n", class_name);
+                    } else {
+                        fprintf(out, "        __obj->");
+                        for(int _d = 0; _d < _depth; _d++) fprintf(out, "super.");
+                        fprintf(out, "vtable = &lumyr_class_%s_vtable;\n", class_name);
                     }
                 }
                 {
                     /* 子类结构体的 __classname__ 在 super 中，父类结构体直接有 __classname__ */
                     TypeDef* _td = type_lookup(class_name);
-                    if(_td && _td->parent) {
-                        fprintf(out, "        __obj->super.__classname__ = \"%s\";\n", class_name);
-                    } else {
+                    /* 计算继承链深度，生成正确的 __classname__ 访问路径 */
+                    int _depth2 = 0;
+                    TypeDef* _cur2 = _td;
+                    while(_cur2 && _cur2->parent) {
+                        _depth2++;
+                        _cur2 = type_lookup(_cur2->parent);
+                    }
+                    if(_depth2 == 0) {
                         fprintf(out, "        __obj->__classname__ = \"%s\";\n", class_name);
+                    } else {
+                        fprintf(out, "        __obj->");
+                        for(int _d2 = 0; _d2 < _depth2; _d2++) fprintf(out, "super.");
+                        fprintf(out, "__classname__ = \"%s\";\n", class_name);
                     }
                 }
                 if(argc > 0) {
