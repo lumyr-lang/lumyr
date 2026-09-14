@@ -135,6 +135,8 @@ struct AstNode {
             int is_static_method;  // 1=静态方法，0=普通方法
             int is_abstract_method;  // 1=抽象方法，0=普通方法
             int is_override_method;  // 1=重写方法，0=普通方法
+            int is_getter;  // 1=getter方法，0=普通方法
+            int is_setter;  // 1=setter方法，0=普通方法
         } func_def;
 
         struct {

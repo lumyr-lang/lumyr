@@ -1,0 +1,28 @@
+// 测试 class 析构函数（__del__）
+print("=== Class Destructor Test ===");
+
+class Resource {
+    name: string;
+
+    func __init__(self, name) {
+        self.name = name;
+        print("Resource created:", self.name);
+    }
+
+    // 析构函数
+    func __del__(self) {
+        print("Resource destroyed:", self.name);
+    }
+
+    func use(self) {
+        print("Using resource:", self.name);
+    }
+}
+
+r = Resource("file.txt");
+r.use();
+
+// 手动调用析构函数
+r.__del__();
+
+print("\n=== Class Destructor Test Done ===");

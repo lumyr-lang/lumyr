@@ -1733,6 +1733,26 @@ class_prop_list
         }
         $$ = ast_seq($1, $4);
       }
+    | class_prop_list TOK_STATIC ID ASSIGN expr SEMI    {
+        /* class 静态属性：static count = 0，存储在全局符号表中，变量名加上类名前缀 */
+        char* static_var_name = (char*)malloc(strlen(g_current_class_name) + strlen($3) + 2);
+        sprintf(static_var_name, "%s_%s", g_current_class_name, $3);
+        /* 编译表达式并赋值给全局变量 */
+        AstNode* assign = ast_assign(static_var_name, $5);
+        /* 添加到 g_class_methods 数组中，这样它会被添加到 method_list 中，从而被 collect_top_level 函数处理 */
+        g_class_method_push(assign);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
+        /* class 静态属性（带类型标注）：static count: int = 0 */
+        char* static_var_name = (char*)malloc(strlen(g_current_class_name) + strlen($3) + 2);
+        sprintf(static_var_name, "%s_%s", g_current_class_name, $3);
+        /* 编译表达式并赋值给全局变量 */
+        AstNode* assign = ast_assign(static_var_name, $7);
+        /* 添加到 g_class_methods 数组中，这样它会被添加到 method_list 中，从而被 collect_top_level 函数处理 */
+        g_class_method_push(assign);
+        $$ = $1;
+      }
     | class_prop_list TOK_STATIC func_def  {
         /* class 静态方法定义：生成一个全局函数，函数名加上 class 名前缀 */
         if($3 && $3->type == AST_FUNC_DEF) {
