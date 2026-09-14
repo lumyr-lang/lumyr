@@ -1,0 +1,19 @@
+// 测试 class 属性注解
+print("=== Class Property Annotation Test ===");
+
+class User {
+    @required
+    name: string;
+    @range(1, 100)
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+}
+
+u = User("Alice", 25);
+print("name:", u.name);
+print("age:", u.age);
+
+print("=== Class Property Annotation Test Done ===");

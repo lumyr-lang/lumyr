@@ -1,0 +1,31 @@
+// 测试带继承的 class 类注解
+print("=== Class Annotation Inherit Test ===");
+
+class Animal {
+    name: string;
+    func __init__(self, name) {
+        self.name = name;
+    }
+    func speak(self) {
+        print("Animal speaks");
+    }
+}
+
+@entity
+class Dog extends Animal {
+    breed: string;
+    func __init__(self, name, breed) {
+        super(name);
+        self.breed = breed;
+    }
+    func speak(self) {
+        print("Dog barks");
+    }
+}
+
+d = Dog("Buddy", "Golden");
+print("name:", d.name);
+print("breed:", d.breed);
+d.speak();
+
+print("=== Class Annotation Inherit Test Done ===");

@@ -1,0 +1,15 @@
+// 测试带字符串参数的注解（用不同的注解名）
+print("=== String Param Annotation Test 2 ===");
+
+class User {
+    @my_annotation("unknown")
+    name: string;
+    func __init__(self, name) {
+        self.name = name;
+    }
+}
+
+u = User("Alice");
+print("name:", u.name);
+
+print("=== String Param Annotation Test 2 Done ===");

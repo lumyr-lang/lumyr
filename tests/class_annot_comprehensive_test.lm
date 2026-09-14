@@ -1,0 +1,72 @@
+// class_annot_comprehensive_test.lm - class 类注解全面测试
+print("=== Class Annotation Comprehensive Test ===");
+
+// 1. 无参数注解
+print("\n--- 1. 无参数注解 ---");
+@entity
+class User1 {
+    name: string;
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+}
+u1 = User1("Alice", 25);
+print("name:", u1.name);
+print("age:", u1.age);
+
+// 2. 带参数注解
+print("\n--- 2. 带参数注解 ---");
+@table("users")
+class User2 {
+    name: string;
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+}
+u2 = User2("Bob", 30);
+print("name:", u2.name);
+print("age:", u2.age);
+
+// 3. 多个注解
+print("\n--- 3. 多个注解 ---");
+@entity
+@table("users")
+@cache
+class User3 {
+    name: string;
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+}
+u3 = User3("Charlie", 35);
+print("name:", u3.name);
+print("age:", u3.age);
+
+// 4. 注解和方法
+print("\n--- 4. 注解和方法 ---");
+@entity
+class User4 {
+    name: string;
+    age: int;
+    func __init__(self, name, age) {
+        self.name = name;
+        self.age = age;
+    }
+    func get_name(self) {
+        return self.name;
+    }
+    func get_age(self) {
+        return self.age;
+    }
+}
+u4 = User4("David", 40);
+print("name:", u4.get_name());
+print("age:", u4.get_age());
+
+print("\n=== All Class Annotation Tests Passed ===");

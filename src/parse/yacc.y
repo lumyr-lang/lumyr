@@ -605,6 +605,52 @@ closed_stmt
           /* 返回方法定义的 AST 节点，让它们作为独立函数定义被正常处理一次 */
           $$ = method_list ? L(method_list) : L(ast_none());
       }
+    | annotation_list class_header class_prop_list RBRACE {
+          /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
+          /* 注解暂时保存，后续可扩展语义处理 */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, NULL);
+          if(g_current_class_is_abstract) {
+              TypeDef* td = type_lookup(g_current_class_name);
+              if(td) td->is_abstract = 1;
+          }
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
+          }
+          AstNode* method_list = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
+              } else {
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              }
+          }
+          if(g_class_constructor) {
+              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          $$ = method_list ? L(method_list) : L(ast_none());
+      }
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
@@ -644,6 +690,35 @@ closed_stmt
                   }
                   g_current_class_name = saved_class_name;  // 恢复
               } else {
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              }
+          }
+          if(g_class_constructor) {
+              method_list = method_list ? ast_seq(method_list, g_class_constructor) : g_class_constructor;
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          $$ = method_list ? L(method_list) : L(ast_none());
+      }
+    | annotation_list class_header_inherit class_prop_list RBRACE {
+          /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, NULL);
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
+          }
+          AstNode* method_list = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
                   method_list = method_list ? ast_seq(method_list, mnode) : mnode;
               }
           }
