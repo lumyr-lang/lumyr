@@ -1710,6 +1710,10 @@ class_prop_list
     | class_prop_list annotation_list TOK_STATIC func_def  {
         /* @annotation static func ...：带注解的 class 静态方法定义 */
         if($4 && $4->type == AST_FUNC_DEF) {
+            /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
+            if(!type_lookup(g_current_class_name)) {
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
+            }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -1732,6 +1736,10 @@ class_prop_list
     | class_prop_list TOK_STATIC func_def  {
         /* class 静态方法定义：生成一个全局函数，函数名加上 class 名前缀 */
         if($3 && $3->type == AST_FUNC_DEF) {
+            /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
+            if(!type_lookup(g_current_class_name)) {
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
+            }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
@@ -1772,6 +1780,10 @@ class_prop_list
     | class_prop_list access_modifier TOK_STATIC func_def  {
         /* public/private/protected static func ...：带访问修饰符的 class 静态方法定义 */
         if($4 && $4->type == AST_FUNC_DEF) {
+            /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
+            if(!type_lookup(g_current_class_name)) {
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
+            }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
             free($4->u.func_def.name);
