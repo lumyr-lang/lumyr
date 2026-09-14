@@ -407,6 +407,52 @@ interface Colored extends Printable {
 }
 ```
 
+### 6.3 implements 运算符（类型断言）
+
+运行时判断对象是否实现了某个接口，返回布尔值。
+
+```lumyr
+interface Printable {
+    func to_string(): <string>;
+}
+
+interface Serializable {
+    func to_json(): <string>;
+}
+
+class Dog implements Printable {
+    name: string,
+    func to_string(self): <string> {
+        return "Dog(" + self.name + ")";
+    }
+}
+
+class Cat implements Printable, Serializable {
+    name: string,
+    func to_string(self): <string> { return "Cat"; }
+    func to_json(self): <string> { return "{}"; }
+}
+
+d = Dog("Buddy");
+c = Cat("Whiskers");
+
+print(d implements Printable);      // true
+print(d implements Serializable);   // false
+print(c implements Printable);      // true
+print(c implements Serializable);   // true
+
+// 在 if 语句中使用
+if(d implements Printable) {
+    print(d.to_string());
+}
+```
+
+**注意**：
+- `implements` 是运算符，不是关键字，用于运行时类型断言
+- 支持 VM 模式和 CC 模式（双通道）
+- 对于 class 实例，通过 class 注册的接口信息判断
+- 对于 type（map）实例，通过 type 注册的接口信息判断
+
 ---
 
 ## 7. 枚举（enum）
