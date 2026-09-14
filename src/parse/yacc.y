@@ -15,24 +15,27 @@
 /* type 声明属性收集器（yacc 动作顺序填充，声明语句动作消费后清空） */
 static char** g_prop_names = NULL;
 static ValueType* g_prop_types = NULL;
+static int* g_prop_access_modifiers = NULL;
 static int g_prop_n = 0, g_prop_cap = 0;
-static void type_prop_push(char* name, ValueType vt)
+static void type_prop_push(char* name, ValueType vt, int access_modifier)
 {
     if(g_prop_n >= g_prop_cap) {
         int nc = g_prop_cap > 0 ? g_prop_cap * 2 : 8;
         g_prop_names = (char**)realloc(g_prop_names, (size_t)nc * sizeof(char*));
         g_prop_types = (ValueType*)realloc(g_prop_types, (size_t)nc * sizeof(ValueType));
+        g_prop_access_modifiers = (int*)realloc(g_prop_access_modifiers, (size_t)nc * sizeof(int));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
     g_prop_types[g_prop_n] = vt;
+    g_prop_access_modifiers[g_prop_n] = access_modifier;
     g_prop_n++;
 }
 static void type_prop_clear(void)
 {
     for(int i = 0; i < g_prop_n; i++) free(g_prop_names[i]);
-    free(g_prop_names); free(g_prop_types);
-    g_prop_names = NULL; g_prop_types = NULL;
+    free(g_prop_names); free(g_prop_types); free(g_prop_access_modifiers);
+    g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -609,7 +612,7 @@ closed_stmt
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -654,7 +657,7 @@ closed_stmt
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
@@ -704,7 +707,7 @@ closed_stmt
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, NULL);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -733,7 +736,7 @@ closed_stmt
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, NULL);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -767,7 +770,7 @@ closed_stmt
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -804,7 +807,7 @@ closed_stmt
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -847,7 +850,7 @@ closed_stmt
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -882,7 +885,7 @@ closed_stmt
       }
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -916,7 +919,7 @@ closed_stmt
       }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1642,7 +1645,7 @@ type_prop_list
     | type_prop_list COMMA type_prop { $$ = ast_seq($1, $3); }
     ;
 type_prop
-    : ID COLON type_name         { type_prop_push($1, $3); $$ = ast_none(); }
+    : ID COLON type_name         { type_prop_push($1, $3, 0); $$ = ast_none(); }
     ;
 struct_prop_list
     : %empty                     { $$ = NULL; }
@@ -1712,7 +1715,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -1758,7 +1761,7 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -1802,7 +1805,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, NULL, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -1830,8 +1833,8 @@ access_modifier
     ;
 
 class_prop
-    : ID COLON type_name SEMI    { type_prop_push($1, $3); $$ = ast_none(); }
-    | access_modifier ID COLON type_name SEMI    { type_prop_push($2, $4); $$ = ast_none(); }
+    : ID COLON type_name SEMI    { type_prop_push($1, $3, 0); $$ = ast_none(); }
+    | access_modifier ID COLON type_name SEMI    { type_prop_push($2, $4, $1); $$ = ast_none(); }
     ;
 builtin_type_name
     : TOK_STRING                 { $$ = CAST_STRING; }
