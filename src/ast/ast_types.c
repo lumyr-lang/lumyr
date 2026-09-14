@@ -371,11 +371,12 @@ TypeDef* struct_lookup(const char* name)
 }
 
 /* ===== class 注册 ===== */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int nprops, const char* parent, char** interfaces)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
     ValueType* merged_ptypes = ptypes;
+    int* merged_access_modifiers = prop_access_modifiers;
     int merged_nprops = nprops;
 
     if(parent) {
@@ -387,15 +388,18 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int n
                 merged_nprops = parent_nprops + nprops;
                 merged_props = (char**)malloc((size_t)merged_nprops * sizeof(char*));
                 merged_ptypes = (ValueType*)malloc((size_t)merged_nprops * sizeof(ValueType));
+                merged_access_modifiers = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 // 父类属性在前
                 for(int i = 0; i < parent_nprops; i++) {
                     merged_props[i] = strdup(parent_td->props[i]);
                     merged_ptypes[i] = parent_td->ptypes[i];
+                    merged_access_modifiers[i] = parent_td->prop_access_modifiers ? parent_td->prop_access_modifiers[i] : 0;
                 }
                 // 子类属性在后
                 for(int i = 0; i < nprops; i++) {
                     merged_props[parent_nprops + i] = strdup(props[i]);
                     merged_ptypes[parent_nprops + i] = ptypes[i];
+                    merged_access_modifiers[parent_nprops + i] = prop_access_modifiers ? prop_access_modifiers[i] : 0;
                 }
             }
         }
@@ -424,6 +428,15 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int n
     td->nmethods = 0;
     td->constructor = NULL;
     td->constructor_func = NULL;
+    // 设置属性访问修饰符（默认 public=0）
+    if(merged_access_modifiers) {
+        td->prop_access_modifiers = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+        for(int k = 0; k < merged_nprops; k++) {
+            td->prop_access_modifiers[k] = merged_access_modifiers[k];
+        }
+    } else {
+        td->prop_access_modifiers = NULL;
+    }
     return td;
 }
 

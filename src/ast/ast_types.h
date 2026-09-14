@@ -14,6 +14,7 @@ typedef struct {
     char* name;          // 类型名
     char** props;        // 属性名（按声明序）
     ValueType* ptypes;   // 属性期望类型（VAL_INT/VAL_STRING/...，VAL_NONE=未标注）
+    int* prop_access_modifiers; // 属性访问修饰符（0=public, 1=private, 2=protected，NULL=默认public）
     int nprops;
     char** generic_params;  // 泛型参数名（NULL=非泛型类型）
     int generic_param_count; // 泛型参数数量
@@ -37,7 +38,7 @@ typedef struct {
 } TypeDef;
 
 /* class 注册（属性用 ValueType 类型） */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int nprops, const char* parent, char** interfaces);
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int nprops, const char* parent, char** interfaces);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
