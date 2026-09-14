@@ -160,6 +160,7 @@ typedef struct {
     const char* struct_name;
     int nfields;
     StructFieldInfo* fields;
+    int struct_size;  /* 结构体的字节大小，用于 memcpy 拷贝 */
 } StructInfo;
 
 /* 确保红黑树已初始化 */
@@ -171,7 +172,7 @@ static void ensure_struct_tree(void)
 /* ==================== struct 信息管理（使用红黑树存储） ==================== */
 
 /* 注册 struct 信息（在代码生成时调用，把 struct 的字段信息导出到运行时） */
-void lumyr_struct_register(const char* struct_name, int nfields, StructFieldInfo* fields)
+void lumyr_struct_register(const char* struct_name, int nfields, StructFieldInfo* fields, int struct_size)
 {
     if(!struct_name) return;
     ensure_struct_tree();
@@ -184,6 +185,7 @@ void lumyr_struct_register(const char* struct_name, int nfields, StructFieldInfo
             if(si->fields) free(si->fields);
             si->nfields = nfields;
             si->fields = fields;
+            si->struct_size = struct_size;
         }
         return;
     }
@@ -193,8 +195,22 @@ void lumyr_struct_register(const char* struct_name, int nfields, StructFieldInfo
     si->struct_name = strdup(struct_name);
     si->nfields = nfields;
     si->fields = fields;
+    si->struct_size = struct_size;
     /* 插入红黑树 */
     struct_rb_insert(g_struct_tree, struct_name, si);
+}
+
+/* 获取 struct 信息（返回字段列表和数量，用于相等比较等） */
+int lumyr_struct_get_info(const char* struct_name, StructFieldInfo** out_fields, int* out_nfields)
+{
+    if(!struct_name || !out_fields || !out_nfields) return 0;
+    ensure_struct_tree();
+    StructRBNode* node = struct_rb_find_node(g_struct_tree, struct_name);
+    if(!node || !node->value) return 0;
+    StructInfo* si = (StructInfo*)node->value;
+    *out_fields = si->fields;
+    *out_nfields = si->nfields;
+    return 1;
 }
 
 /* 查找 struct 字段信息（通过 struct 名和字段名） */
@@ -253,6 +269,10 @@ Value lumyr_struct_get_field(Value obj, const char* field_name)
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
         case STRUCT_FIELD_INT:
+            /* 根据字段宽度精确读取，避免越界读取相邻字段 */
+            if(fi->size == 1) return lumyr_make_int((long long)*(int8_t*)field_ptr);
+            if(fi->size == 2) return lumyr_make_int((long long)*(int16_t*)field_ptr);
+            if(fi->size == 4) return lumyr_make_int((long long)*(int32_t*)field_ptr);
             return lumyr_make_int(*(long long*)field_ptr);
         case STRUCT_FIELD_DOUBLE:
             return lumyr_make_double(*(double*)field_ptr);
@@ -303,6 +323,10 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
         case STRUCT_FIELD_INT:
+            /* 根据字段宽度精确写入，避免越界写入相邻字段 */
+            if(fi->size == 1) { *(int8_t*)field_ptr = (int8_t)value.v.i; break; }
+            if(fi->size == 2) { *(int16_t*)field_ptr = (int16_t)value.v.i; break; }
+            if(fi->size == 4) { *(int32_t*)field_ptr = (int32_t)value.v.i; break; }
             *(long long*)field_ptr = value.v.i;
             break;
         case STRUCT_FIELD_DOUBLE:
@@ -323,4 +347,62 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
             runtime_error("struct 属性写入：不支持的字段类型");
             break;
     }
+}
+
+/* struct 相等比较（专门针对 struct 的函数，按字段比较） */
+int lumyr_struct_eq(Value a, Value b)
+{
+    if(a.type != VAL_STRUCT_PTR || b.type != VAL_STRUCT_PTR) return 0;
+    if(!a.v.struct_ptr || !b.v.struct_ptr) return a.v.struct_ptr == b.v.struct_ptr;
+    /* 同一个指针直接相等 */
+    if(a.v.struct_ptr == b.v.struct_ptr) return 1;
+    /* 比较 struct 名 */
+    const char* name_a = lumyr_struct_get_name(a);
+    const char* name_b = lumyr_struct_get_name(b);
+    if(!name_a || !name_b || strcmp(name_a, name_b) != 0) return 0;
+    /* 获取字段列表，逐个比较 */
+    StructFieldInfo* fields = NULL;
+    int nfields = 0;
+    if(!lumyr_struct_get_info(name_a, &fields, &nfields)) return 0;
+    for(int i = 0; i < nfields; i++) {
+        Value va = lumyr_struct_get_field(a, fields[i].name);
+        Value vb = lumyr_struct_get_field(b, fields[i].name);
+        if(va.type != vb.type) return 0;
+        if(va.type == VAL_INT) { if(va.v.i != vb.v.i) return 0; }
+        else if(va.type == VAL_DOUBLE) { if(va.v.d != vb.v.d) return 0; }
+        else if(va.type == VAL_BOOL) { if(va.v.b != vb.v.b) return 0; }
+        else if(va.type == VAL_STRING) {
+            const char* sa = lumyr_str_cstr(&va);
+            const char* sb = lumyr_str_cstr(&vb);
+            if(!sa || !sb || strcmp(sa, sb) != 0) return 0;
+        }
+        else if(va.type == VAL_STRUCT_PTR) {
+            if(!lumyr_struct_eq(va, vb)) return 0;
+        }
+        else {
+            if(va.v.i != vb.v.i) return 0;
+        }
+    }
+    return 1;
+}
+
+/* struct 浅拷贝（专门针对 struct 的函数，用于值传递） */
+Value lumyr_struct_shallow_copy(Value obj)
+{
+    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return obj;
+    const char* struct_name = lumyr_struct_get_name(obj);
+    if(!struct_name) return obj;
+    ensure_struct_tree();
+    StructRBNode* node = struct_rb_find_node(g_struct_tree, struct_name);
+    if(!node || !node->value) return obj;
+    StructInfo* si = (StructInfo*)node->value;
+    if(si->struct_size <= 0) return obj;
+    /* 分配新的结构体并拷贝 */
+    void* new_ptr = malloc(si->struct_size);
+    if(!new_ptr) return obj;
+    memcpy(new_ptr, obj.v.struct_ptr, si->struct_size);
+    Value result;
+    result.type = VAL_STRUCT_PTR;
+    result.v.struct_ptr = new_ptr;
+    return result;
 }

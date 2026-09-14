@@ -142,7 +142,7 @@ ValueType castkind_to_valtype(int ck)
 /* CAST_xxx -> 类型名字符串（用于 FFI extern 函数返回类型存储） */
 int valuetype_to_castkind(int vt) {
     switch(vt) {
-        case VAL_INT: return CAST_LONGLONG;
+        case VAL_INT: return CAST_INT;
         case VAL_DOUBLE: return CAST_DOUBLE;
         case VAL_BOOL: return CAST_BOOL;
         case VAL_CHAR: return CAST_CHAR;

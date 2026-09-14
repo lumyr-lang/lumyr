@@ -184,10 +184,12 @@ void emit_struct_to_value(const char* struct_name, const char* var_expr) {
     fprintf(out, "    }\n");
 }
 
-/* 生成把 Value(Map) 转换为 C struct 的代码 */
+/* 生成把 Value(Map 或 VAL_STRUCT_PTR) 转换为 C struct 的代码 */
 void emit_value_to_struct(const char* struct_name, const char* var_expr, const char* value_expr) {
     TypeDef* td = struct_lookup(struct_name);
     if(!td || td->nprops <= 0) return;
+    /* 运行时类型检查：如果 value_expr 是 VAL_STRUCT_PTR 类型，直接结构体拷贝 */
+    fprintf(out, "        if(%s.type == VAL_STRUCT_PTR) { memcpy(%s, %s.v.struct_ptr, sizeof(lumyr_struct_%s)); } else {\n", value_expr, var_expr, value_expr, struct_name);
     for(int i = 0; i < td->nprops; i++) {
         int ck = td->field_cast_kinds ? td->field_cast_kinds[i] : CAST_LONGLONG;
         const char* fname = td->props[i];
@@ -214,13 +216,15 @@ void emit_value_to_struct(const char* struct_name, const char* var_expr, const c
             }
         }
     }
+    fprintf(out, "        }\n");
 }
 
 /* CastKind 转 C 类型名（NULL 表示保持 Value） */
 static const char* emit_tag_to_ctype(int tag) {
     switch(tag) {
         case CAST_INT: case CAST_INT32: return "int";
-        case CAST_LONGLONG: case CAST_INT64: case CAST_LONG: return "long long";
+        case CAST_LONGLONG: case CAST_INT64: return "long long";
+        case CAST_LONG: return "long";
         case CAST_SHORT: case CAST_INT16: return "short";
         case CAST_CHAR: case CAST_INT8: return "char";
         case CAST_UCHAR: case CAST_UINT8: case CAST_BYTE: return "unsigned char";
@@ -485,19 +489,9 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_LOAD_VAR: {
                 const char* _sname = emit_get_var_struct_name(fn, nm);
-                int _vidx = bf_sym(fn, nm);
-                /* struct 局部变量转换成 Value(map)，包含所有字段，用于无类型标注的参数传递；
-                   OPC_LOAD_FIELD 高性能路径不受影响（直接用 lmvar_p->x，不经过栈）
-                   注意：class 类型是引用类型，直接传递 VAL_STRUCT_PTR Value，不转换成 map */
-                if(_sname && _vidx >= fn->param_cnt && strncmp(_sname, "class:", 6) != 0) {
-                    /* struct 局部变量转换成 Value(map)，VAL_STRUCT_PTR 通过 v.struct_ptr 访问 */
-                    const char* _type_name = _sname;
-                    const char* _struct_prefix = "lumyr_struct_";
-                    char _load_buf[256];
-                    snprintf(_load_buf, sizeof(_load_buf), "((%s%s*)%s.v.struct_ptr)", _struct_prefix, _type_name, cvar_rw(nm));
-                    emit_struct_to_value(_sname, _load_buf);
-                } else if(_sname) {
-                    /* struct 参数（self）：直接传递 Value */
+                /* struct/class 变量：直接传递 VAL_STRUCT_PTR 类型的 Value，真正隔离，不转换成 map
+                   lumyr_index_get 已支持 VAL_STRUCT_PTR，无类型标注的参数也能正确处理 */
+                if(_sname) {
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
                 } else {
                     int _tag = emit_get_var_tag(fn, nm);
@@ -543,7 +537,12 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "    { Value __v = __stk[--__sp];\n");
                     char _store_buf[256];
                     snprintf(_store_buf, sizeof(_store_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", _sname, cvar_rw(nm));
+                    /* 运行时类型检查：如果右边是 VAL_STRUCT_PTR，直接结构体拷贝；否则从 map 转换 */
+                    fprintf(out, "        if(__v.type == VAL_STRUCT_PTR) {\n");
+                    fprintf(out, "            memcpy(%s, __v.v.struct_ptr, sizeof(lumyr_struct_%s));\n", _store_buf, _sname);
+                    fprintf(out, "        } else {\n");
                     emit_value_to_struct(_sname, _store_buf, "__v");
+                    fprintf(out, "        }\n");
                     fprintf(out, "        __stk[__sp++] = __v;\n    }\n");
                 } else {
                     int _tag = emit_get_var_tag(fn, nm);
@@ -798,6 +797,15 @@ void emit_insns(BytecodeFunc* fn)
                             fprintf(out, "    __stk[__sp++] = lumyr_make_int((long long)%s->%s%s);\n", _struct_access, _pf, fname);
                         }
                     }
+                } else if(sname) {
+                    /* 有类型标记的普通函数参数：直接调用专门的 struct/class 属性访问函数，避免运行时类型判断 */
+                    const char* _ss;
+                    int _is_class = emit_parse_struct_type(sname, &_ss);
+                    if(_is_class) {
+                        fprintf(out, "    { Value __c = %s; __stk[__sp++] = lumyr_class_get_field(__c, \"%s\"); }\n", cvar_rw(vname), fname);
+                    } else {
+                        fprintf(out, "    { Value __c = %s; __stk[__sp++] = lumyr_struct_get_field(__c, \"%s\"); }\n", cvar_rw(vname), fname);
+                    }
                 } else {
                     fprintf(out, "    { Value __c = %s; __stk[__sp++] = lumyr_index_get(__c, lumyr_make_string(\"%s\")); }\n", cvar_rw(vname), fname);
                 }
@@ -929,6 +937,15 @@ void emit_insns(BytecodeFunc* fn)
                         }
                     }
                     fprintf(out, "        __stk[__sp++] = __v;\n    }\n");
+                } else if(sname) {
+                    /* 有类型标记的普通函数参数：直接调用专门的 struct/class 属性写入函数，避免运行时类型判断 */
+                    const char* _ss;
+                    int _is_class = emit_parse_struct_type(sname, &_ss);
+                    if(_is_class) {
+                        fprintf(out, "    { Value __v = __stk[--__sp]; Value __c = %s; lumyr_class_set_field(__c, \"%s\", __v); __stk[__sp++] = __v; }\n", cvar_rw(vname), fname);
+                    } else {
+                        fprintf(out, "    { Value __v = __stk[--__sp]; Value __c = %s; lumyr_struct_set_field(__c, \"%s\", __v); __stk[__sp++] = __v; }\n", cvar_rw(vname), fname);
+                    }
                 } else {
                     fprintf(out, "    { Value __v = __stk[--__sp]; Value __c = %s; lumyr_array_set(__c, lumyr_make_string(\"%s\"), __v); __stk[__sp++] = __v; }\n", cvar_rw(vname), fname);
                 }
@@ -2086,9 +2103,15 @@ void emit_insns(BytecodeFunc* fn)
                 {
                     int _self_skip = (callee->is_method) ? 1 : 0;
                     for(int _tk = _self_skip; _tk < nbind; _tk++) {
-                        fprintf(out, "        if(__args[%d].type == VAL_MAP && lumyr_map_has(__args[%d], lumyr_make_string(\"__mapname__\"))) {\n", _tk, _tk);
-                        fprintf(out, "            __args[%d] = lumyr_map_shallow_copy(__args[%d]);\n", _tk, _tk);
-                        fprintf(out, "        }\n");
+                        /* ref 参数是引用传递，不做浅拷贝 */
+                        int _is_ref = (callee->param_is_ref && _tk < callee->param_cnt) ? callee->param_is_ref[_tk] : 0;
+                        if(!_is_ref) {
+                            fprintf(out, "        if(__args[%d].type == VAL_MAP && lumyr_map_has(__args[%d], lumyr_make_string(\"__mapname__\"))) {\n", _tk, _tk);
+                            fprintf(out, "            __args[%d] = lumyr_map_shallow_copy(__args[%d]);\n", _tk, _tk);
+                            fprintf(out, "        } else if(__args[%d].type == VAL_STRUCT_PTR && !lumyr_is_class_instance(__args[%d])) {\n", _tk, _tk);
+                            fprintf(out, "            __args[%d] = lumyr_struct_shallow_copy(__args[%d]);\n", _tk, _tk);
+                            fprintf(out, "        }\n");
+                        }
                     }
                 }
                 if(callee->has_variadic) {

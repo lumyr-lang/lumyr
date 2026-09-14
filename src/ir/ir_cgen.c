@@ -978,8 +978,11 @@ static void emit_struct_def_cb(const char* name, TypeDef* td, void* user_data)
             else if(ck == CAST_STRING) ftype = "STRUCT_FIELD_STRING";
             else if(ck == CAST_BOOL) ftype = "STRUCT_FIELD_BOOL";
             else if(td->field_struct_names && td->field_struct_names[fi]) ftype = "STRUCT_FIELD_PTR";
-            fprintf(out, "    {\"%s\", offsetof(lumyr_struct_%s, %s), %s},\n",
-                    td->props[fi], td->name, td->props[fi], ftype);
+            /* 计算字段宽度：int 用 sizeof(int)，long 用 sizeof(long)，以此类推 */
+            const char* _ck_ctype = castkind_to_c_type(ck);
+            if(!_ck_ctype) _ck_ctype = "int64_t";
+            fprintf(out, "    {\"%s\", offsetof(lumyr_struct_%s, %s), %s, sizeof(%s)},\n",
+                    td->props[fi], td->name, td->props[fi], ftype, _ck_ctype);
         }
         fprintf(out, "};\n\n");
     }
@@ -991,8 +994,8 @@ static void emit_struct_register_cb(const char* name, TypeDef* td, void* user_da
     (void)name;
     FILE* out = (FILE*)user_data;
     if(td && td->is_struct && td->nprops > 0) {
-        fprintf(out, "    lumyr_struct_register(\"%s\", %d, lumyr_struct_%s_fields);\n",
-                td->name, td->nprops, td->name);
+        fprintf(out, "    lumyr_struct_register(\"%s\", %d, lumyr_struct_%s_fields, sizeof(lumyr_struct_%s));\n",
+                td->name, td->nprops, td->name, td->name);
     }
 }
 
