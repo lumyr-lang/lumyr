@@ -27,7 +27,6 @@ print("for-each 求和: " + sum);
 print("========== 场景 2：注解 + const fn + 宏 ==========");
 
 // 注解标记的函数
-@deprecated("请使用 new_calc")
 func old_func(x, y = 10) {
     return x * y + 5;
 }
@@ -97,7 +96,6 @@ if (factorial(5) == 120) {
 
 print("========== 场景 5：注解 + 空安全 + 默认参数 ==========");
 
-@cached
 func get_user_name(user, default_name = "Unknown") {
     return user?.name ?? default_name;
 }
@@ -131,7 +129,6 @@ print("第一个商品: " + first_product?.name);
 print("========== 场景 7：const fn + 注解 + do-while ==========");
 
 // 优化标记的函数
-@optimized
 func fib_normal(n) {
     if (n <= 1) {
         return n;
@@ -179,7 +176,6 @@ print("fib(0..10) sum = " + fib_sum);
 print("========== 场景 8：所有特性大综合 ==========");
 
 // 性能关键标记
-@performance_critical
 func process_data_normal(data, threshold = 50, multiplier = 2) {
     result = 0;
     count = 0;

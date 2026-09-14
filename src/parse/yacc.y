@@ -514,7 +514,7 @@ closed_stmt
     | continue_stmt                  { $$ = $1; }
     | return_stmt                    { $$ = $1; }
     | yield_stmt                     { $$ = $1; }
-    | annotated_decl                 { $$ = $1; }          /* 带注解的声明（函数、类、类型等） */
+    | func_def                       { $$ = $1; }          /* 新增函数定义语句 */
     | macro_def                      { $$ = $1; }          /* 宏定义语句 */
     | WRITE STRING_LIT expr SEMI {
           /* write "path" value → write_file(path, value)；普通路径不内插 */

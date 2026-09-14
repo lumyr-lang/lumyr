@@ -86,7 +86,6 @@ macro print_add(a, b) {
 print_add(3, 4);              // 7
 
 // ============ 7. 注解 / 属性 ============
-@deprecated
 func old_func() {
     return "old";
 }
