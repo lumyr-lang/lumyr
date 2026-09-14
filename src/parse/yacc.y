@@ -764,6 +764,43 @@ closed_stmt
           g_current_class_parent = NULL;
           $$ = method_list ? L(method_list) : L(ast_none());
       }
+    | annotation_list class_header_implements class_prop_list RBRACE {
+          /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, g_class_interfaces);
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
+          }
+          AstNode* method_list2 = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+                  method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
+              }
+          }
+          if(g_class_constructor) {
+              method_list2 = method_list2 ? ast_seq(method_list2, g_class_constructor) : g_class_constructor;
+          }
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) {
+              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_parent = NULL;
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) free(g_class_interfaces[ii]);
+          free(g_class_interfaces);
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          $$ = method_list2 ? L(method_list2) : L(ast_none());
+      }
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
@@ -842,6 +879,40 @@ closed_stmt
           g_current_class_name = NULL;
           g_current_class_is_abstract = 0;
           $$ = abs_method_list ? L(abs_method_list) : L(ast_none());
+      }
+    | annotation_list class_header_inherit_implements class_prop_list RBRACE {
+          /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
+          }
+          AstNode* method_list3 = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
+          }
+          if(g_class_constructor) {
+              method_list3 = method_list3 ? ast_seq(method_list3, g_class_constructor) : g_class_constructor;
+          }
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) {
+              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_parent = NULL;
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) free(g_class_interfaces[ii]);
+          free(g_class_interfaces);
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          $$ = method_list3 ? L(method_list3) : L(ast_none());
       }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
