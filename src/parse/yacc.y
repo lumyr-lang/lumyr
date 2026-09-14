@@ -1753,6 +1753,43 @@ class_prop_list
         }
         $$ = ast_seq($1, $3);
       }
+    | class_prop_list access_modifier func_def  {
+        /* public/private/protected func ...：带访问修饰符的 class 方法定义 */
+        if($3 && $3->type == AST_FUNC_DEF) {
+            $3->u.func_def.is_class_method = 1;
+            if(strcmp($3->u.func_def.name, "__init__") == 0) {
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
+                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                free($3->u.func_def.name);
+                $3->u.func_def.name = ctor_name;
+                g_class_constructor = $3;
+            } else {
+                g_class_method_push($3);
+            }
+        }
+        $$ = ast_seq($1, $3);
+      }
+    | class_prop_list access_modifier TOK_STATIC func_def  {
+        /* public/private/protected static func ...：带访问修饰符的 class 静态方法定义 */
+        if($4 && $4->type == AST_FUNC_DEF) {
+            char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
+            sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
+            free($4->u.func_def.name);
+            $4->u.func_def.name = static_name;
+            $4->u.func_def.is_class_method = 0;
+            $4->u.func_def.is_static_method = 1;
+            RuntimeFunc* rf = compile_func_from_ast($4);
+            if(rf) {
+                Value fv;
+                fv.type = VAL_FUNC;
+                fv.v.func.ffi_func = NULL;
+                fv.v.func.is_ffi = 0;
+                fv.v.func.func_obj = (void*)rf;
+                sym_set($4->u.func_def.name, fv);
+            }
+        }
+        $$ = ast_seq($1, $4);
+      }
     ;
 access_modifier
     : TOK_PUBLIC                   { $$ = 0LL; }  /* 0 = public */

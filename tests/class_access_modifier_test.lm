@@ -1,4 +1,4 @@
-// 测试 class 的 public/private/protected 访问修饰符（只测试属性）
+// 测试 class 的 public/private/protected 访问修饰符（属性和方法）
 print("=== Class Access Modifier Test ===");
 
 class User {
@@ -12,7 +12,19 @@ class User {
         self.email = email;
     }
 
-    func print_info(self) {
+    public func get_name(self) {
+        return self.name;
+    }
+
+    private func get_age(self) {
+        return self.age;
+    }
+
+    protected func get_email(self) {
+        return self.email;
+    }
+
+    public func print_info(self) {
         print("name:", self.name);
         print("age:", self.age);
         print("email:", self.email);
@@ -21,6 +33,7 @@ class User {
 
 u = User("Alice", 25, "alice@example.com");
 print("name:", u.name);
+print("get_name():", u.get_name());
 u.print_info();
 
 print("\n=== Class Access Modifier Test Done ===");
