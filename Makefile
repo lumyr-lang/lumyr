@@ -107,6 +107,7 @@ C_SRCS := $(filter-out $(RUNTIME_DIR)/src/lumyr_value.c, $(C_SRCS))
 C_SRCS += $(wildcard $(SRC_DIR)/ir/*.c)
 C_SRCS += $(wildcard $(SRC_DIR)/parse/*.c)
 C_SRCS += $(wildcard $(SRC_DIR)/i18n/*.c)
+C_SRCS += $(wildcard $(SRC_DIR)/annotation/*.c)
 C_SRCS += $(SRC_DIR)/main.c
 C_SRCS += $(filter-out $(SRC_DIR)/yacc/lex.yy.c $(SRC_DIR)/yacc/yacc.tab.c, $(wildcard $(SRC_DIR)/yacc/*.c))
 C_SRCS += $(LEX_GEN) $(YACC_GEN_C)

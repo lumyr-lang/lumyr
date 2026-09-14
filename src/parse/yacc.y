@@ -8,6 +8,7 @@
 #include "ast/func_compile.h"
 #include "ast/ast_types.h"
 #include "parse/macro.h"
+#include "annotation/lm_annotation.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -48,6 +49,7 @@ static ValueType* g_class_prop_types = NULL;
 static int g_class_prop_n = 0, g_class_prop_cap = 0;
 static char* g_current_class_name = NULL; /* 当前正在解析的 class 名，用于方法注册 */
 static char* g_current_class_parent = NULL; /* 当前 class 的父类名 */
+static int g_current_class_is_abstract = 0; /* 当前 class 是否是抽象类 */
 static AstNode** g_class_methods = NULL; /* 当前 class 的方法定义临时列表 */
 static AstNode* g_class_constructor = NULL; /* 当前 class 的构造函数（__init__ 方法） */
 static char** g_class_interfaces = NULL; /* 当前 class 实现的接口名列表 */
@@ -335,7 +337,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %token TOK_INT TOK_DOUBLE TOK_CHAR TOK_STRING TOK_BOOL TOK_ASCII TOK_BYTE
 %token TOK_INT8 TOK_INT16 TOK_INT32 TOK_INT64 TOK_UINT8 TOK_UINT16 TOK_UINT32 TOK_UINT64 TOK_UINT TOK_LONG TOK_LONGLONG TOK_FLOAT TOK_ULONG TOK_UCHAR TOK_SHORT TOK_USHORT TOK_SIZE_T TOK_SSIZE_T TOK_VOID TOK_LONG_DOUBLE TOK_PTR
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
-%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC
+%token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
 %token SWITCH CASE DEFAULT BREAK RETURN TRY CATCH THROW FINALLY
@@ -367,7 +369,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %type<node> switch_stmt case_list case_item break_stmt continue_stmt const_expr return_stmt yield_stmt
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
-%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_header class_header_inherit class_header_implements class_header_inherit_implements enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header
+%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
 %type<ll> type_name builtin_type_name type_keyword
 %type<s> type_name_str
 %type <ch> char_lit
@@ -512,7 +514,7 @@ closed_stmt
     | continue_stmt                  { $$ = $1; }
     | return_stmt                    { $$ = $1; }
     | yield_stmt                     { $$ = $1; }
-    | func_def                       { $$ = $1; }          /* 新增函数定义语句 */
+    | annotated_decl                 { $$ = $1; }          /* 带注解的声明（函数、类、类型等） */
     | macro_def                      { $$ = $1; }          /* 宏定义语句 */
     | WRITE STRING_LIT expr SEMI {
           /* write "path" value → write_file(path, value)；普通路径不内插 */
@@ -607,6 +609,11 @@ closed_stmt
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, NULL);
+          /* 标记是否是抽象类 */
+          if(g_current_class_is_abstract) {
+              TypeDef* td = type_lookup(g_current_class_name);
+              if(td) td->is_abstract = 1;
+          }
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -725,6 +732,42 @@ closed_stmt
           g_class_ninterfaces = 0;
           $$ = method_list2 ? L(method_list2) : L(ast_none());
       }
+    | abstract_class_header class_prop_list RBRACE {
+          /* abstract class Shape { ... }：抽象类定义（无继承） */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, NULL, NULL);
+          /* 标记为抽象类 */
+          TypeDef* td = type_lookup(g_current_class_name);
+          if(td) td->is_abstract = 1;
+          /* 添加方法到 class 方法表（静态方法不加入） */
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          /* 保存构造函数（__init__ 方法）到 TypeDef */
+          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
+          }
+          /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
+          AstNode* abs_method_list = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+                  abs_method_list = abs_method_list ? ast_seq(abs_method_list, mnode) : mnode;
+              }
+          }
+          if(g_class_constructor) {
+              abs_method_list = abs_method_list ? ast_seq(abs_method_list, g_class_constructor) : g_class_constructor;
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_is_abstract = 0;
+          $$ = abs_method_list ? L(abs_method_list) : L(ast_none());
+      }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_n, g_current_class_parent, g_class_interfaces);
@@ -827,6 +870,43 @@ operator : PLUS  { $$ = strdup("+"); }
          | GE    { $$ = strdup(">="); }
          ;
 
+/* 带注解的声明：统一处理所有声明类型的注解 */
+annotated_decl:
+    annotation_list func_def  {
+        /* 带注解的函数定义 */
+        $$ = $2;
+        if($$ && $$->type == AST_FUNC_DEF) {
+            $$->u.func_def.annotations = $1;
+            /* 处理注解：注册到注解注册表，识别系统内置注解 */
+            AstNode* ann = $1;
+            while(ann) {
+                if(ann->type == AST_ANNOTATION && ann->u.annotation.name) {
+                    int type_marks = ANNOTATION_TYPE_FUNC;
+                    if(g_current_class_name) {
+                        type_marks |= ANNOTATION_TYPE_CLASS;
+                    }
+                    int category = annotation_is_system(ann->u.annotation.name) ? ANNOTATION_CATEGORY_SYSTEM : ANNOTATION_CATEGORY_USER;
+                    annotation_register(ann->u.annotation.name, type_marks, category,
+                                        ann->u.annotation.args,
+                                        g_current_class_name, $$->u.func_def.name, NULL);
+                    /* 识别系统内置注解 */
+                    if(strcmp(ann->u.annotation.name, "abstract") == 0) {
+                        $$->u.func_def.is_abstract_method = 1;
+                    }
+                    if(strcmp(ann->u.annotation.name, "override") == 0) {
+                        $$->u.func_def.is_override_method = 1;
+                    }
+                }
+                ann = ann->u.seq.second;
+            }
+        }
+      }
+    | func_def  {
+        /* 不带注解的函数定义 */
+        $$ = $1;
+      }
+    ;
+
 func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
           $$->u.func_def.annotations = NULL;
@@ -872,6 +952,29 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
           $$->u.func_def.annotations = $1;
           annotate_self_if_in_struct($$);
+          /* 把注解信息注册到注解注册表中 */
+          AstNode* ann = $1;
+          while(ann) {
+              if(ann->type == AST_ANNOTATION && ann->u.annotation.name) {
+                  int type_marks = ANNOTATION_TYPE_FUNC;
+                  if(g_current_class_name) {
+                      type_marks |= ANNOTATION_TYPE_CLASS;
+                  }
+                  int category = annotation_is_system(ann->u.annotation.name) ? ANNOTATION_CATEGORY_SYSTEM : ANNOTATION_CATEGORY_USER;
+                  annotation_register(ann->u.annotation.name, type_marks, category,
+                                      ann->u.annotation.args,
+                                      g_current_class_name, $3, NULL);
+                  /* 检查是否是 @abstract 注解 */
+                  if(strcmp(ann->u.annotation.name, "abstract") == 0) {
+                      $$->u.func_def.is_abstract_method = 1;
+                  }
+                  /* 检查是否是 @override 注解 */
+                  if(strcmp(ann->u.annotation.name, "override") == 0) {
+                      $$->u.func_def.is_override_method = 1;
+                  }
+              }
+              ann = ann->u.seq.second;
+          }
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
           RuntimeFunc* rf = compile_func_from_ast($$);
           Value func_val = {0};
@@ -880,6 +983,14 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.ffi_func = NULL;
           func_val.v.func.is_ffi = 0;
           try_register_global_func($3, func_val); /* class内部不注册全局符号表 */
+        }
+        | annotation_list FUNC ID LPAREN param_list RPAREN ';' {
+          /* 抽象方法：只有声明，没有实现，子类必须实现 */
+          $$ = ast_func_def($3, $5, L(ast_none()));
+          $$->u.func_def.annotations = $1;
+          $$->u.func_def.is_abstract_method = 1;
+          annotate_self_if_in_struct($$);
+          /* 不编译抽象方法（没有函数体），只注册到符号表 */
         }
         | CONST FUNC ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
@@ -1471,8 +1582,8 @@ class_prop_list
     : %empty                     { $$ = NULL; }
     | class_prop                 { $$ = $1; }
     | class_prop_list COMMA class_prop { $$ = ast_seq($1, $3); }
-    | class_prop_list func_def  {
-        /* class 方法定义：保存到临时列表，class 注册后再统一处理 */
+    | class_prop_list annotated_decl  {
+        /* class 方法定义（支持注解）：保存到临时列表，class 注册后再统一处理 */
         if($2 && $2->type == AST_FUNC_DEF) {
             /* 标记为 class 方法，跳过顶层重复定义检查 */
             $2->u.func_def.is_class_method = 1;
@@ -1654,6 +1765,14 @@ struct_header: TOK_STRUCT ID LBRACE {
 class_header: TOK_CLASS ID LBRACE {
           /* 在 LBRACE 时就设置 g_current_class_name，这样方法定义时就能获取到 */
           g_current_class_name = $2;
+          g_current_class_is_abstract = 0;
+          $$ = NULL;
+      }
+    ;
+abstract_class_header: TOK_ABSTRACT TOK_CLASS ID LBRACE {
+          /* 抽象类定义：标记为抽象类，不能被实例化 */
+          g_current_class_name = $3;
+          g_current_class_is_abstract = 1;
           $$ = NULL;
       }
     ;

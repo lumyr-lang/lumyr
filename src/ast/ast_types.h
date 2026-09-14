@@ -21,6 +21,7 @@ typedef struct {
     int ninterfaces;     // 实现的接口数量
     int is_struct;       // 是否是 struct（1=struct，0=普通 type/动态 Map）
     int is_class;        // 是否是 class（1=class，0=非 class）
+    int is_abstract;     // 是否是抽象类（1=抽象类，0=普通类）
     char* parent;        // 父类名（NULL=无父类，仅 class 使用）
     int* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）

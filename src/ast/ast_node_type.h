@@ -133,6 +133,8 @@ struct AstNode {
             char* ret_type_name;  // 返回值类型名（如 "int","double","string"），NULL=无类型声明
             int is_class_method;  // 1=class方法，0=普通函数
             int is_static_method;  // 1=静态方法，0=普通方法
+            int is_abstract_method;  // 1=抽象方法，0=普通方法
+            int is_override_method;  // 1=重写方法，0=普通方法
         } func_def;
 
         struct {
