@@ -790,13 +790,16 @@ static int is_int8_var(Ctx* c, AstNode* node) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_INT8);
 }
 
-// 检测是否全部是 int8 类型变量或字面量
+// 检测是否全部是 int8 类型变量或数组元素访问
 static int all_int8_vars(Ctx* c, AstNode* e) {
     if(!e) return 1;
     if(e->type == AST_SEQ) {
         return all_int8_vars(c, e->u.seq.first) && all_int8_vars(c, e->u.seq.second);
     }
-    if(e->type == AST_INT) return 1;
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 int8 候选，运行时 OPC_INT8_ARRAY_GET 会检查是否是 int8 类型化数组 */
+        return 1;
+    }
     return is_int8_var(c, e);
 }
 
@@ -1867,6 +1870,11 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_BYTE_ARRAY_LIT(a=1) 从 byte 栈读取，实现零检查零转换 */
                     compile_byte_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_BYTE_ARRAY_LIT, 1, n);  /* a=1: 从 byte 栈读取 */
+                } else if(elem_type == VAL_INT8 && all_int8_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 int8 类型的变量：使用 OPC_LOAD_INT8_VAR 压入 int8 栈，
+                       OPC_INT8_ARRAY_LIT(a=1) 从 int8 栈读取，实现零检查零转换 */
+                    compile_int8_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_INT8_ARRAY_LIT, 1, n);  /* a=1: 从 int8 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
                        OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_FLOAT_ARRAY_LIT(a=0)/OPC_UINT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
@@ -1885,6 +1893,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_CHAR_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_BYTE) {
                         emit(c, OPC_BYTE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_INT8) {
+                        emit(c, OPC_INT8_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
@@ -1904,6 +1914,8 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_CHAR_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_BYTE) {
                     emit(c, OPC_BYTE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_INT8) {
+                    emit(c, OPC_INT8_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }
@@ -1968,6 +1980,10 @@ static void c_expr(Ctx* c, AstNode* node)
                     } else if(tag == CAST_BYTE) {
                         emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_BYTE, 0, 0);
+                        break;
+                    } else if(tag == CAST_INT8) {
+                        emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT8, 0, 0);
                         break;
                     }
                 }
