@@ -2763,6 +2763,101 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         runtime_error(buf);
                     }
                 }
+                // 0. 数组方法识别：当第一个参数是数组时，直接调用对应的运行时函数
+                // 这样数组方法名（如 add、remove、clear）就不占用全局函数命名空间了
+                if(argc > 0) {
+                    Value arr_obj = stack[sp - argc];
+                    if(arr_obj.type == VAL_ARRAY) {
+                        _Bool is_array_method = 1;
+                        if(strcmp(fname, "add") == 0) {
+                            if(argc >= 2) {
+                                Value v = stack[--sp];
+                                lumyr_array_add(&stack[sp-1], v);
+                            } else {
+                                runtime_error("add() 需要至少 2 个参数");
+                            }
+                        } else if(strcmp(fname, "remove") == 0) {
+                            if(argc >= 2) {
+                                Value idx = stack[--sp];
+                                lumyr_del(&stack[sp-1], idx);
+                            } else {
+                                runtime_error("remove() 需要至少 2 个参数");
+                            }
+                        } else if(strcmp(fname, "clear") == 0) {
+                            lumyr_array_clear(&stack[sp-1]);
+                        } else if(strcmp(fname, "indexOf") == 0) {
+                            if(argc >= 2) {
+                                Value x = stack[--sp];
+                                Value arr = stack[--sp];
+                                stack[sp++] = lumyr_index_of(arr, x);
+                            } else {
+                                runtime_error("indexOf() 需要至少 2 个参数");
+                            }
+                        } else if(strcmp(fname, "arr_get") == 0 || strcmp(fname, "get") == 0) {
+                            if(argc >= 2) {
+                                Value i = stack[--sp];
+                                Value arr = stack[--sp];
+                                stack[sp++] = lumyr_array_get_safe(arr, i);
+                            } else {
+                                runtime_error("get() 需要至少 2 个参数");
+                            }
+                        } else if(strcmp(fname, "set") == 0) {
+                            if(argc >= 3) {
+                                Value v = stack[--sp];
+                                Value i = stack[--sp];
+                                Value arr = stack[--sp];
+                                stack[sp++] = lumyr_array_set_method(arr, i, v);
+                            } else {
+                                runtime_error("set() 需要至少 3 个参数");
+                            }
+                        } else if(strcmp(fname, "first") == 0) {
+                            Value arr = stack[--sp];
+                            stack[sp++] = lumyr_array_first(arr);
+                        } else if(strcmp(fname, "last") == 0) {
+                            Value arr = stack[--sp];
+                            stack[sp++] = lumyr_array_last(arr);
+                        } else if(strcmp(fname, "has") == 0) {
+                            if(argc >= 2) {
+                                Value k = stack[--sp];
+                                Value m = stack[--sp];
+                                stack[sp++] = lumyr_make_bool(lumyr_map_has(m, k));
+                            } else {
+                                runtime_error("has() 需要至少 2 个参数");
+                            }
+                        } else if(strcmp(fname, "flat") == 0) {
+                            Value arr = stack[--sp];
+                            int depth = (argc >= 2) ? (int)stack[--sp].v.i : 1;
+                            stack[sp++] = lumyr_array_flat(arr, depth);
+                        } else if(strcmp(fname, "qs") == 0) {
+                            Value enc = val_none();
+                            Value v;
+                            if(argc >= 2) { enc = stack[--sp]; v = stack[--sp]; }
+                            else { v = stack[--sp]; }
+                            if(v.type == VAL_MAP || v.type == VAL_ARRAY) {
+                                char* q = lumyr_qs_stringify_enc(v, enc);
+                                stack[sp++] = lumyr_make_string(q);
+                                free(q);
+                            } else if(v.type == VAL_STRING) {
+                                stack[sp++] = lumyr_qs_parse_enc(lumyr_str_cstr(&v), enc);
+                            } else {
+                                runtime_error("qs() 参数必须是字典/数组（序列化）或字符串（解析）");
+                            }
+                        } else if(strcmp(fname, "addAll") == 0) {
+                            if(argc >= 2) {
+                                Value b = stack[--sp];
+                                lumyr_array_addall(&stack[sp-1], b);
+                            } else {
+                                runtime_error("addAll() 需要至少 2 个参数");
+                            }
+                        } else {
+                            is_array_method = 0;
+                        }
+                        if(is_array_method) {
+                            LOG_POP_CALL();
+                            break;
+                        }
+                    }
+                }
                 // 1. 查函数：帧链 VAL_FUNC → 全局函数表 → 函数表（红黑树）→ class 方法表
                 Value func_val;
                 _Bool fnd = 0;

@@ -2149,15 +2149,79 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "    }\n");
                     break;
                 }
+                /* 检查函数名是否是某个 class 的方法 */
+                ClassMethodCheckCtx check_ctx = { nm, 0 };
+                type_foreach(check_class_method_cb, &check_ctx);
+                int is_class_method_call = check_ctx.found;
+                /* 数组方法识别：当函数名是数组方法名且不是 class 方法时，生成运行时检查的代码
+                   这样数组方法名（如 add、remove、clear）就不占用全局函数命名空间了 */
+                _Bool is_array_method_name = 0;
+                if(!is_class_method_call && nm && (strcmp(nm, "add") == 0 || strcmp(nm, "remove") == 0 ||
+                          strcmp(nm, "clear") == 0 || strcmp(nm, "indexOf") == 0 ||
+                          strcmp(nm, "arr_get") == 0 || strcmp(nm, "get") == 0 ||
+                          strcmp(nm, "set") == 0 || strcmp(nm, "first") == 0 ||
+                          strcmp(nm, "last") == 0 || strcmp(nm, "has") == 0 ||
+                          strcmp(nm, "flat") == 0 || strcmp(nm, "qs") == 0 ||
+                          strcmp(nm, "addAll") == 0)) {
+                    is_array_method_name = 1;
+                }
+                if(is_array_method_name) {
+                    int argc = in.b;
+                    fprintf(out, "    {\n");
+                    fprintf(out, "        int __am_argc = %d;\n", argc);
+                    fprintf(out, "        Value __am_args[%d];\n", argc > 0 ? argc : 1);
+                    fprintf(out, "        for (int __k = 0; __k < __am_argc; __k++) __am_args[__k] = __stk[__sp - __am_argc + __k];\n");
+                    fprintf(out, "        __sp -= __am_argc;\n");
+                    fprintf(out, "        if(__am_argc > 0 && __am_args[0].type == VAL_ARRAY) {\n");
+                    fprintf(out, "            if(strcmp(\"%s\", \"add\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 2) lumyr_array_add(&__am_args[0], __am_args[1]);\n");
+                    fprintf(out, "                __stk[__sp++] = __am_args[0];\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"remove\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 2) lumyr_del(&__am_args[0], __am_args[1]);\n");
+                    fprintf(out, "                __stk[__sp++] = __am_args[0];\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"clear\") == 0) {\n", nm);
+                    fprintf(out, "                lumyr_array_clear(&__am_args[0]);\n");
+                    fprintf(out, "                __stk[__sp++] = __am_args[0];\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"indexOf\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 2) __stk[__sp++] = lumyr_index_of(__am_args[0], __am_args[1]);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"arr_get\") == 0 || strcmp(\"%s\", \"get\") == 0) {\n", nm, nm);
+                    fprintf(out, "                if(__am_argc >= 2) __stk[__sp++] = lumyr_array_get_safe(__am_args[0], __am_args[1]);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"set\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 3) __stk[__sp++] = lumyr_array_set_method(__am_args[0], __am_args[1], __am_args[2]);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"first\") == 0) {\n", nm);
+                    fprintf(out, "                __stk[__sp++] = lumyr_array_first(__am_args[0]);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"last\") == 0) {\n", nm);
+                    fprintf(out, "                __stk[__sp++] = lumyr_array_last(__am_args[0]);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"has\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 2) __stk[__sp++] = lumyr_make_bool(lumyr_map_has(__am_args[0], __am_args[1]));\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"flat\") == 0) {\n", nm);
+                    fprintf(out, "                int __depth = (__am_argc >= 2) ? (int)__am_args[1].v.i : 1;\n");
+                    fprintf(out, "                __stk[__sp++] = lumyr_array_flat(__am_args[0], __depth);\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"qs\") == 0) {\n", nm);
+                    fprintf(out, "                Value __enc = val_none(); Value __v = __am_args[0];\n");
+                    fprintf(out, "                if(__v.type == VAL_MAP || __v.type == VAL_ARRAY) {\n");
+                    fprintf(out, "                    char* __q = lumyr_qs_stringify_enc(__v, __enc);\n");
+                    fprintf(out, "                    __stk[__sp++] = lumyr_make_string(__q);\n");
+                    fprintf(out, "                    free(__q);\n");
+                    fprintf(out, "                } else if(__v.type == VAL_STRING) {\n");
+                    fprintf(out, "                    __stk[__sp++] = lumyr_qs_parse_enc(lumyr_str_cstr(&__v), __enc);\n");
+                    fprintf(out, "                }\n");
+                    fprintf(out, "            } else if(strcmp(\"%s\", \"addAll\") == 0) {\n", nm);
+                    fprintf(out, "                if(__am_argc >= 2) lumyr_array_addall(&__am_args[0], __am_args[1]);\n");
+                    fprintf(out, "                __stk[__sp++] = __am_args[0];\n");
+                    fprintf(out, "            }\n");
+                    fprintf(out, "        } else {\n");
+                    fprintf(out, "            runtime_error(\"数组方法调用失败：第一个参数必须是数组\");\n");
+                    fprintf(out, "        }\n");
+                    fprintf(out, "    }\n");
+                    i++;
+                    continue;
+                }
                 BytecodeFunc* callee = ir_func_table_lookup_any(nm);
                 if(!callee) {
                     LOG_ERROR("codegen: 未定义函数: %s\n", nm);
                     exit(EXIT_FAILURE);
                 }
-                /* 检查函数名是否是某个 class 的方法 */
-                ClassMethodCheckCtx check_ctx = { nm, 0 };
-                type_foreach(check_class_method_cb, &check_ctx);
-                int is_class_method_call = check_ctx.found;
                 /* 生成器函数调用：创建状态机实例，包装成 VAL_GENERATOR */
                 if(callee->is_generator) {
                     int gargc = in.b;

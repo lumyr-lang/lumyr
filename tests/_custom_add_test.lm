@@ -1,0 +1,33 @@
+// 测试用户自定义 add 方法（不应该和数组方法冲突）
+print("=== 测试用户自定义 add 方法 ===");
+
+class Calculator {
+    value: int;
+    func __init__(self, value) {
+        self.value = value;
+    }
+
+    func add(self, x) {
+        return self.value + x;
+    }
+
+    func get_value(self) {
+        return self.value;
+    }
+}
+
+calc = Calculator();
+calc.value = 10;
+print("calc.value:", calc.value);
+result = calc.add(5);
+print("calc.add(5):", result);
+print("calc.value:", calc.value);
+
+// 同时测试数组方法，确保不冲突
+print("\n=== 同时测试数组方法 ===");
+arr = [1, 2, 3];
+arr.add(4);
+print("arr.add(4) 后:", arr);
+print("arr.indexOf(2):", arr.indexOf(2));
+
+print("\n=== 所有测试完成 ===");
