@@ -25,6 +25,7 @@ Value lumyr_make_long(long lv);                  // long：长整数（平台相
 Value lumyr_make_ulong(unsigned long ulv);        // unsigned long：无符号长整数（平台相关）
 Value lumyr_make_size_t(size_t stv);               // size_t：无符号整数类型，用于表示对象大小
 Value lumyr_make_ssize_t(ssize_t sstv);             // ssize_t：有符号整数类型，用于表示大小或错误码
+Value lumyr_make_long_double(long double ldv);       // long double：扩展精度浮点数
 Value lumyr_make_struct_ptr(void* ptr);    // C结构体指针：零拷贝传递，类型由外部标识
 
 // 算术

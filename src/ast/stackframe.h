@@ -140,6 +140,12 @@ ssize_t stackframe_get_ssize_t(StackFrame* f, const char* name, _Bool* found);
 // 绑定 ssize_t 变量：同时更新 vals 和 ssize_t_vals，零重复提取
 void stackframe_bind_ssize_t(StackFrame* f, const char* name, ssize_t sstv);
 
+// 获取 long double 类型变量的原始 long double 值，零提取、零类型检查
+long double stackframe_get_long_double(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 long double 变量：同时更新 vals 和 long_double_vals，零重复提取
+void stackframe_bind_long_double(StackFrame* f, const char* name, long double ldv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
