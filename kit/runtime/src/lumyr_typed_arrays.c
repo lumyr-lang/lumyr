@@ -191,3 +191,19 @@ void callback_array_free(CallbackArray* arr) { TYPED_ARRAY_FREE(arr) }
 void callback_array_add(CallbackArray* arr, void (*val)()) { TYPED_ARRAY_ADD(arr, val) }
 void (*callback_array_get(CallbackArray* arr, int idx))() { TYPED_ARRAY_GET(arr, idx) }
 void callback_array_set(CallbackArray* arr, int idx, void (*val)()) { TYPED_ARRAY_SET(arr, idx, val) }
+
+/* ==================== 结构体数组和Class数组实现 ==================== */
+
+/* StructArray */
+StructArray* struct_array_new(int cap) { TYPED_ARRAY_NEW(StructArray, cap) }
+void struct_array_free(StructArray* arr) { TYPED_ARRAY_FREE(arr) }
+void struct_array_add(StructArray* arr, void* val) { TYPED_ARRAY_ADD(arr, val) }
+void* struct_array_get(StructArray* arr, int idx) { TYPED_ARRAY_GET(arr, idx) }
+void struct_array_set(StructArray* arr, int idx, void* val) { TYPED_ARRAY_SET(arr, idx, val) }
+
+/* ClassArray */
+ClassArray* class_array_new(int cap) { TYPED_ARRAY_NEW(ClassArray, cap) }
+void class_array_free(ClassArray* arr) { TYPED_ARRAY_FREE(arr) }
+void class_array_add(ClassArray* arr, void* val) { TYPED_ARRAY_ADD(arr, val) }
+void* class_array_get(ClassArray* arr, int idx) { TYPED_ARRAY_GET(arr, idx) }
+void class_array_set(ClassArray* arr, int idx, void* val) { TYPED_ARRAY_SET(arr, idx, val) }

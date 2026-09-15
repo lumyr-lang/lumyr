@@ -141,6 +141,20 @@ typedef struct {
     int cap;
 } CallbackArray;
 
+/* 结构体数组（类型安全，存储 VAL_STRUCT_PTR 类型的指针） */
+typedef struct {
+    void** items;      /* 结构体指针数组，每个元素都是 VAL_STRUCT_PTR 类型 */
+    int len;
+    int cap;
+} StructArray;
+
+/* Class数组（类型安全，存储 VAL_CLASS_PTR 类型的指针） */
+typedef struct {
+    void** items;      /* class实例指针数组，每个元素都是 VAL_CLASS_PTR 类型 */
+    int len;
+    int cap;
+} ClassArray;
+
 /* ==================== 类型化数组统一访问宏 ==================== */
 /* 通过这些宏可以统一访问不同类型的数组，避免重复代码 */
 
@@ -282,5 +296,21 @@ void callback_array_free(CallbackArray* arr);
 void callback_array_add(CallbackArray* arr, void (*val)());
 void (*callback_array_get(CallbackArray* arr, int idx))();
 void callback_array_set(CallbackArray* arr, int idx, void (*val)());
+
+/* ==================== 结构体数组和Class数组函数声明 ==================== */
+
+/* StructArray */
+StructArray* struct_array_new(int cap);
+void struct_array_free(StructArray* arr);
+void struct_array_add(StructArray* arr, void* val);
+void* struct_array_get(StructArray* arr, int idx);
+void struct_array_set(StructArray* arr, int idx, void* val);
+
+/* ClassArray */
+ClassArray* class_array_new(int cap);
+void class_array_free(ClassArray* arr);
+void class_array_add(ClassArray* arr, void* val);
+void* class_array_get(ClassArray* arr, int idx);
+void class_array_set(ClassArray* arr, int idx, void* val);
 
 #endif /* LUMYR_TYPED_ARRAYS_H */
