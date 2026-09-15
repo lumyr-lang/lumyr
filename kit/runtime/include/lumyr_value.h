@@ -43,6 +43,8 @@ Value val_char(char v);
 Value val_string(const char* s);
 // ❗ 删除这一行：Value val_func(AstNode* func_ast);
 Value val_array(int len);
+// int 泛型数组：创建 IntArray，包装为 VAL_STRUCT_PTR 类型的 Value
+Value val_int_array(int len);
 // 初始化调用方提供的栈上 ValueArray（items 仍走 gc_alloc），设置 stack_alloc=1，返回 Value
 // 编译通道专用：VM 通道始终用 val_array（堆分配）
 Value val_array_from_stack(ValueArray* va, int len);

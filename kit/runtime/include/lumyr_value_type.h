@@ -75,6 +75,7 @@ typedef enum {
     VAL_GENERATOR,  // 生成器对象：保存冻结的执行状态，next() 恢复执行
     VAL_STRUCT_PTR,  // C结构体指针：零拷贝传递，直接存储void*，配合__structname__标识类型
     VAL_CLASS_PTR,    // class实例指针：零拷贝传递，直接存储void*，配合vtable标识类型，与struct区分
+    VAL_TYPED_ARRAY,  // 类型化数组：统一处理 IntArray、DoubleArray、StringArray 等，通过 elem_type 区分元素类型
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -110,6 +111,17 @@ typedef struct {
     uint8_t stack_alloc;        // 0=堆分配，1=编译通道栈分配
     uint8_t items_stack_alloc;  // 0=items堆分配，1=items栈分配（仅 stack_alloc=1 时有效）
 } ValueArray;
+
+// 类型化数组运行时对象，VAL_TYPED_ARRAY 使用（统一处理所有类型化数组，通过 elem_type 区分元素类型）
+// 与 ValueArray 的区别：ValueArray 存储 Value 类型元素，TypedArray 存储精确类型元素（int、double 等）
+// GC 管理：TypedArray* 本身由 gc_alloc(vtype=VAL_TYPED_ARRAY) 分配；items 缓冲区也由 gc_alloc 管理
+typedef struct {
+    void* items;           // 指向具体类型的数组（int*、double*、char** 等）
+    int len;
+    int cap;               // 预分配容量（>= len），add 时按需 2x 扩容
+    ValueType elem_type;   // 元素类型（VAL_INT、VAL_DOUBLE、VAL_STRING 等）
+    uint8_t stack_alloc;   // 0=堆分配，1=编译通道栈分配
+} TypedArray;
 
 // 错误对象，VAL_ERROR 使用（type 为错误类别，message 为消息，stack 为调用栈回溯）
 // GC 管理：ValueError 内联在 Value 里；type/message/stack 字符串由 gc_alloc(vtype=VAL_STRING) 管理。
@@ -150,6 +162,7 @@ struct Value {
         ValueError err;        // VAL_ERROR：错误对象（type/message/stack，堆上字符串）
         void* generator;       // VAL_GENERATOR：GeneratorObject* 指针（vm.c 中定义）
         void* struct_ptr;      // VAL_STRUCT_PTR：C结构体指针（零拷贝传递，类型由外部标识）
+        TypedArray* typed_array;  // VAL_TYPED_ARRAY：类型化数组（统一处理，通过 elem_type 区分元素类型）
     } v;
 };
 

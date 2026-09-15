@@ -2,6 +2,7 @@
 #include "lumyr_log.h"
 #include "lm_map.h"
 #include "gc_runtime.h"
+#include "lumyr_typed_arrays.h"
 #include <string.h>
 
 /* 错误机制全部动态化，无硬上限：
@@ -229,6 +230,33 @@ Value val_array(int len) {
     return r;
 }
 
+/* int 泛型数组：创建 TypedArray，元素类型为 VAL_INT，包装为 VAL_TYPED_ARRAY 类型的 Value */
+Value val_int_array(int len) {
+    Value r;
+    r.type = VAL_TYPED_ARRAY;
+    /* GC 安全：构造期间暂停自动 GC，避免中间分配触发 sweep */
+    gc_disable();
+    TypedArray* arr = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    if(arr) {
+        arr->elem_type = VAL_INT;
+        arr->len = len > 0 ? len : 0;
+        arr->cap = len > 0 ? len : 8;
+        arr->stack_alloc = 0;
+        if(len > 0) {
+            arr->items = (int*)gc_alloc_old(sizeof(int) * arr->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(arr->items);
+            for(int i = 0; i < len; i++) {
+                ((int*)arr->items)[i] = 0;
+            }
+        } else {
+            arr->items = NULL;
+        }
+    }
+    r.v.typed_array = arr;
+    gc_enable();
+    return r;
+}
+
 /* 编译通道栈分配数组：初始化调用方提供的栈上 ValueArray（items 仍走 gc_alloc），
  * 设置 stack_alloc=1，返回 Value。GC 标记时跳过 ValueArray 自身（无 GCObject 头），
  * 但仍标记 items 缓冲区及递归标记 items[i]。VM 路径不使用此函数。 */
@@ -342,6 +370,8 @@ const char* val_typename(ValueType t) {
     case VAL_BYTE: return "byte";
     case VAL_GENERATOR: return "generator";
     case VAL_STRUCT_PTR: return "struct_ptr";
+    case VAL_CLASS_PTR: return "class_ptr";
+    case VAL_TYPED_ARRAY: return "typed_array";
     default: return "unknown";
     }
 }

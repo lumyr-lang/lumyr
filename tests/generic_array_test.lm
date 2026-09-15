@@ -1,0 +1,34 @@
+// 泛型数组测试
+print("=== 泛型数组测试 ===\n");
+
+// 测试 1: 普通数组
+arr1 = [1, 2, 3, 4, 5];
+print("普通数组: ");
+print(arr1);
+print("\n");
+
+// 测试 2: 使用 (int)[1,2,3] 语法
+arr2 = (int)[1, 2, 3, 4, 5];
+print("(int)数组: ");
+print(arr2);
+print("\n");
+
+// 测试 3: 使用 (double)[1.1, 2.2, 3.3] 语法
+arr3 = (double)[1.1, 2.2, 3.3];
+print("(double)数组: ");
+print(arr3);
+print("\n");
+
+// 测试 4: 数组操作
+arr4 = [1, 2, 3];
+arr4.add(4);
+arr4.add(5);
+print("数组 add 操作: ");
+print(arr4);
+print("\n");
+
+print("数组长度: ");
+print(arr4.len());
+print("\n");
+
+print("=== 测试完成 ===\n");

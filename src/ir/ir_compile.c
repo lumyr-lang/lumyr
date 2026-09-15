@@ -1195,9 +1195,18 @@ static void c_expr(Ctx* c, AstNode* node)
             if(!has_spread_node(node->u.array_lit.elems)) {
                 int n = 0;
                 c_args(c, node->u.array_lit.elems, &n);
-                emit(c, OPC_ARRAY_LIT, elem_type, n);
+                if(elem_type == VAL_INT) {
+                    // int 泛型数组：使用专门的 OPC_INT_ARRAY_LIT 指令，内联类型转换
+                    emit(c, OPC_INT_ARRAY_LIT, elem_type, n);
+                } else {
+                    emit(c, OPC_ARRAY_LIT, elem_type, n);
+                }
             } else {
-                emit(c, OPC_ARRAY_LIT, elem_type, 0);
+                if(elem_type == VAL_INT) {
+                    emit(c, OPC_INT_ARRAY_LIT, elem_type, 0);
+                } else {
+                    emit(c, OPC_ARRAY_LIT, elem_type, 0);
+                }
                 compile_array_elems(c, node->u.array_lit.elems);
             }
             break;

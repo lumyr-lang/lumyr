@@ -2038,11 +2038,62 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_LOGIC_NOT:   { Value v = stack[--sp]; stack[sp++] = lumyr_logic_not(v); break; }
             case OPC_ARRAY_LIT: {
                 int n = in.b;
-                Value arr = val_array(n);
-                for(int k = 0; k < n; k++)
-                    arr.v.array->items[k] = stack[sp - n + k];
+                int elem_type = in.a;
+                fprintf(stderr, "[DEBUG] OPC_ARRAY_LIT: elem_type=%d, n=%d\n", elem_type, n);
+                if(elem_type == VAL_INT) {
+                    /* int 泛型数组：创建 TypedArray，元素类型为 VAL_INT，元素直接存储 int 值 */
+                    Value arr = val_int_array(n);
+                    TypedArray* tarr = arr.v.typed_array;
+                    if(tarr && tarr->items) {
+                        int* iitems = (int*)tarr->items;
+                        for(int k = 0; k < n; k++) {
+                            Value v = stack[sp - n + k];
+                            iitems[k] = (v.type == VAL_INT) ? (int)v.v.i : (int)lumyr_cast_long(v).v.i;
+                        }
+                        tarr->len = n;
+                    }
+                    sp = sp - n + 1;
+                    sp--; stack[sp++] = arr;
+                } else {
+                    /* 通用数组：创建 ValueArray，元素存储 Value */
+                    Value arr = val_array(n);
+                    for(int k = 0; k < n; k++)
+                        arr.v.array->items[k] = stack[sp - n + k];
+                    sp = sp - n + 1;
+                    sp--; stack[sp++] = arr;   /* 安全原地写：先 pop 使槽位对 GC 不可见，再 push */
+                }
+                break;
+            }
+            case OPC_INT_ARRAY_LIT: {
+                /* int 泛型数组：使用内联类型转换，减少函数调用开销 */
+                int n = in.b;
+                Value arr = val_int_array(n);
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr && tarr->items) {
+                    int* iitems = (int*)tarr->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = stack[sp - n + k];
+                        /* 内联类型转换：常见类型直接转换，减少函数调用 */
+                        switch(v.type) {
+                            case VAL_INT:
+                            case VAL_BYTE:
+                            case VAL_CHAR:
+                            case VAL_BOOL:
+                                iitems[k] = (int)v.v.i;
+                                break;
+                            case VAL_DOUBLE:
+                                iitems[k] = (int)v.v.d;
+                                break;
+                            default:
+                                /* 其他类型调用通用转换函数 */
+                                iitems[k] = (int)lumyr_cast_long(v).v.i;
+                                break;
+                        }
+                    }
+                    tarr->len = n;
+                }
                 sp = sp - n + 1;
-                sp--; stack[sp++] = arr;   /* 安全原地写：先 pop 使槽位对 GC 不可见，再 push */
+                sp--; stack[sp++] = arr;
                 break;
             }
             case OPC_MAP_LIT: {

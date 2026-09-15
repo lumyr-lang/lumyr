@@ -1,4 +1,5 @@
 #include "ast_node.h"
+#include "ast_types.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -516,8 +517,14 @@ AstNode* ast_extern_func(char* name, AstNode* params, char* ret_type_name, char*
 }
 
 // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
-// 数组/map 字面量：当前直接返回原字面量，元素级类型转换后续完善
+// 数组字面量：直接设置 AST_ARRAY_LIT 节点的 elem_type 字段，创建类型化数组
+// 其他表达式：创建 AST_TYPE_ANNOTATION 节点，运行时进行类型转换
 AstNode* ast_type_annotation(int cast_type, AstNode* expr) {
+    if(expr && expr->type == AST_ARRAY_LIT) {
+        // 数组字面量：直接设置 elem_type 字段，创建类型化数组
+        expr->u.array_lit.elem_type = castkind_to_valtype(cast_type);
+        return expr;
+    }
     AstNode* n = ast_new(AST_TYPE_ANNOTATION);
     n->u.type_annotation.cast_type = cast_type;
     n->u.type_annotation.expr = expr;

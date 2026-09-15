@@ -364,6 +364,7 @@ Value lumyr_type(Value v) {
         case VAL_GENERATOR: return lumyr_make_string("generator");
         case VAL_STRUCT_PTR: return lumyr_make_string("struct");
         case VAL_CLASS_PTR: return lumyr_make_string("class");
+        case VAL_TYPED_ARRAY: return lumyr_make_string("typed_array");
     }
     return lumyr_make_string("unknown");
 }

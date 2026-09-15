@@ -23,6 +23,7 @@ typedef enum {
     OPC_CAST_UINT8, OPC_CAST_UINT16, OPC_CAST_UINT32, OPC_CAST_UINT64,
     OPC_CAST_LONG, OPC_CAST_LONGLONG, OPC_CAST_FLOAT,
     OPC_ARRAY_LIT,    // b=元素个数；弹 b 个元素压数组
+    OPC_INT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int，创建 int 泛型数组
     OPC_MAP_LIT,      // b=键值对个数；弹 2b 个值（键、值交替）压字典
     OPC_INDEX_GET,    // 弹 arr,idx 压元素（数组元素 / 字符串字符）
     OPC_INDEX_SET,    // 弹 arr,idx,val 写回；压回 val（表达式值）
