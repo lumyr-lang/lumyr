@@ -514,16 +514,9 @@ Value lumyr_interface_cast(Value obj, const char* iface_name) {
     /* 获取对象的类型名，用于错误信息 */
     const char* type_name = "unknown";
     if(obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) {
-        if(lumyr_is_class_instance(obj)) {
-            type_name = lumyr_class_get_name(obj);
-        } else {
-            type_name = lumyr_struct_get_name(obj);
-        }
-    } else if(obj.type == VAL_MAP) {
-        Value cn = lumyr_map_get(obj, lumyr_make_string("__mapname__"));
-        if(cn.type == VAL_STRING) {
-            type_name = lumyr_str_cstr(&cn);
-        }
+        type_name = lumyr_class_get_name(obj);
+    } else if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr) {
+        type_name = lumyr_struct_get_name(obj);
     }
     char msg[256];
     snprintf(msg, sizeof(msg), "接口类型转换失败：类型 \"%s\" 未实现接口 \"%s\"", type_name, iface_name);
