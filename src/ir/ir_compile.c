@@ -12,6 +12,7 @@
 #include "ast/func_compile.h"
 #include "ast/ast_interp.h"
 #include "rbtree.h"
+#include "symbol_table.h"
 #include "lm_value.h"
 #include "gc_runtime.h"
 #include <stdio.h>
@@ -21,41 +22,89 @@
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
 // 动态扩容，无硬上限。
-/* 红黑树存储函数：键为 (class_name, method_name)，class_name 为 NULL 表示普通函数 */
-static RBTree* ir_func_table = NULL;
+/* 统一符号表存储函数：键为 (file_name, class_name, method_name)，class_name 为 NULL 表示普通函数 */
+static SymbolTable* ir_func_table = NULL;
 
 void ir_func_table_reset(void)
 {
-    if(ir_func_table) rbtree_destroy(ir_func_table);
-    ir_func_table = rbtree_create();
+    if(ir_func_table) symbol_table_destroy(ir_func_table);
+    ir_func_table = symbol_table_create();
 }
 
 BytecodeFunc* ir_func_table_lookup(const char* name)
 {
     if(!name || !ir_func_table) return NULL;
-    /* 先查找普通函数（class_name 为 NULL） */
-    void* data = rbtree_find(ir_func_table, NULL, name);
-    if(data) return (BytecodeFunc*)data;
-    /* 兼容旧代码：查找第一个匹配 method_name 的函数 */
-    return (BytecodeFunc*)rbtree_find_by_name(ir_func_table, name);
+    /* 只查找 class_name 为 NULL 的普通函数，class 方法通过 ir_func_table_lookup_class 查找 */
+    SymbolEntry* entry = symbol_table_find(ir_func_table, NULL, NULL, name);
+    if(entry) return (BytecodeFunc*)entry->data;
+    return NULL;
 }
 
 /* 按 class_name + method_name 查找 class 方法 */
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name)
 {
     if(!class_name || !method_name || !ir_func_table) return NULL;
-    return (BytecodeFunc*)rbtree_find(ir_func_table, class_name, method_name);
+    SymbolEntry* entry = symbol_table_find(ir_func_table, NULL, class_name, method_name);
+    if(entry) return (BytecodeFunc*)entry->data;
+    return NULL;
 }
 
-/* 遍历所有函数（红黑树中序遍历） */
+/* 查找任意函数（先查找普通函数，如果找不到，再按名字查找第一个匹配的 class 方法）
+   用于 CC 模式的代码生成器，因为 CC 模式在处理 OPC_GETFUNC 时不知道函数是普通函数还是 class 方法 */
+BytecodeFunc* ir_func_table_lookup_any(const char* name)
+{
+    if(!name || !ir_func_table) return NULL;
+    /* 先查找普通函数 */
+    SymbolEntry* entry = symbol_table_find(ir_func_table, NULL, NULL, name);
+    if(entry) return (BytecodeFunc*)entry->data;
+    /* 再按名字查找第一个匹配的 class 方法 */
+    entry = symbol_table_find_by_name(ir_func_table, name);
+    if(entry) return (BytecodeFunc*)entry->data;
+    /* DEBUG: 打印 ir_func_table 中的所有函数 */
+    {
+        FILE* __dbg = fopen("debug_lookup_any.txt", "a");
+        if(__dbg) {
+            fprintf(__dbg, "[ir_func_table_lookup_any] 未找到函数: %s\n", name);
+            fprintf(__dbg, "  ir_func_table 中的所有函数:\n");
+            SymbolTable* __st = ir_func_table;
+            /* 遍历红黑树，打印所有节点 */
+            /* 简化实现：使用 symbol_table_foreach */
+            fclose(__dbg);
+        }
+    }
+    return NULL;
+}
+
+/* 遍历所有函数（统一符号表中序遍历） */
+typedef struct {
+    void (*callback)(const char*, const char*, void*, void*);
+    void* user_data;
+} ForeachWrapperData;
+
+static void ir_func_table_foreach_wrapper(const char* file_name, const char* scope,
+                                           const char* name, SymbolType type, void* data, void* user_data)
+{
+    (void)file_name;
+    (void)type;
+    ForeachWrapperData* wd = (ForeachWrapperData*)user_data;
+    if(wd && wd->callback) {
+        wd->callback(scope, name, data, wd->user_data);
+    }
+}
+
 void ir_func_table_foreach(void (*callback)(const char* class_name, const char* method_name, void* data, void* user_data), void* user_data)
 {
-    if(ir_func_table) rbtree_foreach(ir_func_table, callback, user_data);
+    if(ir_func_table) {
+        ForeachWrapperData wd;
+        wd.callback = callback;
+        wd.user_data = user_data;
+        symbol_table_foreach(ir_func_table, ir_func_table_foreach_wrapper, &wd);
+    }
 }
 
 static void ir_func_table_add(BytecodeFunc* fn)
 {
-    if(!ir_func_table) ir_func_table = rbtree_create();
+    if(!ir_func_table) ir_func_table = symbol_table_create();
     if(fn->name) {
         /* 跳过原始名字的构造函数注册：构造函数会被改名成 <类名>___init__ 后再注册 */
         size_t _name_len = strlen(fn->name);
@@ -63,16 +112,8 @@ static void ir_func_table_add(BytecodeFunc* fn)
         if(_is_raw_constructor) {
             return;
         }
-        /* DEBUG: 记录函数注册 */
-        {
-            FILE* __dbg = fopen("debug_func_table.txt", "a");
-            if(__dbg) {
-                fprintf(__dbg, "[ir_func_table_add] name=%s, class_name=%s, param_cnt=%d\n",
-                        fn->name, fn->class_name ? fn->class_name : "(null)", fn->param_cnt);
-                fclose(__dbg);
-            }
-        }
-        rbtree_insert(ir_func_table, fn->class_name, fn->name, fn);
+        SymbolType sym_type = fn->class_name ? SYMBOL_METHOD : SYMBOL_FUNC;
+        symbol_table_add(ir_func_table, NULL, fn->class_name, fn->name, sym_type, fn);
     }
 }
 

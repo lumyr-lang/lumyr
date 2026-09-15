@@ -457,7 +457,7 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, ";\n");
                 break;
             case OPC_GETFUNC: {
-                if(!ir_func_table_lookup(nm)) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
+                if(!ir_func_table_lookup_any(nm)) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
                 fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%s_rf; __stk[__sp++] = __f; }\n", nm);
                 break;
             }
@@ -466,7 +466,7 @@ void emit_insns(BytecodeFunc* fn)
                  * captures 为 Value** cell 指针数组（末尾 NULL 哨兵），capture_count=-2。
                  * cell 指针来源：本函数装箱局部/参数 → lmloc_<name>；
                  *               本 lambda 自身透传的外层捕获 → __caps[idx]。 */
-                BytecodeFunc* lfn = ir_func_table_lookup(nm);
+                BytecodeFunc* lfn = ir_func_table_lookup_any(nm);
                 if(!lfn) {
                     fprintf(stderr, "codegen: 未定义闭包函数: %s\n", nm);
                     exit(EXIT_FAILURE);
@@ -2079,7 +2079,7 @@ void emit_insns(BytecodeFunc* fn)
                     fprintf(out, "    }\n");
                     break;
                 }
-                BytecodeFunc* callee = ir_func_table_lookup(nm);
+                BytecodeFunc* callee = ir_func_table_lookup_any(nm);
                 if(!callee) {
                     fprintf(stderr, "codegen: 未定义函数: %s\n", nm);
                     exit(EXIT_FAILURE);

@@ -2546,7 +2546,13 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     /* 同时支持 VAL_MAP 和 VAL_STRUCT_PTR 类型的 class 实例 */
                     _Bool is_class_instance = (self_val.type == VAL_MAP || self_val.type == VAL_STRUCT_PTR);
                     if(is_class_instance && parent_name && method_name[0]) {
-                        void* rf = class_find_method_func(parent_name, method_name);
+                        void* rf = NULL;
+                        /* 构造函数 __init__ 单独处理，使用 class_get_constructor_func */
+                        if(strcmp(method_name, "__init__") == 0) {
+                            rf = class_get_constructor_func(parent_name);
+                        } else {
+                            rf = class_find_method_func(parent_name, method_name);
+                        }
                         if(rf) {
                             /* 调用父类方法：使用和 super_method_call 相同的方式 */
                             RuntimeFunc* rf_ptr = (RuntimeFunc*)rf;

@@ -17,6 +17,9 @@ void ir_func_table_reset(void);
 BytecodeFunc* ir_func_table_lookup(const char* name);
 /* 按 class_name + method_name 查找 class 方法（红黑树快速查找） */
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name);
+/* 查找任意函数（先查找普通函数，如果找不到，再按名字查找第一个匹配的 class 方法）
+   用于 CC 模式的代码生成器 */
+BytecodeFunc* ir_func_table_lookup_any(const char* name);
 /* 遍历所有函数（红黑树中序遍历） */
 void ir_func_table_foreach(void (*callback)(const char* class_name, const char* method_name, void* data, void* user_data), void* user_data);
 
