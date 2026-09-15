@@ -47,6 +47,43 @@ static _Thread_local int vm_fin_n = 0;
 static _Thread_local int vm_cap = 0;          /* 错误处理器栈容量 */
 static _Thread_local Value vm_pend_val;   /* 挂起返回的值（PEND_RETURN 存，FINISH act5 恢复） */
 
+/* ========== int 栈（方案 A：多类型栈，零检查零转换） ========== */
+/* 专门用于存储 int 类型值，与 Value 栈并行，避免类型检查和转换开销 */
+static _Thread_local int* vm_int_stack = NULL;
+static _Thread_local int vm_int_sp = 0;
+static _Thread_local int vm_int_cap = 0;
+
+#define INT_STACK_INIT_CAP 64
+
+static void int_stack_init(void) {
+    if(vm_int_stack) return;
+    vm_int_cap = INT_STACK_INIT_CAP;
+    vm_int_stack = (int*)malloc((size_t)vm_int_cap * sizeof(int));
+    if(!vm_int_stack) { LOG_ERROR("vm: int 栈内存不足\n"); exit(EXIT_FAILURE); }
+    vm_int_sp = 0;
+}
+
+static void int_stack_destroy(void) {
+    if(vm_int_stack) { free(vm_int_stack); vm_int_stack = NULL; }
+    vm_int_sp = 0;
+    vm_int_cap = 0;
+}
+
+static void int_stack_ensure(int need) {
+    if(vm_int_sp + need <= vm_int_cap) return;
+    int nc = vm_int_cap > 0 ? vm_int_cap : INT_STACK_INIT_CAP;
+    while(nc < vm_int_sp + need) nc *= 2;
+    int* ns = (int*)realloc(vm_int_stack, (size_t)nc * sizeof(int));
+    if(!ns) { LOG_ERROR("vm: int 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    vm_int_stack = ns;
+    vm_int_cap = nc;
+}
+
+#define INT_PUSH(val) do { int_stack_ensure(1); vm_int_stack[vm_int_sp++] = (val); } while(0)
+#define INT_POP() (vm_int_stack[--vm_int_sp])
+#define INT_PEEK() (vm_int_stack[vm_int_sp - 1])
+#define INT_TOP(idx) (vm_int_stack[vm_int_sp - 1 - (idx)])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -636,7 +673,11 @@ Value vm_run_main(BytecodeFunc* main_fn)
     stackframe_set(top, "log", val_map());   // 预定义 log 对象（方法链 log.xxx）
     StackFrame* saved_global = s_global_frame;
     s_global_frame = top;
+    /* 初始化 int 栈（方案 A：多类型栈，零检查零转换） */
+    int_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
+    /* 销毁 int 栈 */
+    int_stack_destroy();
     s_global_frame = saved_global;
     stackframe_destroy(top);
     return ret;
@@ -1877,6 +1918,17 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = vv;
                 break;
             }
+            case OPC_LOAD_INT_VAR: {
+                /* 声明为 int 类型的变量：直接加载到 int 栈，零检查零转换 */
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                Value vv = stackframe_get(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                /* 变量声明为 int 类型，直接提取 int 值压入 int 栈 */
+                int iv = (int)lumyr_extract_int(vv);
+                INT_PUSH(iv);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2065,34 +2117,42 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_INT_ARRAY_LIT: {
-                /* int 泛型数组：使用内联类型转换，减少函数调用开销 */
+                /* int 泛型数组：优先从 int 栈读取（零检查零转换），
+                   如果 int 栈元素不足，则回退到 Value 栈读取（兼容混合场景） */
                 int n = in.b;
                 Value arr = val_int_array(n);
                 TypedArray* tarr = arr.v.typed_array;
                 if(tarr && tarr->items) {
                     int* iitems = (int*)tarr->items;
-                    for(int k = 0; k < n; k++) {
-                        Value v = stack[sp - n + k];
-                        /* 内联类型转换：常见类型直接转换，减少函数调用 */
-                        switch(v.type) {
-                            case VAL_INT:
-                            case VAL_BYTE:
-                            case VAL_CHAR:
-                            case VAL_BOOL:
-                                iitems[k] = (int)v.v.i;
-                                break;
-                            case VAL_DOUBLE:
-                                iitems[k] = (int)v.v.d;
-                                break;
-                            default:
-                                /* 其他类型调用通用转换函数 */
-                                iitems[k] = (int)lumyr_cast_long(v).v.i;
-                                break;
+                    if(vm_int_sp >= n) {
+                        /* int 栈有足够元素：零检查零转换，直接从 int 栈读取 */
+                        for(int k = 0; k < n; k++) {
+                            iitems[k] = vm_int_stack[vm_int_sp - n + k];
                         }
+                        vm_int_sp -= n;
+                    } else {
+                        /* int 栈元素不足：回退到 Value 栈读取（兼容混合场景） */
+                        for(int k = 0; k < n; k++) {
+                            Value v = stack[sp - n + k];
+                            switch(v.type) {
+                                case VAL_INT:
+                                case VAL_BYTE:
+                                case VAL_CHAR:
+                                case VAL_BOOL:
+                                    iitems[k] = (int)v.v.i;
+                                    break;
+                                case VAL_DOUBLE:
+                                    iitems[k] = (int)v.v.d;
+                                    break;
+                                default:
+                                    iitems[k] = (int)lumyr_cast_long(v).v.i;
+                                    break;
+                            }
+                        }
+                        sp = sp - n + 1;
                     }
                     tarr->len = n;
                 }
-                sp = sp - n + 1;
                 sp--; stack[sp++] = arr;
                 break;
             }
