@@ -56,6 +56,24 @@ unsigned int stackframe_get_uint(StackFrame* f, const char* name, _Bool* found);
 // 绑定 uint 变量：同时更新 vals（包装成 Value）和 uint_vals（原始 uint 值），零重复提取
 void stackframe_bind_uint(StackFrame* f, const char* name, unsigned int uv);
 
+// 获取 bool 类型变量的原始 bool 值，零提取、零类型检查
+_Bool stackframe_get_bool(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 bool 变量：同时更新 vals 和 bool_vals，零重复提取
+void stackframe_bind_bool(StackFrame* f, const char* name, _Bool bv);
+
+// 获取 char 类型变量的原始 char 值，零提取、零类型检查
+char stackframe_get_char(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 char 变量：同时更新 vals 和 char_vals，零重复提取
+void stackframe_bind_char(StackFrame* f, const char* name, char cv);
+
+// 获取 byte 类型变量的原始 byte 值，零提取、零类型检查
+unsigned char stackframe_get_byte(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 byte 变量：同时更新 vals 和 byte_vals，零重复提取
+void stackframe_bind_byte(StackFrame* f, const char* name, unsigned char bv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);

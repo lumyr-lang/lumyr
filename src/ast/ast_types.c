@@ -133,21 +133,26 @@ ValueType castkind_to_valtype(int ck)
         case CAST_BOOL: return VAL_BOOL;
         case CAST_CHAR: return VAL_CHAR;
         case CAST_BYTE: return VAL_BYTE;
-        case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
-        case CAST_UINT8: case CAST_UINT16: case CAST_UINT64:
-        case CAST_LONG: case CAST_LONGLONG:
-            return VAL_INT;
-        case CAST_UINT32:
-            return VAL_UINT32;  // uint 类型化数组，与 int 区分
-        case CAST_FLOAT:
-            return VAL_FLOAT;  // float 类型化数组，与 double 区分
-        case CAST_ULONG: case CAST_UCHAR: case CAST_SHORT: case CAST_USHORT:
-        case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_PTR:
-            return VAL_INT;
-        case CAST_LONG_DOUBLE:
-            return VAL_DOUBLE;
-        case CAST_VOID:
-            return VAL_NONE;
+        case CAST_INT8: return VAL_INT8;
+        case CAST_INT16: return VAL_INT16;
+        case CAST_INT32: return VAL_INT32;
+        case CAST_INT64: return VAL_INT64;
+        case CAST_UINT8: return VAL_UINT8;
+        case CAST_UINT16: return VAL_UINT16;
+        case CAST_UINT32: return VAL_UINT32;
+        case CAST_UINT64: return VAL_UINT64;
+        case CAST_LONG: return VAL_LONG;
+        case CAST_LONGLONG: return VAL_INT64;  // long long 等价于 int64
+        case CAST_FLOAT: return VAL_FLOAT;
+        case CAST_ULONG: return VAL_ULONG;
+        case CAST_UCHAR: return VAL_UCHAR;
+        case CAST_SHORT: return VAL_SHORT;  // short 类型，与 int16 彻底隔离
+        case CAST_USHORT: return VAL_USHORT;  // unsigned short 类型，与 uint16 彻底隔离
+        case CAST_SIZE_T: return VAL_SIZE_T;
+        case CAST_SSIZE_T: return VAL_SSIZE_T;
+        case CAST_LONG_DOUBLE: return VAL_LONG_DOUBLE;
+        case CAST_PTR: return VAL_PTR;
+        case CAST_VOID: return VAL_NONE;
         default: return VAL_NONE;
     }
 }

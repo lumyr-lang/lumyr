@@ -199,6 +199,33 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
         case OPC_UINT_ARRAY_GET:
             return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 uint 栈（Value栈净变化-2） */
+        case OPC_LOAD_BOOL_VAR:
+            return 0;                        /* 压入 bool 栈，不改变 Value 栈深度 */
+        case OPC_STORE_BOOL_VAR:
+            return +1;                       /* 从 bool 栈弹出 bool，包装成 Value 压回 */
+        case OPC_BOOL_ARRAY_LIT:
+            if(in.a == 1) return +1;          /* 从 bool 栈读取 b 元素，压 1 数组 */
+            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
+        case OPC_BOOL_ARRAY_GET:
+            return -2;                          /* 弹 arr,idx，压入 bool 栈 */
+        case OPC_LOAD_CHAR_VAR:
+            return 0;
+        case OPC_STORE_CHAR_VAR:
+            return +1;
+        case OPC_CHAR_ARRAY_LIT:
+            if(in.a == 1) return +1;
+            return -in.b + 1;
+        case OPC_CHAR_ARRAY_GET:
+            return -2;
+        case OPC_LOAD_BYTE_VAR:
+            return 0;
+        case OPC_STORE_BYTE_VAR:
+            return +1;
+        case OPC_BYTE_ARRAY_LIT:
+            if(in.a == 1) return +1;
+            return -in.b + 1;
+        case OPC_BYTE_ARRAY_GET:
+            return -2;
         case OPC_MAP_LIT:
             return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
         case OPC_CLASS_NEW:
@@ -255,6 +282,9 @@ static int op_stack_push(OpCode op)
         case OPC_DOUBLE_ARRAY_LIT:
         case OPC_FLOAT_ARRAY_LIT:
         case OPC_UINT_ARRAY_LIT:
+        case OPC_BOOL_ARRAY_LIT:
+        case OPC_CHAR_ARRAY_LIT:
+        case OPC_BYTE_ARRAY_LIT:
             return 1;
         default:
             return 0;

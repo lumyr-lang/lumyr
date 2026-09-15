@@ -338,6 +338,81 @@ Value val_uint_array(int len) {
     return r;
 }
 
+Value val_bool_array(int len) {
+    Value r;
+    r.type = VAL_TYPED_ARRAY;
+    gc_disable();
+    TypedArray* arr = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    if(arr) {
+        arr->elem_type = VAL_BOOL;  // bool 类型化数组，与其他类型彻底隔离
+        arr->len = len > 0 ? len : 0;
+        arr->cap = len > 0 ? len : 8;
+        arr->stack_alloc = 0;
+        if(len > 0) {
+            arr->items = (_Bool*)gc_alloc_old(sizeof(_Bool) * arr->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(arr->items);
+            for(int i = 0; i < len; i++) {
+                ((_Bool*)arr->items)[i] = 0;
+            }
+        } else {
+            arr->items = NULL;
+        }
+    }
+    r.v.typed_array = arr;
+    gc_enable();
+    return r;
+}
+
+Value val_char_array(int len) {
+    Value r;
+    r.type = VAL_TYPED_ARRAY;
+    gc_disable();
+    TypedArray* arr = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    if(arr) {
+        arr->elem_type = VAL_CHAR;  // char 类型化数组，与其他类型彻底隔离
+        arr->len = len > 0 ? len : 0;
+        arr->cap = len > 0 ? len : 8;
+        arr->stack_alloc = 0;
+        if(len > 0) {
+            arr->items = (char*)gc_alloc_old(sizeof(char) * arr->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(arr->items);
+            for(int i = 0; i < len; i++) {
+                ((char*)arr->items)[i] = 0;
+            }
+        } else {
+            arr->items = NULL;
+        }
+    }
+    r.v.typed_array = arr;
+    gc_enable();
+    return r;
+}
+
+Value val_byte_array(int len) {
+    Value r;
+    r.type = VAL_TYPED_ARRAY;
+    gc_disable();
+    TypedArray* arr = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    if(arr) {
+        arr->elem_type = VAL_BYTE;  // byte 类型化数组，与其他类型彻底隔离
+        arr->len = len > 0 ? len : 0;
+        arr->cap = len > 0 ? len : 8;
+        arr->stack_alloc = 0;
+        if(len > 0) {
+            arr->items = (unsigned char*)gc_alloc_old(sizeof(unsigned char) * arr->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(arr->items);
+            for(int i = 0; i < len; i++) {
+                ((unsigned char*)arr->items)[i] = 0;
+            }
+        } else {
+            arr->items = NULL;
+        }
+    }
+    r.v.typed_array = arr;
+    gc_enable();
+    return r;
+}
+
 /* 编译通道栈分配数组：初始化调用方提供的栈上 ValueArray（items 仍走 gc_alloc），
  * 设置 stack_alloc=1，返回 Value。GC 标记时跳过 ValueArray 自身（无 GCObject 头），
  * 但仍标记 items 缓冲区及递归标记 items[i]。VM 路径不使用此函数。 */

@@ -840,6 +840,129 @@ void stackframe_bind_uint(StackFrame* f, const char* name, unsigned int uv)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+_Bool stackframe_get_bool(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            _Bool bv = fr->bool_vals ? fr->bool_vals[idx] : (fr->vals[idx].v.i ? 1 : 0);
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return bv;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_bool(StackFrame* f, const char* name, _Bool bv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_BOOL;
+        f->vals[idx].v.i = bv ? 1 : 0;
+        if(f->bool_vals) f->bool_vals[idx] = bv;
+        if(f->type_tags) f->type_tags[idx] = CAST_BOOL;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_BOOL;
+        f->vals[f->cnt].v.i = bv ? 1 : 0;
+        if(f->bool_vals) f->bool_vals[f->cnt] = bv;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_BOOL;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
+char stackframe_get_char(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            char cv = fr->char_vals ? fr->char_vals[idx] : (char)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return cv;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_char(StackFrame* f, const char* name, char cv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_CHAR;
+        f->vals[idx].v.i = (long long)cv;
+        if(f->char_vals) f->char_vals[idx] = cv;
+        if(f->type_tags) f->type_tags[idx] = CAST_CHAR;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_CHAR;
+        f->vals[f->cnt].v.i = (long long)cv;
+        if(f->char_vals) f->char_vals[f->cnt] = cv;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_CHAR;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
+unsigned char stackframe_get_byte(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            unsigned char bv = fr->byte_vals ? fr->byte_vals[idx] : (unsigned char)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return bv;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_byte(StackFrame* f, const char* name, unsigned char bv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_BYTE;
+        f->vals[idx].v.i = (long long)bv;
+        if(f->byte_vals) f->byte_vals[idx] = bv;
+        if(f->type_tags) f->type_tags[idx] = CAST_BYTE;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_BYTE;
+        f->vals[f->cnt].v.i = (long long)bv;
+        if(f->byte_vals) f->byte_vals[f->cnt] = bv;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_BYTE;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 // cell 表扩容（调用方须已持锁）
 static void cell_ensure(StackFrame* f, int need)
 {

@@ -90,6 +90,8 @@ typedef enum {
     VAL_UINT64,       // uint64_t / unsigned long long
     VAL_ULONG,        // unsigned long
     VAL_UCHAR,        // unsigned char
+    VAL_SHORT,        // short（16位有符号，与 int16 隔离）
+    VAL_USHORT,       // unsigned short（16位无符号，与 uint16 隔离）
     VAL_SIZE_T,       // size_t
     VAL_SSIZE_T,      // ssize_t / ptrdiff_t
     VAL_FLOAT,        // float（单精度）

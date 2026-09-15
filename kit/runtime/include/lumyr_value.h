@@ -48,6 +48,9 @@ Value val_int_array(int len);
 Value val_double_array(int len);
 Value val_float_array(int len);
 Value val_uint_array(int len);
+Value val_bool_array(int len);  // 创建 bool 泛型数组（elem_type=VAL_BOOL，彻底隔离）
+Value val_char_array(int len);  // 创建 char 泛型数组（elem_type=VAL_CHAR，彻底隔离）
+Value val_byte_array(int len);  // 创建 byte 泛型数组（elem_type=VAL_BYTE，彻底隔离）
 // 初始化调用方提供的栈上 ValueArray（items 仍走 gc_alloc），设置 stack_alloc=1，返回 Value
 // 编译通道专用：VM 通道始终用 val_array（堆分配）
 Value val_array_from_stack(ValueArray* va, int len);

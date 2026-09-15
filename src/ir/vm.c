@@ -195,6 +195,36 @@ static void uint_stack_ensure(int need) {
 #define UINT_PEEK() (vm_uint_stack[vm_uint_sp - 1])
 #define UINT_TOP(idx) (vm_uint_stack[vm_uint_sp - 1 - (idx)])
 
+/* ========== bool 栈 ========== */
+static _Thread_local _Bool* vm_bool_stack = NULL;
+static _Thread_local int vm_bool_sp = 0;
+static _Thread_local int vm_bool_cap = 0;
+static void bool_stack_init(void) { if(vm_bool_stack) return; vm_bool_cap = 64; vm_bool_stack = (_Bool*)malloc(64 * sizeof(_Bool)); if(!vm_bool_stack) { LOG_ERROR("vm: bool 栈内存不足\n"); exit(EXIT_FAILURE); } vm_bool_sp = 0; }
+static void bool_stack_destroy(void) { if(vm_bool_stack) { free(vm_bool_stack); vm_bool_stack = NULL; } vm_bool_sp = 0; vm_bool_cap = 0; }
+static void bool_stack_ensure(int need) { if(vm_bool_sp + need <= vm_bool_cap) return; int nc = vm_bool_cap > 0 ? vm_bool_cap : 64; while(nc < vm_bool_sp + need) nc *= 2; _Bool* ns = (_Bool*)realloc(vm_bool_stack, nc * sizeof(_Bool)); if(!ns) { LOG_ERROR("vm: bool 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_bool_stack = ns; vm_bool_cap = nc; }
+#define BOOL_PUSH(val) do { bool_stack_ensure(1); vm_bool_stack[vm_bool_sp++] = (val); } while(0)
+#define BOOL_POP() (vm_bool_stack[--vm_bool_sp])
+
+/* ========== char 栈 ========== */
+static _Thread_local char* vm_char_stack = NULL;
+static _Thread_local int vm_char_sp = 0;
+static _Thread_local int vm_char_cap = 0;
+static void char_stack_init(void) { if(vm_char_stack) return; vm_char_cap = 64; vm_char_stack = (char*)malloc(64 * sizeof(char)); if(!vm_char_stack) { LOG_ERROR("vm: char 栈内存不足\n"); exit(EXIT_FAILURE); } vm_char_sp = 0; }
+static void char_stack_destroy(void) { if(vm_char_stack) { free(vm_char_stack); vm_char_stack = NULL; } vm_char_sp = 0; vm_char_cap = 0; }
+static void char_stack_ensure(int need) { if(vm_char_sp + need <= vm_char_cap) return; int nc = vm_char_cap > 0 ? vm_char_cap : 64; while(nc < vm_char_sp + need) nc *= 2; char* ns = (char*)realloc(vm_char_stack, nc * sizeof(char)); if(!ns) { LOG_ERROR("vm: char 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_char_stack = ns; vm_char_cap = nc; }
+#define CHAR_PUSH(val) do { char_stack_ensure(1); vm_char_stack[vm_char_sp++] = (val); } while(0)
+#define CHAR_POP() (vm_char_stack[--vm_char_sp])
+
+/* ========== byte 栈 ========== */
+static _Thread_local unsigned char* vm_byte_stack = NULL;
+static _Thread_local int vm_byte_sp = 0;
+static _Thread_local int vm_byte_cap = 0;
+static void byte_stack_init(void) { if(vm_byte_stack) return; vm_byte_cap = 64; vm_byte_stack = (unsigned char*)malloc(64 * sizeof(unsigned char)); if(!vm_byte_stack) { LOG_ERROR("vm: byte 栈内存不足\n"); exit(EXIT_FAILURE); } vm_byte_sp = 0; }
+static void byte_stack_destroy(void) { if(vm_byte_stack) { free(vm_byte_stack); vm_byte_stack = NULL; } vm_byte_sp = 0; vm_byte_cap = 0; }
+static void byte_stack_ensure(int need) { if(vm_byte_sp + need <= vm_byte_cap) return; int nc = vm_byte_cap > 0 ? vm_byte_cap : 64; while(nc < vm_byte_sp + need) nc *= 2; unsigned char* ns = (unsigned char*)realloc(vm_byte_stack, nc * sizeof(unsigned char)); if(!ns) { LOG_ERROR("vm: byte 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_byte_stack = ns; vm_byte_cap = nc; }
+#define BYTE_PUSH(val) do { byte_stack_ensure(1); vm_byte_stack[vm_byte_sp++] = (val); } while(0)
+#define BYTE_POP() (vm_byte_stack[--vm_byte_sp])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -792,7 +822,15 @@ Value vm_run_main(BytecodeFunc* main_fn)
     float_stack_init();
     /* 初始化 uint 栈（方案 A：多类型栈，零检查零转换） */
     uint_stack_init();
+    /* 初始化 bool、char、byte 栈 */
+    bool_stack_init();
+    char_stack_init();
+    byte_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
+    /* 销毁 bool、char、byte 栈 */
+    byte_stack_destroy();
+    char_stack_destroy();
+    bool_stack_destroy();
     /* 销毁 uint 栈 */
     uint_stack_destroy();
     /* 销毁 float 栈 */
@@ -2079,6 +2117,30 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 UINT_PUSH(uv);
                 break;
             }
+            case OPC_LOAD_BOOL_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                _Bool bv = stackframe_get_bool(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                BOOL_PUSH(bv);
+                break;
+            }
+            case OPC_LOAD_CHAR_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                char cv = stackframe_get_char(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                CHAR_PUSH(cv);
+                break;
+            }
+            case OPC_LOAD_BYTE_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                unsigned char bv = stackframe_get_byte(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                BYTE_PUSH(bv);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2141,6 +2203,36 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = 1;  // VAL_INT（uint 用 VAL_INT 存储，long long 可以存储 uint32_t）
                 ret.v.i = (long long)uv;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_BOOL_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool bv = BOOL_POP();
+                stackframe_bind_bool(frame, name, bv);
+                Value ret;
+                ret.type = VAL_BOOL;
+                ret.v.i = bv ? 1 : 0;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_CHAR_VAR: {
+                const char* name = bf->syms[in.a];
+                char cv = CHAR_POP();
+                stackframe_bind_char(frame, name, cv);
+                Value ret;
+                ret.type = VAL_CHAR;
+                ret.v.i = (long long)cv;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_BYTE_VAR: {
+                const char* name = bf->syms[in.a];
+                unsigned char bv = BYTE_POP();
+                stackframe_bind_byte(frame, name, bv);
+                Value ret;
+                ret.type = VAL_BYTE;
+                ret.v.i = (long long)bv;
                 stack[sp++] = ret;
                 break;
             }
@@ -2619,6 +2711,180 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 unsigned int val = ((unsigned int*)tarr->items)[iidx];  // 直接读取 uint 值，零提取零转换！
                 UINT_PUSH(val);  // 压入 uint 栈，零包装！
+                break;
+            }
+            case OPC_BOOL_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_BOOL;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(_Bool), VAL_TYPED_ARRAY);
+                    _Bool* bitems = (_Bool*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        bitems[k] = BOOL_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_BOOL;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(_Bool), VAL_TYPED_ARRAY);
+                    _Bool* bitems = (_Bool*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        bitems[k] = (v.type == VAL_BOOL) ? (v.v.i ? 1 : 0) : (lumyr_cast_bool(v).v.i ? 1 : 0);
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_BOOL_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int bidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_BOOL_ARRAY_GET 需要 bool 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_BOOL) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 bool，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(bidx < 0 || bidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", bidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                _Bool val = ((_Bool*)tarr->items)[bidx];
+                BOOL_PUSH(val);
+                break;
+            }
+            case OPC_CHAR_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_CHAR;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(char), VAL_TYPED_ARRAY);
+                    char* citems = (char*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        citems[k] = CHAR_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_CHAR;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(char), VAL_TYPED_ARRAY);
+                    char* citems = (char*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        citems[k] = (v.type == VAL_CHAR) ? (char)v.v.i : (char)lumyr_cast_char(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_CHAR_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int cidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_CHAR_ARRAY_GET 需要 char 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_CHAR) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 char，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(cidx < 0 || cidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", cidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                char val = ((char*)tarr->items)[cidx];
+                CHAR_PUSH(val);
+                break;
+            }
+            case OPC_BYTE_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_BYTE;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(unsigned char), VAL_TYPED_ARRAY);
+                    unsigned char* byitems = (unsigned char*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        byitems[k] = BYTE_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_BYTE;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(unsigned char), VAL_TYPED_ARRAY);
+                    unsigned char* byitems = (unsigned char*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        byitems[k] = (v.type == VAL_BYTE) ? (unsigned char)v.v.i : (unsigned char)lumyr_cast_byte(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_BYTE_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int byidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_BYTE_ARRAY_GET 需要 byte 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_BYTE) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 byte，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(byidx < 0 || byidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", byidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                unsigned char val = ((unsigned char*)tarr->items)[byidx];
+                BYTE_PUSH(val);
                 break;
             }
             case OPC_INDEX_GET: {
