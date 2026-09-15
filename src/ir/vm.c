@@ -2437,39 +2437,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     Value iface_val = stack[sp - argc + 1];
                     const char* iface_name = (iface_val.type == VAL_STRING) ? lumyr_str_cstr(&iface_val) : "";
                     _Bool impl = 0;
-                    /* class 实例（VAL_STRUCT_PTR）：通过 lumyr_obj_implements_interface 判断 */
+                    /* class 实例：通过 lumyr_obj_implements_interface 判断 */
                     if(obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) {
                         impl = lumyr_obj_implements_interface(obj, iface_name);
-                    }
-                    /* map（type/class 类型）：通过 type_lookup 和 TypeDef 的 interfaces 字段判断 */
-                    else if(obj.type == VAL_MAP) {
-                        const char* type_name = NULL;
-                        if(lumyr_map_has(obj, lumyr_make_string("__classname__"))) {
-                            Value cn = lumyr_map_get(obj, lumyr_make_string("__classname__"));
-                            if(cn.type == VAL_STRING) type_name = lumyr_str_cstr(&cn);
-                        }
-                        if(!type_name && lumyr_map_has(obj, lumyr_make_string("__mapname__"))) {
-                            Value mn = lumyr_map_get(obj, lumyr_make_string("__mapname__"));
-                            if(mn.type == VAL_STRING) {
-                                const char* mn_str = lumyr_str_cstr(&mn);
-                                if(strncmp(mn_str, "class:", 6) == 0) {
-                                    type_name = mn_str + 6;
-                                } else {
-                                    type_name = mn_str;
-                                }
-                            }
-                        }
-                        if(type_name) {
-                            TypeDef* td = type_lookup(type_name);
-                            if(td && td->interfaces) {
-                                for(int ii = 0; ii < td->ninterfaces; ii++) {
-                                    if(td->interfaces[ii] && strcmp(td->interfaces[ii], iface_name) == 0) {
-                                        impl = 1;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
                     }
                     if(impl) {
                         sp -= argc;
