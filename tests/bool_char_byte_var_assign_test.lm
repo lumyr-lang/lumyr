@@ -1,0 +1,67 @@
+// 测试：bool、char、byte 类型变量赋值上下文感知
+print("=== bool、char、byte 变量赋值上下文感知测试 ===\n");
+
+// 测试 1：bool 变量声明和赋值上下文感知
+a = <bool>true;
+print("a = \n");
+print(a);
+print(" (期望 true)\n");
+
+b = a;
+print("b = \n");
+print(b);
+print(" (期望 true)\n");
+
+c = <bool>false;
+print("c = \n");
+print(c);
+print(" (期望 false)\n");
+
+d = c;
+print("d = \n");
+print(d);
+print(" (期望 false)\n");
+
+// 测试 2：char 变量声明和赋值上下文感知
+e = <char>'a';
+print("e = \n");
+print(e);
+print(" (期望 a)\n");
+
+f = e;
+print("f = \n");
+print(f);
+print(" (期望 a)\n");
+
+g = <char>'z';
+print("g = \n");
+print(g);
+print(" (期望 z)\n");
+
+h = g;
+print("h = \n");
+print(h);
+print(" (期望 z)\n");
+
+// 测试 3：byte 变量声明和赋值上下文感知
+i = <byte>10;
+print("i = \n");
+print(i);
+print(" (期望 10)\n");
+
+j = i;
+print("j = \n");
+print(j);
+print(" (期望 10)\n");
+
+k = <byte>255;
+print("k = \n");
+print(k);
+print(" (期望 255)\n");
+
+l = k;
+print("l = \n");
+print(l);
+print(" (期望 255)\n");
+
+print("\n=== 测试完成 ===\n");

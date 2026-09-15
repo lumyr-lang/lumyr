@@ -1303,6 +1303,27 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 uint 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
+                }
+                /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_BOOL) {
+                    emit(c, OPC_LOAD_BOOL_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_BOOL;
+                }
+                /* 检查右侧变量是否标记为 char 类型（CAST_CHAR） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_CHAR) {
+                    emit(c, OPC_LOAD_CHAR_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_CHAR_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_CHAR;
+                }
+                /* 检查右侧变量是否标记为 byte 类型（CAST_BYTE） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_BYTE) {
+                    emit(c, OPC_LOAD_BYTE_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_BYTE_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_BYTE;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
