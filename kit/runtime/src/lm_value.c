@@ -305,7 +305,7 @@ Value lumyr_index_get(Value c, Value idx) {
     if(c.type == VAL_STRUCT_PTR || c.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            if(lumyr_is_class_instance(c)) {
+            if(c.type == VAL_CLASS_PTR) {
                 return lumyr_class_get_field(c, idxcs);
             } else {
                 return lumyr_struct_get_field(c, idxcs);
