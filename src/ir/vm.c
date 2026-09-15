@@ -235,6 +235,16 @@ static void int8_stack_ensure(int need) { if(vm_int8_sp + need <= vm_int8_cap) r
 #define INT8_PUSH(val) do { int8_stack_ensure(1); vm_int8_stack[vm_int8_sp++] = (val); } while(0)
 #define INT8_POP() (vm_int8_stack[--vm_int8_sp])
 
+/* ========== int16 栈 ========== */
+static _Thread_local int16_t* vm_int16_stack = NULL;
+static _Thread_local int vm_int16_sp = 0;
+static _Thread_local int vm_int16_cap = 0;
+static void int16_stack_init(void) { if(vm_int16_stack) return; vm_int16_cap = 64; vm_int16_stack = (int16_t*)malloc(64 * sizeof(int16_t)); if(!vm_int16_stack) { LOG_ERROR("vm: int16 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int16_sp = 0; }
+static void int16_stack_destroy(void) { if(vm_int16_stack) { free(vm_int16_stack); vm_int16_stack = NULL; } vm_int16_sp = 0; vm_int16_cap = 0; }
+static void int16_stack_ensure(int need) { if(vm_int16_sp + need <= vm_int16_cap) return; int nc = vm_int16_cap > 0 ? vm_int16_cap : 64; while(nc < vm_int16_sp + need) nc *= 2; int16_t* ns = (int16_t*)realloc(vm_int16_stack, nc * sizeof(int16_t)); if(!ns) { LOG_ERROR("vm: int16 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int16_stack = ns; vm_int16_cap = nc; }
+#define INT16_PUSH(val) do { int16_stack_ensure(1); vm_int16_stack[vm_int16_sp++] = (val); } while(0)
+#define INT16_POP() (vm_int16_stack[--vm_int16_sp])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -832,12 +842,16 @@ Value vm_run_main(BytecodeFunc* main_fn)
     float_stack_init();
     /* 初始化 uint 栈（方案 A：多类型栈，零检查零转换） */
     uint_stack_init();
-    /* 初始化 bool、char、byte 栈 */
+    /* 初始化 bool、char、byte、int8、int16 栈 */
     bool_stack_init();
     char_stack_init();
     byte_stack_init();
+    int8_stack_init();
+    int16_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
-    /* 销毁 bool、char、byte 栈 */
+    /* 销毁 bool、char、byte、int8、int16 栈 */
+    int16_stack_destroy();
+    int8_stack_destroy();
     byte_stack_destroy();
     char_stack_destroy();
     bool_stack_destroy();
@@ -2159,6 +2173,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT8_PUSH(i8v);
                 break;
             }
+            case OPC_LOAD_INT16_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                int16_t i16v = stackframe_get_int16(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                INT16_PUSH(i16v);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2261,6 +2283,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = VAL_INT8;
                 ret.v.i = (long long)i8v;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_INT16_VAR: {
+                const char* name = bf->syms[in.a];
+                int16_t i16v = INT16_POP();
+                stackframe_bind_int16(frame, name, i16v);
+                Value ret;
+                ret.type = VAL_INT16;
+                ret.v.i = (long long)i16v;
                 stack[sp++] = ret;
                 break;
             }
@@ -2973,6 +3005,64 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT8_PUSH(val);
                 break;
             }
+            case OPC_INT16_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT16;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int16_t), VAL_TYPED_ARRAY);
+                    int16_t* i16items = (int16_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        i16items[k] = INT16_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT16;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int16_t), VAL_TYPED_ARRAY);
+                    int16_t* i16items = (int16_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        i16items[k] = (v.type == VAL_INT16) ? (int16_t)v.v.i : (int16_t)lumyr_cast_int(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_INT16_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int i16idx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_INT16_ARRAY_GET 需要 int16 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_INT16) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 int16，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(i16idx < 0 || i16idx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", i16idx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                int16_t val = ((int16_t*)tarr->items)[i16idx];
+                INT16_PUSH(val);
+                break;
+            }
             case OPC_INDEX_GET: {
                 Value idx = stack[--sp];
                 Value c = stack[--sp];
@@ -3288,6 +3378,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 从 int8 栈弹出并打印（零开销，用于声明为 int8 的变量） */
                 int8_t i8v = INT8_POP();
                 printf("%d\n", (int)i8v);
+                break;
+            }
+            case OPC_PRINT_INT16: {
+                /* 从 int16 栈弹出并打印（零开销，用于声明为 int16 的变量） */
+                int16_t i16v = INT16_POP();
+                printf("%d\n", (int)i16v);
                 break;
             }
             case OPC_TO_BOOL:
