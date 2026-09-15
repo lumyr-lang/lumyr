@@ -31,6 +31,7 @@
 #define VAR_TYPE_BOOL_ARRAY 1004
 #define VAR_TYPE_CHAR_ARRAY 1005
 #define VAR_TYPE_BYTE_ARRAY 1006
+#define VAR_TYPE_INT8_ARRAY 1007
 
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
@@ -778,6 +779,46 @@ static void compile_byte_array_elems(Ctx* c, AstNode* e, int* n) {
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
     emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
+    (*n)++;
+}
+
+// 检测是否是 int8 类型变量
+static int is_int8_var(Ctx* c, AstNode* node) {
+    if(node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_INT8);
+}
+
+// 检测是否全部是 int8 类型变量或字面量
+static int all_int8_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_int8_vars(c, e->u.seq.first) && all_int8_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INT) return 1;
+    return is_int8_var(c, e);
+}
+
+// 编译 int8 泛型数组元素：全部压入 int8 栈
+static void compile_int8_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_int8_array_elems(c, e->u.seq.first, n);
+        compile_int8_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_INT8_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
     (*n)++;
 }
 
