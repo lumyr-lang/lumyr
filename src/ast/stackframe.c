@@ -467,8 +467,12 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     Value v = p->vals[i];
                     _Bool bv = 0;
                     switch(v.type) {
-                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                        case VAL_INT: case VAL_BYTE:
                             bv = v.v.i ? 1 : 0; break;
+                        case VAL_CHAR:
+                            bv = v.v.c ? 1 : 0; break;
+                        case VAL_BOOL:
+                            bv = v.v.b ? 1 : 0; break;
                         case VAL_DOUBLE:
                             bv = v.v.d ? 1 : 0; break;
                         default:
@@ -481,8 +485,12 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     Value v = p->vals[i];
                     char cv = 0;
                     switch(v.type) {
-                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                        case VAL_INT: case VAL_BYTE:
                             cv = (char)v.v.i; break;
+                        case VAL_CHAR:
+                            cv = v.v.c; break;
+                        case VAL_BOOL:
+                            cv = v.v.b ? 1 : 0; break;
                         case VAL_DOUBLE:
                             cv = (char)v.v.d; break;
                         default:
@@ -495,8 +503,12 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     Value v = p->vals[i];
                     unsigned char bv = 0;
                     switch(v.type) {
-                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                        case VAL_INT: case VAL_BYTE:
                             bv = (unsigned char)v.v.i; break;
+                        case VAL_CHAR:
+                            bv = (unsigned char)v.v.c; break;
+                        case VAL_BOOL:
+                            bv = v.v.b ? 1 : 0; break;
                         case VAL_DOUBLE:
                             bv = (unsigned char)v.v.d; break;
                         default:
