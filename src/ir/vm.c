@@ -2098,7 +2098,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                             ClassInstance* inst = (ClassInstance*)c.v.struct_ptr;
                             ClassVTable* vt = inst->vtable;
                             if(vt) {
-                                FuncEntry* method = NULL;
+                                RuntimeFunc* method = NULL;
                                 /* 先在当前类的方法表中查找 */
                                 for(int mi = 0; mi < vt->nmethods; mi++) {
                                     if(vt->method_names && strcmp(vt->method_names[mi], field_name) == 0) {
@@ -2120,16 +2120,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                     }
                                 }
                                 if(method) {
-                                    /* 把 FuncEntry* 包装成 RuntimeFunc*，再包装成 Value */
-                                    RuntimeFunc* rf = (RuntimeFunc*)malloc(sizeof(RuntimeFunc));
-                                    memset(rf, 0, sizeof(RuntimeFunc));
-                                    rf->entry = method;
-                                    rf->param_count = 0;
-                                    rf->has_variadic = 0;
-                                    rf->captures = NULL;
-                                    rf->capture_count = 0;
+                                    /* vt->methods[i] 已经是 RuntimeFunc* 了，直接包装成 Value */
                                     result.type = VAL_FUNC;
-                                    result.v.func.func_obj = rf;
+                                    result.v.func.func_obj = method;
                                     result.v.func.ffi_func = NULL;
                                     result.v.func.is_ffi = 0;
                                 } else {

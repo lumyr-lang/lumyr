@@ -600,7 +600,7 @@ closed_stmt
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_struct_method_n; mi++) {
               AstNode* mnode = g_struct_methods[mi];
-              method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
           }
           g_struct_method_clear();
           struct_prop_clear();
@@ -643,7 +643,7 @@ closed_stmt
                   }
                   g_current_class_name = saved_class_name;
               } else {
-                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -690,7 +690,7 @@ closed_stmt
                   }
                   g_current_class_name = saved_class_name;  // 恢复
               } else {
-                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -716,7 +716,7 @@ closed_stmt
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
-                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -746,7 +746,7 @@ closed_stmt
               AstNode* mnode = g_class_methods[mi];
               /* 静态方法已经在语法分析阶段编译并注册了，这里跳过 */
               if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
-                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -1035,7 +1035,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.ret_type_name = strdup(castkind_to_name($2));
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1049,7 +1053,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.ret_type_name = NULL;
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1062,7 +1070,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($2, $4, $6);
           $$->u.func_def.annotations = NULL;
           annotate_self_if_in_struct($$);
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1076,7 +1088,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.is_const = 1;
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1090,7 +1106,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.annotations = NULL;
           $$->u.func_def.is_generator = 1;
           annotate_self_if_in_struct($$);
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1104,7 +1124,11 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.annotations = NULL;
           annotate_self_if_in_struct($$);
           $$->u.func_def.generic_params = $2;
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
@@ -1492,7 +1516,11 @@ primary
           char nm[64];
           snprintf(nm, sizeof nm, "_lambda_%d", g_lambda_seq++);
           $$ = L(ast_func_def(nm, $3, $5));
-          RuntimeFunc* rf = compile_func_from_ast($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
           Value func_val = {0};
           func_val.type = VAL_FUNC;
           func_val.v.func.func_obj = rf;
