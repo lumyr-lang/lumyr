@@ -192,6 +192,7 @@ struct AstNode {
 
         struct {
             AstNode* elems;  // AST_SEQ 链：数组元素
+            int elem_type;   // 数组元素类型（ValueType，-1 表示通用类型）
         } array_lit;
         struct {
             AstNode* entries;  // AST_SEQ 链：AST_MAP_ENTRY

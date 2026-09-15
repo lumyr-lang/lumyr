@@ -2038,9 +2038,20 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_LOGIC_NOT:   { Value v = stack[--sp]; stack[sp++] = lumyr_logic_not(v); break; }
             case OPC_ARRAY_LIT: {
                 int n = in.b;
-                Value arr = val_array(n);
-                for(int k = 0; k < n; k++)
-                    arr.v.array->items[k] = stack[sp - n + k];
+                int elem_type = in.a;
+                Value arr;
+                if(elem_type >= 0) {
+                    /* 类型化数组：创建指定类型的数组 */
+                    arr = lumyr_typed_array_new(elem_type, n > 0 ? n : 4);
+                    for(int k = 0; k < n; k++) {
+                        lumyr_typed_array_add(&arr, stack[sp - n + k]);
+                    }
+                } else {
+                    /* 通用类型数组 */
+                    arr = val_array(n);
+                    for(int k = 0; k < n; k++)
+                        arr.v.array->items[k] = stack[sp - n + k];
+                }
                 sp = sp - n + 1;
                 sp--; stack[sp++] = arr;   /* 安全原地写：先 pop 使槽位对 GC 不可见，再 push */
                 break;

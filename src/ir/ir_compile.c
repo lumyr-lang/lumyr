@@ -1191,12 +1191,13 @@ static void c_expr(Ctx* c, AstNode* node)
             break;
         }
         case AST_ARRAY_LIT: {
+            int elem_type = node->u.array_lit.elem_type;
             if(!has_spread_node(node->u.array_lit.elems)) {
                 int n = 0;
                 c_args(c, node->u.array_lit.elems, &n);
-                emit(c, OPC_ARRAY_LIT, 0, n);
+                emit(c, OPC_ARRAY_LIT, elem_type, n);
             } else {
-                emit(c, OPC_ARRAY_LIT, 0, 0);
+                emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 compile_array_elems(c, node->u.array_lit.elems);
             }
             break;
@@ -1721,14 +1722,14 @@ static void c_stmt(Ctx* c, AstNode* node)
         case AST_EXTERN_FUNC: {
             /* FFI 外部函数声明：编译阶段创建 FFIFunc 对象，注册到全局符号表，
                同时添加到编译通道的 extern 声明列表中 */
-            FFIType ret_type = lumyr_ffi_type_from_name(node->u.extern_func.ret_type_name);
+            ValueType ret_type = lumyr_ffi_type_from_name(node->u.extern_func.ret_type_name);
             int param_count = 0;
             AstNode* p = node->u.extern_func.params;
             while(p) { param_count++; p = p->u.param.next; }
-            FFIType* param_types = NULL;
+            ValueType* param_types = NULL;
             int* cgen_param_types = NULL;
             if(param_count > 0) {
-                param_types = (FFIType*)malloc((size_t)param_count * sizeof(FFIType));
+                param_types = (ValueType*)malloc((size_t)param_count * sizeof(ValueType));
                 cgen_param_types = (int*)malloc((size_t)param_count * sizeof(int));
                 p = node->u.extern_func.params;
                 for(int i = 0; i < param_count && p; i++) {

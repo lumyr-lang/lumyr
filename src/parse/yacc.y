@@ -1420,7 +1420,7 @@ primary
               $$ = L(ast_call($1, $3));
           }
       }  /* 函数调用 foo(a,b,c) 或宏调用 */
-    | ARRAY_OPEN arg_list RBRACKET { $$ = ast_array_lit($2); }  /* 数组字面量 [1,2,3] / []（lexer 按上下文消歧） */
+    | ARRAY_OPEN arg_list RBRACKET { $$ = ast_array_lit($2, -1); }  /* 数组字面量 [1,2,3] / []（lexer 按上下文消歧） */
     | MAP_OPEN map_items RBRACE   { $$ = ast_map_lit($2); }    /* 字典字面量 {"k": v, name: 1} / {}（lexer 上下文消歧：表达式位置） */
     | LPAREN expr RPAREN      { $$ = $2; }
     /* 强转 (int)x 接 postfix_expr：C 语义，(int)a[0] = (int)(a[0])（cast 作用于整个后缀表达式） */
@@ -1455,37 +1455,40 @@ primary
     /* 泛型容器字面量：(byte)[1,2,3] 逐元素强转 / (byte){"a":1} 逐值强转
        （lexer 上下文消歧后 cast 后接 LBRACKET/LBRACE，按容器字面量解释） */
     | LPAREN TOK_INT RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_INT, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_INT, ast_array_lit($5, -1)); }
     | LPAREN TOK_INT RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_INT, ast_map_lit($5)); }
     | LPAREN TOK_DOUBLE RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_DOUBLE, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_DOUBLE, ast_array_lit($5, -1)); }
     | LPAREN TOK_DOUBLE RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_DOUBLE, ast_map_lit($5)); }
     | LPAREN TOK_STRING RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_STRING, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_STRING, ast_array_lit($5, -1)); }
     | LPAREN TOK_STRING RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_STRING, ast_map_lit($5)); }
     | LPAREN TOK_BOOL RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_BOOL, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_BOOL, ast_array_lit($5, -1)); }
     | LPAREN TOK_BOOL RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_BOOL, ast_map_lit($5)); }
     | LPAREN TOK_ASCII RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_ASCII, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_ASCII, ast_array_lit($5, -1)); }
     | LPAREN TOK_ASCII RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_ASCII, ast_map_lit($5)); }
     | LPAREN TOK_CHAR RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_CHAR, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_CHAR, ast_array_lit($5, -1)); }
     | LPAREN TOK_CHAR RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_CHAR, ast_map_lit($5)); }
     | LPAREN TOK_BYTE RPAREN LBRACKET arg_list RBRACKET
-        { $$ = new_cast_node(CAST_BYTE, ast_array_lit($5)); }
+        { $$ = new_cast_node(CAST_BYTE, ast_array_lit($5, -1)); }
     | LPAREN TOK_BYTE RPAREN LBRACE map_items RBRACE
         { $$ = new_cast_node(CAST_BYTE, ast_map_lit($5)); }
     /* 类型标注：<T>value 给变量打类型标记（等价 C 的类型声明 int a = 8）
        <string,V>{k:v} map 值强转（键固定 string） */
     | TOK_TYPE_ANNOT unary_expr
-        { $$ = ast_type_annotation($1, $2); }
+        {
+            fprintf(stderr, "[DEBUG] TOK_TYPE_ANNOT unary_expr: cast_type=%d, $2->type=%d\n", $1, $2 ? $2->type : -1);
+            $$ = ast_type_annotation($1, $2);
+        }
     | LT ID GT unary_expr {
           /* 接口类型标注：<Printable>expr → 接口引用类型 */
           if(interface_lookup($2) != NULL) {
@@ -1501,7 +1504,7 @@ primary
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
           /* 泛型自定义类型：<Person>[e1,e2] → [Person(e1), Person(e2)]（形状构造） */
           if(type_lookup($2) != NULL) {
-              $$ = L(ast_array_lit(wrap_type_list($2, $5)));
+              $$ = L(ast_array_lit(wrap_type_list($2, $5), -1));
               free($2);
           } else {
               yyerror("未定义类型");

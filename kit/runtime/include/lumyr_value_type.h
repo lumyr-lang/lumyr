@@ -46,7 +46,7 @@ typedef enum {
     CAST_LONG,       // long：平台相关，lm 统一 64 位
     CAST_LONGLONG,   // long long：64 位（= int 默认）
     CAST_FLOAT,      // float：32 位单精度，运行时 double 存储，强转时截断精度
-    // 补充 C 标准类型（与 FFI FFIType 对齐，运行时统一 long long/double 存储）
+    // 补充 C 标准类型（与 FFI 类型对齐，运行时统一 long long/double 存储）
     CAST_ULONG,      // unsigned long
     CAST_UCHAR,      // unsigned char（= byte，但语义明确）
     CAST_SHORT,      // short（16 位有符号）
@@ -58,8 +58,9 @@ typedef enum {
     CAST_PTR,        // 指针/句柄（用 int 存储指针值）
 } CastKind;
 
-// 值类型：语言支持的数据类型
+// 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
 typedef enum {
+    // 运行时值类型（0-99）
     VAL_NONE = 0,
     VAL_INT,
     VAL_DOUBLE,
@@ -73,7 +74,27 @@ typedef enum {
     VAL_BYTE,      // 8 位无符号整数（0-255，C 风格截断；算术/比较按数值类型处理）
     VAL_GENERATOR,  // 生成器对象：保存冻结的执行状态，next() 恢复执行
     VAL_STRUCT_PTR,  // C结构体指针：零拷贝传递，直接存储void*，配合__structname__标识类型
-    VAL_CLASS_PTR    // class实例指针：零拷贝传递，直接存储void*，配合vtable标识类型，与struct区分
+    VAL_CLASS_PTR,    // class实例指针：零拷贝传递，直接存储void*，配合vtable标识类型，与struct区分
+
+    // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
+    VAL_VOID = 100,
+    VAL_INT8,         // int8_t / signed char
+    VAL_INT16,        // int16_t / short
+    VAL_INT32,        // int32_t / int
+    VAL_INT64,        // int64_t / long long
+    VAL_LONG,         // long
+    VAL_UINT8,        // uint8_t / unsigned char / byte
+    VAL_UINT16,       // uint16_t / unsigned short
+    VAL_UINT32,       // uint32_t / unsigned int / uint
+    VAL_UINT64,       // uint64_t / unsigned long long
+    VAL_ULONG,        // unsigned long
+    VAL_UCHAR,        // unsigned char
+    VAL_SIZE_T,       // size_t
+    VAL_SSIZE_T,      // ssize_t / ptrdiff_t
+    VAL_FLOAT,        // float（单精度）
+    VAL_LONG_DOUBLE,  // long double（扩展精度）
+    VAL_PTR,          // void* / 任意指针 / 句柄
+    VAL_CALLBACK      // 回调函数（函数指针）
 } ValueType;
 
 // 数组运行时对象，VAL_ARRAY 使用（原地修改语义，cap 预分配容量）
@@ -82,10 +103,10 @@ typedef enum {
 // stack_alloc：0=堆分配（默认，有 GCObject 头），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过自身）
 // items_stack_alloc：0=items 堆分配（默认），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过 items 自身但仍递归标记 items[i]）
 // elem_type：数组元素类型（VAL_NONE 表示通用类型，使用 Value* items；其他类型使用对应的类型化数组，避免 Value 结构体转换开销）
-// typed_items union 包含所有 C 标准类型的数组，与 FFIType 枚举对齐
+// typed_items union 包含所有 C 标准类型的数组，与 ValueType 枚举对齐
 typedef struct {
-    ValueType elem_type;       // 元素类型（VAL_NONE=通用类型，VAL_INT=int类型，VAL_DOUBLE=double类型，VAL_STRING=string类型，...）
-    Value* items;              // 通用类型数组（elem_type == VAL_NONE 时有效，向后兼容）
+    int elem_type;             // 元素类型（ValueType 枚举，-1=通用类型，VAL_INT=int类型，VAL_DOUBLE=double类型，...）
+    Value* items;              // 通用类型数组（elem_type == -1 时有效，向后兼容）
     union {
         /* 整数类型（有符号） */
         int* ints;                 // int / int32_t

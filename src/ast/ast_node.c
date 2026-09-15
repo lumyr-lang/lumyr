@@ -606,9 +606,10 @@ AstNode* ast_index_assign(AstNode* arr, AstNode* idx, AstNode* value) {
     return n;
 }
 
-AstNode* ast_array_lit(AstNode* elems) {
+AstNode* ast_array_lit(AstNode* elems, int elem_type) {
     AstNode* n = ast_new(AST_ARRAY_LIT);
     n->u.array_lit.elems = elems;
+    n->u.array_lit.elem_type = elem_type;
     return n;
 }
 

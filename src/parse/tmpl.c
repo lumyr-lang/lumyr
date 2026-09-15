@@ -427,7 +427,7 @@ static AstNode* tp_primary(TpParser* tp)
                 }
             }
             tp_expect(tp, TT_RBRACKET, "缺少 ']'");
-            return ast_array_lit(elems);
+            return ast_array_lit(elems, -1);
         }
         case TT_LPAREN: {
             // 强转：(int) primary
