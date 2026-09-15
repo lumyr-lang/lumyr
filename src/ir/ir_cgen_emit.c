@@ -2273,22 +2273,6 @@ void emit_insns(BytecodeFunc* fn)
                     } else {
                         fprintf(out, "            runtime_error(\"未找到方法: %s\");\n", nm);
                     }
-                    fprintf(out, "        } else if(__self.type == VAL_MAP && lumyr_map_has(__self, lumyr_make_string(\"__classname__\"))) {\n");
-                    fprintf(out, "            /* 旧的 map 实例：通过 if-else 链 + strcmp 实现（向后兼容） */\n");
-                    fprintf(out, "            Value __cn = lumyr_map_get(__self, lumyr_make_string(\"__classname__\"));\n");
-                    fprintf(out, "            const char* __cn_str = (__cn.type == VAL_STRING) ? lumyr_str_cstr(&__cn) : NULL;\n");
-                    fprintf(out, "            if(__cn_str) {\n");
-                    /* 遍历所有的 class，生成 if-else 链（支持继承链查找） */
-                    int first_class = 1;
-                    ClassDispatchCtx dispatch_ctx = { out, nm, fixed, nbind, &first_class };
-                    type_foreach(emit_class_dispatch_cb, &dispatch_ctx);
-                    /* 如果没有匹配的 class，报错 */
-                    fprintf(out, "                else {\n");
-                    fprintf(out, "                    runtime_error(\"未找到方法: %s\");\n", nm);
-                    fprintf(out, "                }\n");
-                    fprintf(out, "            } else {\n");
-                    fprintf(out, "                runtime_error(\"self 不是 class 实例\");\n");
-                    fprintf(out, "            }\n");
                     fprintf(out, "        } else {\n");
                     fprintf(out, "            runtime_error(\"self 不是 class 实例\");\n");
                     fprintf(out, "        }\n");
