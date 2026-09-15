@@ -141,6 +141,57 @@ typedef struct {
     int cap;
 } CallbackArray;
 
+/* ==================== 函数式操作函数指针类型 ==================== */
+
+/* 映射函数：接受一个元素，返回一个元素（同类型） */
+typedef int (*IntMapFunc)(int);
+typedef int8_t (*Int8MapFunc)(int8_t);
+typedef int16_t (*Int16MapFunc)(int16_t);
+typedef int32_t (*Int32MapFunc)(int32_t);
+typedef int64_t (*Int64MapFunc)(int64_t);
+typedef long (*LongMapFunc)(long);
+typedef char (*CharMapFunc)(char);
+typedef uint8_t (*UInt8MapFunc)(uint8_t);
+typedef uint16_t (*UInt16MapFunc)(uint16_t);
+typedef uint32_t (*UInt32MapFunc)(uint32_t);
+typedef uint64_t (*UInt64MapFunc)(uint64_t);
+typedef unsigned long (*ULongMapFunc)(unsigned long);
+typedef unsigned char (*UCharMapFunc)(unsigned char);
+typedef size_t (*SizeTMapFunc)(size_t);
+typedef ssize_t (*SSizeTMapFunc)(ssize_t);
+typedef _Bool (*BoolMapFunc)(_Bool);
+typedef float (*FloatMapFunc)(float);
+typedef double (*DoubleMapFunc)(double);
+typedef char* (*StringMapFunc)(char*);
+typedef void* (*PtrMapFunc)(void*);
+
+/* 过滤函数：接受一个元素，返回布尔值（1=保留，0=过滤） */
+typedef int (*IntFilterFunc)(int);
+typedef int (*Int8FilterFunc)(int8_t);
+typedef int (*Int16FilterFunc)(int16_t);
+typedef int (*Int32FilterFunc)(int32_t);
+typedef int (*Int64FilterFunc)(int64_t);
+typedef int (*LongFilterFunc)(long);
+typedef int (*CharFilterFunc)(char);
+typedef int (*UInt8FilterFunc)(uint8_t);
+typedef int (*UInt16FilterFunc)(uint16_t);
+typedef int (*UInt32FilterFunc)(uint32_t);
+typedef int (*UInt64FilterFunc)(uint64_t);
+typedef int (*ULongFilterFunc)(unsigned long);
+typedef int (*UCharFilterFunc)(unsigned char);
+typedef int (*SizeTFilterFunc)(size_t);
+typedef int (*SSizeTFilterFunc)(ssize_t);
+typedef int (*BoolFilterFunc)(_Bool);
+typedef int (*FloatFilterFunc)(float);
+typedef int (*DoubleFilterFunc)(double);
+typedef int (*StringFilterFunc)(char*);
+typedef int (*PtrFilterFunc)(void*);
+
+/* 归约函数：接受累加器和当前元素，返回新的累加器 */
+typedef int (*IntReduceFunc)(int, int);
+typedef double (*DoubleReduceFunc)(double, double);
+typedef void* (*PtrReduceFunc)(void*, void*);
+
 /* 结构体数组（类型安全，存储 VAL_STRUCT_PTR 类型的指针） */
 typedef struct {
     void** items;      /* 结构体指针数组，每个元素都是 VAL_STRUCT_PTR 类型 */
@@ -312,5 +363,66 @@ void class_array_free(ClassArray* arr);
 void class_array_add(ClassArray* arr, void* val);
 void* class_array_get(ClassArray* arr, int idx);
 void class_array_set(ClassArray* arr, int idx, void* val);
+void class_array_insert(ClassArray* arr, int idx, void* val);
+void class_array_remove(ClassArray* arr, int idx);
+void class_array_clear(ClassArray* arr);
+int class_array_index_of(ClassArray* arr, void* val);
+int class_array_contains(ClassArray* arr, void* val);
+void* class_array_first(ClassArray* arr);
+void* class_array_last(ClassArray* arr);
+int class_array_len(ClassArray* arr);
+int class_array_cap(ClassArray* arr);
+void class_array_reverse(ClassArray* arr);
+
+/* ==================== 函数式操作函数声明（map、filter、reduce、flat） ==================== */
+
+/* IntArray */
+IntArray* int_array_map(IntArray* arr, IntMapFunc func);
+IntArray* int_array_filter(IntArray* arr, IntFilterFunc func);
+int int_array_reduce(IntArray* arr, IntReduceFunc func, int initial);
+
+/* DoubleArray */
+DoubleArray* double_array_map(DoubleArray* arr, DoubleMapFunc func);
+DoubleArray* double_array_filter(DoubleArray* arr, DoubleFilterFunc func);
+double double_array_reduce(DoubleArray* arr, DoubleReduceFunc func, double initial);
+
+/* StringArray */
+StringArray* string_array_map(StringArray* arr, StringMapFunc func);
+StringArray* string_array_filter(StringArray* arr, StringFilterFunc func);
+StringArray* string_array_flat(StringArray** arrays, int count);
+
+/* PtrArray */
+PtrArray* ptr_array_map(PtrArray* arr, PtrMapFunc func);
+PtrArray* ptr_array_filter(PtrArray* arr, PtrFilterFunc func);
+void* ptr_array_reduce(PtrArray* arr, PtrReduceFunc func, void* initial);
+PtrArray* ptr_array_flat(PtrArray** arrays, int count);
+
+/* StructArray */
+StructArray* struct_array_filter(StructArray* arr, PtrFilterFunc func);
+StructArray* struct_array_flat(StructArray** arrays, int count);
+
+/* ClassArray */
+ClassArray* class_array_filter(ClassArray* arr, PtrFilterFunc func);
+ClassArray* class_array_flat(ClassArray** arrays, int count);
+
+/* ==================== 通用数组操作宏（用于批量生成函数声明） ==================== */
+/*
+#define TYPED_ARRAY_DECLARE(prefix, type) \
+prefix##Array* prefix##_array_new(int cap); \
+void prefix##_array_free(prefix##Array* arr); \
+void prefix##_array_add(prefix##Array* arr, type val); \
+type prefix##_array_get(prefix##Array* arr, int idx); \
+void prefix##_array_set(prefix##Array* arr, int idx, type val); \
+void prefix##_array_insert(prefix##Array* arr, int idx, type val); \
+void prefix##_array_remove(prefix##Array* arr, int idx); \
+void prefix##_array_clear(prefix##Array* arr); \
+int prefix##_array_index_of(prefix##Array* arr, type val); \
+int prefix##_array_contains(prefix##Array* arr, type val); \
+type prefix##_array_first(prefix##Array* arr); \
+type prefix##_array_last(prefix##Array* arr); \
+int prefix##_array_len(prefix##Array* arr); \
+int prefix##_array_cap(prefix##Array* arr); \
+void prefix##_array_reverse(prefix##Array* arr);
+*/
 
 #endif /* LUMYR_TYPED_ARRAYS_H */

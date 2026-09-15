@@ -31,6 +31,77 @@
     if(!arr || idx < 0 || idx >= arr->len) return; \
     arr->items[idx] = val;
 
+/* 在指定位置插入元素 */
+#define TYPED_ARRAY_INSERT(arr, idx, val) \
+    if(!arr || idx < 0 || idx > arr->len) return; \
+    if(arr->len >= arr->cap) { \
+        arr->cap = (arr->cap > 0) ? arr->cap * 2 : 8; \
+        arr->items = (typeof(arr->items))realloc(arr->items, (size_t)arr->cap * sizeof(*arr->items)); \
+    } \
+    for(int i = arr->len; i > idx; i--) { \
+        arr->items[i] = arr->items[i - 1]; \
+    } \
+    arr->items[idx] = val; \
+    arr->len++;
+
+/* 删除指定位置的元素 */
+#define TYPED_ARRAY_REMOVE(arr, idx) \
+    if(!arr || idx < 0 || idx >= arr->len) return; \
+    for(int i = idx; i < arr->len - 1; i++) { \
+        arr->items[i] = arr->items[i + 1]; \
+    } \
+    arr->len--;
+
+/* 清空数组 */
+#define TYPED_ARRAY_CLEAR(arr) \
+    if(!arr) return; \
+    arr->len = 0;
+
+/* 查找元素下标 */
+#define TYPED_ARRAY_INDEX_OF(arr, val) \
+    if(!arr) return -1; \
+    for(int i = 0; i < arr->len; i++) { \
+        if(arr->items[i] == val) return i; \
+    } \
+    return -1;
+
+/* 判断是否包含元素 */
+#define TYPED_ARRAY_CONTAINS(arr, val) \
+    if(!arr) return 0; \
+    for(int i = 0; i < arr->len; i++) { \
+        if(arr->items[i] == val) return 1; \
+    } \
+    return 0;
+
+/* 获取首元素 */
+#define TYPED_ARRAY_FIRST(arr) \
+    if(!arr || arr->len == 0) return 0; \
+    return arr->items[0];
+
+/* 获取尾元素 */
+#define TYPED_ARRAY_LAST(arr) \
+    if(!arr || arr->len == 0) return 0; \
+    return arr->items[arr->len - 1];
+
+/* 获取长度 */
+#define TYPED_ARRAY_LEN(arr) \
+    if(!arr) return 0; \
+    return arr->len;
+
+/* 获取容量 */
+#define TYPED_ARRAY_CAP(arr) \
+    if(!arr) return 0; \
+    return arr->cap;
+
+/* 反转数组 */
+#define TYPED_ARRAY_REVERSE(arr) \
+    if(!arr || arr->len < 2) return; \
+    for(int i = 0; i < arr->len / 2; i++) { \
+        typeof(arr->items[0]) tmp = arr->items[i]; \
+        arr->items[i] = arr->items[arr->len - 1 - i]; \
+        arr->items[arr->len - 1 - i] = tmp; \
+    }
+
 /* ==================== 整数类型数组实现 ==================== */
 
 /* IntArray */
@@ -207,3 +278,493 @@ void class_array_free(ClassArray* arr) { TYPED_ARRAY_FREE(arr) }
 void class_array_add(ClassArray* arr, void* val) { TYPED_ARRAY_ADD(arr, val) }
 void* class_array_get(ClassArray* arr, int idx) { TYPED_ARRAY_GET(arr, idx) }
 void class_array_set(ClassArray* arr, int idx, void* val) { TYPED_ARRAY_SET(arr, idx, val) }
+
+
+/* ==================== 完整操作函数实现（增删改查等） ==================== */
+
+/* IntArray 完整操作实现 */
+void int_array_insert(IntArray* arr, int idx, int val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void int_array_remove(IntArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void int_array_clear(IntArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int int_array_index_of(IntArray* arr, int val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int int_array_contains(IntArray* arr, int val) { TYPED_ARRAY_CONTAINS(arr, val) }
+int int_array_first(IntArray* arr) { TYPED_ARRAY_FIRST(arr) }
+int int_array_last(IntArray* arr) { TYPED_ARRAY_LAST(arr) }
+int int_array_len(IntArray* arr) { TYPED_ARRAY_LEN(arr) }
+int int_array_cap(IntArray* arr) { TYPED_ARRAY_CAP(arr) }
+void int_array_reverse(IntArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* Int8Array 完整操作实现 */
+void int8_array_insert(Int8Array* arr, int idx, int8_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void int8_array_remove(Int8Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void int8_array_clear(Int8Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int int8_array_index_of(Int8Array* arr, int8_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int int8_array_contains(Int8Array* arr, int8_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+int8_t int8_array_first(Int8Array* arr) { TYPED_ARRAY_FIRST(arr) }
+int8_t int8_array_last(Int8Array* arr) { TYPED_ARRAY_LAST(arr) }
+int int8_array_len(Int8Array* arr) { TYPED_ARRAY_LEN(arr) }
+int int8_array_cap(Int8Array* arr) { TYPED_ARRAY_CAP(arr) }
+void int8_array_reverse(Int8Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* Int16Array 完整操作实现 */
+void int16_array_insert(Int16Array* arr, int idx, int16_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void int16_array_remove(Int16Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void int16_array_clear(Int16Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int int16_array_index_of(Int16Array* arr, int16_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int int16_array_contains(Int16Array* arr, int16_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+int16_t int16_array_first(Int16Array* arr) { TYPED_ARRAY_FIRST(arr) }
+int16_t int16_array_last(Int16Array* arr) { TYPED_ARRAY_LAST(arr) }
+int int16_array_len(Int16Array* arr) { TYPED_ARRAY_LEN(arr) }
+int int16_array_cap(Int16Array* arr) { TYPED_ARRAY_CAP(arr) }
+void int16_array_reverse(Int16Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* Int32Array 完整操作实现 */
+void int32_array_insert(Int32Array* arr, int idx, int32_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void int32_array_remove(Int32Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void int32_array_clear(Int32Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int int32_array_index_of(Int32Array* arr, int32_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int int32_array_contains(Int32Array* arr, int32_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+int32_t int32_array_first(Int32Array* arr) { TYPED_ARRAY_FIRST(arr) }
+int32_t int32_array_last(Int32Array* arr) { TYPED_ARRAY_LAST(arr) }
+int int32_array_len(Int32Array* arr) { TYPED_ARRAY_LEN(arr) }
+int int32_array_cap(Int32Array* arr) { TYPED_ARRAY_CAP(arr) }
+void int32_array_reverse(Int32Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* Int64Array 完整操作实现 */
+void int64_array_insert(Int64Array* arr, int idx, int64_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void int64_array_remove(Int64Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void int64_array_clear(Int64Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int int64_array_index_of(Int64Array* arr, int64_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int int64_array_contains(Int64Array* arr, int64_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+int64_t int64_array_first(Int64Array* arr) { TYPED_ARRAY_FIRST(arr) }
+int64_t int64_array_last(Int64Array* arr) { TYPED_ARRAY_LAST(arr) }
+int int64_array_len(Int64Array* arr) { TYPED_ARRAY_LEN(arr) }
+int int64_array_cap(Int64Array* arr) { TYPED_ARRAY_CAP(arr) }
+void int64_array_reverse(Int64Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* LongArray 完整操作实现 */
+void long_array_insert(LongArray* arr, int idx, long val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void long_array_remove(LongArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void long_array_clear(LongArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int long_array_index_of(LongArray* arr, long val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int long_array_contains(LongArray* arr, long val) { TYPED_ARRAY_CONTAINS(arr, val) }
+long long_array_first(LongArray* arr) { TYPED_ARRAY_FIRST(arr) }
+long long_array_last(LongArray* arr) { TYPED_ARRAY_LAST(arr) }
+int long_array_len(LongArray* arr) { TYPED_ARRAY_LEN(arr) }
+int long_array_cap(LongArray* arr) { TYPED_ARRAY_CAP(arr) }
+void long_array_reverse(LongArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* CharArray 完整操作实现 */
+void char_array_insert(CharArray* arr, int idx, char val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void char_array_remove(CharArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void char_array_clear(CharArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int char_array_index_of(CharArray* arr, char val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int char_array_contains(CharArray* arr, char val) { TYPED_ARRAY_CONTAINS(arr, val) }
+char char_array_first(CharArray* arr) { TYPED_ARRAY_FIRST(arr) }
+char char_array_last(CharArray* arr) { TYPED_ARRAY_LAST(arr) }
+int char_array_len(CharArray* arr) { TYPED_ARRAY_LEN(arr) }
+int char_array_cap(CharArray* arr) { TYPED_ARRAY_CAP(arr) }
+void char_array_reverse(CharArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* UInt8Array 完整操作实现 */
+void uint8_array_insert(UInt8Array* arr, int idx, uint8_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void uint8_array_remove(UInt8Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void uint8_array_clear(UInt8Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int uint8_array_index_of(UInt8Array* arr, uint8_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int uint8_array_contains(UInt8Array* arr, uint8_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+uint8_t uint8_array_first(UInt8Array* arr) { TYPED_ARRAY_FIRST(arr) }
+uint8_t uint8_array_last(UInt8Array* arr) { TYPED_ARRAY_LAST(arr) }
+int uint8_array_len(UInt8Array* arr) { TYPED_ARRAY_LEN(arr) }
+int uint8_array_cap(UInt8Array* arr) { TYPED_ARRAY_CAP(arr) }
+void uint8_array_reverse(UInt8Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* UInt16Array 完整操作实现 */
+void uint16_array_insert(UInt16Array* arr, int idx, uint16_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void uint16_array_remove(UInt16Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void uint16_array_clear(UInt16Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int uint16_array_index_of(UInt16Array* arr, uint16_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int uint16_array_contains(UInt16Array* arr, uint16_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+uint16_t uint16_array_first(UInt16Array* arr) { TYPED_ARRAY_FIRST(arr) }
+uint16_t uint16_array_last(UInt16Array* arr) { TYPED_ARRAY_LAST(arr) }
+int uint16_array_len(UInt16Array* arr) { TYPED_ARRAY_LEN(arr) }
+int uint16_array_cap(UInt16Array* arr) { TYPED_ARRAY_CAP(arr) }
+void uint16_array_reverse(UInt16Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* UInt32Array 完整操作实现 */
+void uint32_array_insert(UInt32Array* arr, int idx, uint32_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void uint32_array_remove(UInt32Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void uint32_array_clear(UInt32Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int uint32_array_index_of(UInt32Array* arr, uint32_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int uint32_array_contains(UInt32Array* arr, uint32_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+uint32_t uint32_array_first(UInt32Array* arr) { TYPED_ARRAY_FIRST(arr) }
+uint32_t uint32_array_last(UInt32Array* arr) { TYPED_ARRAY_LAST(arr) }
+int uint32_array_len(UInt32Array* arr) { TYPED_ARRAY_LEN(arr) }
+int uint32_array_cap(UInt32Array* arr) { TYPED_ARRAY_CAP(arr) }
+void uint32_array_reverse(UInt32Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* UInt64Array 完整操作实现 */
+void uint64_array_insert(UInt64Array* arr, int idx, uint64_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void uint64_array_remove(UInt64Array* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void uint64_array_clear(UInt64Array* arr) { TYPED_ARRAY_CLEAR(arr) }
+int uint64_array_index_of(UInt64Array* arr, uint64_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int uint64_array_contains(UInt64Array* arr, uint64_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+uint64_t uint64_array_first(UInt64Array* arr) { TYPED_ARRAY_FIRST(arr) }
+uint64_t uint64_array_last(UInt64Array* arr) { TYPED_ARRAY_LAST(arr) }
+int uint64_array_len(UInt64Array* arr) { TYPED_ARRAY_LEN(arr) }
+int uint64_array_cap(UInt64Array* arr) { TYPED_ARRAY_CAP(arr) }
+void uint64_array_reverse(UInt64Array* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* ULongArray 完整操作实现 */
+void ulong_array_insert(ULongArray* arr, int idx, unsigned long val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void ulong_array_remove(ULongArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void ulong_array_clear(ULongArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int ulong_array_index_of(ULongArray* arr, unsigned long val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int ulong_array_contains(ULongArray* arr, unsigned long val) { TYPED_ARRAY_CONTAINS(arr, val) }
+unsigned long ulong_array_first(ULongArray* arr) { TYPED_ARRAY_FIRST(arr) }
+unsigned long ulong_array_last(ULongArray* arr) { TYPED_ARRAY_LAST(arr) }
+int ulong_array_len(ULongArray* arr) { TYPED_ARRAY_LEN(arr) }
+int ulong_array_cap(ULongArray* arr) { TYPED_ARRAY_CAP(arr) }
+void ulong_array_reverse(ULongArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* UCharArray 完整操作实现 */
+void uchar_array_insert(UCharArray* arr, int idx, unsigned char val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void uchar_array_remove(UCharArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void uchar_array_clear(UCharArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int uchar_array_index_of(UCharArray* arr, unsigned char val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int uchar_array_contains(UCharArray* arr, unsigned char val) { TYPED_ARRAY_CONTAINS(arr, val) }
+unsigned char uchar_array_first(UCharArray* arr) { TYPED_ARRAY_FIRST(arr) }
+unsigned char uchar_array_last(UCharArray* arr) { TYPED_ARRAY_LAST(arr) }
+int uchar_array_len(UCharArray* arr) { TYPED_ARRAY_LEN(arr) }
+int uchar_array_cap(UCharArray* arr) { TYPED_ARRAY_CAP(arr) }
+void uchar_array_reverse(UCharArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* SizeTArray 完整操作实现 */
+void size_t_array_insert(SizeTArray* arr, int idx, size_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void size_t_array_remove(SizeTArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void size_t_array_clear(SizeTArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int size_t_array_index_of(SizeTArray* arr, size_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int size_t_array_contains(SizeTArray* arr, size_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+size_t size_t_array_first(SizeTArray* arr) { TYPED_ARRAY_FIRST(arr) }
+size_t size_t_array_last(SizeTArray* arr) { TYPED_ARRAY_LAST(arr) }
+int size_t_array_len(SizeTArray* arr) { TYPED_ARRAY_LEN(arr) }
+int size_t_array_cap(SizeTArray* arr) { TYPED_ARRAY_CAP(arr) }
+void size_t_array_reverse(SizeTArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* SSizeTArray 完整操作实现 */
+void ssize_t_array_insert(SSizeTArray* arr, int idx, ssize_t val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void ssize_t_array_remove(SSizeTArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void ssize_t_array_clear(SSizeTArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int ssize_t_array_index_of(SSizeTArray* arr, ssize_t val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int ssize_t_array_contains(SSizeTArray* arr, ssize_t val) { TYPED_ARRAY_CONTAINS(arr, val) }
+ssize_t ssize_t_array_first(SSizeTArray* arr) { TYPED_ARRAY_FIRST(arr) }
+ssize_t ssize_t_array_last(SSizeTArray* arr) { TYPED_ARRAY_LAST(arr) }
+int ssize_t_array_len(SSizeTArray* arr) { TYPED_ARRAY_LEN(arr) }
+int ssize_t_array_cap(SSizeTArray* arr) { TYPED_ARRAY_CAP(arr) }
+void ssize_t_array_reverse(SSizeTArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* BoolArray 完整操作实现 */
+void bool_array_insert(BoolArray* arr, int idx, _Bool val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void bool_array_remove(BoolArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void bool_array_clear(BoolArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int bool_array_index_of(BoolArray* arr, _Bool val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int bool_array_contains(BoolArray* arr, _Bool val) { TYPED_ARRAY_CONTAINS(arr, val) }
+_Bool bool_array_first(BoolArray* arr) { TYPED_ARRAY_FIRST(arr) }
+_Bool bool_array_last(BoolArray* arr) { TYPED_ARRAY_LAST(arr) }
+int bool_array_len(BoolArray* arr) { TYPED_ARRAY_LEN(arr) }
+int bool_array_cap(BoolArray* arr) { TYPED_ARRAY_CAP(arr) }
+void bool_array_reverse(BoolArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* FloatArray 完整操作实现 */
+void float_array_insert(FloatArray* arr, int idx, float val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void float_array_remove(FloatArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void float_array_clear(FloatArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int float_array_index_of(FloatArray* arr, float val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int float_array_contains(FloatArray* arr, float val) { TYPED_ARRAY_CONTAINS(arr, val) }
+float float_array_first(FloatArray* arr) { TYPED_ARRAY_FIRST(arr) }
+float float_array_last(FloatArray* arr) { TYPED_ARRAY_LAST(arr) }
+int float_array_len(FloatArray* arr) { TYPED_ARRAY_LEN(arr) }
+int float_array_cap(FloatArray* arr) { TYPED_ARRAY_CAP(arr) }
+void float_array_reverse(FloatArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* DoubleArray 完整操作实现 */
+void double_array_insert(DoubleArray* arr, int idx, double val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void double_array_remove(DoubleArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void double_array_clear(DoubleArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int double_array_index_of(DoubleArray* arr, double val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int double_array_contains(DoubleArray* arr, double val) { TYPED_ARRAY_CONTAINS(arr, val) }
+double double_array_first(DoubleArray* arr) { TYPED_ARRAY_FIRST(arr) }
+double double_array_last(DoubleArray* arr) { TYPED_ARRAY_LAST(arr) }
+int double_array_len(DoubleArray* arr) { TYPED_ARRAY_LEN(arr) }
+int double_array_cap(DoubleArray* arr) { TYPED_ARRAY_CAP(arr) }
+void double_array_reverse(DoubleArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* StringArray 完整操作实现 */
+void string_array_insert(StringArray* arr, int idx, char* val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void string_array_remove(StringArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void string_array_clear(StringArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int string_array_index_of(StringArray* arr, char* val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int string_array_contains(StringArray* arr, char* val) { TYPED_ARRAY_CONTAINS(arr, val) }
+char* string_array_first(StringArray* arr) { TYPED_ARRAY_FIRST(arr) }
+char* string_array_last(StringArray* arr) { TYPED_ARRAY_LAST(arr) }
+int string_array_len(StringArray* arr) { TYPED_ARRAY_LEN(arr) }
+int string_array_cap(StringArray* arr) { TYPED_ARRAY_CAP(arr) }
+void string_array_reverse(StringArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* PtrArray 完整操作实现 */
+void ptr_array_insert(PtrArray* arr, int idx, void* val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void ptr_array_remove(PtrArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void ptr_array_clear(PtrArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int ptr_array_index_of(PtrArray* arr, void* val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int ptr_array_contains(PtrArray* arr, void* val) { TYPED_ARRAY_CONTAINS(arr, val) }
+void* ptr_array_first(PtrArray* arr) { TYPED_ARRAY_FIRST(arr) }
+void* ptr_array_last(PtrArray* arr) { TYPED_ARRAY_LAST(arr) }
+int ptr_array_len(PtrArray* arr) { TYPED_ARRAY_LEN(arr) }
+int ptr_array_cap(PtrArray* arr) { TYPED_ARRAY_CAP(arr) }
+void ptr_array_reverse(PtrArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* StructArray 完整操作实现 */
+void struct_array_insert(StructArray* arr, int idx, void* val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void struct_array_remove(StructArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void struct_array_clear(StructArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int struct_array_index_of(StructArray* arr, void* val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int struct_array_contains(StructArray* arr, void* val) { TYPED_ARRAY_CONTAINS(arr, val) }
+void* struct_array_first(StructArray* arr) { TYPED_ARRAY_FIRST(arr) }
+void* struct_array_last(StructArray* arr) { TYPED_ARRAY_LAST(arr) }
+int struct_array_len(StructArray* arr) { TYPED_ARRAY_LEN(arr) }
+int struct_array_cap(StructArray* arr) { TYPED_ARRAY_CAP(arr) }
+void struct_array_reverse(StructArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* ClassArray 完整操作实现 */
+void class_array_insert(ClassArray* arr, int idx, void* val) { TYPED_ARRAY_INSERT(arr, idx, val) }
+void class_array_remove(ClassArray* arr, int idx) { TYPED_ARRAY_REMOVE(arr, idx) }
+void class_array_clear(ClassArray* arr) { TYPED_ARRAY_CLEAR(arr) }
+int class_array_index_of(ClassArray* arr, void* val) { TYPED_ARRAY_INDEX_OF(arr, val) }
+int class_array_contains(ClassArray* arr, void* val) { TYPED_ARRAY_CONTAINS(arr, val) }
+void* class_array_first(ClassArray* arr) { TYPED_ARRAY_FIRST(arr) }
+void* class_array_last(ClassArray* arr) { TYPED_ARRAY_LAST(arr) }
+int class_array_len(ClassArray* arr) { TYPED_ARRAY_LEN(arr) }
+int class_array_cap(ClassArray* arr) { TYPED_ARRAY_CAP(arr) }
+void class_array_reverse(ClassArray* arr) { TYPED_ARRAY_REVERSE(arr) }
+
+/* ==================== 函数式操作实现（map、filter、reduce、flat） ==================== */
+
+/* IntArray 函数式操作 */
+IntArray* int_array_map(IntArray* arr, IntMapFunc func) {
+    if(!arr || !func) return NULL;
+    IntArray* result = int_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        result->items[i] = func(arr->items[i]);
+    }
+    result->len = arr->len;
+    return result;
+}
+
+IntArray* int_array_filter(IntArray* arr, IntFilterFunc func) {
+    if(!arr || !func) return NULL;
+    IntArray* result = int_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+int int_array_reduce(IntArray* arr, IntReduceFunc func, int initial) {
+    if(!arr || !func) return initial;
+    int acc = initial;
+    for(int i = 0; i < arr->len; i++) {
+        acc = func(acc, arr->items[i]);
+    }
+    return acc;
+}
+
+/* DoubleArray 函数式操作 */
+DoubleArray* double_array_map(DoubleArray* arr, DoubleMapFunc func) {
+    if(!arr || !func) return NULL;
+    DoubleArray* result = double_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        result->items[i] = func(arr->items[i]);
+    }
+    result->len = arr->len;
+    return result;
+}
+
+DoubleArray* double_array_filter(DoubleArray* arr, DoubleFilterFunc func) {
+    if(!arr || !func) return NULL;
+    DoubleArray* result = double_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+double double_array_reduce(DoubleArray* arr, DoubleReduceFunc func, double initial) {
+    if(!arr || !func) return initial;
+    double acc = initial;
+    for(int i = 0; i < arr->len; i++) {
+        acc = func(acc, arr->items[i]);
+    }
+    return acc;
+}
+
+/* StringArray 函数式操作 */
+StringArray* string_array_map(StringArray* arr, StringMapFunc func) {
+    if(!arr || !func) return NULL;
+    StringArray* result = string_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        result->items[i] = func(arr->items[i]);
+    }
+    result->len = arr->len;
+    return result;
+}
+
+StringArray* string_array_filter(StringArray* arr, StringFilterFunc func) {
+    if(!arr || !func) return NULL;
+    StringArray* result = string_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+StringArray* string_array_flat(StringArray** arrays, int count) {
+    if(!arrays || count <= 0) return NULL;
+    int total_len = 0;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) total_len += arrays[i]->len;
+    }
+    StringArray* result = string_array_new(total_len);
+    if(!result) return NULL;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) {
+            for(int j = 0; j < arrays[i]->len; j++) {
+                result->items[result->len++] = arrays[i]->items[j];
+            }
+        }
+    }
+    return result;
+}
+
+/* PtrArray 函数式操作 */
+PtrArray* ptr_array_map(PtrArray* arr, PtrMapFunc func) {
+    if(!arr || !func) return NULL;
+    PtrArray* result = ptr_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        result->items[i] = func(arr->items[i]);
+    }
+    result->len = arr->len;
+    return result;
+}
+
+PtrArray* ptr_array_filter(PtrArray* arr, PtrFilterFunc func) {
+    if(!arr || !func) return NULL;
+    PtrArray* result = ptr_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+void* ptr_array_reduce(PtrArray* arr, PtrReduceFunc func, void* initial) {
+    if(!arr || !func) return initial;
+    void* acc = initial;
+    for(int i = 0; i < arr->len; i++) {
+        acc = func(acc, arr->items[i]);
+    }
+    return acc;
+}
+
+PtrArray* ptr_array_flat(PtrArray** arrays, int count) {
+    if(!arrays || count <= 0) return NULL;
+    int total_len = 0;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) total_len += arrays[i]->len;
+    }
+    PtrArray* result = ptr_array_new(total_len);
+    if(!result) return NULL;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) {
+            for(int j = 0; j < arrays[i]->len; j++) {
+                result->items[result->len++] = arrays[i]->items[j];
+            }
+        }
+    }
+    return result;
+}
+
+/* StructArray 函数式操作 */
+StructArray* struct_array_filter(StructArray* arr, PtrFilterFunc func) {
+    if(!arr || !func) return NULL;
+    StructArray* result = struct_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+StructArray* struct_array_flat(StructArray** arrays, int count) {
+    if(!arrays || count <= 0) return NULL;
+    int total_len = 0;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) total_len += arrays[i]->len;
+    }
+    StructArray* result = struct_array_new(total_len);
+    if(!result) return NULL;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) {
+            for(int j = 0; j < arrays[i]->len; j++) {
+                result->items[result->len++] = arrays[i]->items[j];
+            }
+        }
+    }
+    return result;
+}
+
+/* ClassArray 函数式操作 */
+ClassArray* class_array_filter(ClassArray* arr, PtrFilterFunc func) {
+    if(!arr || !func) return NULL;
+    ClassArray* result = class_array_new(arr->len);
+    if(!result) return NULL;
+    for(int i = 0; i < arr->len; i++) {
+        if(func(arr->items[i])) {
+            result->items[result->len++] = arr->items[i];
+        }
+    }
+    return result;
+}
+
+ClassArray* class_array_flat(ClassArray** arrays, int count) {
+    if(!arrays || count <= 0) return NULL;
+    int total_len = 0;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) total_len += arrays[i]->len;
+    }
+    ClassArray* result = class_array_new(total_len);
+    if(!result) return NULL;
+    for(int i = 0; i < count; i++) {
+        if(arrays[i]) {
+            for(int j = 0; j < arrays[i]->len; j++) {
+                result->items[result->len++] = arrays[i]->items[j];
+            }
+        }
+    }
+    return result;
+}
