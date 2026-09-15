@@ -3,6 +3,15 @@
 
 #include "lumyr_value_type.h"
 
+/* 前置声明 */
+struct RuntimeFunc;
+struct StackFrame;
+struct EvalCtx;
+
+/* 编译器提供的函数（实现在编译器中，运行时库调用） */
+struct RuntimeFunc* interp_set_current_rf(struct RuntimeFunc* rf);
+Value vm_func_entry(int arg_cnt, const Value* args, struct EvalCtx* ctx, struct StackFrame* frame);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,7 +45,7 @@ typedef struct {
 typedef struct ClassVTable {
     const char* class_name;       /* class 名 */
     int nmethods;                 /* 方法数量 */
-    FuncEntry** methods;          /* 方法指针数组 */
+    RuntimeFunc** methods;        /* 方法 RuntimeFunc 数组（VM 模式下使用） */
     const char** method_names;    /* 方法名数组（用于调试和查找） */
     int nfields;                  /* 字段数量 */
     int* field_offsets;           /* 字段偏移量数组（字节） */

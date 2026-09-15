@@ -588,6 +588,16 @@ void class_add_method(const char* class_name, const char* method_name, struct As
             // 方法重写：替换旧方法
             td->method_nodes[i] = method_node;
             td->method_funcs[i] = rf;
+            // 同时更新 vtable 中的方法
+            ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
+            if(vt) {
+                for(int vi = 0; vi < vt->nmethods; vi++) {
+                    if(strcmp(vt->method_names[vi], method_name) == 0) {
+                        vt->methods[vi] = rf;
+                        break;
+                    }
+                }
+            }
             return;
         }
     }
@@ -600,6 +610,23 @@ void class_add_method(const char* class_name, const char* method_name, struct As
     td->method_nodes[td->nmethods] = method_node;
     td->method_funcs[td->nmethods] = rf;
     td->nmethods = n;
+    // 同时添加到 vtable 中
+    ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
+    if(vt) {
+        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, before nmethods=%d\n",
+                class_name, method_name, vt->nmethods);
+        int vn = vt->nmethods + 1;
+        vt->method_names = (const char**)realloc(vt->method_names, (size_t)vn * sizeof(const char*));
+        vt->methods = (RuntimeFunc**)realloc(vt->methods, (size_t)vn * sizeof(RuntimeFunc*));
+        vt->method_names[vt->nmethods] = strdup(method_name);
+        vt->methods[vt->nmethods] = rf;
+        vt->nmethods = vn;
+        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, after nmethods=%d\n",
+                class_name, method_name, vt->nmethods);
+    } else {
+        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, vtable NOT FOUND!\n",
+                class_name, method_name);
+    }
 }
 
 // 查找 class 方法的 RuntimeFunc（支持继承链查找）

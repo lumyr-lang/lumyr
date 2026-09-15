@@ -671,8 +671,8 @@ Value lumyr_class_instance_new(const char* class_name)
     return v;
 }
 
-/* 从 vtable 中查找方法（返回 FuncEntry* 或 NULL） */
-static FuncEntry* class_vtable_find_method(ClassVTable* vt, const char* method_name)
+/* 从 vtable 中查找方法（返回 RuntimeFunc* 或 NULL） */
+static RuntimeFunc* class_vtable_find_method(ClassVTable* vt, const char* method_name)
 {
     if(!vt || !method_name) return NULL;
     /* 先在当前类的方法表中查找 */
@@ -697,6 +697,10 @@ Value lumyr_class_instance_get_field(Value obj, const char* field_name)
     ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
     ClassVTable* vt = inst->vtable;
     if(!vt) return val_none();
+    /* 特殊处理 __classname__ 只读属性 */
+    if(strcmp(field_name, "__classname__") == 0) {
+        return lumyr_make_string(vt->class_name ? vt->class_name : "");
+    }
     /* 查找字段偏移量 */
     for(int i = 0; i < vt->nfields; i++) {
         if(strcmp(vt->field_names[i], field_name) == 0) {
@@ -795,7 +799,10 @@ Value lumyr_class_instance_call_method(Value obj, const char* method_name, int a
                 for(int j = 0; j < argc; j++) {
                     call_args[j + 1] = args[j];
                 }
-                Value ret = vt->methods[i](argc + 1, call_args, ctx, frame);
+                /* 设置当前函数上下文，然后调用 vm_func_entry */
+                RuntimeFunc* prev_rf = interp_set_current_rf(vt->methods[i]);
+                Value ret = vm_func_entry(argc + 1, call_args, ctx, frame);
+                interp_set_current_rf(prev_rf);
                 free(call_args);
                 return ret;
             }
