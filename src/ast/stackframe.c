@@ -453,14 +453,56 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     Value v = p->vals[i];
                     unsigned int uv = 0;
                     switch(v.type) {
-                        case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
                             uv = (unsigned int)v.v.i; break;
-                        case 2:  // VAL_DOUBLE
+                        case VAL_DOUBLE:
                             uv = (unsigned int)v.v.d; break;
                         default:
                             uv = 0; break;
                     }
                     p->uint32_vals[i] = uv;
+                }
+                /* 当设置为 bool 类型时，同时更新 bool_vals */
+                if(type_tag == CAST_BOOL && p->bool_vals) {
+                    Value v = p->vals[i];
+                    _Bool bv = 0;
+                    switch(v.type) {
+                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                            bv = v.v.i ? 1 : 0; break;
+                        case VAL_DOUBLE:
+                            bv = v.v.d ? 1 : 0; break;
+                        default:
+                            bv = 0; break;
+                    }
+                    p->bool_vals[i] = bv;
+                }
+                /* 当设置为 char 类型时，同时更新 char_vals */
+                if(type_tag == CAST_CHAR && p->char_vals) {
+                    Value v = p->vals[i];
+                    char cv = 0;
+                    switch(v.type) {
+                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                            cv = (char)v.v.i; break;
+                        case VAL_DOUBLE:
+                            cv = (char)v.v.d; break;
+                        default:
+                            cv = 0; break;
+                    }
+                    p->char_vals[i] = cv;
+                }
+                /* 当设置为 byte 类型时，同时更新 byte_vals */
+                if(type_tag == CAST_BYTE && p->byte_vals) {
+                    Value v = p->vals[i];
+                    unsigned char bv = 0;
+                    switch(v.type) {
+                        case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+                            bv = (unsigned char)v.v.i; break;
+                        case VAL_DOUBLE:
+                            bv = (unsigned char)v.v.d; break;
+                        default:
+                            bv = 0; break;
+                    }
+                    p->byte_vals[i] = bv;
                 }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
