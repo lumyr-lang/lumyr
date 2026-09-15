@@ -954,6 +954,49 @@ static void compile_int64_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 uint8 类型
+static int is_uint8_var(Ctx* c, AstNode* node) {
+    if(node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_UINT8);
+}
+
+// 检测是否全部是 uint8 类型变量或数组元素访问
+static int all_uint8_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_uint8_vars(c, e->u.seq.first) && all_uint8_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 uint8 候选，运行时 OPC_UINT8_ARRAY_GET 会检查是否是 uint8 类型化数组 */
+        return 1;
+    }
+    return is_uint8_var(c, e);
+}
+
+// 编译 uint8 泛型数组元素：全部压入 uint8 栈
+static void compile_uint8_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_uint8_array_elems(c, e->u.seq.first, n);
+        compile_uint8_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_UINT8_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 递归检测 AST_SEQ 树中是否含 AST_SPREAD
 static int has_spread_node(AstNode* e) {
     if(!e) return 0;
@@ -2019,6 +2062,11 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_INT64_ARRAY_LIT(a=1) 从 int64 栈读取，实现零检查零转换 */
                     compile_int64_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int64 栈读取 */
+                } else if(elem_type == VAL_UINT8 && all_uint8_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 uint8 类型的变量：使用 OPC_LOAD_UINT8_VAR 压入 uint8 栈，
+                       OPC_UINT8_ARRAY_LIT(a=1) 从 uint8 栈读取，实现零检查零转换 */
+                    compile_uint8_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_UINT8_ARRAY_LIT, 1, n);  /* a=1: 从 uint8 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
                        OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_FLOAT_ARRAY_LIT(a=0)/OPC_UINT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
@@ -2045,6 +2093,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_INT32_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_INT64) {
                         emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_UINT8) {
+                        emit(c, OPC_UINT8_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
@@ -2072,6 +2122,8 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_INT32_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_INT64) {
                     emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_UINT8) {
+                    emit(c, OPC_UINT8_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }
@@ -2152,6 +2204,10 @@ static void c_expr(Ctx* c, AstNode* node)
                     } else if(tag == CAST_INT64) {
                         emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT64, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT8) {
+                        emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT8, 0, 0);
                         break;
                     }
                 }

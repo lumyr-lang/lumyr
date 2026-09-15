@@ -106,6 +106,13 @@ Value lumyr_make_int64(int64_t i64) {
     return v;
 }
 
+Value lumyr_make_uint8(uint8_t u8) {
+    Value v;
+    v.type = VAL_UINT8;
+    v.v.i = (long long)u8;
+    return v;
+}
+
 // 获取value的数值，int转double
 double value_as_number(Value x) {
     if(x.type == VAL_INT)
@@ -384,6 +391,8 @@ Value lumyr_index_get(Value c, Value idx) {
                 return lumyr_make_int32(((int32_t*)tarr->items)[i]);
             case VAL_INT64:
                 return lumyr_make_int64(((int64_t*)tarr->items)[i]);
+            case VAL_UINT8:
+                return lumyr_make_uint8(((uint8_t*)tarr->items)[i]);
             case VAL_STRING:
                 return lumyr_make_string(((char**)tarr->items)[i]);
             default:
@@ -1036,6 +1045,9 @@ void lumyr_print_inline(Value v) {
             break;
         case VAL_INT64:
             printf("%lld", v.v.i);
+            break;
+        case VAL_UINT8:
+            printf("%u", (unsigned int)v.v.i);
             break;
         case VAL_NONE:
             printf("null");

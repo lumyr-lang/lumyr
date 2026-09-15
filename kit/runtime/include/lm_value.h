@@ -18,6 +18,7 @@ Value lumyr_make_int8(int8_t i8);          // int8：8 位有符号整数（-128
 Value lumyr_make_int16(int16_t i16);        // int16：16 位有符号整数（-32768 到 32767）
 Value lumyr_make_int32(int32_t i32);        // int32：32 位有符号整数（-2147483648 到 2147483647）
 Value lumyr_make_int64(int64_t i64);        // int64：64 位有符号整数（-9223372036854775808 到 9223372036854775807）
+Value lumyr_make_uint8(uint8_t u8);          // uint8：8 位无符号整数（0 到 255）
 Value lumyr_make_struct_ptr(void* ptr);    // C结构体指针：零拷贝传递，类型由外部标识
 
 // 算术

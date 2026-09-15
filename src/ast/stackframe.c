@@ -1201,6 +1201,47 @@ void stackframe_bind_int64(StackFrame* f, const char* name, int64_t i64v)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+uint8_t stackframe_get_uint8(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            uint8_t u8v = fr->uint8_vals ? fr->uint8_vals[idx] : (uint8_t)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return u8v;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_uint8(StackFrame* f, const char* name, uint8_t u8v)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_UINT8;
+        f->vals[idx].v.i = (long long)u8v;
+        if(f->uint8_vals) f->uint8_vals[idx] = u8v;
+        if(f->type_tags) f->type_tags[idx] = CAST_UINT8;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_UINT8;
+        f->vals[f->cnt].v.i = (long long)u8v;
+        if(f->uint8_vals) f->uint8_vals[f->cnt] = u8v;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT8;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 // cell 表扩容（调用方须已持锁）
 static void cell_ensure(StackFrame* f, int need)
 {
