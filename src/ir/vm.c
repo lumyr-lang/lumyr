@@ -2543,8 +2543,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         if(td && td->parent) parent_name = td->parent;
                     }
                     Value self_val = stack[sp - argc];
-                    /* 同时支持 VAL_MAP 和 VAL_STRUCT_PTR 类型的 class 实例 */
-                    _Bool is_class_instance = (self_val.type == VAL_MAP || self_val.type == VAL_STRUCT_PTR || self_val.type == VAL_CLASS_PTR);
+                    /* 类型拆分后，class 实例使用 VAL_CLASS_PTR 类型 */
+                    _Bool is_class_instance = (self_val.type == VAL_CLASS_PTR);
                     if(is_class_instance && parent_name && method_name[0]) {
                         void* rf = NULL;
                         /* 构造函数 __init__ 单独处理，使用 class_get_constructor_func */
@@ -2598,8 +2598,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         if(td && td->parent) parent_name = td->parent;
                     }
                     Value self_val = stack[sp - argc];
-                    /* 同时支持 VAL_MAP 和 VAL_STRUCT_PTR 类型的 class 实例 */
-                    _Bool is_class_instance2 = (self_val.type == VAL_MAP || self_val.type == VAL_STRUCT_PTR || self_val.type == VAL_CLASS_PTR);
+                    /* 类型拆分后，class 实例使用 VAL_CLASS_PTR 类型 */
+                    _Bool is_class_instance2 = (self_val.type == VAL_CLASS_PTR);
                     if(is_class_instance2 && parent_name) {
                         /* 调用父类构造函数 */
                         void* rf = class_get_constructor_func(parent_name);
@@ -2778,10 +2778,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(!bf_fn && argc > 0) {
                         /* 可能是 class 方法调用：从接收者类型推断类名 */
                         Value obj = stack[sp - argc];
-                        if(obj.type == VAL_MAP && lumyr_map_has(obj, lumyr_make_string("__classname__"))) {
-                            Value cn = lumyr_map_get(obj, lumyr_make_string("__classname__"));
-                            if(cn.type == VAL_STRING) class_name = lumyr_str_cstr(&cn);
-                        } else if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(obj)) {
+                        if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
                             ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
                             if(inst && inst->vtable) class_name = inst->vtable->class_name;
                         }
