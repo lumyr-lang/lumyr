@@ -5,6 +5,26 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* ==================== VM 特定函数的弱符号存根（CC 模式下使用） ==================== */
+/* 这些函数在 vm.c 中定义，CC 模式下没有链接 vm.c，所以提供弱符号存根 */
+/* 前向声明 */
+typedef struct RuntimeFunc RuntimeFunc;
+typedef struct EvalCtx EvalCtx;
+typedef struct StackFrame StackFrame;
+
+__attribute__((weak)) RuntimeFunc* interp_set_current_rf(RuntimeFunc* rf) {
+    (void)rf;
+    return NULL;
+}
+
+__attribute__((weak)) Value vm_func_entry(int arg_cnt, const Value* args, EvalCtx* ctx, StackFrame* frame) {
+    (void)arg_cnt;
+    (void)args;
+    (void)ctx;
+    (void)frame;
+    return val_none();
+}
+
 /* ==================== 红黑树实现（用于存储 class 信息，大型项目 class 特别多时 O(log n) 查找） ==================== */
 
 typedef struct ClassRBNode {
