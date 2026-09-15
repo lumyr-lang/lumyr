@@ -67,6 +67,11 @@ typedef enum {
     OPC_PRINT_BOOL,   // 从 bool 栈弹出并打印（零开销，用于声明为 bool 的变量）
     OPC_PRINT_CHAR,   // 从 char 栈弹出并打印（零开销，用于声明为 char 的变量）
     OPC_PRINT_BYTE,   // 从 byte 栈弹出并打印（零开销，用于声明为 byte 的变量）
+    OPC_LOAD_INT8_VAR,   // a=符号表下标；加载声明为 int8 的变量，直接压入 int8 栈（零检查零转换）
+    OPC_STORE_INT8_VAR,  // a=符号表下标；从 int8 栈弹出 int8 值，直接存储到变量的 int8_vals（零包装零转换）
+    OPC_INT8_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int8，创建 int8 泛型数组
+    OPC_INT8_ARRAY_GET, // 弹 arr,idx；直接从 int8 类型化数组读取元素，压入 int8 栈（零包装零 Value 开销）
+    OPC_PRINT_INT8,     // 从 int8 栈弹出并打印（零开销，用于声明为 int8 的变量）
     OPC_TO_BOOL,      // 弹1压1 bool
     OPC_DUP,          // 复制栈顶
     OPC_POP,          // 丢弃栈顶

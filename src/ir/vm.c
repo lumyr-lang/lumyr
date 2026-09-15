@@ -225,6 +225,16 @@ static void byte_stack_ensure(int need) { if(vm_byte_sp + need <= vm_byte_cap) r
 #define BYTE_PUSH(val) do { byte_stack_ensure(1); vm_byte_stack[vm_byte_sp++] = (val); } while(0)
 #define BYTE_POP() (vm_byte_stack[--vm_byte_sp])
 
+/* ========== int8 栈 ========== */
+static _Thread_local int8_t* vm_int8_stack = NULL;
+static _Thread_local int vm_int8_sp = 0;
+static _Thread_local int vm_int8_cap = 0;
+static void int8_stack_init(void) { if(vm_int8_stack) return; vm_int8_cap = 64; vm_int8_stack = (int8_t*)malloc(64 * sizeof(int8_t)); if(!vm_int8_stack) { LOG_ERROR("vm: int8 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int8_sp = 0; }
+static void int8_stack_destroy(void) { if(vm_int8_stack) { free(vm_int8_stack); vm_int8_stack = NULL; } vm_int8_sp = 0; vm_int8_cap = 0; }
+static void int8_stack_ensure(int need) { if(vm_int8_sp + need <= vm_int8_cap) return; int nc = vm_int8_cap > 0 ? vm_int8_cap : 64; while(nc < vm_int8_sp + need) nc *= 2; int8_t* ns = (int8_t*)realloc(vm_int8_stack, nc * sizeof(int8_t)); if(!ns) { LOG_ERROR("vm: int8 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int8_stack = ns; vm_int8_cap = nc; }
+#define INT8_PUSH(val) do { int8_stack_ensure(1); vm_int8_stack[vm_int8_sp++] = (val); } while(0)
+#define INT8_POP() (vm_int8_stack[--vm_int8_sp])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -2141,6 +2151,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 BYTE_PUSH(bv);
                 break;
             }
+            case OPC_LOAD_INT8_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                int8_t i8v = stackframe_get_int8(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                INT8_PUSH(i8v);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2233,6 +2251,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = VAL_BYTE;
                 ret.v.i = (long long)bv;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_INT8_VAR: {
+                const char* name = bf->syms[in.a];
+                int8_t i8v = INT8_POP();
+                stackframe_bind_int8(frame, name, i8v);
+                Value ret;
+                ret.type = VAL_INT8;
+                ret.v.i = (long long)i8v;
                 stack[sp++] = ret;
                 break;
             }

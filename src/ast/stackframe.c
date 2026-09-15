@@ -516,6 +516,26 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     }
                     p->byte_vals[i] = bv;
                 }
+                /* 当设置为 int8 类型时，同时更新 int8_vals */
+                if(type_tag == CAST_INT8 && p->int8_vals) {
+                    Value v = p->vals[i];
+                    int8_t i8v = 0;
+                    switch(v.type) {
+                        case VAL_INT: case VAL_INT8:
+                            i8v = (int8_t)v.v.i; break;
+                        case VAL_BYTE:
+                            i8v = (int8_t)v.v.i; break;
+                        case VAL_CHAR:
+                            i8v = (int8_t)v.v.c; break;
+                        case VAL_BOOL:
+                            i8v = v.v.b ? 1 : 0; break;
+                        case VAL_DOUBLE:
+                            i8v = (int8_t)v.v.d; break;
+                        default:
+                            i8v = 0; break;
+                    }
+                    p->int8_vals[i] = i8v;
+                }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
             }
@@ -1012,6 +1032,47 @@ void stackframe_bind_byte(StackFrame* f, const char* name, unsigned char bv)
         f->vals[f->cnt].v.i = (long long)bv;
         if(f->byte_vals) f->byte_vals[f->cnt] = bv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_BYTE;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
+int8_t stackframe_get_int8(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            int8_t i8v = fr->int8_vals ? fr->int8_vals[idx] : (int8_t)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return i8v;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_int8(StackFrame* f, const char* name, int8_t i8v)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_INT8;
+        f->vals[idx].v.i = (long long)i8v;
+        if(f->int8_vals) f->int8_vals[idx] = i8v;
+        if(f->type_tags) f->type_tags[idx] = CAST_INT8;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_INT8;
+        f->vals[f->cnt].v.i = (long long)i8v;
+        if(f->int8_vals) f->int8_vals[f->cnt] = i8v;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_INT8;
         f->cnt++;
     }
     if(hl) pthread_rwlock_unlock(&f->rw);
