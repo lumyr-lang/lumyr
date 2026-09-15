@@ -1,28 +1,28 @@
 // ============================================================
-// gc_return_race.lm — 返回值保护窗口压力测试
-// 专测：线程函数返回堆对象后、unregister→protect 之间的窗口
-// 大量短生命周期线程并发退出，主线程疯狂分配触发 GC，
-// 验证返回的堆对象不被错误回收（UAF）。
+// gc_return_race.lm - Return value protection window stress test
+// Tests: thread function returns heap object, between unregister and protect
+// Many short-lived threads exit concurrently, main thread allocates heavily to trigger GC,
+// Verify returned heap objects are not incorrectly collected (UAF).
 // ============================================================
 
-func make_payload(id, iter) {
-    // 创建一个非 SSO 的大字符串，强制堆分配
-    s = "payload_" + id + "_" + iter +
+func make_payload(id, iteration) {
+    // Create a non-SSO large string to force heap allocation
+    s = "payload_" + id + "_" + iteration +
         "_padding_padding_padding_padding_padding_padding_padding_padding";
-    // 再包一层数组，增加堆对象图复杂度
-    holder = [s, id, iter, s, s, s, s, s];
+    // Wrap in an array to increase heap object graph complexity
+    holder = [s, id, iteration, s, s, s, s, s];
     return holder;
 }
 
-func worker(id, iter) {
-    h = make_payload(id, iter);
-    // 持有引用一段时间，确保对象在新生代存活足够久
+func worker(id, iteration) {
+    h = make_payload(id, iteration);
+    // Hold reference for a while to ensure object survives long enough in young generation
     gc_collect();
-    // 返回 holder —— 返回值在 C 栈上，线程退出时 unregister 与 protect 之间有窗口
+    // Return holder - return value on C stack, window between unregister and protect on thread exit
     return h;
 }
 
-// 主循环：批量启动线程 + 分配垃圾触发 GC
+// Main loop: batch start threads + allocate garbage to trigger GC
 GARBAGE = 5000;
 total_ok = 1;
 round = 0;
@@ -34,7 +34,7 @@ while (round < 20) {
         tids.add(thread(worker, round * 1000 + t, t));
     }
 
-    // 主线程疯狂分配垃圾，触发频繁 GC
+    // Main thread allocates garbage heavily to trigger frequent GC
     junk = [];
     for (j = 0; j < GARBAGE; j = j + 1) {
         junk.add("junk_string_" + j + "_padding_padding_padding_padding");
@@ -43,18 +43,18 @@ while (round < 20) {
     junk = [];
     gc_collect();
 
-    // Join 并验证返回值
+    // Join and verify return values
     for (t = 0; t < N; t = t + 1) {
         r = thread_join(tids[t]);
         expected_id = round * 1000 + t;
-        // 验证返回数组内容未被破坏
+        // Verify returned array content is not corrupted
         if (len(r) != 8) {
             print("CORRUPTION round=" + round + " t=" + t + " len=" + len(r));
             total_ok = 0;
         } else {
             first = r[0];
             expected_prefix = "payload_" + expected_id + "_" + t + "_padding";
-            // 简单校验：第一个元素应是字符串且非空
+            // Simple check: first element should be a string and non-empty
             if (len(first) < 10) {
                 print("CORRUPTION round=" + round + " t=" + t + " first_len=" + len(first));
                 total_ok = 0;

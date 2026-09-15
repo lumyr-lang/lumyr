@@ -1,72 +1,120 @@
 #include "ast_runtime_sym.h"
+#include "ir/rbtree.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-char** sym_names = NULL;
-Value* sym_vals = NULL;
-int sym_cnt = 0;
-int sym_cap = 0;
+/* 运行时符号表：红黑树存储，键为 (class_name, name)，class_name 为 NULL 表示普通符号 */
+static RBTree* g_sym_tree = NULL;
 
-/* 容量不足时翻倍扩容（realloc；表项只被下标访问，无外部持有指针） */
-void sym_ensure(int need)
+/* 初始化符号表 */
+void sym_init(void)
 {
-    if(need <= sym_cap) return;
-    int newcap = sym_cap > 0 ? sym_cap : SYM_INITIAL_CAP;
-    while(newcap < need) newcap *= 2;
-    char** nn = (char**)realloc(sym_names, (size_t)newcap * sizeof(char*));
-    if(!nn) { fprintf(stderr, "变量数量超限（内存不足）\n"); exit(EXIT_FAILURE); }
-    sym_names = nn;
-    Value* nv = (Value*)realloc(sym_vals, (size_t)newcap * sizeof(Value));
-    if(!nv) { fprintf(stderr, "变量数量超限（内存不足）\n"); exit(EXIT_FAILURE); }
-    sym_vals = nv;
-    sym_cap = newcap;
+    if(!g_sym_tree) g_sym_tree = rbtree_create();
 }
 
-
-static int sym_lookup(const char* n) {
-    for(int i = 0; i < sym_cnt; ++i) {
-        if(strcmp(sym_names[i], n) == 0) return i;
+/* 清空符号表 */
+void sym_clear(void)
+{
+    if(g_sym_tree) {
+        rbtree_destroy(g_sym_tree);
+        g_sym_tree = NULL;
     }
-    return -1;
 }
 
+/* 确保符号表已初始化 */
+static void sym_ensure_init(void)
+{
+    if(!g_sym_tree) sym_init();
+}
 
-void sym_set(const char* n, Value v) {
-    int idx = sym_lookup(n);
-    if(idx >= 0) {
-        if(sym_vals[idx].type == VAL_STRING && !sym_vals[idx].str_inline) {
-            free(sym_vals[idx].v.s);
+/* 设置符号（class_name 为 NULL 表示普通符号） */
+void sym_set_class(const char* class_name, const char* n, Value v)
+{
+    sym_ensure_init();
+    /* 先查找是否已存在，如果存在则释放旧的 Value */
+    Value* old_v = (Value*)rbtree_find(g_sym_tree, class_name, n);
+    if(old_v) {
+        if(old_v->type == VAL_STRING && !old_v->str_inline) {
+            free(old_v->v.s);
         }
-        sym_vals[idx] = v;
+        *old_v = v;
         return;
     }
-    sym_ensure(sym_cnt + 1);
-    sym_names[sym_cnt] = strdup(n);
-    sym_vals[sym_cnt] = v;
-    sym_cnt++;
+    /* 不存在则分配新的 Value 并插入 */
+    Value* new_v = (Value*)malloc(sizeof(Value));
+    *new_v = v;
+    rbtree_insert(g_sym_tree, class_name, n, new_v);
 }
 
-Value sym_get(const char* n) {
-    int idx = sym_lookup(n);
-    if(idx < 0) {
+/* 设置符号（普通符号） */
+void sym_set(const char* n, Value v)
+{
+    sym_set_class(NULL, n, v);
+}
+
+/* 获取符号（class_name 为 NULL 表示普通符号） */
+Value sym_get_class(const char* class_name, const char* n)
+{
+    sym_ensure_init();
+    Value* v = (Value*)rbtree_find(g_sym_tree, class_name, n);
+    if(!v) {
         fprintf(stderr,"未定义变量: %s\n",n);
         exit(EXIT_FAILURE);
     }
-    return sym_vals[idx];
+    return *v;
 }
 
-Value* sym_get_ptr(const char* n) {
-    int idx = sym_lookup(n);
-    if(idx < 0) {
+/* 获取符号（普通符号） */
+Value sym_get(const char* n)
+{
+    return sym_get_class(NULL, n);
+}
+
+/* 获取符号指针（用于修改） */
+Value* sym_get_ptr(const char* n)
+{
+    sym_ensure_init();
+    Value* v = (Value*)rbtree_find(g_sym_tree, NULL, n);
+    if(!v) {
         fprintf(stderr,"未定义变量: %s\n",n);
         exit(EXIT_FAILURE);
     }
-    return &sym_vals[idx];
+    return v;
 }
 
-_Bool sym_has(const char* n) {
-    return sym_lookup(n) >= 0;
+/* 检查符号是否存在（class_name 为 NULL 表示普通符号） */
+_Bool sym_has_class(const char* class_name, const char* n)
+{
+    sym_ensure_init();
+    return rbtree_find(g_sym_tree, class_name, n) != NULL;
+}
+
+/* 检查符号是否存在（普通符号） */
+_Bool sym_has(const char* n)
+{
+    return sym_has_class(NULL, n);
+}
+
+/* 删除符号 */
+void sym_del(const char* n)
+{
+    sym_ensure_init();
+    Value* v = (Value*)rbtree_find(g_sym_tree, NULL, n);
+    if(v) {
+        if(v->type == VAL_STRING && !v->str_inline) {
+            free(v->v.s);
+        }
+        free(v);
+        rbtree_delete(g_sym_tree, NULL, n);
+    }
+}
+
+/* 兼容旧代码：sym_ensure（现在不需要了，保留为空函数） */
+void sym_ensure(int need)
+{
+    (void)need;
+    sym_ensure_init();
 }
 
 double val_to_num(Value v) {

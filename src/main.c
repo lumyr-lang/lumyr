@@ -16,6 +16,7 @@
 #include "ir/ir_cgen.h"
 #include "parse/import.h"
 #include "i18n/lm_i18n.h"
+#include "ast/ast_runtime_sym.h"
 
 extern AstNode* root;
 extern int yyparse(void);
@@ -47,6 +48,7 @@ int main(int argc, char** argv) {
 
     /* Initialize i18n - auto-detect system language */
     lm_i18n_init();
+    sym_init();
 
     const char* src_file = NULL;
     const char* out_base = NULL;
