@@ -250,7 +250,7 @@ ClassFieldInfo* lumyr_class_find_field(const char* class_name, const char* field
    vtable 的第一个字段是 class_name */
 const char* lumyr_class_get_name(Value obj)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return NULL;
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr) return NULL;
     /* vtable 指针在偏移量 0 的位置 */
     void** vtable_ptr = (void**)obj.v.struct_ptr;
     if(!*vtable_ptr) return NULL;
@@ -259,32 +259,18 @@ const char* lumyr_class_get_name(Value obj)
     return *class_name_ptr;
 }
 
-/* 判断一个 VAL_STRUCT_PTR 是不是 class 实例（通过 vtable 指针和 class 红黑树判断）
-   class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name
-   struct 的第一个字段是 __structname__（直接是 const char*）
-   区分方法：尝试通过 vtable 获取 class 名，如果能在 class 红黑树中找到，就是 class */
+/* 判断一个 Value 是不是 class 实例（直接检查 type 字段）
+   类型拆分后，class 实例使用 VAL_CLASS_PTR 类型，struct 实例使用 VAL_STRUCT_PTR 类型
+   不再需要通过检查 vtable 指针和 class 红黑树来区分 */
 int lumyr_is_class_instance(Value obj)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
-    /* class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name
-       结构体的第一个字段是 __structname__（直接是 const char*）
-       使用 IsBadReadPtr 检查指针是否有效，避免访问违规 */
-    void** vtable_ptr = (void**)obj.v.struct_ptr;
-    if(IsBadReadPtr(vtable_ptr, sizeof(void*))) return 0;
-    if(!*vtable_ptr) return 0;
-    if(IsBadReadPtr(*vtable_ptr, sizeof(const char*))) return 0;
-    const char** class_name_ptr = (const char**)*vtable_ptr;
-    if(!*class_name_ptr) return 0;
-    /* 检查这个 class 名是否在 class 红黑树中 */
-    ensure_class_tree();
-    ClassRBNode* node = class_rb_find_node(g_class_tree, *class_name_ptr);
-    return node ? 1 : 0;
+    return (obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) ? 1 : 0;
 }
 
 /* class 属性读取（专门针对 class 的函数，不依赖通用的 lumyr_index_get） */
 Value lumyr_class_get_field(Value obj, const char* field_name)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) {
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr || !field_name) {
         runtime_error("class 属性读取：对象不是 class 实例或字段名为空");
         return val_none();
     }
@@ -339,7 +325,7 @@ Value lumyr_class_get_field(Value obj, const char* field_name)
         case CLASS_FIELD_PTR: {
             /* 指针类型（struct/class/array/map/func），直接返回指针包装成 Value */
             Value v;
-            v.type = VAL_STRUCT_PTR;
+            v.type = VAL_CLASS_PTR;
             v.v.struct_ptr = *(void**)field_ptr;
             return v;
         }
@@ -352,7 +338,7 @@ Value lumyr_class_get_field(Value obj, const char* field_name)
 /* class 属性写入（专门针对 class 的函数） */
 void lumyr_class_set_field(Value obj, const char* field_name, Value value)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) {
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr || !field_name) {
         runtime_error("class 属性写入：对象不是 class 实例或字段名为空");
         return;
     }
@@ -463,7 +449,7 @@ int lumyr_class_implements_interface(const char* class_name, const char* interfa
 /* 判断对象是否实现了某个接口（对象必须是 class 实例） */
 int lumyr_obj_implements_interface(Value obj, const char* interface_name)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr) return 0;
     if(!lumyr_is_class_instance(obj)) return 0;
     const char* class_name = lumyr_class_get_name(obj);
     if(!class_name) return 0;
@@ -509,7 +495,7 @@ int lumyr_implements_interface(Value obj, const char* iface_name)
 {
     if(!iface_name) return 0;
     /* class 实例：通过 lumyr_obj_implements_interface 判断 */
-    if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr && lumyr_is_class_instance(obj)) {
+    if(obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) {
         return lumyr_obj_implements_interface(obj, iface_name);
     }
     /* 其他类型（包括 map）：暂时返回 0，后续可以在运行时添加 type 接口信息表 */
@@ -527,7 +513,7 @@ Value lumyr_interface_cast(Value obj, const char* iface_name) {
     }
     /* 获取对象的类型名，用于错误信息 */
     const char* type_name = "unknown";
-    if(obj.type == VAL_STRUCT_PTR && obj.v.struct_ptr) {
+    if(obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) {
         if(lumyr_is_class_instance(obj)) {
             type_name = lumyr_class_get_name(obj);
         } else {
@@ -693,7 +679,7 @@ Value lumyr_class_instance_new(const char* class_name)
     inst->vtable = vt;
     /* 返回 VAL_STRUCT_PTR 类型 */
     Value v;
-    v.type = VAL_STRUCT_PTR;
+    v.type = VAL_CLASS_PTR;
     v.v.struct_ptr = ptr;
     return v;
 }
@@ -718,7 +704,7 @@ static RuntimeFunc* class_vtable_find_method(ClassVTable* vt, const char* method
 /* class 实例属性读取（按偏移量访问） */
 Value lumyr_class_instance_get_field(Value obj, const char* field_name)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) {
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr || !field_name) {
         return val_none();
     }
     ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
@@ -754,7 +740,7 @@ Value lumyr_class_instance_get_field(Value obj, const char* field_name)
                 case CLASS_FIELD_PTR: {
                     void* val = *(void**)field_ptr;
                     Value v;
-                    v.type = VAL_STRUCT_PTR;
+                    v.type = VAL_CLASS_PTR;
                     v.v.struct_ptr = val;
                     return v;
                 }
@@ -769,7 +755,7 @@ Value lumyr_class_instance_get_field(Value obj, const char* field_name)
 /* class 实例属性写入（按偏移量访问） */
 void lumyr_class_instance_set_field(Value obj, const char* field_name, Value value)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !field_name) return;
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr || !field_name) return;
     ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
     ClassVTable* vt = inst->vtable;
     if(!vt) return;
@@ -809,7 +795,7 @@ void lumyr_class_instance_set_field(Value obj, const char* field_name, Value val
 /* class 实例方法调用（通过 vtable 索引调用） */
 Value lumyr_class_instance_call_method(Value obj, const char* method_name, int argc, Value* args, EvalCtx* ctx, StackFrame* frame)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr || !method_name) {
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr || !method_name) {
         return val_none();
     }
     ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
@@ -851,7 +837,7 @@ Value lumyr_class_instance_call_method(Value obj, const char* method_name, int a
 /* 判断一个 Value 是不是 class 实例（VAL_STRUCT_PTR 且 vtable 有效） */
 int lumyr_is_class_instance_value(Value obj)
 {
-    if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
+    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr) return 0;
     ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
     if(!inst->vtable) return 0;
     /* 检查 vtable 是否在红黑树中 */

@@ -303,7 +303,7 @@ Value lumyr_index_get(Value c, Value idx) {
        自动判断是 class 还是 struct，调用对应的专门属性访问函数
        class 通过 vtable 判断，struct 通过 __structname__ 字段获取类型名
        这样即使没有类型标记（如函数参数），也能正确访问属性 */
-    if(c.type == VAL_STRUCT_PTR) {
+    if(c.type == VAL_STRUCT_PTR || c.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
             if(lumyr_is_class_instance(c)) {
@@ -364,6 +364,7 @@ Value lumyr_type(Value v) {
         case VAL_ERROR:  return lumyr_make_string("error");
         case VAL_GENERATOR: return lumyr_make_string("generator");
         case VAL_STRUCT_PTR: return lumyr_make_string("struct");
+        case VAL_CLASS_PTR: return lumyr_make_string("class");
     }
     return lumyr_make_string("unknown");
 }
@@ -414,7 +415,7 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
     /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
        自动判断是 class 还是 struct，调用对应的专门属性写入函数 */
-    if(arr.type == VAL_STRUCT_PTR) {
+    if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
             if(lumyr_is_class_instance(arr)) {
@@ -542,7 +543,7 @@ Value lumyr_eq(Value a, Value b) {
     }
     /* VAL_STRUCT_PTR 类型：class 按引用比较，struct 按字段比较（隔离） */
     if(a.type == VAL_STRUCT_PTR || b.type == VAL_STRUCT_PTR) {
-        if(a.type != VAL_STRUCT_PTR || b.type != VAL_STRUCT_PTR) return lumyr_make_bool(0);
+        if((a.type != VAL_STRUCT_PTR && a.type != VAL_CLASS_PTR) || (b.type != VAL_STRUCT_PTR && b.type != VAL_CLASS_PTR)) return lumyr_make_bool(0);
         if(!a.v.struct_ptr || !b.v.struct_ptr) return lumyr_make_bool(a.v.struct_ptr == b.v.struct_ptr);
         /* class 是引用类型，按指针比较 */
         if(lumyr_is_class_instance(a) || lumyr_is_class_instance(b)) {

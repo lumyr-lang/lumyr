@@ -613,19 +613,12 @@ void class_add_method(const char* class_name, const char* method_name, struct As
     // 同时添加到 vtable 中
     ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
     if(vt) {
-        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, before nmethods=%d\n",
-                class_name, method_name, vt->nmethods);
         int vn = vt->nmethods + 1;
         vt->method_names = (const char**)realloc(vt->method_names, (size_t)vn * sizeof(const char*));
         vt->methods = (RuntimeFunc**)realloc(vt->methods, (size_t)vn * sizeof(RuntimeFunc*));
         vt->method_names[vt->nmethods] = strdup(method_name);
         vt->methods[vt->nmethods] = rf;
         vt->nmethods = vn;
-        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, after nmethods=%d\n",
-                class_name, method_name, vt->nmethods);
-    } else {
-        fprintf(stderr, "[ADD_METHOD_TO_VTABLE] class=%s, method=%s, vtable NOT FOUND!\n",
-                class_name, method_name);
     }
 }
 

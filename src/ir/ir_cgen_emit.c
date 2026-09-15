@@ -551,7 +551,7 @@ void emit_insns(BytecodeFunc* fn)
                     char _store_buf[256];
                     snprintf(_store_buf, sizeof(_store_buf), "((lumyr_struct_%s*)%s.v.struct_ptr)", _sname, cvar_rw(nm));
                     /* 运行时类型检查：如果右边是 VAL_STRUCT_PTR，直接结构体拷贝；否则从 map 转换 */
-                    fprintf(out, "        if(__v.type == VAL_STRUCT_PTR) {\n");
+                    fprintf(out, "        if(__v.type == VAL_STRUCT_PTR || __v.type == VAL_CLASS_PTR) {\n");
                     fprintf(out, "            memcpy(%s, __v.v.struct_ptr, sizeof(lumyr_struct_%s));\n", _store_buf, _sname);
                     fprintf(out, "        } else {\n");
                     emit_value_to_struct(_sname, _store_buf, "__v");
@@ -1885,7 +1885,7 @@ void emit_insns(BytecodeFunc* fn)
                     }
                 }
                 fprintf(out, "        Value __val = {0};\n");
-                fprintf(out, "        __val.type = VAL_STRUCT_PTR;\n");
+                fprintf(out, "        __val.type = VAL_CLASS_PTR;\n");
                 fprintf(out, "        __val.v.struct_ptr = __obj;\n");
                 fprintf(out, "        __stk[__sp++] = __val;\n");
                 fprintf(out, "    }\n");
@@ -2246,7 +2246,7 @@ void emit_insns(BytecodeFunc* fn)
                         /* 动态分派 */
                         fprintf(out, "        /* class 方法动态分派 */\n");
                         fprintf(out, "        Value __self = __args[0];\n");
-                    fprintf(out, "        if(__self.type == VAL_STRUCT_PTR && __self.v.struct_ptr) {\n");
+                    fprintf(out, "        if((__self.type == VAL_STRUCT_PTR || __self.type == VAL_CLASS_PTR) && __self.v.struct_ptr) {\n");
                     fprintf(out, "            /* C 结构体实例：通过 vtable 函数指针直接调用（O(1)） */\n");
                     /* 编译期查找方法名对应的 vtable 索引 */
                     int method_idx = find_method_index(nm);
