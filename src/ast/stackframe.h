@@ -92,6 +92,12 @@ int32_t stackframe_get_int32(StackFrame* f, const char* name, _Bool* found);
 // 绑定 int32 变量：同时更新 vals 和 int32_vals，零重复提取
 void stackframe_bind_int32(StackFrame* f, const char* name, int32_t i32v);
 
+// 获取 int64 类型变量的原始 int64 值，零提取、零类型检查
+int64_t stackframe_get_int64(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 int64 变量：同时更新 vals 和 int64_vals，零重复提取
+void stackframe_bind_int64(StackFrame* f, const char* name, int64_t i64v);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);

@@ -255,6 +255,16 @@ static void int32_stack_ensure(int need) { if(vm_int32_sp + need <= vm_int32_cap
 #define INT32_PUSH(val) do { int32_stack_ensure(1); vm_int32_stack[vm_int32_sp++] = (val); } while(0)
 #define INT32_POP() (vm_int32_stack[--vm_int32_sp])
 
+/* ========== int64 栈 ========== */
+static _Thread_local int64_t* vm_int64_stack = NULL;
+static _Thread_local int vm_int64_sp = 0;
+static _Thread_local int vm_int64_cap = 0;
+static void int64_stack_init(void) { if(vm_int64_stack) return; vm_int64_cap = 64; vm_int64_stack = (int64_t*)malloc(64 * sizeof(int64_t)); if(!vm_int64_stack) { LOG_ERROR("vm: int64 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int64_sp = 0; }
+static void int64_stack_destroy(void) { if(vm_int64_stack) { free(vm_int64_stack); vm_int64_stack = NULL; } vm_int64_sp = 0; vm_int64_cap = 0; }
+static void int64_stack_ensure(int need) { if(vm_int64_sp + need <= vm_int64_cap) return; int nc = vm_int64_cap > 0 ? vm_int64_cap : 64; while(nc < vm_int64_sp + need) nc *= 2; int64_t* ns = (int64_t*)realloc(vm_int64_stack, nc * sizeof(int64_t)); if(!ns) { LOG_ERROR("vm: int64 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int64_stack = ns; vm_int64_cap = nc; }
+#define INT64_PUSH(val) do { int64_stack_ensure(1); vm_int64_stack[vm_int64_sp++] = (val); } while(0)
+#define INT64_POP() (vm_int64_stack[--vm_int64_sp])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -852,15 +862,17 @@ Value vm_run_main(BytecodeFunc* main_fn)
     float_stack_init();
     /* 初始化 uint 栈（方案 A：多类型栈，零检查零转换） */
     uint_stack_init();
-    /* 初始化 bool、char、byte、int8、int16、int32 栈 */
+    /* 初始化 bool、char、byte、int8、int16、int32、int64 栈 */
     bool_stack_init();
     char_stack_init();
     byte_stack_init();
     int8_stack_init();
     int16_stack_init();
     int32_stack_init();
+    int64_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
-    /* 销毁 bool、char、byte、int8、int16、int32 栈 */
+    /* 销毁 bool、char、byte、int8、int16、int32、int64 栈 */
+    int64_stack_destroy();
     int32_stack_destroy();
     int16_stack_destroy();
     int8_stack_destroy();
@@ -2201,6 +2213,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT32_PUSH(i32v);
                 break;
             }
+            case OPC_LOAD_INT64_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                int64_t i64v = stackframe_get_int64(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                INT64_PUSH(i64v);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2323,6 +2343,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = VAL_INT32;
                 ret.v.i = (long long)i32v;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_INT64_VAR: {
+                const char* name = bf->syms[in.a];
+                int64_t i64v = INT64_POP();
+                stackframe_bind_int64(frame, name, i64v);
+                Value ret;
+                ret.type = VAL_INT64;
+                ret.v.i = (long long)i64v;
                 stack[sp++] = ret;
                 break;
             }
@@ -3151,6 +3181,64 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT32_PUSH(val);
                 break;
             }
+            case OPC_INT64_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT64;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int64_t), VAL_TYPED_ARRAY);
+                    int64_t* i64items = (int64_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        i64items[k] = INT64_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT64;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int64_t), VAL_TYPED_ARRAY);
+                    int64_t* i64items = (int64_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        i64items[k] = (v.type == VAL_INT64) ? (int64_t)v.v.i : (int64_t)lumyr_cast_int(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_INT64_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int i64idx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_INT64_ARRAY_GET 需要 int64 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_INT64) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 int64，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(i64idx < 0 || i64idx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", i64idx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                int64_t val = ((int64_t*)tarr->items)[i64idx];
+                INT64_PUSH(val);
+                break;
+            }
             case OPC_INDEX_GET: {
                 Value idx = stack[--sp];
                 Value c = stack[--sp];
@@ -3478,6 +3566,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 从 int32 栈弹出并打印（零开销，用于声明为 int32 的变量） */
                 int32_t i32v = INT32_POP();
                 printf("%d\n", (int)i32v);
+                break;
+            }
+            case OPC_PRINT_INT64: {
+                /* 从 int64 栈弹出并打印（零开销，用于声明为 int64 的变量） */
+                int64_t i64v = INT64_POP();
+                printf("%lld\n", (long long)i64v);
                 break;
             }
             case OPC_TO_BOOL:
