@@ -420,6 +420,20 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     }
                     p->int_vals[i] = iv;
                 }
+                /* 当设置为 double 类型时，同时更新 double_vals */
+                if(type_tag == 1 /* CAST_DOUBLE */ && p->double_vals) {
+                    Value v = p->vals[i];
+                    double dv = 0.0;
+                    switch(v.type) {
+                        case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                            dv = (double)v.v.i; break;
+                        case 2:  // VAL_DOUBLE
+                            dv = v.v.d; break;
+                        default:
+                            dv = 0.0; break;
+                    }
+                    p->double_vals[i] = dv;
+                }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
             }

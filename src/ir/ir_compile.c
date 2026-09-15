@@ -22,6 +22,8 @@
 
 /* 变量类型标记特殊值：1000 表示变量是 int 类型化数组（用于上下文感知类型推导） */
 #define VAR_TYPE_INT_ARRAY 1000
+/* 变量类型标记特殊值：1001 表示变量是 double 类型化数组（用于上下文感知类型推导） */
+#define VAR_TYPE_DOUBLE_ARRAY 1001
 
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
@@ -506,6 +508,54 @@ static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 double 类型
+static int is_double_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_DOUBLE);
+}
+
+// 检查数组所有元素是否都是 double 类型（声明为 double 的变量或 double 类型化数组的元素访问）
+static int all_double_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_double_vars(c, e->u.seq.first) && all_double_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 double 候选，运行时 OPC_DOUBLE_ARRAY_GET 会检查是否是 double 类型化数组 */
+        return 1;
+    }
+    return is_double_var(c, e);
+}
+
+// 编译 double 泛型数组元素：全部压入 double 栈（零检查零转换）
+// 支持：声明为 double 的变量（OPC_LOAD_DOUBLE_VAR）、double 类型化数组元素访问（OPC_DOUBLE_ARRAY_GET）
+static void compile_double_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_double_array_elems(c, e->u.seq.first, n);
+        compile_double_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_DOUBLE_ARRAY_GET
+           运行时会检查是否是 double 类型化数组，如果是直接读取 double 值压入 double 栈，零包装！
+           如果不是，回退到普通数组访问（包装成 Value，然后需要转换） */
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    /* 声明为 double 类型的变量：使用 OPC_LOAD_DOUBLE_VAR，直接压入 double 栈 */
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 递归检测 AST_SEQ 树中是否含 AST_SPREAD
 static int has_spread_node(AstNode* e) {
     if(!e) return 0;
@@ -737,6 +787,10 @@ static void c_expr(Ctx* c, AstNode* node)
                           node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */) {
                     /* <int>[...] 形式：变量是 int 类型化数组，设置特殊标记用于上下文感知类型推导 */
                     c->fn->var_type_tags[var_idx] = VAR_TYPE_INT_ARRAY;
+                } else if(inner && inner->type == AST_ARRAY_LIT &&
+                          node->u.assign.expr->u.type_annotation.cast_type == 1 /* CAST_DOUBLE */) {
+                    /* <double>[...] 形式：变量是 double 类型化数组，设置特殊标记用于上下文感知类型推导 */
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_DOUBLE_ARRAY;
                 } else {
                     /* 其他数组/map字面量的类型标注不设置变量类型标记 */
                     c->fn->var_type_tags[var_idx] = -1;
@@ -832,6 +886,25 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 int */
                 c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
             }
+            /* 优化1b：赋值为 <double>arr[idx] 形式时，使用 OPC_DOUBLE_ARRAY_GET + OPC_STORE_DOUBLE_VAR
+               零包装零重复提取，直接从 double 类型化数组读取并存储到 double 变量 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == 1 /* CAST_DOUBLE */ &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INDEX) {
+                AstNode* index_node = node->u.assign.expr->u.type_annotation.expr;
+                AstNode* arr = index_node->u.index.arr;
+                AstNode* idx = index_node->u.index.idx;
+                /* 编译 arr 和 idx（压入 Value 栈） */
+                c_expr(c, arr);
+                c_expr(c, idx);
+                /* OPC_DOUBLE_ARRAY_GET：直接读取 double 值，压入 double 栈，零包装 */
+                emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
+                emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                /* 记录变量类型标记为 double */
+                c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+            }
             /* 优化2：上下文感知 - 赋值为 arr[idx] 且 arr 是 int 类型化数组时，自动感知为 int 类型
                即使左侧变量没有显式声明 <int>，也自动推导为 int 类型，并使用优化路径 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_INDEX &&
@@ -853,6 +926,21 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
                     c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                }
+                /* 检查数组变量是否标记为 double 类型化数组 */
+                else if(arr_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[arr_idx] == VAR_TYPE_DOUBLE_ARRAY) {
+                    AstNode* arr = node->u.assign.expr->u.index.arr;
+                    AstNode* idx = node->u.assign.expr->u.index.idx;
+                    /* 编译 arr 和 idx（压入 Value 栈） */
+                    c_expr(c, arr);
+                    c_expr(c, idx);
+                    /* OPC_DOUBLE_ARRAY_GET：直接读取 double 值，压入 double 栈，零包装 */
+                    emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                    /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
+                    emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 double 类型 */
+                    c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
@@ -872,6 +960,16 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
                     c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                }
+                /* 检查右侧变量是否标记为 double 类型（CAST_DOUBLE = 1） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == 1 /* CAST_DOUBLE */) {
+                    /* OPC_LOAD_DOUBLE_VAR：直接从 double_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_DOUBLE_VAR, rhs_idx, 0);
+                    /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
+                    emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 double 类型 */
+                    c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
@@ -1319,12 +1417,19 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_INT_ARRAY_LIT(a=1) 从 int 栈读取，实现零检查零转换 */
                     compile_int_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_INT_ARRAY_LIT, 1, n);  /* a=1: 从 int 栈读取 */
+                } else if(elem_type == VAL_DOUBLE && all_double_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 double 类型的变量：使用 OPC_LOAD_DOUBLE_VAR 压入 double 栈，
+                       OPC_DOUBLE_ARRAY_LIT(a=1) 从 double 栈读取，实现零检查零转换 */
+                    compile_double_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 1, n);  /* a=1: 从 double 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
-                       OPC_INT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
+                       OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
                     c_args(c, node->u.array_lit.elems, &n);
                     if(elem_type == VAL_INT) {
                         emit(c, OPC_INT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_DOUBLE) {
+                        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
@@ -1332,6 +1437,8 @@ static void c_expr(Ctx* c, AstNode* node)
             } else {
                 if(elem_type == VAL_INT) {
                     emit(c, OPC_INT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_DOUBLE) {
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }

@@ -1,0 +1,91 @@
+// 测试：double 类型零开销路径
+// 验证：double 变量加载、double 数组创建、double 数组元素访问、赋值给 double 变量、上下文感知
+
+print("=== double 类型零开销测试 ===\n");
+
+// 测试 1：double 变量声明和加载
+a = <double>3.14;
+print("a = \n");
+print(a);
+print(" (期望 3.14)\n");
+
+b = <double>2.718;
+print("b = \n");
+print(b);
+print(" (期望 2.718)\n");
+
+// 测试 2：double 变量赋值上下文感知
+c = a;
+print("c = \n");
+print(c);
+print(" (期望 3.14)\n");
+
+d = b;
+print("d = \n");
+print(d);
+print(" (期望 2.718)\n");
+
+// 测试 3：double 数组创建
+arr = <double>[1.1, 2.2, 3.3, 4.4, 5.5];
+print("arr type = \n");
+print(type(arr));
+print("\n");
+print("arr len = \n");
+print(len(arr));
+print("\n");
+
+// 测试 4：double 数组元素访问
+print("arr[0] = \n");
+print(arr[0]);
+print(" (期望 1.1)\n");
+print("arr[2] = \n");
+print(arr[2]);
+print(" (期望 3.3)\n");
+print("arr[4] = \n");
+print(arr[4]);
+print(" (期望 5.5)\n");
+
+// 测试 5：double 数组元素赋值上下文感知
+e = arr[0];
+print("e = \n");
+print(e);
+print(" (期望 1.1)\n");
+
+f = arr[2];
+print("f = \n");
+print(f);
+print(" (期望 3.3)\n");
+
+// 测试 6：显式 <double>arr[idx] 赋值
+g = <double>arr[1];
+print("g = \n");
+print(g);
+print(" (期望 2.2)\n");
+
+// 测试 7：double 变量作为数组元素
+arr2 = <double>[a, b, c, d];
+print("arr2 len = \n");
+print(len(arr2));
+print("\n");
+print("arr2[0] = \n");
+print(arr2[0]);
+print(" (期望 3.14)\n");
+print("arr2[1] = \n");
+print(arr2[1]);
+print(" (期望 2.718)\n");
+print("arr2[2] = \n");
+print(arr2[2]);
+print(" (期望 3.14)\n");
+print("arr2[3] = \n");
+print(arr2[3]);
+print(" (期望 2.718)\n");
+
+// 测试 8：链式上下文感知
+h = arr[0];
+i = h;
+j = i;
+print("j = \n");
+print(j);
+print(" (期望 1.1)\n");
+
+print("\n=== 测试完成 ===\n");
