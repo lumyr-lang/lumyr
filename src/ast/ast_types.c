@@ -134,9 +134,11 @@ ValueType castkind_to_valtype(int ck)
         case CAST_CHAR: return VAL_CHAR;
         case CAST_BYTE: return VAL_BYTE;
         case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
-        case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT64:
+        case CAST_UINT8: case CAST_UINT16: case CAST_UINT64:
         case CAST_LONG: case CAST_LONGLONG:
             return VAL_INT;
+        case CAST_UINT32:
+            return VAL_UINT32;  // uint 类型化数组，与 int 区分
         case CAST_FLOAT:
             return VAL_FLOAT;  // float 类型化数组，与 double 区分
         case CAST_ULONG: case CAST_UCHAR: case CAST_SHORT: case CAST_USHORT:

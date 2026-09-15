@@ -343,6 +343,8 @@ Value lumyr_index_get(Value c, Value idx) {
                 return lumyr_make_double(((double*)tarr->items)[i]);
             case VAL_FLOAT:
                 return lumyr_make_double((double)((float*)tarr->items)[i]);
+            case VAL_UINT32:
+                return lumyr_make_int((long long)((unsigned int*)tarr->items)[i]);
             case VAL_STRING:
                 return lumyr_make_string(((char**)tarr->items)[i]);
             default:

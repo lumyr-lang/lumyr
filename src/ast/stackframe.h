@@ -50,6 +50,12 @@ float stackframe_get_float(StackFrame* f, const char* name, _Bool* found);
 // 绑定 float 变量：同时更新 vals（包装成 Value）和 float_vals（原始 float 值），零重复提取
 void stackframe_bind_float(StackFrame* f, const char* name, float fv);
 
+// 获取 uint 类型变量的原始 uint 值，零提取、零类型检查
+unsigned int stackframe_get_uint(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 uint 变量：同时更新 vals（包装成 Value）和 uint_vals（原始 uint 值），零重复提取
+void stackframe_bind_uint(StackFrame* f, const char* name, unsigned int uv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
