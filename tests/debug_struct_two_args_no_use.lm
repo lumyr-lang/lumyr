@@ -1,0 +1,36 @@
+// 调试结构体方法有两个参数但不使用第二个参数的测试
+print("=== 调试结构体方法有两个参数但不使用第二个参数 ===");
+
+// 简单 class（没有方法）
+class SimpleClass {
+    name: string;
+}
+
+obj = SimpleClass();
+obj.name = "Test";
+print("obj.name =", obj.name);
+
+// 结构体方法（有两个参数，但不使用第二个参数）
+struct Point {
+    x: int;
+    y: int;
+    func test(self, other) {
+        print("进入 test 方法");
+        print("self.x =", self.x);
+        print("self.y =", self.y);
+        print("离开 test 方法");
+        return 0;
+    }
+}
+
+p1 = Point();
+p1.x = 0;
+p1.y = 0;
+p2 = Point();
+p2.x = 3;
+p2.y = 4;
+print("准备调用 p1.test(p2)");
+result = p1.test(p2);
+print("result =", result);
+
+print("=== 调试完成 ===");
