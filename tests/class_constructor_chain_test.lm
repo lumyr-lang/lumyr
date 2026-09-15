@@ -1,0 +1,25 @@
+// 构造函数链测试
+print("=== 构造函数链测试 ===");
+
+class Vehicle {
+    brand: string;
+    func __init__(self, brand) {
+        self.brand = brand;
+        print("Vehicle constructor: brand =", brand);
+    }
+}
+
+class Car extends Vehicle {
+    model: string;
+    func __init__(self, brand, model) {
+        super.__init__(brand);
+        self.model = model;
+        print("Car constructor: model =", model);
+    }
+}
+
+car = Car("Toyota", "Camry");
+print("car.brand =", car.brand);
+print("car.model =", car.model);
+
+print("=== 构造函数链测试完成 ===");

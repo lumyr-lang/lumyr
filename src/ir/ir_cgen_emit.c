@@ -1860,7 +1860,12 @@ void emit_insns(BytecodeFunc* fn)
                         fprintf(out, "        Value __super_args[%d];\n", arg_count > 0 ? arg_count : 1);
                         fprintf(out, "        for (int __k = 0; __k < %d; __k++) __super_args[__k] = __stk[__sp - %d + __k];\n", arg_count, arg_count);
                         fprintf(out, "        __sp -= %d;\n", in.b);
-                        fprintf(out, "        __stk[__sp++] = lumyr_func_%s_%s_%d(", parent_name, method_name, arg_count);
+                        /* 构造函数不带参数个数后缀，普通方法带参数个数后缀 */
+                        if(strcmp(method_name, "__init__") == 0) {
+                            fprintf(out, "        __stk[__sp++] = lumyr_func_%s_%s(", parent_name, method_name);
+                        } else {
+                            fprintf(out, "        __stk[__sp++] = lumyr_func_%s_%s_%d(", parent_name, method_name, arg_count);
+                        }
                         for(int ak = 0; ak < arg_count; ak++) {
                             if(ak > 0) fprintf(out, ", ");
                             fprintf(out, "__super_args[%d]", ak);

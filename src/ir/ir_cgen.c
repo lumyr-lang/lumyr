@@ -1163,6 +1163,56 @@ static void emit_class_register_cb(const char* name, TypeDef* td, void* user_dat
     }
 }
 
+/* 拓扑排序用的 class 类型列表 */
+typedef struct {
+    TypeDef* classes[256];
+    int count;
+} ClassList;
+
+static void collect_class_cb(const char* name, TypeDef* td, void* user_data)
+{
+    (void)name;
+    ClassList* list = (ClassList*)user_data;
+    if(td && td->is_class && list->count < 256) {
+        list->classes[list->count++] = td;
+    }
+}
+
+/* 拓扑排序：确保父类在子类之前 */
+static void topological_sort_classes(ClassList* list)
+{
+    TypeDef* sorted[256];
+    int sorted_count = 0;
+    int visited[256] = {0};
+    
+    while(sorted_count < list->count) {
+        for(int i = 0; i < list->count; i++) {
+            if(visited[i]) continue;
+            TypeDef* td = list->classes[i];
+            /* 检查父类是否已经被排序 */
+            int parent_ready = 1;
+            if(td->parent) {
+                parent_ready = 0;
+                for(int j = 0; j < sorted_count; j++) {
+                    if(strcmp(sorted[j]->name, td->parent) == 0) {
+                        parent_ready = 1;
+                        break;
+                    }
+                }
+            }
+            if(parent_ready) {
+                sorted[sorted_count++] = td;
+                visited[i] = 1;
+            }
+        }
+    }
+    
+    /* 复制回原列表 */
+    for(int i = 0; i < list->count; i++) {
+        list->classes[i] = sorted[i];
+    }
+}
+
 /* 生成 C class 结构体定义的回调函数 */
 static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
 {
@@ -1302,8 +1352,16 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "    void* methods[64];       /* 方法函数指针数组，最多 64 个方法 */\n");
     fprintf(out, "} lumyr_vtable;\n\n");
 
-    // 生成 C class 结构体定义（所有已注册的 class 类型）
-    type_foreach(emit_class_def_cb, out);
+    // 生成 C class 结构体定义（所有已注册的 class 类型，按拓扑排序确保父类在子类之前）
+    {
+        ClassList class_list;
+        class_list.count = 0;
+        type_foreach(collect_class_cb, &class_list);
+        topological_sort_classes(&class_list);
+        for(int i = 0; i < class_list.count; i++) {
+            emit_class_def_cb(class_list.classes[i]->name, class_list.classes[i], out);
+        }
+    }
 
     // 全局变量：main 指令流里的全部变量引用
     memset(&g_globals, 0, sizeof(g_globals));
