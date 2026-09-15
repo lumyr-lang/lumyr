@@ -257,6 +257,33 @@ Value val_int_array(int len) {
     return r;
 }
 
+/* double 泛型数组：创建 TypedArray，元素类型为 VAL_DOUBLE，包装为 VAL_TYPED_ARRAY 类型的 Value */
+Value val_double_array(int len) {
+    Value r;
+    r.type = VAL_TYPED_ARRAY;
+    /* GC 安全：构造期间暂停自动 GC，避免中间分配触发 sweep */
+    gc_disable();
+    TypedArray* arr = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    if(arr) {
+        arr->elem_type = VAL_DOUBLE;
+        arr->len = len > 0 ? len : 0;
+        arr->cap = len > 0 ? len : 8;
+        arr->stack_alloc = 0;
+        if(len > 0) {
+            arr->items = (double*)gc_alloc_old(sizeof(double) * arr->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(arr->items);
+            for(int i = 0; i < len; i++) {
+                ((double*)arr->items)[i] = 0.0;
+            }
+        } else {
+            arr->items = NULL;
+        }
+    }
+    r.v.typed_array = arr;
+    gc_enable();
+    return r;
+}
+
 /* 编译通道栈分配数组：初始化调用方提供的栈上 ValueArray（items 仍走 gc_alloc），
  * 设置 stack_alloc=1，返回 Value。GC 标记时跳过 ValueArray 自身（无 GCObject 头），
  * 但仍标记 items 缓冲区及递归标记 items[i]。VM 路径不使用此函数。 */

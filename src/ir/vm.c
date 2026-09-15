@@ -84,6 +84,43 @@ static void int_stack_ensure(int need) {
 #define INT_PEEK() (vm_int_stack[vm_int_sp - 1])
 #define INT_TOP(idx) (vm_int_stack[vm_int_sp - 1 - (idx)])
 
+/* ========== double 栈（方案 A：多类型栈，零检查零转换） ========== */
+/* 专门用于存储 double 类型值，与 Value 栈并行，避免类型检查和转换开销 */
+static _Thread_local double* vm_double_stack = NULL;
+static _Thread_local int vm_double_sp = 0;
+static _Thread_local int vm_double_cap = 0;
+
+#define DOUBLE_STACK_INIT_CAP 64
+
+static void double_stack_init(void) {
+    if(vm_double_stack) return;
+    vm_double_cap = DOUBLE_STACK_INIT_CAP;
+    vm_double_stack = (double*)malloc((size_t)vm_double_cap * sizeof(double));
+    if(!vm_double_stack) { LOG_ERROR("vm: double 栈内存不足\n"); exit(EXIT_FAILURE); }
+    vm_double_sp = 0;
+}
+
+static void double_stack_destroy(void) {
+    if(vm_double_stack) { free(vm_double_stack); vm_double_stack = NULL; }
+    vm_double_sp = 0;
+    vm_double_cap = 0;
+}
+
+static void double_stack_ensure(int need) {
+    if(vm_double_sp + need <= vm_double_cap) return;
+    int nc = vm_double_cap > 0 ? vm_double_cap : DOUBLE_STACK_INIT_CAP;
+    while(nc < vm_double_sp + need) nc *= 2;
+    double* ns = (double*)realloc(vm_double_stack, (size_t)nc * sizeof(double));
+    if(!ns) { LOG_ERROR("vm: double 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    vm_double_stack = ns;
+    vm_double_cap = nc;
+}
+
+#define DOUBLE_PUSH(val) do { double_stack_ensure(1); vm_double_stack[vm_double_sp++] = (val); } while(0)
+#define DOUBLE_POP() (vm_double_stack[--vm_double_sp])
+#define DOUBLE_PEEK() (vm_double_stack[vm_double_sp - 1])
+#define DOUBLE_TOP(idx) (vm_double_stack[vm_double_sp - 1 - (idx)])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -675,7 +712,11 @@ Value vm_run_main(BytecodeFunc* main_fn)
     s_global_frame = top;
     /* 初始化 int 栈（方案 A：多类型栈，零检查零转换） */
     int_stack_init();
+    /* 初始化 double 栈（方案 A：多类型栈，零检查零转换） */
+    double_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
+    /* 销毁 double 栈 */
+    double_stack_destroy();
     /* 销毁 int 栈 */
     int_stack_destroy();
     s_global_frame = saved_global;
@@ -1928,6 +1969,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT_PUSH(iv);
                 break;
             }
+            case OPC_LOAD_DOUBLE_VAR: {
+                /* 声明为 double 类型的变量：直接从栈帧的 double_vals 数组读取，零提取、零类型检查
+                   stackframe_get_double 直接返回原始 double 值，不需要从 Value 联合体提取 */
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                double dv = stackframe_get_double(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                DOUBLE_PUSH(dv);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -1948,6 +1999,20 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = 1;  // VAL_INT
                 ret.v.i = iv;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_DOUBLE_VAR: {
+                /* 从 double 栈弹出 double 值，直接存储到 double 变量，零重复提取
+                   stackframe_bind_double 同时更新 vals 和 double_vals，避免从 Value 重复提取 */
+                const char* name = bf->syms[in.a];
+                double dv = DOUBLE_POP();  // 从 double 栈弹出 double 值
+                /* 直接绑定 double 变量（同时更新 vals 和 double_vals，零重复提取） */
+                stackframe_bind_double(frame, name, dv);
+                /* 包装成 Value 压回（赋值表达式有返回值，如 a = b = 5.0） */
+                Value ret;
+                ret.type = 2;  // VAL_DOUBLE
+                ret.v.d = dv;
                 stack[sp++] = ret;
                 break;
             }
@@ -2175,6 +2240,52 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 break;
             }
+            case OPC_DOUBLE_ARRAY_LIT: {
+                /* double 泛型数组：
+                   a=1: 从 double 栈读取（零检查零转换）
+                   a=0: 从 Value 栈读取（内联类型转换） */
+                int n = in.b;
+                Value arr = val_double_array(n);
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr && tarr->items) {
+                    double* ditems = (double*)tarr->items;
+                    if(in.a == 1) {
+                        /* 从 double 栈读取：零检查零转换 */
+                        for(int k = 0; k < n; k++) {
+                            ditems[k] = vm_double_stack[vm_double_sp - n + k];
+                        }
+                        vm_double_sp -= n;
+                        /* Value 栈没有元素需要弹出，直接压入数组 */
+                        stack[sp++] = arr;
+                    } else {
+                        /* 从 Value 栈读取：内联类型转换 */
+                        for(int k = 0; k < n; k++) {
+                            Value v = stack[sp - n + k];
+                            switch(v.type) {
+                                case VAL_INT:
+                                case VAL_BYTE:
+                                case VAL_CHAR:
+                                case VAL_BOOL:
+                                    ditems[k] = (double)v.v.i;
+                                    break;
+                                case VAL_DOUBLE:
+                                    ditems[k] = v.v.d;
+                                    break;
+                                default:
+                                    ditems[k] = (double)lumyr_cast_long(v).v.i;
+                                    break;
+                            }
+                        }
+                        sp = sp - n + 1;
+                        sp--; stack[sp++] = arr;
+                    }
+                    tarr->len = n;
+                } else {
+                    /* 数组创建失败，直接压入 */
+                    stack[sp++] = arr;
+                }
+                break;
+            }
             case OPC_MAP_LIT: {
                 int n = in.b;
                 Value m = lumyr_map_lit(&stack[sp - 2 * n], n);
@@ -2207,6 +2318,33 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 int val = ((int*)tarr->items)[iidx];  // 直接读取 int 值，零提取零转换！
                 INT_PUSH(val);  // 压入 int 栈，零包装！
+                break;
+            }
+            case OPC_DOUBLE_ARRAY_GET: {
+                /* double 类型化数组元素访问：直接读取 double 值，压入 double 栈，零包装零 Value 开销
+                   严格类型检查：必须是 double 类型化数组，否则直接抛异常，无须兼容和回退 */
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                int iidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arr.type != 14 /* VAL_TYPED_ARRAY */ || !arr.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_DOUBLE_ARRAY_GET 需要 double 类型化数组，实际类型为 %s", val_typename(arr.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr->elem_type != 2 /* VAL_DOUBLE */) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 double，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(!tarr->items) {
+                    runtime_error("数组错误：double 类型化数组 items 指针为空");
+                }
+                if(iidx < 0 || iidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", iidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                double val = ((double*)tarr->items)[iidx];  // 直接读取 double 值，零提取零转换！
+                DOUBLE_PUSH(val);  // 压入 double 栈，零包装！
                 break;
             }
             case OPC_INDEX_GET: {

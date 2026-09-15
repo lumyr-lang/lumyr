@@ -37,6 +37,13 @@ void stackframe_bind(StackFrame* f, const char* name, Value v);
 // 绑定 int 变量：同时更新 vals（包装成 Value）和 int_vals（原始 int 值），零重复提取
 void stackframe_bind_int(StackFrame* f, const char* name, int iv);
 
+// 获取 double 类型变量的原始 double 值，零提取、零类型检查
+// 直接从 double_vals 数组读取，用于 OPC_LOAD_DOUBLE_VAR 指令
+double stackframe_get_double(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 double 变量：同时更新 vals（包装成 Value）和 double_vals（原始 double 值），零重复提取
+void stackframe_bind_double(StackFrame* f, const char* name, double dv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
