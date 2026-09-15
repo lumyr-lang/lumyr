@@ -299,10 +299,9 @@ Value lumyr_index_get(Value c, Value idx) {
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
     }
-    /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
-       自动判断是 class 还是 struct，调用对应的专门属性访问函数
-       class 通过 vtable 判断，struct 通过 __structname__ 字段获取类型名
-       这样即使没有类型标记（如函数参数），也能正确访问属性 */
+    /* VAL_STRUCT_PTR / VAL_CLASS_PTR（C 结构体实例）：
+       类型拆分后，class 实例使用 VAL_CLASS_PTR，struct 实例使用 VAL_STRUCT_PTR
+       通过类型字段直接区分，调用对应的专门属性访问函数 */
     if(c.type == VAL_STRUCT_PTR || c.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);

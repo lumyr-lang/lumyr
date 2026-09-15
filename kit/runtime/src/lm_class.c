@@ -659,12 +659,10 @@ Value lumyr_class_instance_new(const char* class_name)
 {
     ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
     if(!vt) {
-        /* 虚表未注册，返回 map（兼容旧代码） */
-        Value obj = val_map();
-        lumyr_map_set(&obj, lumyr_make_string("__mapname__"), lumyr_make_string(class_name));
-        lumyr_map_set(&obj, lumyr_make_string("__structname__"), lumyr_make_string(class_name));
-        lumyr_map_set(&obj, lumyr_make_string("__classname__"), lumyr_make_string(class_name));
-        return obj;
+        char buf[256];
+        snprintf(buf, sizeof(buf), "class 虚表未注册：%s", class_name);
+        runtime_error(buf);
+        return val_none();
     }
     /* 分配结构体内存（包含 vtable 指针 + 字段数据） */
     int size = sizeof(ClassVTable*) + vt->instance_size;
@@ -834,12 +832,9 @@ Value lumyr_class_instance_call_method(Value obj, const char* method_name, int a
     return val_none();
 }
 
-/* 判断一个 Value 是不是 class 实例（VAL_STRUCT_PTR 且 vtable 有效） */
+/* 判断一个 Value 是不是 class 实例（直接检查 type 字段）
+   类型拆分后，class 实例使用 VAL_CLASS_PTR 类型，不再需要检查 vtable */
 int lumyr_is_class_instance_value(Value obj)
 {
-    if(obj.type != VAL_CLASS_PTR || !obj.v.struct_ptr) return 0;
-    ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
-    if(!inst->vtable) return 0;
-    /* 检查 vtable 是否在红黑树中 */
-    return lumyr_class_vtable_lookup(inst->vtable->class_name) != NULL;
+    return (obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) ? 1 : 0;
 }
