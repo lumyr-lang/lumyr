@@ -139,13 +139,6 @@ void sym_del(const char* n)
     }
 }
 
-/* 兼容旧代码：sym_ensure（现在不需要了，保留为空函数） */
-void sym_ensure(int need)
-{
-    (void)need;
-    sym_ensure_init();
-}
-
 /* ========== 工具函数 ========== */
 
 double val_to_num(Value v) {
