@@ -1,6 +1,7 @@
 // 字节码 VM 执行器
 // 指令语义与 ast_interp.c 对齐（栈帧链变量、调用绑定、return 深拷贝、break/continue 编译期跳转）。
 #include "vm.h"
+#include "lumyr_log.h"
 #include "ir_compile.h"
 #include "lumyr_ffi.h"
 #include "ast/stackframe.h"
@@ -126,7 +127,7 @@ static void paused_gen_add(GeneratorObject* gen) {
     if(s_paused_gen_cnt >= s_paused_gen_cap) {
         int nc = s_paused_gen_cap > 0 ? s_paused_gen_cap * 2 : 16;
         GeneratorObject** ns = (GeneratorObject**)realloc(s_paused_gens, (size_t)nc * sizeof(GeneratorObject*));
-        if(!ns) { fprintf(stderr, "vm: paused_gens 扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!ns) { LOG_ERROR("vm: paused_gens 扩容内存不足\n"); exit(EXIT_FAILURE); }
         s_paused_gens = ns;
         s_paused_gen_cap = nc;
     }
@@ -205,31 +206,31 @@ static void vm_ensure(int need)
     if(need <= vm_cap) return;
     int nc = vm_cap > 0 ? vm_cap * 2 : 64;
     jmp_buf* nj = (jmp_buf*)realloc(vm_jbs, (size_t)nc * sizeof(jmp_buf));
-    if(!nj) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nj) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_jbs = nj;
     jmp_buf** np = (jmp_buf**)realloc(vm_prev, (size_t)nc * sizeof(jmp_buf*));
-    if(!np) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!np) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_prev = np;
     int* na = (int*)realloc(vm_sp, (size_t)nc * sizeof(int));
-    if(!na) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!na) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_sp = na;
     int* nt = (int*)realloc(vm_target, (size_t)nc * sizeof(int));
-    if(!nt) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nt) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_target = nt;
     int* nn = (int*)realloc(vm_tn, (size_t)nc * sizeof(int));
-    if(!nn) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nn) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_tn = nn;
     int* nf = (int*)realloc(vm_fn, (size_t)nc * sizeof(int));
-    if(!nf) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nf) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_fn = nf;
     int* nfa = (int*)realloc(vm_fin_act, (size_t)nc * sizeof(int));
-    if(!nfa) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nfa) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_fin_act = nfa;
     int* nft = (int*)realloc(vm_fin_tgt, (size_t)nc * sizeof(int));
-    if(!nft) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nft) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_fin_tgt = nft;
     int* nfd = (int*)realloc(vm_fin_dep, (size_t)nc * sizeof(int));
-    if(!nfd) { fprintf(stderr, "vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nfd) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     vm_fin_dep = nfd;
     vm_cap = nc;
 }
@@ -241,7 +242,7 @@ static GeneratorObject* generator_new(BytecodeFunc* bf, StackFrame* parent_frame
                                         int arg_cnt, const Value* args)
 {
     GeneratorObject* gen = (GeneratorObject*)calloc(1, sizeof(GeneratorObject));
-    if(!gen) { fprintf(stderr, "generator_new: 内存不足\n"); exit(EXIT_FAILURE); }
+    if(!gen) { LOG_ERROR("generator_new: 内存不足\n"); exit(EXIT_FAILURE); }
     gen->bf = bf;
     /* 生成器使用独立栈帧，不持有父栈帧指针（避免父栈帧被释放后的 UAF）。
        生成器通过全局符号表访问全局变量和函数；局部变量在生成器自己的栈帧中。 */
@@ -529,7 +530,7 @@ static int generator_resume(GeneratorObject* gen, Value* result, Value* send_val
 // 未定义变量/函数：统一报错退出（与 ast_interp.c 输出一致）
 static void runtime_undefined(const char* what, const char* name)
 {
-    fprintf(stderr, "Runtime Error: 未定义%s: %s\n", what, name);
+    LOG_ERROR("Runtime Error: 未定义%s: %s\n", what, name);
     exit(EXIT_FAILURE);
 }
 
@@ -1191,7 +1192,7 @@ static int vm_exec_builtin(Instruction in, Value* stack, int sp, StackFrame* fra
                          * 避免 generator_resume 执行期间触发 GC 时生成器引用被错误回收。 */
                         Value gen_val = stack[sp - 1];
                         if(gen_val.type != VAL_GENERATOR) {
-                            fprintf(stderr, "Runtime Error: next() 需要生成器对象，实际类型: %d\n", gen_val.type);
+                            LOG_ERROR("Runtime Error: next() 需要生成器对象，实际类型: %d\n", gen_val.type);
                             exit(EXIT_FAILURE);
                         }
                         GeneratorObject* gen = (GeneratorObject*)gen_val.v.generator;
@@ -1207,12 +1208,12 @@ static int vm_exec_builtin(Instruction in, Value* stack, int sp, StackFrame* fra
                         Value send_val = stack[--sp];
                         Value gen_val = stack[sp - 1];  /* 不弹出，留在栈上 */
                         if(gen_val.type != VAL_GENERATOR) {
-                            fprintf(stderr, "Runtime Error: send() 需要生成器对象，实际类型: %d\n", gen_val.type);
+                            LOG_ERROR("Runtime Error: send() 需要生成器对象，实际类型: %d\n", gen_val.type);
                             exit(EXIT_FAILURE);
                         }
                         GeneratorObject* gen = (GeneratorObject*)gen_val.v.generator;
                         if(!gen->started) {
-                            fprintf(stderr, "Runtime Error: send() 不能用于刚创建的生成器，请先调用 next()\n");
+                            LOG_ERROR("Runtime Error: send() 不能用于刚创建的生成器，请先调用 next()\n");
                             exit(EXIT_FAILURE);
                         }
                         Value result;
@@ -1234,7 +1235,7 @@ static int vm_exec_builtin(Instruction in, Value* stack, int sp, StackFrame* fra
                         /* close(gen)：关闭生成器，标记为已结束 */
                         Value gen_val = stack[--sp];
                         if(gen_val.type != VAL_GENERATOR) {
-                            fprintf(stderr, "Runtime Error: close() 需要生成器对象，实际类型: %d\n", gen_val.type);
+                            LOG_ERROR("Runtime Error: close() 需要生成器对象，实际类型: %d\n", gen_val.type);
                             exit(EXIT_FAILURE);
                         }
                         GeneratorObject* gen = (GeneratorObject*)gen_val.v.generator;
@@ -1247,12 +1248,12 @@ static int vm_exec_builtin(Instruction in, Value* stack, int sp, StackFrame* fra
                         Value err_val = stack[--sp];
                         Value gen_val = stack[--sp];
                         if(gen_val.type != VAL_GENERATOR) {
-                            fprintf(stderr, "Runtime Error: GenThrow() 需要生成器对象，实际类型: %d\n", gen_val.type);
+                            LOG_ERROR("Runtime Error: GenThrow() 需要生成器对象，实际类型: %d\n", gen_val.type);
                             exit(EXIT_FAILURE);
                         }
                         GeneratorObject* gen = (GeneratorObject*)gen_val.v.generator;
                         if(gen->finished) {
-                            fprintf(stderr, "Runtime Error: GenThrow() 生成器已结束\n");
+                            LOG_ERROR("Runtime Error: GenThrow() 生成器已结束\n");
                             exit(EXIT_FAILURE);
                         }
                         /* 设置待抛出的异常，恢复执行时会在 yield 位置抛出 */
@@ -1827,17 +1828,17 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
         g_err_msg_set(msg);
         free(msg);
         if(g_err_jmp) longjmp(*g_err_jmp, 1);
-        fprintf(stderr, "Runtime Error: %s\n", g_err_msg);
+        LOG_ERROR("Runtime Error: %s\n", g_err_msg);
         exit(EXIT_FAILURE);
     }
 
     if(getenv("LUMYR_BC_DUMP")) {
-        fprintf(stderr, "== bc dump: %s (code_len=%d, max_stack=%d) ==\n",
+        LOG_ERROR("== bc dump: %s (code_len=%d, max_stack=%d) ==\n",
                 bf->name ? bf->name : "<main>", bf->code_len, maxd);
         for(int i = 0; i < bf->code_len; i++) {
             Instruction in = bf->code[i];
             const char* n = (in.a >= 0 && in.a < bf->sym_cnt) ? bf->syms[in.a] : "?";
-            fprintf(stderr, "  %4d: op=%d a=%d(%s) b=%d\n", i, (int)in.op, in.a, n, in.b);
+            LOG_ERROR("  %4d: op=%d a=%d(%s) b=%d\n", i, (int)in.op, in.a, n, in.b);
         }
     }
 
@@ -2336,7 +2337,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 g_err_msg_set(msg);
                 free(msg);
                 if(g_err_jmp) longjmp(*g_err_jmp, 1);
-                fprintf(stderr, "Runtime Error: %s\n", g_err_msg);
+                LOG_ERROR("Runtime Error: %s\n", g_err_msg);
                 exit(EXIT_FAILURE);
             }
             case OPC_FIN_PUSH:
@@ -2356,7 +2357,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 } else if(act == 2) {
                     /* RETHROW：错误消息/类型仍在 g_err_msg/g_err_type，向上一层冒泡 */
                     if(g_err_jmp) longjmp(*g_err_jmp, 1);
-                    fprintf(stderr, "Runtime Error: %s\n", g_err_msg);
+                    LOG_ERROR("Runtime Error: %s\n", g_err_msg);
                     exit(EXIT_FAILURE);
                 } else if(act == 5) {
                     /* RETURN：恢复函数返回 */
@@ -2710,20 +2711,25 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if(fnd && gv.type == VAL_FUNC) func_val = gv;
                 else if(sym_has(fname)) func_val = sym_get(fname);
                 else {
-                    /* 从函数表（红黑树）中查找，先按普通函数查找，再按 class 方法查找 */
-                    BytecodeFunc* bf_fn = ir_func_table_lookup(fname);
+                    /* 从函数表（红黑树）中查找
+                       当第一个参数是 class 实例时，优先查找 class 方法，然后再查找全局函数 */
+                    BytecodeFunc* bf_fn = NULL;
                     const char* class_name = NULL;
-                    if(!bf_fn && argc > 0) {
-                        /* 可能是 class 方法调用：从接收者类型推断类名 */
+                    if(argc > 0) {
+                        /* 检查第一个参数是否是 class 实例 */
                         Value obj = stack[sp - argc];
                         if(obj.type == VAL_CLASS_PTR) {
                             ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
                             if(inst && inst->vtable) class_name = inst->vtable->class_name;
                         }
                     }
-                    if(!bf_fn && class_name) {
-                        /* 直接用 class_name + fname 查找（fname 可能已经是 <类名>_<方法名> 格式） */
+                    if(class_name) {
+                        /* 优先查找 class 方法（fname 可能已经是 <类名>_<方法名> 格式） */
                         bf_fn = ir_func_table_lookup_class(class_name, fname);
+                    }
+                    if(!bf_fn) {
+                        /* 找不到 class 方法，再查找全局函数 */
+                        bf_fn = ir_func_table_lookup(fname);
                     }
                     if(bf_fn) {
                         /* 把 BytecodeFunc* 包装成 RuntimeFunc* */
@@ -2939,7 +2945,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 生成器 yield：保存状态，longjmp 返回到 generator_resume
                  * 恢复时，send_value 会被压入栈顶作为 yield 表达式的返回值 */
                 if(!is_generator) {
-                    fprintf(stderr, "Runtime Error: yield 只能在生成器函数中使用\n");
+                    LOG_ERROR("Runtime Error: yield 只能在生成器函数中使用\n");
                     exit(EXIT_FAILURE);
                 }
                 Value v = stack[--sp];

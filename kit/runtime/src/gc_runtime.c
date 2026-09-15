@@ -19,6 +19,7 @@
  *   - 大对象（user_size > TLA_MAX_SIZE）走原有直接 malloc + free 路径
  */
 #include "gc_runtime.h"
+#include "lumyr_log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -378,7 +379,7 @@ void* gc_alloc(size_t size, int vtype)
         for (int i = 0; i < TLA_BATCH; i++) {
             batch[i] = (GCObject*)malloc(total);
             if (!batch[i]) {
-                fprintf(stderr, "GC: out of memory (requested %zu bytes)\n", size);
+                LOG_ERROR("GC: out of memory (requested %zu bytes)\n", size);
                 abort();
             }
             batch[i]->marked = 0;
@@ -435,7 +436,7 @@ void* gc_alloc(size_t size, int vtype)
     size_t total = sizeof(GCObject) + size;
     GCObject* obj = (GCObject*)malloc(total);
     if (!obj) {
-        fprintf(stderr, "GC: out of memory (requested %zu bytes)\n", size);
+        LOG_ERROR("GC: out of memory (requested %zu bytes)\n", size);
         abort();
     }
     obj->marked = g_gc_marking ? 1 : 3;  /* 新分配预标记 / 标记期黑色 */
@@ -488,7 +489,7 @@ void* gc_realloc(void* ptr, size_t new_size)
     size_t new_total = sizeof(GCObject) + new_size;
     GCObject* new_obj = (GCObject*)malloc(new_total);
     if (!new_obj) {
-        fprintf(stderr, "GC: realloc out of memory (requested %zu bytes)\n", new_size);
+        LOG_ERROR("GC: realloc out of memory (requested %zu bytes)\n", new_size);
         abort();
     }
     memcpy(new_obj, old_obj, sizeof(GCObject) + copy_size);
@@ -554,7 +555,7 @@ static void remembered_set_add(GCObject* obj)
         size_t new_cap = g_rs_cap ? g_rs_cap * 2 : 64;
         GCObject** new_rs = (GCObject**)realloc(g_remembered_set, new_cap * sizeof(GCObject*));
         if (!new_rs) {
-            fprintf(stderr, "GC: out of memory expanding remembered set\n");
+            LOG_ERROR("GC: out of memory expanding remembered set\n");
             abort();
         }
         g_remembered_set = new_rs;
@@ -828,7 +829,7 @@ static void mark_stack_push_locked(GCObject* obj) {
         size_t new_cap = g_mark_stack_cap ? g_mark_stack_cap * 2 : 1024;
         GCObject** new_stack = (GCObject**)realloc(g_mark_stack, new_cap * sizeof(GCObject*));
         if (!new_stack) {
-            fprintf(stderr, "GC: out of memory expanding mark stack\n");
+            LOG_ERROR("GC: out of memory expanding mark stack\n");
             abort();
         }
         g_mark_stack = new_stack;
@@ -1700,7 +1701,7 @@ static void gc_wait_all_threads_at_safepoint(void)
         pthread_mutex_unlock(&g_gc_mutex);
         if (all_paused) break;
         if (poll_iters >= STW_POLL_MAX_ITERS) {
-            fprintf(stderr, "GC: WARNING: STW timeout, some threads not at safepoint (blocked in IO/lock?)\n");
+            LOG_ERROR("GC: WARNING: STW timeout, some threads not at safepoint (blocked in IO/lock?)\n");
             break;
         }
         sched_yield();
@@ -1870,7 +1871,7 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
         /* LUMYR_GC_STATS=1 时输出统计（与增量路径格式对齐：initial=final=总停顿） */
         const char* stats_env = getenv("LUMYR_GC_STATS");
         if (stats_env && strcmp(stats_env, "1") == 0) {
-            fprintf(stderr, "[GC major] initial STW=%lluus final STW=0us total STW=%llums minor=%llu major=%llu young=%zuKB old=%zuKB\n",
+            LOG_ERROR("[GC major] initial STW=%lluus final STW=0us total STW=%llums minor=%llu major=%llu young=%zuKB old=%zuKB\n",
                     t_fb_stw / 1000, g_stw_total_ns / 1000000,
                     g_minor_gc_count, g_major_gc_count, g_young_bytes / 1024, g_old_bytes / 1024);
         }
@@ -1970,7 +1971,7 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
     /* LUMYR_GC_STATS=1 时输出统计 */
     const char* stats_env = getenv("LUMYR_GC_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
-        fprintf(stderr, "[GC major] initial STW=%lluus final STW=%lluus total STW=%llums minor=%llu major=%llu young=%zuKB old=%zuKB\n",
+        LOG_ERROR("[GC major] initial STW=%lluus final STW=%lluus total STW=%llums minor=%llu major=%llu young=%zuKB old=%zuKB\n",
                 t_initial_stw / 1000, t_final_stw / 1000, g_stw_total_ns / 1000000,
                 g_minor_gc_count, g_major_gc_count, g_young_bytes / 1024, g_old_bytes / 1024);
     }
@@ -2054,7 +2055,7 @@ void gc_collect_minor(Value* stack, int sp, StackFrame* frame)
     /* LUMYR_GC_STATS=1 时输出统计 */
     const char* stats_env = getenv("LUMYR_GC_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
-        fprintf(stderr, "[GC minor] STW=%lluus total STW=%llums marked=%zu rs=%zu minor=%llu major=%llu young=%zuKB old=%zuKB\n",
+        LOG_ERROR("[GC minor] STW=%lluus total STW=%llums marked=%zu rs=%zu minor=%llu major=%llu young=%zuKB old=%zuKB\n",
                 t_stw / 1000, g_stw_total_ns / 1000000, marked_count, g_rs_size,
                 g_minor_gc_count, g_major_gc_count, g_young_bytes / 1024, g_old_bytes / 1024);
     }
@@ -2136,7 +2137,7 @@ void gc_register_thread(Value* stack, int* sp_ptr, StackFrame* frame)
 {
     GCThreadEntry* e = (GCThreadEntry*)malloc(sizeof(GCThreadEntry));
     if (!e) {
-        fprintf(stderr, "GC: out of memory registering thread\n");
+        LOG_ERROR("GC: out of memory registering thread\n");
         abort();
     }
     e->tid = pthread_self();
@@ -2275,7 +2276,7 @@ void gc_register_cframe_thread(void)
 {
     GCCFrameEntry* e = (GCCFrameEntry*)malloc(sizeof(GCCFrameEntry));
     if (!e) {
-        fprintf(stderr, "GC: out of memory registering cframe thread\n");
+        LOG_ERROR("GC: out of memory registering cframe thread\n");
         abort();
     }
     e->tid = pthread_self();

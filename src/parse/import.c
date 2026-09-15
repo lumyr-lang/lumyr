@@ -13,6 +13,7 @@
  * 主文件不做 mangle，其符号为程序全局符号。
  */
 #include "import.h"
+#include "lumyr_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -277,14 +278,14 @@ static TransformResult* transform(const char* src) {
                 int k = j;
                 while(k < n && (src[k] == ' ' || src[k] == '\t' || src[k] == '\r' || src[k] == '\n')) k++;
                 if(k >= n || src[k] != '"') {
-                    fprintf(stderr, "[module] 语法错误：import 后应为字符串字面量路径\n");
+                    LOG_ERROR("[module] 语法错误：import 后应为字符串字面量路径\n");
                     free(out.buf); free(t);
                     return NULL;
                 }
                 k++;
                 int pstart = k;
                 while(k < n && src[k] != '"') k++;
-                if(k >= n) { fprintf(stderr, "[module] 语法错误：import 路径字符串未闭合\n"); free(out.buf); free(t); return NULL; }
+                if(k >= n) { LOG_ERROR("[module] 语法错误：import 路径字符串未闭合\n"); free(out.buf); free(t); return NULL; }
                 int plen = k - pstart;
                 k++;
                 while(k < n && (src[k] == ' ' || src[k] == '\t' || src[k] == '\r' || src[k] == '\n')) k++;
@@ -293,12 +294,12 @@ static TransformResult* transform(const char* src) {
                    (k + 2 >= n || !is_id_char(src[k + 2]))) {
                     k += 2;
                 } else {
-                    fprintf(stderr, "[module] 语法错误：import 路径后应为 `as 别名`\n");
+                    LOG_ERROR("[module] 语法错误：import 路径后应为 `as 别名`\n");
                     free(out.buf); free(t); return NULL;
                 }
                 while(k < n && (src[k] == ' ' || src[k] == '\t' || src[k] == '\r' || src[k] == '\n')) k++;
                 if(k >= n || !is_id_start(src[k])) {
-                    fprintf(stderr, "[module] 语法错误：as 后应为别名标识符\n");
+                    LOG_ERROR("[module] 语法错误：as 后应为别名标识符\n");
                     free(out.buf); free(t); return NULL;
                 }
                 int astart = k;
@@ -587,7 +588,7 @@ static char* expand_file(const char* abs_path, SB* out,
     /* 3) 读模块源码 + transform */
     char* content = slurp_file(abs_path);
     if(!content) {
-        fprintf(stderr, "[module] 无法打开模块文件: %s\n", abs_path);
+        LOG_ERROR("[module] 无法打开模块文件: %s\n", abs_path);
         return NULL;
     }
     TransformResult* tr = transform(content);
@@ -619,7 +620,7 @@ static char* expand_file(const char* abs_path, SB* out,
             if(k < tl) k++;
 
             if(idx < 0 || idx >= tr->nimports) {
-                fprintf(stderr, "[module] 内部错误：占位符越界\n"); ok = 0; break;
+                LOG_ERROR("[module] 内部错误：占位符越界\n"); ok = 0; break;
             }
             ImportSpec* isp = &tr->imports[idx];
 
@@ -630,7 +631,7 @@ static char* expand_file(const char* abs_path, SB* out,
 
             char real[PATH_MAX];
             if(!realpath(joined, real)) {
-                fprintf(stderr, "[module] 无法解析导入路径: %s (in %s)\n", isp->path, abs_path);
+                LOG_ERROR("[module] 无法解析导入路径: %s (in %s)\n", isp->path, abs_path);
                 ok = 0; break;
             }
             /* 循环导入检测（在递归之前） */
@@ -639,7 +640,7 @@ static char* expand_file(const char* abs_path, SB* out,
                 if(strcmp(active[a], real) == 0) { cyc = 1; break; }
             }
             if(cyc) {
-                fprintf(stderr, "[module] 检测到循环导入: %s\n", real);
+                LOG_ERROR("[module] 检测到循环导入: %s\n", real);
                 ok = 0; break;
             }
 
@@ -647,7 +648,7 @@ static char* expand_file(const char* abs_path, SB* out,
             char* child_expvar = NULL;
             {
                 const char* new_active[64];
-                if(n_active + 1 > 63) { fprintf(stderr, "[module] 导入嵌套过深\n"); ok = 0; break; }
+                if(n_active + 1 > 63) { LOG_ERROR("[module] 导入嵌套过深\n"); ok = 0; break; }
                 for(int a = 0; a < n_active; a++) new_active[a] = active[a];
                 new_active[n_active] = real;
 
@@ -757,7 +758,7 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
             else snprintf(joined, sizeof joined, "%s/%s", dir, isp->path);
             char mreal[PATH_MAX];
             if(!realpath(joined, mreal)) {
-                fprintf(stderr, "[module] 无法解析导入路径: %s (in %s)\n", isp->path, real);
+                LOG_ERROR("[module] 无法解析导入路径: %s (in %s)\n", isp->path, real);
                 ok = 0; break;
             }
             /* 循环检测（主文件自身 + 当前子模块入栈） */

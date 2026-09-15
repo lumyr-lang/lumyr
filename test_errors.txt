@@ -1,0 +1,95 @@
+全量测试结果：通过 120 个，失败 11 个，总计 131 个
+
+失败的测试文件：
+
+1. class_func_annot_comprehensive_test.lm (VM)
+   返回码: 1
+   错误输出: Runtime Error: add() 第一个参数必须是数组
+
+   标准输出: === Class Function Annotation Comprehensive Test ===
+\n--- 1. 无参数注解 ---
+
+
+2. class_func_annot_test.lm (VM)
+   返回码: 1
+   错误输出: Runtime Error: add() 第一个参数必须是数组
+
+   标准输出: === Class Function Annotation Test ===
+value: 10
+
+
+3. class_static_prop_test.lm (VM)
+   返回码: 1
+   错误输出: Runtime Error: 未定义变量: Config_version
+
+   标准输出: === Class Static Property Test (Simple) ===
+
+
+4. combo_test_1_5.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: cannot open output file tests\combo_test_1_5.exe: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\combo_test_1_5.c
+
+
+5. combo_test_all.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: cannot open output file tests\combo_test_all.exe: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\combo_test_all.c
+
+
+6. cond_timeout_test.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: cannot open output file tests\cond_timeout_test.exe: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\cond_timeout_test.c
+
+
+7. debug_struct_two_args_no_use.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: cannot open output file tests\debug_struct_two_args_no_use.exe: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\debug_struct_two_args_no_use.c
+
+
+8. full_test.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: reopening tests\full_test.exe: Permission denied
+C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: final link failed: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\full_test.c
+
+
+9. functional_test.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: reopening tests\functional_test.exe: Permission denied
+C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: final link failed: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\functional_test.c
+
+
+10. gc_efficiency_diag.lm (EXCEPTION)
+   返回码: -1
+   错误输出: [WinError 1392] 文件或目录损坏且无法读取。
+
+11. gc_thread_stress.lm (CC_COMPILE)
+   返回码: 1
+   错误输出: C:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/15.1.0/../../../../x86_64-w64-mingw32/bin/ld.exe: cannot open output file tests\gc_thread_stress.exe: Permission denied
+collect2.exe: error: ld returned 1 exit status
+[CodeGen] gcc 编译失败
+
+   标准输出: [CodeGen] 已生成 tests\gc_thread_stress.c
+

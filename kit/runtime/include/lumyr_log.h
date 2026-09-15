@@ -43,10 +43,4 @@ void log_throw_impl(const char* file, int line, const char* fmt, ...);
 /* 异常抛出宏：自动传入文件名和行号，打印后退出 */
 #define THROW_ERROR(...) log_throw_impl(__FILE__, __LINE__, __VA_ARGS__)
 
-/* 运行时错误宏：兼容现有的 runtime_error 调用 */
-#define runtime_error(msg) log_throw_impl(__FILE__, __LINE__, "%s", msg)
-
-/* 运行时未定义宏：兼容现有的 runtime_undefined 调用 */
-#define runtime_undefined(type, name) log_throw_impl(__FILE__, __LINE__, "未定义%s: %s", type, name)
-
 #endif /* LUMYR_LOG_H */

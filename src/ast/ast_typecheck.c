@@ -1,6 +1,7 @@
 /* 编译期模块：func_depth/in_lambda/lambda_locals_cnt/g_global_vars_cnt 为单线程编译状态，
  * 未来并发编译需实例化。 */
 #include "ast_typecheck.h"
+#include "lumyr_log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,7 +56,7 @@ static void cap_push(void) {
     if(g_cap_depth >= g_cap_cap) {
         int nc = g_cap_cap > 0 ? g_cap_cap * 2 : 8;
         CaptList* nt = (CaptList*)realloc(g_cap_stack, (size_t)nc * sizeof(CaptList));
-        if(!nt) { fprintf(stderr, "捕获栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!nt) { LOG_ERROR("捕获栈扩容内存不足\n"); exit(EXIT_FAILURE); }
         g_cap_stack = nt; g_cap_cap = nc;
     }
     g_cap_stack[g_cap_depth].names = NULL;
@@ -70,7 +71,7 @@ static void cap_add(const char* name) {
     if(L->cnt >= L->cap) {
         int nc = L->cap > 0 ? L->cap * 2 : 8;
         char** nn = (char**)realloc(L->names, (size_t)nc * sizeof(char*));
-        if(!nn) { fprintf(stderr, "捕获名表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!nn) { LOG_ERROR("捕获名表扩容内存不足\n"); exit(EXIT_FAILURE); }
         L->names = nn; L->cap = nc;
     }
     L->names[L->cnt++] = strdup(name);
@@ -118,7 +119,7 @@ static void collect_top_level(AstNode* node) {
             if(g_global_vars_cnt >= g_global_vars_cap) {
                 int nc = g_global_vars_cap > 0 ? g_global_vars_cap * 2 : 64;
                 char** nt = (char**)realloc(g_global_vars, (size_t)nc * sizeof(char*));
-                if(!nt) { fprintf(stderr, "全局变量表扩容内存不足\n"); exit(EXIT_FAILURE); }
+                if(!nt) { LOG_ERROR("全局变量表扩容内存不足\n"); exit(EXIT_FAILURE); }
                 g_global_vars = nt; g_global_vars_cap = nc;
             }
             g_global_vars[g_global_vars_cnt++] = strdup(node->u.assign.varname);
@@ -130,7 +131,7 @@ static void collect_top_level(AstNode* node) {
             if(strncmp(node->u.func_def.name, "_lambda_", 8) != 0 && !node->u.func_def.is_class_method) {
                 ValueType ty;
                 if(static_sym_get(node->u.func_def.name, &ty) && ty == VAL_FUNC) {
-                    fprintf(stderr, "语义错误(第%d行)：函数 \"%s\" 重复定义\n",
+                    LOG_ERROR("语义错误(第%d行)：函数 \"%s\" 重复定义\n",
                             node->line, node->u.func_def.name);
                     g_collect_err = 1;
                 }
@@ -185,7 +186,7 @@ static void collect_top_level(AstNode* node) {
                 if(g_global_vars_cnt >= g_global_vars_cap) {
                     int nc = g_global_vars_cap > 0 ? g_global_vars_cap * 2 : 64;
                     char** nt = (char**)realloc(g_global_vars, (size_t)nc * sizeof(char*));
-                    if(!nt) { fprintf(stderr, "全局变量表扩容内存不足\n"); exit(EXIT_FAILURE); }
+                    if(!nt) { LOG_ERROR("全局变量表扩容内存不足\n"); exit(EXIT_FAILURE); }
                     g_global_vars = nt; g_global_vars_cap = nc;
                 }
                 g_global_vars[g_global_vars_cnt++] = strdup(node->u.destruct.names[i]);
@@ -371,7 +372,7 @@ static int typecheck_call(AstNode* node)
                 if(nargs > 0) {
                     int nprops = type_lookup(node->u.call.name)->nprops;
                     if(!(nargs == nprops || nargs == 1)) {
-                        fprintf(stderr, "语义错误(第%d行)：类型构造参数个数错误：需要 %d 个（或单个 map），实际 %d 个\n",
+                        LOG_ERROR("语义错误(第%d行)：类型构造参数个数错误：需要 %d 个（或单个 map），实际 %d 个\n",
                                 node->line, nprops, nargs);
                     }
                 }
@@ -420,13 +421,13 @@ static int typecheck_call(AstNode* node)
                                   (builtins[k].max >= 0 && nargs > builtins[k].max);
                         if(bad) {
                             if(builtins[k].max >= 0 && builtins[k].min == builtins[k].max)
-                                fprintf(stderr,"语义错误(第%d行)：%s() 需要 %d 个实参（给了 %d 个）\n", node->line,
+                                LOG_ERROR("语义错误(第%d行)：%s() 需要 %d 个实参（给了 %d 个）\n", node->line,
                                         builtins[k].name, builtins[k].min, nargs);
                             else if(builtins[k].max < 0)
-                                fprintf(stderr,"语义错误(第%d行)：%s() 需要至少 %d 个实参（给了 %d 个）\n", node->line,
+                                LOG_ERROR("语义错误(第%d行)：%s() 需要至少 %d 个实参（给了 %d 个）\n", node->line,
                                         builtins[k].name, builtins[k].min, nargs);
                             else
-                                fprintf(stderr,"语义错误(第%d行)：%s() 需要 %d 到 %d 个实参（给了 %d 个）\n", node->line,
+                                LOG_ERROR("语义错误(第%d行)：%s() 需要 %d 到 %d 个实参（给了 %d 个）\n", node->line,
                                         builtins[k].name, builtins[k].min, builtins[k].max, nargs);
                             err = 1;
                         }
@@ -441,14 +442,14 @@ static int typecheck_call(AstNode* node)
                         /* 无参数的函数调用，不可能是方法调用，报错
                            但是静态方法的函数名是 <类名>_<方法名>，包含 _，跳过检查 */
                         if(strchr(node->u.call.name, '_') == NULL) {
-                            fprintf(stderr,"语义错误(第%d行)：调用未定义函数 %s\n", node->line, node->u.call.name);
+                            LOG_ERROR("语义错误(第%d行)：调用未定义函数 %s\n", node->line, node->u.call.name);
                             err = 1;
                         }
                     }
                     /* 有参数的函数调用，可能是方法调用，不报错，运行时查找 */
                 }
             } else if(t != VAL_NONE && t != VAL_FUNC) {
-                fprintf(stderr,"语义错误(第%d行)：%s 不是函数\n", node->line, node->u.call.name);
+                LOG_ERROR("语义错误(第%d行)：%s 不是函数\n", node->line, node->u.call.name);
                 err = 1;
             }
             node->val_type = VAL_NONE;
@@ -499,7 +500,7 @@ int typecheck_expr(AstNode* node)
                             if(g_recompile_cnt >= g_recompile_cap) {
                                 int nc = g_recompile_cap > 0 ? g_recompile_cap * 2 : 16;
                                 AstNode** nt = (AstNode**)realloc(g_recompile, (size_t)nc * sizeof(AstNode*));
-                                if(!nt) { fprintf(stderr, "重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
+                                if(!nt) { LOG_ERROR("重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
                                 g_recompile = nt; g_recompile_cap = nc;
                             }
                             g_recompile[g_recompile_cnt++] = g_cur_func_def;
@@ -509,7 +510,7 @@ int typecheck_expr(AstNode* node)
                     node->val_type = t;
                 }
             } else {
-                fprintf(stderr,"语义错误(第%d行)：使用未定义变量 %s\n", node->line, node->u.varname);
+                LOG_ERROR("语义错误(第%d行)：使用未定义变量 %s\n", node->line, node->u.varname);
                 node->val_type = VAL_NONE;
                 err = 1;
             }
@@ -524,7 +525,7 @@ int typecheck_expr(AstNode* node)
             err |= typecheck_expr(kid);
             if(op == OP_PRE_INC || op == OP_POST_INC || op == OP_PRE_DEC || op == OP_POST_DEC) {
                 if(kid->type != AST_VAR) {
-                    fprintf(stderr,"语义错误：++/-- 的操作数必须是变量\n");
+                    LOG_ERROR("语义错误：++/-- 的操作数必须是变量\n");
                     return -1;
                 }
             }
@@ -556,7 +557,7 @@ int typecheck_expr(AstNode* node)
                     else
                         node->val_type = VAL_INT;
                 } else {
-                    fprintf(stderr,"语义错误：不支持 %s + %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
+                    LOG_ERROR("语义错误：不支持 %s + %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
                     err = 1;
                 }
             } else if(op == OP_EQ || op == OP_NE) {
@@ -569,7 +570,7 @@ int typecheck_expr(AstNode* node)
                         (tl == VAL_BYTE && tr == VAL_INT) || (tl == VAL_INT && tr == VAL_BYTE) ||
                         (tl == VAL_CHAR && tr == VAL_BYTE) || (tl == VAL_BYTE && tr == VAL_CHAR) ) { ok = 1; }
                     if(!ok) {
-                        fprintf(stderr,"语义错误：==/!= 两侧类型不一致 %s vs %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
+                        LOG_ERROR("语义错误：==/!= 两侧类型不一致 %s vs %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
                         err = 1;
                     }
                 }
@@ -583,7 +584,7 @@ int typecheck_expr(AstNode* node)
             } else if(op == OP_MOD) {
                 if(!(left_unknown || right_unknown)) {
                     if(!(left_is_num && right_is_num)) {
-                        fprintf(stderr,"语义错误：%% 只支持数值类型\n");
+                        LOG_ERROR("语义错误：%% 只支持数值类型\n");
                         err = 1;
                     }
                 }
@@ -594,7 +595,7 @@ int typecheck_expr(AstNode* node)
             } else {
                 if(!(left_unknown || right_unknown)) {
                     if(!(left_is_num && right_is_num)) {
-                        fprintf(stderr,"语义错误：运算符只支持数值类型\n");
+                        LOG_ERROR("语义错误：运算符只支持数值类型\n");
                         err = 1;
                     }
                 }
@@ -628,7 +629,7 @@ int typecheck_expr(AstNode* node)
                     if(lambda_locals_cnt >= lambda_locals_cap) {
                         int nc = lambda_locals_cap > 0 ? lambda_locals_cap * 2 : 64;
                         char** nt = (char**)realloc(lambda_locals, (size_t)nc * sizeof(char*));
-                        if(!nt) { fprintf(stderr, "lambda 局部表扩容内存不足\n"); exit(EXIT_FAILURE); }
+                        if(!nt) { LOG_ERROR("lambda 局部表扩容内存不足\n"); exit(EXIT_FAILURE); }
                         lambda_locals = nt; lambda_locals_cap = nc;
                     }
                     lambda_locals[lambda_locals_cnt++] = strdup(vn);
@@ -644,7 +645,7 @@ int typecheck_expr(AstNode* node)
                node->u.index.arr->val_type != VAL_STRING &&
                node->u.index.arr->val_type != VAL_MAP &&
                node->u.index.arr->val_type != VAL_NONE) {
-                fprintf(stderr,"语义错误(第%d行)：下标访问的对象不是数组、字符串或字典\n", node->line);
+                LOG_ERROR("语义错误(第%d行)：下标访问的对象不是数组、字符串或字典\n", node->line);
                 err = 1;
             }
             node->val_type = VAL_NONE;   // 元素类型不可静态追踪
@@ -658,13 +659,13 @@ int typecheck_expr(AstNode* node)
             if(node->u.index_assign.idx->type == AST_STRING &&
                (strcmp(node->u.index_assign.idx->u.sval, "__mapname__") == 0 ||
                 strcmp(node->u.index_assign.idx->u.sval, "__structname__") == 0)) {
-                fprintf(stderr, "语义错误(第%d行)：只读属性 %s 不能赋值\n", node->line, node->u.index_assign.idx->u.sval);
+                LOG_ERROR("语义错误(第%d行)：只读属性 %s 不能赋值\n", node->line, node->u.index_assign.idx->u.sval);
                 err = 1;
             }
             if(node->u.index_assign.arr->val_type != VAL_ARRAY &&
                node->u.index_assign.arr->val_type != VAL_MAP &&
                node->u.index_assign.arr->val_type != VAL_NONE) {
-                fprintf(stderr,"语义错误(第%d行)：下标访问的对象不是数组或字典\n", node->line);
+                LOG_ERROR("语义错误(第%d行)：下标访问的对象不是数组或字典\n", node->line);
                 err = 1;
             }
             node->val_type = node->u.index_assign.value->val_type;
@@ -850,7 +851,7 @@ int typecheck_expr(AstNode* node)
             AstNode* p = node->u.func_def.params;
             while(p) {
                 if(p->u.param.is_ellipsis && p->u.param.next != NULL) {
-                    fprintf(stderr,"语义错误：可变参数...必须放在参数列表最后\n");
+                    LOG_ERROR("语义错误：可变参数...必须放在参数列表最后\n");
                     err = 1;
                 }
                 p = p->u.param.next;
@@ -886,7 +887,7 @@ int typecheck_expr(AstNode* node)
                         if(g_recompile_cnt >= g_recompile_cap) {
                             int ncap2 = g_recompile_cap > 0 ? g_recompile_cap * 2 : 16;
                             AstNode** nt = (AstNode**)realloc(g_recompile, (size_t)ncap2 * sizeof(AstNode*));
-                            if(!nt) { fprintf(stderr, "重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
+                            if(!nt) { LOG_ERROR("重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
                             g_recompile = nt; g_recompile_cap = ncap2;
                         }
                         g_recompile[g_recompile_cnt++] = save_cur;

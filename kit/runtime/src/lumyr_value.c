@@ -1,4 +1,5 @@
 #include "lumyr_value.h"
+#include "lumyr_log.h"
 #include "lm_map.h"
 #include "gc_runtime.h"
 #include <string.h>
@@ -36,34 +37,34 @@ void __g_ensure(int need)
     if(need <= __g_cap) return;
     int nc = __g_cap > 0 ? __g_cap * 2 : 64;
     jmp_buf* nj = (jmp_buf*)realloc(__g_jbs, (size_t)nc * sizeof(jmp_buf));
-    if(!nj) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nj) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_jbs = nj;
     jmp_buf** np = (jmp_buf**)realloc(__g_prev, (size_t)nc * sizeof(jmp_buf*));
-    if(!np) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!np) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_prev = np;
     int* na = (int*)realloc(__g_sp0, (size_t)nc * sizeof(int));
-    if(!na) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!na) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_sp0 = na;
     int* nt = (int*)realloc(__g_tgt, (size_t)nc * sizeof(int));
-    if(!nt) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nt) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_tgt = nt;
     int* nn = (int*)realloc(__g_tn, (size_t)nc * sizeof(int));
-    if(!nn) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nn) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_tn = nn;
     int* nf = (int*)realloc(__g_fn, (size_t)nc * sizeof(int));
-    if(!nf) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nf) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_fn = nf;
     int* nfa = (int*)realloc(__g_fin_act, (size_t)nc * sizeof(int));
-    if(!nfa) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nfa) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_fin_act = nfa;
     int* nfd = (int*)realloc(__g_fin_dep, (size_t)nc * sizeof(int));
-    if(!nfd) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nfd) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_fin_dep = nfd;
     int* nft = (int*)realloc(__g_fin_tgt, (size_t)nc * sizeof(int));
-    if(!nft) { fprintf(stderr, "错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!nft) { LOG_ERROR("错误处理栈扩容内存不足\n"); exit(EXIT_FAILURE); }
     __g_fin_tgt = nft;
     const char** ntr = (const char**)realloc(g_trace, (size_t)nc * sizeof(const char*));
-    if(!ntr) { fprintf(stderr, "调用栈回溯扩容内存不足\n"); exit(EXIT_FAILURE); }
+    if(!ntr) { LOG_ERROR("调用栈回溯扩容内存不足\n"); exit(EXIT_FAILURE); }
     g_trace = ntr;
     __g_cap = nc;
     g_trace_cap = nc;
@@ -84,7 +85,7 @@ void g_err_msg_set(const char* s)
         int nc = g_err_msg_cap > 0 ? g_err_msg_cap * 2 : 1024;
         while(nc < (int)l + 1) nc *= 2;
         char* nm = (char*)realloc(g_err_msg, (size_t)nc);
-        if(!nm) { fprintf(stderr, "错误消息缓冲扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!nm) { LOG_ERROR("错误消息缓冲扩容内存不足\n"); exit(EXIT_FAILURE); }
         g_err_msg = nm; g_err_msg_cap = nc;
     }
     memcpy(g_err_msg, s ? s : "", l + 1);
@@ -97,7 +98,7 @@ void g_err_type_set(const char* s)
         int nc = g_err_type_cap > 0 ? g_err_type_cap * 2 : 64;
         while(nc < (int)l + 1) nc *= 2;
         char* nm = (char*)realloc(g_err_type, (size_t)nc);
-        if(!nm) { fprintf(stderr, "错误类型缓冲扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!nm) { LOG_ERROR("错误类型缓冲扩容内存不足\n"); exit(EXIT_FAILURE); }
         g_err_type = nm; g_err_type_cap = nc;
     }
     memcpy(g_err_type, s ? s : "RuntimeError", l + 1);
@@ -110,7 +111,7 @@ void runtime_error(const char* msg) {
         g_err_msg_set(msg);
         longjmp(*g_err_jmp, 1);
     }
-    fprintf(stderr, "Runtime Error: %s\n", msg);
+    LOG_ERROR("Runtime Error: %s\n", msg);
     exit(EXIT_FAILURE);
 }
 

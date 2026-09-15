@@ -3,6 +3,7 @@
  * 自动从 ir_cgen.c 拆分
  */
 #include "ir_cgen_internal.h"
+#include "lumyr_log.h"
 
 /* 全局方法名到 vtable 索引的查找函数（定义在 ir_cgen.c 中） */
 int find_method_index(const char* name);
@@ -296,7 +297,7 @@ int fin_lab_idx_of(int pc)
     if(fin_lab_cnt >= fin_lab_cap) {
         int newcap = fin_lab_cap > 0 ? fin_lab_cap * 2 : 64;
         int* np = (int*)realloc(fin_lab_pcs, (size_t)newcap * sizeof(int));
-        if(!np) { fprintf(stderr, "codegen: fin_lab 表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        if(!np) { LOG_ERROR("codegen: fin_lab 表扩容内存不足\n"); exit(EXIT_FAILURE); }
         fin_lab_pcs = np;
         fin_lab_cap = newcap;
     }
@@ -458,7 +459,7 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             case OPC_GETFUNC: {
                 BytecodeFunc* _gf_fn = ir_func_table_lookup_any(nm);
-                if(!_gf_fn) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
+                if(!_gf_fn) { LOG_ERROR("codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
                 /* class 方法加上 class 名前缀，避免多个 class 有相同方法名时包装函数名重复 */
                 const char* _gf_wrap_name = nm;
                 char _gf_wrap_name_buf[256];
@@ -476,7 +477,7 @@ void emit_insns(BytecodeFunc* fn)
                  *               本 lambda 自身透传的外层捕获 → __caps[idx]。 */
                 BytecodeFunc* lfn = ir_func_table_lookup_any(nm);
                 if(!lfn) {
-                    fprintf(stderr, "codegen: 未定义闭包函数: %s\n", nm);
+                    LOG_ERROR("codegen: 未定义闭包函数: %s\n", nm);
                     exit(EXIT_FAILURE);
                 }
                 int ncap = lambda_capture_count(nm);
@@ -2150,7 +2151,7 @@ void emit_insns(BytecodeFunc* fn)
                 }
                 BytecodeFunc* callee = ir_func_table_lookup_any(nm);
                 if(!callee) {
-                    fprintf(stderr, "codegen: 未定义函数: %s\n", nm);
+                    LOG_ERROR("codegen: 未定义函数: %s\n", nm);
                     exit(EXIT_FAILURE);
                 }
                 /* 检查函数名是否是某个 class 的方法 */

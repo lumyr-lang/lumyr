@@ -8,6 +8,7 @@
  * - 完善的错误处理
  */
 #include "lumyr_ffi.h"
+#include "lumyr_log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -46,12 +47,12 @@ static long long ffi_trampoline_0(long long a, long long b, long long c, long lo
 /* 调用 Lumyr 回调函数（由 FFI 调用的 C 函数内部触发） */
 Value lumyr_ffi_invoke_callback(int slot, Value* args, int argc) {
     if(slot < 0 || slot >= FFI_MAX_CALLBACKS || !g_callbacks[slot].used) {
-        fprintf(stderr, "FFI Error: invalid callback slot %d\n", slot);
+        LOG_ERROR("FFI Error: invalid callback slot %d\n", slot);
         return val_none();
     }
     Value cb = g_callbacks[slot].func_val;
     if(cb.type != VAL_FUNC) {
-        fprintf(stderr, "FFI Error: callback slot %d is not a function\n", slot);
+        LOG_ERROR("FFI Error: callback slot %d is not a function\n", slot);
         return val_none();
     }
     /* 通过 RuntimeFunc entry 调用 */
@@ -71,7 +72,7 @@ int lumyr_ffi_register_callback(Value func_val, int param_count) {
             return i;
         }
     }
-    fprintf(stderr, "FFI Error: no free callback slots (max %d)\n", FFI_MAX_CALLBACKS);
+    LOG_ERROR("FFI Error: no free callback slots (max %d)\n", FFI_MAX_CALLBACKS);
     return -1;
 }
 
@@ -91,14 +92,14 @@ void* lumyr_ffi_load_lib(const char* libname) {
 #ifdef _WIN32
     HMODULE h = LoadLibraryA(libname);
     if(!h) {
-        fprintf(stderr, "FFI Error: failed to load library '%s' (error %lu)\n",
+        LOG_ERROR("FFI Error: failed to load library '%s' (error %lu)\n",
                 libname, GetLastError());
     }
     return (void*)h;
 #else
     void* h = dlopen(libname, RTLD_LAZY | RTLD_GLOBAL);
     if(!h) {
-        fprintf(stderr, "FFI Error: failed to load library '%s': %s\n",
+        LOG_ERROR("FFI Error: failed to load library '%s': %s\n",
                 libname, dlerror());
     }
     return h;
@@ -189,17 +190,17 @@ typedef double (*ffi_dfunc6_d_t)(double, double, double, double, double, double)
 /* 调用 FFI 函数 */
 Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
     if(!func) {
-        fprintf(stderr, "FFI Error: null function object\n");
+        LOG_ERROR("FFI Error: null function object\n");
         return val_none();
     }
     if(!func->func_ptr) {
-        fprintf(stderr, "FFI Error: function '%s' not resolved (library: %s)\n",
+        LOG_ERROR("FFI Error: function '%s' not resolved (library: %s)\n",
                 func->name ? func->name : "?",
                 func->libname ? func->libname : "(default)");
         return val_none();
     }
     if(argc > FFI_MAX_ARGS) {
-        fprintf(stderr, "FFI Error: too many arguments (%d), max %d\n", argc, FFI_MAX_ARGS);
+        LOG_ERROR("FFI Error: too many arguments (%d), max %d\n", argc, FFI_MAX_ARGS);
         return val_none();
     }
 
@@ -270,7 +271,7 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
                 case 5: dret = ((ffi_dfunc5_d_t)func->func_ptr)(dargs[0], dargs[1], dargs[2], dargs[3], dargs[4]); break;
                 case 6: dret = ((ffi_dfunc6_d_t)func->func_ptr)(dargs[0], dargs[1], dargs[2], dargs[3], dargs[4], dargs[5]); break;
                 default:
-                    fprintf(stderr, "FFI Error: invalid argument count %d\n", argc);
+                    LOG_ERROR("FFI Error: invalid argument count %d\n", argc);
                     return val_none();
             }
         } else {
@@ -283,7 +284,7 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
                 case 5: ret = ((ffi_func5_d_t)func->func_ptr)(dargs[0], dargs[1], dargs[2], dargs[3], dargs[4]); break;
                 case 6: ret = ((ffi_func6_d_t)func->func_ptr)(dargs[0], dargs[1], dargs[2], dargs[3], dargs[4], dargs[5]); break;
                 default:
-                    fprintf(stderr, "FFI Error: invalid argument count %d\n", argc);
+                    LOG_ERROR("FFI Error: invalid argument count %d\n", argc);
                     return val_none();
             }
         }
@@ -308,7 +309,7 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
             case 15: dret = ((ffi_dfunc15_t)func->func_ptr)(cargs[0], cargs[1], cargs[2], cargs[3], cargs[4], cargs[5], cargs[6], cargs[7], cargs[8], cargs[9], cargs[10], cargs[11], cargs[12], cargs[13], cargs[14]); break;
             case 16: dret = ((ffi_dfunc16_t)func->func_ptr)(cargs[0], cargs[1], cargs[2], cargs[3], cargs[4], cargs[5], cargs[6], cargs[7], cargs[8], cargs[9], cargs[10], cargs[11], cargs[12], cargs[13], cargs[14], cargs[15]); break;
             default:
-                fprintf(stderr, "FFI Error: invalid argument count %d\n", argc);
+                LOG_ERROR("FFI Error: invalid argument count %d\n", argc);
                 return val_none();
         }
     } else {
@@ -332,7 +333,7 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
             case 15: ret = ((ffi_func15_t)func->func_ptr)(cargs[0], cargs[1], cargs[2], cargs[3], cargs[4], cargs[5], cargs[6], cargs[7], cargs[8], cargs[9], cargs[10], cargs[11], cargs[12], cargs[13], cargs[14]); break;
             case 16: ret = ((ffi_func16_t)func->func_ptr)(cargs[0], cargs[1], cargs[2], cargs[3], cargs[4], cargs[5], cargs[6], cargs[7], cargs[8], cargs[9], cargs[10], cargs[11], cargs[12], cargs[13], cargs[14], cargs[15]); break;
             default:
-                fprintf(stderr, "FFI Error: invalid argument count %d\n", argc);
+                LOG_ERROR("FFI Error: invalid argument count %d\n", argc);
                 return val_none();
         }
     }
@@ -381,13 +382,13 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
 FFIFunc* lumyr_ffi_func_create(const char* name, const char* libname,
                                  FFIType ret_type, FFIType* param_types, int param_count) {
     if(!name) {
-        fprintf(stderr, "FFI Error: function name is null\n");
+        LOG_ERROR("FFI Error: function name is null\n");
         return NULL;
     }
 
     FFIFunc* func = (FFIFunc*)calloc(1, sizeof(FFIFunc));
     if(!func) {
-        fprintf(stderr, "FFI Error: out of memory allocating FFIFunc\n");
+        LOG_ERROR("FFI Error: out of memory allocating FFIFunc\n");
         return NULL;
     }
 
@@ -401,7 +402,7 @@ FFIFunc* lumyr_ffi_func_create(const char* name, const char* libname,
         if(func->param_types) {
             memcpy(func->param_types, param_types, (size_t)param_count * sizeof(FFIType));
         } else {
-            fprintf(stderr, "FFI Error: out of memory allocating param types\n");
+            LOG_ERROR("FFI Error: out of memory allocating param types\n");
             free(func->name);
             free(func->libname);
             free(func);
@@ -413,7 +414,7 @@ FFIFunc* lumyr_ffi_func_create(const char* name, const char* libname,
     if(func->libname) {
         func->lib_handle = lumyr_ffi_load_lib(func->libname);
         if(!func->lib_handle) {
-            fprintf(stderr, "FFI Warning: library '%s' not loaded, function '%s' will fail at call time\n",
+            LOG_ERROR("FFI Warning: library '%s' not loaded, function '%s' will fail at call time\n",
                     func->libname, func->name);
         }
     }
@@ -421,7 +422,7 @@ FFIFunc* lumyr_ffi_func_create(const char* name, const char* libname,
     func->func_ptr = lumyr_ffi_get_func(func->lib_handle, func->name);
 
     if(!func->func_ptr) {
-        fprintf(stderr, "FFI Warning: function '%s' not found in library '%s'\n",
+        LOG_ERROR("FFI Warning: function '%s' not found in library '%s'\n",
                 name, libname ? libname : "(default)");
     }
 
