@@ -60,6 +60,13 @@ typedef enum {
     OPC_LOAD_STRUCT_PTR,   // a=变量索引；加载 struct 变量的指针（用于方法 self 参数）
     OPC_BUILTIN,      // a=内置函数 ID，b=实参个数（见 BuiltinId）
     OPC_PRINT,        // 打印栈顶，不弹出
+    OPC_PRINT_INT,    // 从 int 栈弹出并打印（零开销，用于声明为 int 的变量）
+    OPC_PRINT_DOUBLE, // 从 double 栈弹出并打印（零开销，用于声明为 double 的变量）
+    OPC_PRINT_FLOAT,  // 从 float 栈弹出并打印（零开销，用于声明为 float 的变量）
+    OPC_PRINT_UINT,   // 从 uint 栈弹出并打印（零开销，用于声明为 uint 的变量）
+    OPC_PRINT_BOOL,   // 从 bool 栈弹出并打印（零开销，用于声明为 bool 的变量）
+    OPC_PRINT_CHAR,   // 从 char 栈弹出并打印（零开销，用于声明为 char 的变量）
+    OPC_PRINT_BYTE,   // 从 byte 栈弹出并打印（零开销，用于声明为 byte 的变量）
     OPC_TO_BOOL,      // 弹1压1 bool
     OPC_DUP,          // 复制栈顶
     OPC_POP,          // 丢弃栈顶

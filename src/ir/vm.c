@@ -3156,6 +3156,48 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 sp -= cnt;  /* 弹出所有参数 */
                 break;
             }
+            case OPC_PRINT_INT: {
+                /* 从 int 栈弹出并打印（零开销，用于声明为 int 的变量） */
+                int iv = INT_POP();
+                printf("%d\n", iv);
+                break;
+            }
+            case OPC_PRINT_DOUBLE: {
+                /* 从 double 栈弹出并打印（零开销，用于声明为 double 的变量） */
+                double dv = DOUBLE_POP();
+                printf("%g\n", dv);
+                break;
+            }
+            case OPC_PRINT_FLOAT: {
+                /* 从 float 栈弹出并打印（零开销，用于声明为 float 的变量） */
+                float fv = FLOAT_POP();
+                printf("%g\n", (double)fv);
+                break;
+            }
+            case OPC_PRINT_UINT: {
+                /* 从 uint 栈弹出并打印（零开销，用于声明为 uint 的变量） */
+                unsigned int uv = UINT_POP();
+                printf("%u\n", uv);
+                break;
+            }
+            case OPC_PRINT_BOOL: {
+                /* 从 bool 栈弹出并打印（零开销，用于声明为 bool 的变量） */
+                _Bool bv = BOOL_POP();
+                printf("%s\n", bv ? "true" : "false");
+                break;
+            }
+            case OPC_PRINT_CHAR: {
+                /* 从 char 栈弹出并打印（零开销，用于声明为 char 的变量） */
+                char cv = CHAR_POP();
+                printf("%c\n", cv);
+                break;
+            }
+            case OPC_PRINT_BYTE: {
+                /* 从 byte 栈弹出并打印（零开销，用于声明为 byte 的变量） */
+                unsigned char byv = BYTE_POP();
+                printf("%d\n", (int)byv);
+                break;
+            }
             case OPC_TO_BOOL:
                 stack[sp - 1] = lumyr_make_bool(lumyr_to_bool(stack[sp - 1]));
                 break;

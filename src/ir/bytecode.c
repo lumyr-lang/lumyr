@@ -246,6 +246,14 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return 0;                        // 弹1压1
         case OPC_PRINT:
             return -(in.a > 0 ? in.a : 1);  /* 多参数打印：弹出所有参数（向后兼容：a<=0 时弹1） */
+        case OPC_PRINT_INT:
+        case OPC_PRINT_DOUBLE:
+        case OPC_PRINT_FLOAT:
+        case OPC_PRINT_UINT:
+        case OPC_PRINT_BOOL:
+        case OPC_PRINT_CHAR:
+        case OPC_PRINT_BYTE:
+            return 0;  /* 从专用栈弹出值，不改变 Value 栈深度 */
         case OPC_TO_BOOL:
         case OPC_JMP:
         case OPC_RETURN_NIL:

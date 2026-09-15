@@ -1866,6 +1866,47 @@ static void c_expr(Ctx* c, AstNode* node)
             break;
         }
         case AST_PRINT: {
+            /* 优化：如果 print 只有一个参数，而且是一个有类型标记的变量，使用专用打印指令（零开销） */
+            AstNode* single_arg = NULL;
+            if(node->u.print.args && node->u.print.args->type != AST_SEQ) {
+                single_arg = node->u.print.args;  /* 单个参数 */
+            }
+            if(single_arg && single_arg->type == AST_VAR) {
+                int var_idx = bf_sym(c->fn, single_arg->u.varname);
+                if(c->fn->var_type_tags && var_idx >= 0 && var_idx < c->fn->sym_cnt) {
+                    int tag = c->fn->var_type_tags[var_idx];
+                    if(tag == CAST_INT) {
+                        emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT, 0, 0);
+                        break;
+                    } else if(tag == CAST_DOUBLE) {
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
+                        break;
+                    } else if(tag == CAST_FLOAT) {
+                        emit(c, OPC_LOAD_FLOAT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT32) {
+                        emit(c, OPC_LOAD_UINT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        break;
+                    } else if(tag == CAST_BOOL) {
+                        emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_BOOL, 0, 0);
+                        break;
+                    } else if(tag == CAST_CHAR) {
+                        emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_CHAR, 0, 0);
+                        break;
+                    } else if(tag == CAST_BYTE) {
+                        emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_BYTE, 0, 0);
+                        break;
+                    }
+                }
+            }
+            /* 普通打印：多参数或非类型化变量 */
             int cnt = c_print_args(c, node->u.print.args);
             emit(c, OPC_PRINT, cnt, 0);
             break;
