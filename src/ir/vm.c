@@ -2819,12 +2819,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     /* 可能是 class 方法调用：检查第一个参数是否是 class 实例 */
                     Value obj = stack[sp - argc];
                     const char* class_name = NULL;
-                    if(obj.type == VAL_MAP && lumyr_map_has(obj, lumyr_make_string("__classname__"))) {
-                        /* map 方式的 class 实例 */
-                        Value cn = lumyr_map_get(obj, lumyr_make_string("__classname__"));
-                        if(cn.type == VAL_STRING) class_name = lumyr_str_cstr(&cn);
-                    } else if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(obj)) {
-                        /* 结构体方式的 class 实例：从 vtable 中获取 class 名 */
+                    if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                        /* class 实例：从 vtable 中获取 class 名 */
                         ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
                         if(inst && inst->vtable) class_name = inst->vtable->class_name;
                     }
