@@ -204,6 +204,9 @@ struct EvalCtx {
 typedef struct StackFrame {
     char** names;    // 动态：按需扩容，无硬上限
     Value* vals;
+    int* int_vals;   /* int 类型变量的原始值存储（与 names/vals 平行数组）
+                        声明为 int 类型的变量同时存储在 vals（作为 Value）和 int_vals（作为原始 int）
+                        OPC_LOAD_INT_VAR 直接从 int_vals 读取，实现零提取、零类型检查 */
     int cnt;
     int cap;
     struct StackFrame* parent;

@@ -1919,30 +1919,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_LOAD_INT_VAR: {
-                /* 声明为 int 类型的变量：直接加载到 int 栈，零检查零转换
-                   因为变量已声明为 int 类型，直接从 Value 联合体提取，无需类型检查和转换函数调用 */
+                /* 声明为 int 类型的变量：直接从栈帧的 int_vals 数组读取，零提取、零类型检查
+                   stackframe_get_int 直接返回原始 int 值，不需要从 Value 联合体提取 */
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;
-                Value vv = stackframe_get(frame, name, &fnd);
+                int iv = stackframe_get_int(frame, name, &fnd);
                 if(!fnd) runtime_undefined("变量", name);
-                /* 直接从 Value 联合体提取 int 值，零类型检查、零函数调用 */
-                int iv;
-                switch(vv.type) {
-                    case VAL_INT:
-                    case VAL_BYTE:
-                    case VAL_CHAR:
-                    case VAL_BOOL:
-                        iv = (int)vv.v.i;
-                        break;
-                    case VAL_DOUBLE:
-                        iv = (int)vv.v.d;
-                        break;
-                    default:
-                        /* 理论上不会走到这里，因为变量已声明为 int 类型；
-                           作为兜底，调用通用转换函数 */
-                        iv = (int)lumyr_extract_int(vv);
-                        break;
-                }
                 INT_PUSH(iv);
                 break;
             }

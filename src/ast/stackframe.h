@@ -27,6 +27,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag);
 // 获取变量的类型标记（-1 表示无精确类型）
 int stackframe_get_type_tag(StackFrame* f, const char* name);
 
+// 获取 int 类型变量的原始 int 值，零提取、零类型检查
+// 直接从 int_vals 数组读取，用于 OPC_LOAD_INT_VAR 指令
+int stackframe_get_int(StackFrame* f, const char* name, _Bool* found);
+
 // 绑定语义（参数绑定用）：只在当前帧查找/创建，不向上查找，遮蔽父帧同名变量
 void stackframe_bind(StackFrame* f, const char* name, Value v);
 

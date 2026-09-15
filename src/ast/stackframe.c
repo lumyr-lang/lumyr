@@ -93,6 +93,19 @@ static void frame_ensure(StackFrame* f, int need)
     f->type_tags = nt;
     free(old_tags);
 
+    /* 扩容 int_vals：malloc + memcpy，更新指针后 free 旧缓冲区
+       int_vals 存储声明为 int 类型的变量的原始 int 值，用于 OPC_LOAD_INT_VAR 零提取 */
+    int* niv = (int*)malloc((size_t)newcap * sizeof(int));
+    if(!niv) { perror("stackframe expand int_vals"); exit(EXIT_FAILURE); }
+    if(f->int_vals) {
+        memcpy(niv, f->int_vals, (size_t)f->cap * sizeof(int));
+    }
+    /* 新槽位初始化为 0 */
+    for(int i = f->cap; i < newcap; i++) niv[i] = 0;
+    int* old_int_vals = f->int_vals;
+    f->int_vals = niv;
+    free(old_int_vals);
+
     f->cap = newcap;
 }
 
@@ -105,6 +118,7 @@ void stackframe_destroy(StackFrame* f)
     }
     free(f->names);
     free(f->vals);
+    free(f->int_vals);
     /* cell 表：cell 指针本身由闭包持有，这里只释放表项名与指针数组 */
     for(int i = 0; i < f->cell_cnt; i++) {
         free(f->cell_names[i]);
@@ -163,7 +177,9 @@ Value stackframe_get(StackFrame* f, const char* name, _Bool* found)
     return zero;
 }
 
-/* 设置变量的类型标记（CastKind 枚举，-1 表示无精确类型） */
+/* 设置变量的类型标记（CastKind 枚举，-1 表示无精确类型）
+   当设置类型标记为 CAST_INT 时，同时从 vals 提取 int 值存储到 int_vals，
+   用于 OPC_LOAD_INT_VAR 零提取 */
 void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
 {
     if(!f || !name) return;
@@ -172,6 +188,20 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 if(p->type_tags) p->type_tags[i] = type_tag;
+                /* 当设置为 int 类型时，同时更新 int_vals */
+                if(type_tag == 2 /* CAST_INT */ && p->int_vals) {
+                    Value v = p->vals[i];
+                    int iv = 0;
+                    switch(v.type) {
+                        case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                            iv = (int)v.v.i; break;
+                        case 2:  // VAL_DOUBLE
+                            iv = (int)v.v.d; break;
+                        default:
+                            iv = 0; break;
+                    }
+                    p->int_vals[i] = iv;
+                }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
             }
@@ -196,6 +226,46 @@ int stackframe_get_type_tag(StackFrame* f, const char* name)
         if(hl) pthread_rwlock_unlock(&p->rw);
     }
     return -1;
+}
+
+/* 获取 int 类型变量的原始 int 值，零提取、零类型检查
+   直接从 int_vals 数组读取，用于 OPC_LOAD_INT_VAR 指令
+   如果变量不存在或不是 int 类型，返回 0 并置 *found=0 */
+int stackframe_get_int(StackFrame* f, const char* name, _Bool* found)
+{
+    if(found) *found = 0;
+    if(!f || !name) return 0;
+    for(StackFrame* p = f; p; p = p->parent) {
+        int hl = p->shared ? (pthread_rwlock_rdlock(&p->rw), 1) : 0;
+        for(int i = 0; i < p->cnt; i++) {
+            if(strcmp(p->names[i], name) == 0) {
+                /* 检查变量是否标记为 int 类型 */
+                int tag = (p->type_tags) ? p->type_tags[i] : -1;
+                if(tag == 2 /* CAST_INT */ && p->int_vals) {
+                    int iv = p->int_vals[i];  // 直接读取，零提取
+                    if(hl) pthread_rwlock_unlock(&p->rw);
+                    if(found) *found = 1;
+                    return iv;
+                }
+                /* 不是 int 类型，回退到从 Value 提取 */
+                Value v = p->vals[i];
+                int iv = 0;
+                switch(v.type) {
+                    case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                        iv = (int)v.v.i; break;
+                    case 2:  // VAL_DOUBLE
+                        iv = (int)v.v.d; break;
+                    default:
+                        iv = 0; break;
+                }
+                if(hl) pthread_rwlock_unlock(&p->rw);
+                if(found) *found = 1;
+                return iv;
+            }
+        }
+        if(hl) pthread_rwlock_unlock(&p->rw);
+    }
+    return 0;
 }
 
 void stackframe_set(StackFrame* f, const char* name, Value v)
