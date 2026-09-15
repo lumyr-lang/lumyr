@@ -1449,17 +1449,42 @@ static void c_expr(Ctx* c, AstNode* node)
                     double dv = (fv.type == VAL_DOUBLE) ? fv.v.d : (double)fv.v.i;
                     if(ct == CAST_FLOAT) dv = (float)dv;
                     fv = lumyr_make_double(dv);
+                } else if(ct == CAST_BOOL) {
+                    /* bool 类型：创建 VAL_BOOL 类型的值 */
+                    _Bool bv = 0;
+                    if(fv.type == VAL_BOOL) bv = fv.v.b;
+                    else if(fv.type == VAL_INT || fv.type == VAL_BYTE || fv.type == VAL_CHAR) bv = fv.v.i ? 1 : 0;
+                    else if(fv.type == VAL_DOUBLE) bv = fv.v.d ? 1 : 0;
+                    fv = lumyr_make_bool(bv);
+                } else if(ct == CAST_CHAR) {
+                    /* char 类型：创建 VAL_CHAR 类型的值 */
+                    long long iv = 0;
+                    if(fv.type == VAL_CHAR) iv = (long long)(unsigned char)fv.v.c;
+                    else if(fv.type == VAL_INT || fv.type == VAL_BYTE || fv.type == VAL_BOOL) iv = fv.v.i;
+                    else if(fv.type == VAL_DOUBLE) iv = (long long)fv.v.d;
+                    Value cv;
+                    cv.type = VAL_CHAR;
+                    cv.v.c = (char)(unsigned char)iv;
+                    fv = cv;
+                } else if(ct == CAST_BYTE) {
+                    /* byte 类型：创建 VAL_BYTE 类型的值 */
+                    long long iv = 0;
+                    if(fv.type == VAL_BYTE) iv = fv.v.i;
+                    else if(fv.type == VAL_INT || fv.type == VAL_CHAR || fv.type == VAL_BOOL) iv = fv.v.i;
+                    else if(fv.type == VAL_DOUBLE) iv = (long long)fv.v.d;
+                    Value bv;
+                    bv.type = VAL_BYTE;
+                    bv.v.i = (long long)(uint8_t)(unsigned long long)iv;
+                    fv = bv;
                 } else {
                     long long iv = (fv.type == VAL_INT) ? fv.v.i : (long long)fv.v.d;
                     switch(ct) {
                         case CAST_INT8: iv = (long long)(int8_t)iv; break;
                         case CAST_INT16: case CAST_SHORT: iv = (long long)(int16_t)iv; break;
                         case CAST_INT32: case CAST_INT: iv = (long long)(int32_t)iv; break;
-                        case CAST_UINT8: case CAST_UCHAR: case CAST_BYTE: iv = (long long)(uint8_t)(unsigned long long)iv; break;
+                        case CAST_UINT8: case CAST_UCHAR: iv = (long long)(uint8_t)(unsigned long long)iv; break;
                         case CAST_UINT16: case CAST_USHORT: iv = (long long)(uint16_t)(unsigned long long)iv; break;
                         case CAST_UINT32: iv = (long long)(uint32_t)(unsigned long long)iv; break;
-                        case CAST_CHAR: iv = (long long)(unsigned char)iv; break;
-                        case CAST_BOOL: iv = iv ? 1 : 0; break;
                         /* int64/long/long long/uint64/ulong/size_t/ssize_t/ptr：不截断 */
                         default: break;
                     }
