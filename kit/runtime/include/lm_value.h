@@ -21,6 +21,7 @@ Value lumyr_make_int64(int64_t i64);        // int64：64 位有符号整数（-
 Value lumyr_make_uint8(uint8_t u8);          // uint8：8 位无符号整数（0 到 255）
 Value lumyr_make_uint16(uint16_t u16);        // uint16：16 位无符号整数（0 到 65535）
 Value lumyr_make_uint64(uint64_t u64);        // uint64：64 位无符号整数（0 到 18446744073709551615）
+Value lumyr_make_long(long lv);                  // long：长整数（平台相关，通常 32 位或 64 位）
 Value lumyr_make_struct_ptr(void* ptr);    // C结构体指针：零拷贝传递，类型由外部标识
 
 // 算术
