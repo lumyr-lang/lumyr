@@ -1,4 +1,7 @@
 #include "lm_class.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "lm_value.h"
 #include "lm_runtime.h"
 #include "lm_struct.h"
@@ -263,9 +266,13 @@ const char* lumyr_class_get_name(Value obj)
 int lumyr_is_class_instance(Value obj)
 {
     if(obj.type != VAL_STRUCT_PTR || !obj.v.struct_ptr) return 0;
-    /* class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name */
+    /* class 的第一个字段是 vtable 指针，vtable 的第一个字段是 class_name
+       结构体的第一个字段是 __structname__（直接是 const char*）
+       使用 IsBadReadPtr 检查指针是否有效，避免访问违规 */
     void** vtable_ptr = (void**)obj.v.struct_ptr;
+    if(IsBadReadPtr(vtable_ptr, sizeof(void*))) return 0;
     if(!*vtable_ptr) return 0;
+    if(IsBadReadPtr(*vtable_ptr, sizeof(const char*))) return 0;
     const char** class_name_ptr = (const char**)*vtable_ptr;
     if(!*class_name_ptr) return 0;
     /* 检查这个 class 名是否在 class 红黑树中 */

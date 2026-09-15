@@ -1,0 +1,32 @@
+// 调试结构体方法有两个参数（第二个是整数）的测试
+print("=== 调试结构体方法有两个参数（第二个是整数）===");
+
+// 简单 class（没有方法）
+class SimpleClass {
+    name: string;
+}
+
+obj = SimpleClass();
+obj.name = "Test";
+print("obj.name =", obj.name);
+
+// 结构体方法（有两个参数，第二个是整数）
+struct Point {
+    x: int;
+    y: int;
+    func scale(self, factor) {
+        print("进入 scale 方法");
+        print("self.x =", self.x);
+        print("factor =", factor);
+        return self.x * factor;
+    }
+}
+
+p1 = Point();
+p1.x = 10;
+p1.y = 20;
+print("准备调用 p1.scale(5)");
+result = p1.scale(5);
+print("result =", result);
+
+print("=== 调试完成 ===");
