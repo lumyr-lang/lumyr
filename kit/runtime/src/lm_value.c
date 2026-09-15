@@ -92,6 +92,13 @@ Value lumyr_make_int16(int16_t i16) {
     return v;
 }
 
+Value lumyr_make_int32(int32_t i32) {
+    Value v;
+    v.type = VAL_INT32;
+    v.v.i = (long long)i32;
+    return v;
+}
+
 // 获取value的数值，int转double
 double value_as_number(Value x) {
     if(x.type == VAL_INT)
@@ -366,6 +373,8 @@ Value lumyr_index_get(Value c, Value idx) {
                 return lumyr_make_int8(((int8_t*)tarr->items)[i]);
             case VAL_INT16:
                 return lumyr_make_int16(((int16_t*)tarr->items)[i]);
+            case VAL_INT32:
+                return lumyr_make_int32(((int32_t*)tarr->items)[i]);
             case VAL_STRING:
                 return lumyr_make_string(((char**)tarr->items)[i]);
             default:
@@ -1011,6 +1020,9 @@ void lumyr_print_inline(Value v) {
             printf("%lld", v.v.i);
             break;
         case VAL_INT16:
+            printf("%lld", v.v.i);
+            break;
+        case VAL_INT32:
             printf("%lld", v.v.i);
             break;
         case VAL_NONE:

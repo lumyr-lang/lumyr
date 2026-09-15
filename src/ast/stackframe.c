@@ -1119,6 +1119,47 @@ void stackframe_bind_int16(StackFrame* f, const char* name, int16_t i16v)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+int32_t stackframe_get_int32(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            int32_t i32v = fr->int32_vals ? fr->int32_vals[idx] : (int32_t)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return i32v;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_int32(StackFrame* f, const char* name, int32_t i32v)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_INT32;
+        f->vals[idx].v.i = (long long)i32v;
+        if(f->int32_vals) f->int32_vals[idx] = i32v;
+        if(f->type_tags) f->type_tags[idx] = CAST_INT32;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_INT32;
+        f->vals[f->cnt].v.i = (long long)i32v;
+        if(f->int32_vals) f->int32_vals[f->cnt] = i32v;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_INT32;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 // cell 表扩容（调用方须已持锁）
 static void cell_ensure(StackFrame* f, int need)
 {
