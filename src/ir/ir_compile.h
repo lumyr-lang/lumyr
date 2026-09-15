@@ -5,7 +5,7 @@
 #include "ast/ast_node.h"
 
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
-BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator);
+BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name);
 // 重编译已注册函数（typecheck 转换 AST_VAR→AST_FUNCREF 后原位替换字节码）
 BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body);
 

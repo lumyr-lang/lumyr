@@ -243,7 +243,7 @@ void lumyr_interp_scan_captures(const RuntimeFunc* rf, void (*mark)(Value))
     }
 }
 
-RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast)
+RuntimeFunc* compile_func_from_ast_with_class(AstNode* func_def_ast, const char* class_name)
 {
     if(func_def_ast->type != AST_FUNC_DEF) return NULL;
 
@@ -291,7 +291,7 @@ RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast)
     // 编译函数体为字节码 IR（VM 执行；不再直接求值 AST）
     payload->body = func_def_ast->u.func_def.body;
     payload->bytecode = ir_compile_function(func_def_ast->u.func_def.name, func_def_ast->u.func_def.params, func_def_ast->u.func_def.body,
-                                            func_def_ast->u.func_def.is_generator);
+                                            func_def_ast->u.func_def.is_generator, class_name);
 
     // 构造RuntimeFunc，原有字段一个不动
     RuntimeFunc* rf = malloc(sizeof(RuntimeFunc));
@@ -307,6 +307,12 @@ RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast)
     rf->capture_count = -1; // 标记这是解释器payload，不是真实捕获变量
 
     return rf;
+}
+
+
+RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast)
+{
+    return compile_func_from_ast_with_class(func_def_ast, NULL);
 }
 
 // typecheck 把 AST_VAR（函数名）就地转成 AST_FUNCREF 后，重新编译该函数的

@@ -1771,10 +1771,11 @@ static void method_self_lookup_cb(const char* name, TypeDef* td, void* user_data
     }
 }
 
-BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator)
+BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name)
 {
     BytecodeFunc* fn = bytecode_func_new(name, 0);
     fn->is_generator = is_generator;
+    if(class_name) fn->class_name = strdup(class_name);
     compile_params(fn, params);
     /* 方法标记：第一个参数名是 "self" 时，标记为方法，self 传递 struct 指针 */
     if(params && params->u.param.name && strcmp(params->u.param.name, "self") == 0) {
@@ -1783,32 +1784,32 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
         /* 构造函数和普通方法：从函数名中提取 class 名，自动给 self 打上 class 类型标记 */
         if(!self_type && name) {
             size_t nlen = strlen(name);
-            char* class_name = NULL;
+            char* extracted_class_name = NULL;
             /* 先尝试构造函数：函数名以 ___init__ 结尾 */
             if(nlen >= 9 && strcmp(name + nlen - 9, "___init__") == 0) {
                 /* 提取 class 名：去掉 ___init__ 后缀 */
-                class_name = (char*)malloc(nlen - 8);
-                strncpy(class_name, name, nlen - 9);
-                class_name[nlen - 9] = '\0';
+                extracted_class_name = (char*)malloc(nlen - 8);
+                strncpy(extracted_class_name, name, nlen - 9);
+                extracted_class_name[nlen - 9] = '\0';
             } else {
                 /* 普通方法：遍历所有 class 类型，看看函数名是否以 <类名>_ 开头 */
                 MethodSelfLookupCtx ctx = { name, nlen, NULL };
                 type_foreach(method_self_lookup_cb, &ctx);
-                class_name = ctx.class_name;
+                extracted_class_name = ctx.class_name;
             }
-            if(class_name) {
-                TypeDef* td = type_lookup(class_name);
+            if(extracted_class_name) {
+                TypeDef* td = type_lookup(extracted_class_name);
                 if(td && td->is_class) {
                     /* 用 class: 前缀标记这是 class 类型 */
-                    size_t marked_len = strlen(class_name) + 7; /* "class:" + 类名 + \0 */
+                    size_t marked_len = strlen(extracted_class_name) + 7; /* "class:" + 类名 + \0 */
                     char* marked_name = (char*)malloc(marked_len);
-                    snprintf(marked_name, marked_len, "class:%s", class_name);
+                    snprintf(marked_name, marked_len, "class:%s", extracted_class_name);
                     self_type = marked_name;
                     fn->method_self_struct = marked_name;
                     /* 设置 fn->class_name 字段，用于红黑树查找 class 方法 */
-                    fn->class_name = strdup(class_name);
+                    if(!fn->class_name) fn->class_name = strdup(extracted_class_name);
                 }
-                free(class_name);
+                free(extracted_class_name);
             }
         }
         if(self_type) {
@@ -1857,7 +1858,7 @@ BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode
             old_class_name = strdup(old_fn->class_name);
         }
     }
-    BytecodeFunc* nb = ir_compile_function(name, params, body, 0); // 内部 add 到红黑树
+    BytecodeFunc* nb = ir_compile_function(name, params, body, 0, old_fn ? old_fn->class_name : NULL); // 内部 add 到红黑树
     /* 恢复方法标记 */
     if(old_is_method && !nb->is_method) {
         nb->is_method = old_is_method;
