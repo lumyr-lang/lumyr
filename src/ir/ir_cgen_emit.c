@@ -2246,7 +2246,7 @@ void emit_insns(BytecodeFunc* fn)
                         /* 动态分派 */
                         fprintf(out, "        /* class 方法动态分派 */\n");
                         fprintf(out, "        Value __self = __args[0];\n");
-                    fprintf(out, "        if((__self.type == VAL_STRUCT_PTR || __self.type == VAL_CLASS_PTR) && __self.v.struct_ptr) {\n");
+                    fprintf(out, "        if(__self.type == VAL_CLASS_PTR && __self.v.struct_ptr) {\n");
                     fprintf(out, "            /* C 结构体实例：通过 vtable 函数指针直接调用（O(1)） */\n");
                     /* 编译期查找方法名对应的 vtable 索引 */
                     int method_idx = find_method_index(nm);
