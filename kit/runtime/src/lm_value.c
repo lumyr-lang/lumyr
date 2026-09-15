@@ -148,6 +148,13 @@ Value lumyr_make_size_t(size_t stv) {
     return v;
 }
 
+Value lumyr_make_ssize_t(ssize_t sstv) {
+    Value v;
+    v.type = VAL_SSIZE_T;
+    v.v.i = (long long)sstv;
+    return v;
+}
+
 // 获取value的数值，int转double
 double value_as_number(Value x) {
     if(x.type == VAL_INT)
@@ -438,6 +445,8 @@ Value lumyr_index_get(Value c, Value idx) {
                 return lumyr_make_ulong(((unsigned long*)tarr->items)[i]);
             case VAL_SIZE_T:
                 return lumyr_make_size_t(((size_t*)tarr->items)[i]);
+            case VAL_SSIZE_T:
+                return lumyr_make_ssize_t(((ssize_t*)tarr->items)[i]);
             case VAL_STRING:
                 return lumyr_make_string(((char**)tarr->items)[i]);
             default:
@@ -1108,6 +1117,9 @@ void lumyr_print_inline(Value v) {
             break;
         case VAL_SIZE_T:
             printf("%zu", (size_t)v.v.i);
+            break;
+        case VAL_SSIZE_T:
+            printf("%zd", (ssize_t)v.v.i);
             break;
         case VAL_NONE:
             printf("null");

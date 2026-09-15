@@ -1212,6 +1212,49 @@ static void compile_size_t_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 ssize_t 类型
+static int is_ssize_t_var(Ctx* c, AstNode* node) {
+    if(node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_SSIZE_T);
+}
+
+// 检测是否全部是 ssize_t 类型变量或数组元素访问
+static int all_ssize_t_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_ssize_t_vars(c, e->u.seq.first) && all_ssize_t_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 ssize_t 候选，运行时 OPC_SSIZE_T_ARRAY_GET 会检查是否是 ssize_t 类型化数组 */
+        return 1;
+    }
+    return is_ssize_t_var(c, e);
+}
+
+// 编译 ssize_t 泛型数组元素：全部压入 ssize_t 栈
+static void compile_ssize_t_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_ssize_t_array_elems(c, e->u.seq.first, n);
+        compile_ssize_t_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_SSIZE_T_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 递归检测 AST_SEQ 树中是否含 AST_SPREAD
 static int has_spread_node(AstNode* e) {
     if(!e) return 0;
@@ -2307,6 +2350,11 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_SIZE_T_ARRAY_LIT(a=1) 从 size_t 栈读取，实现零检查零转换 */
                     compile_size_t_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_SIZE_T_ARRAY_LIT, 1, n);  /* a=1: 从 size_t 栈读取 */
+                } else if(elem_type == VAL_SSIZE_T && all_ssize_t_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 ssize_t 类型的变量：使用 OPC_LOAD_SSIZE_T_VAR 压入 ssize_t 栈，
+                       OPC_SSIZE_T_ARRAY_LIT(a=1) 从 ssize_t 栈读取，实现零检查零转换 */
+                    compile_ssize_t_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_SSIZE_T_ARRAY_LIT, 1, n);  /* a=1: 从 ssize_t 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
                        OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_FLOAT_ARRAY_LIT(a=0)/OPC_UINT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
@@ -2345,6 +2393,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_ULONG_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_SIZE_T) {
                         emit(c, OPC_SIZE_T_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_SSIZE_T) {
+                        emit(c, OPC_SSIZE_T_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
@@ -2384,6 +2434,8 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_ULONG_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_SIZE_T) {
                     emit(c, OPC_SIZE_T_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_SSIZE_T) {
+                    emit(c, OPC_SSIZE_T_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }
@@ -2488,6 +2540,10 @@ static void c_expr(Ctx* c, AstNode* node)
                     } else if(tag == CAST_SIZE_T) {
                         emit(c, OPC_LOAD_SIZE_T_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_SIZE_T, 0, 0);
+                        break;
+                    } else if(tag == CAST_SSIZE_T) {
+                        emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_SSIZE_T, 0, 0);
                         break;
                     }
                 }

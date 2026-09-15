@@ -117,6 +117,11 @@ typedef enum {
     OPC_SIZE_T_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 size_t，创建 size_t 泛型数组
     OPC_SIZE_T_ARRAY_GET, // 弹 arr,idx；直接从 size_t 类型化数组读取元素，压入 size_t 栈（零包装零 Value 开销）
     OPC_PRINT_SIZE_T,     // 从 size_t 栈弹出并打印（零开销，用于声明为 size_t 的变量）
+    OPC_LOAD_SSIZE_T_VAR,   // a=符号表下标；加载声明为 ssize_t 的变量，直接压入 ssize_t 栈（零检查零转换）
+    OPC_STORE_SSIZE_T_VAR,  // a=符号表下标；从 ssize_t 栈弹出 ssize_t 值，直接存储到变量的 ssize_t_vals（零包装零转换）
+    OPC_SSIZE_T_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 ssize_t，创建 ssize_t 泛型数组
+    OPC_SSIZE_T_ARRAY_GET, // 弹 arr,idx；直接从 ssize_t 类型化数组读取元素，压入 ssize_t 栈（零包装零 Value 开销）
+    OPC_PRINT_SSIZE_T,     // 从 ssize_t 栈弹出并打印（零开销，用于声明为 ssize_t 的变量）
     OPC_TO_BOOL,      // 弹1压1 bool
     OPC_DUP,          // 复制栈顶
     OPC_POP,          // 丢弃栈顶
