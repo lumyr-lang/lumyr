@@ -138,7 +138,7 @@ ValueType castkind_to_valtype(int ck)
         case CAST_LONG: case CAST_LONGLONG:
             return VAL_INT;
         case CAST_FLOAT:
-            return VAL_DOUBLE;
+            return VAL_FLOAT;  // float 类型化数组，与 double 区分
         case CAST_ULONG: case CAST_UCHAR: case CAST_SHORT: case CAST_USHORT:
         case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_PTR:
             return VAL_INT;

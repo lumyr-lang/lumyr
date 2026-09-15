@@ -181,6 +181,15 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
         case OPC_DOUBLE_ARRAY_GET:
             return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 double 栈（Value栈净变化-2） */
+        case OPC_LOAD_FLOAT_VAR:
+            return 0;                        /* 压入 float 栈，不改变 Value 栈深度 */
+        case OPC_STORE_FLOAT_VAR:
+            return +1;                       /* 从 float 栈弹出 float，包装成 Value 压回（赋值表达式有返回值） */
+        case OPC_FLOAT_ARRAY_LIT:
+            if(in.a == 1) return +1;          /* 从 float 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
+            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
+        case OPC_FLOAT_ARRAY_GET:
+            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 float 栈（Value栈净变化-2） */
         case OPC_MAP_LIT:
             return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
         case OPC_CLASS_NEW:
@@ -235,6 +244,7 @@ static int op_stack_push(OpCode op)
         case OPC_LOAD_FIELD:
         case OPC_INT_ARRAY_LIT:
         case OPC_DOUBLE_ARRAY_LIT:
+        case OPC_FLOAT_ARRAY_LIT:
             return 1;
         default:
             return 0;

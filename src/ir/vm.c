@@ -121,6 +121,43 @@ static void double_stack_ensure(int need) {
 #define DOUBLE_PEEK() (vm_double_stack[vm_double_sp - 1])
 #define DOUBLE_TOP(idx) (vm_double_stack[vm_double_sp - 1 - (idx)])
 
+/* ========== float 栈（方案 A：多类型栈，零检查零转换） ========== */
+/* 专门用于存储 float 类型值，与 Value 栈并行，避免类型检查和转换开销 */
+static _Thread_local float* vm_float_stack = NULL;
+static _Thread_local int vm_float_sp = 0;
+static _Thread_local int vm_float_cap = 0;
+
+#define FLOAT_STACK_INIT_CAP 64
+
+static void float_stack_init(void) {
+    if(vm_float_stack) return;
+    vm_float_cap = FLOAT_STACK_INIT_CAP;
+    vm_float_stack = (float*)malloc((size_t)vm_float_cap * sizeof(float));
+    if(!vm_float_stack) { LOG_ERROR("vm: float 栈内存不足\n"); exit(EXIT_FAILURE); }
+    vm_float_sp = 0;
+}
+
+static void float_stack_destroy(void) {
+    if(vm_float_stack) { free(vm_float_stack); vm_float_stack = NULL; }
+    vm_float_sp = 0;
+    vm_float_cap = 0;
+}
+
+static void float_stack_ensure(int need) {
+    if(vm_float_sp + need <= vm_float_cap) return;
+    int nc = vm_float_cap > 0 ? vm_float_cap : FLOAT_STACK_INIT_CAP;
+    while(nc < vm_float_sp + need) nc *= 2;
+    float* ns = (float*)realloc(vm_float_stack, (size_t)nc * sizeof(float));
+    if(!ns) { LOG_ERROR("vm: float 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
+    vm_float_stack = ns;
+    vm_float_cap = nc;
+}
+
+#define FLOAT_PUSH(val) do { float_stack_ensure(1); vm_float_stack[vm_float_sp++] = (val); } while(0)
+#define FLOAT_POP() (vm_float_stack[--vm_float_sp])
+#define FLOAT_PEEK() (vm_float_stack[vm_float_sp - 1])
+#define FLOAT_TOP(idx) (vm_float_stack[vm_float_sp - 1 - (idx)])
+
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
 typedef enum {
@@ -714,7 +751,11 @@ Value vm_run_main(BytecodeFunc* main_fn)
     int_stack_init();
     /* 初始化 double 栈（方案 A：多类型栈，零检查零转换） */
     double_stack_init();
+    /* 初始化 float 栈（方案 A：多类型栈，零检查零转换） */
+    float_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
+    /* 销毁 float 栈 */
+    float_stack_destroy();
     /* 销毁 double 栈 */
     double_stack_destroy();
     /* 销毁 int 栈 */
@@ -1979,6 +2020,15 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 DOUBLE_PUSH(dv);
                 break;
             }
+            case OPC_LOAD_FLOAT_VAR: {
+                /* 声明为 float 类型的变量：直接从栈帧的 float_vals 数组读取，零提取、零类型检查 */
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                float fv = stackframe_get_float(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                FLOAT_PUSH(fv);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：和 OPC_LOAD_VAR 行为相同（VM 模式下 struct 本来就是 Value(map)） */
                 const char* name = bf->syms[in.a];
@@ -2013,6 +2063,20 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = 2;  // VAL_DOUBLE
                 ret.v.d = dv;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_FLOAT_VAR: {
+                /* 从 float 栈弹出 float 值，直接存储到 float 变量，零重复提取
+                   stackframe_bind_float 同时更新 vals 和 float_vals，避免从 Value 重复提取 */
+                const char* name = bf->syms[in.a];
+                float fv = FLOAT_POP();  // 从 float 栈弹出 float 值
+                /* 直接绑定 float 变量（同时更新 vals 和 float_vals，零重复提取） */
+                stackframe_bind_float(frame, name, fv);
+                /* 包装成 Value 压回（赋值表达式有返回值） */
+                Value ret;
+                ret.type = 2;  // VAL_DOUBLE（float 用 VAL_DOUBLE 存储）
+                ret.v.d = (double)fv;
                 stack[sp++] = ret;
                 break;
             }
@@ -2286,6 +2350,52 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 break;
             }
+            case OPC_FLOAT_ARRAY_LIT: {
+                /* float 泛型数组：
+                   a=1: 从 float 栈读取（零检查零转换）
+                   a=0: 从 Value 栈读取（内联类型转换） */
+                int n = in.b;
+                Value arr = val_float_array(n);
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr && tarr->items) {
+                    float* fitems = (float*)tarr->items;
+                    if(in.a == 1) {
+                        /* 从 float 栈读取：零检查零转换 */
+                        for(int k = 0; k < n; k++) {
+                            fitems[k] = vm_float_stack[vm_float_sp - n + k];
+                        }
+                        vm_float_sp -= n;
+                        /* Value 栈没有元素需要弹出，直接压入数组 */
+                        stack[sp++] = arr;
+                    } else {
+                        /* 从 Value 栈读取：内联类型转换 */
+                        for(int k = 0; k < n; k++) {
+                            Value v = stack[sp - n + k];
+                            switch(v.type) {
+                                case VAL_INT:
+                                case VAL_BYTE:
+                                case VAL_CHAR:
+                                case VAL_BOOL:
+                                    fitems[k] = (float)v.v.i;
+                                    break;
+                                case VAL_DOUBLE:
+                                    fitems[k] = (float)v.v.d;
+                                    break;
+                                default:
+                                    fitems[k] = (float)lumyr_cast_long(v).v.i;
+                                    break;
+                            }
+                        }
+                        sp = sp - n + 1;
+                        sp--; stack[sp++] = arr;
+                    }
+                    tarr->len = n;
+                } else {
+                    /* 数组创建失败，直接压入 */
+                    stack[sp++] = arr;
+                }
+                break;
+            }
             case OPC_MAP_LIT: {
                 int n = in.b;
                 Value m = lumyr_map_lit(&stack[sp - 2 * n], n);
@@ -2345,6 +2455,33 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 double val = ((double*)tarr->items)[iidx];  // 直接读取 double 值，零提取零转换！
                 DOUBLE_PUSH(val);  // 压入 double 栈，零包装！
+                break;
+            }
+            case OPC_FLOAT_ARRAY_GET: {
+                /* float 类型化数组元素访问：直接读取 float 值，压入 float 栈，零包装零 Value 开销
+                   严格类型检查：必须是 float 类型化数组，否则直接抛异常，无须兼容和回退 */
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                int iidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arr.type != 14 /* VAL_TYPED_ARRAY */ || !arr.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_FLOAT_ARRAY_GET 需要 float 类型化数组，实际类型为 %s", val_typename(arr.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr->elem_type != VAL_FLOAT) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 float，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(!tarr->items) {
+                    runtime_error("数组错误：float 类型化数组 items 指针为空");
+                }
+                if(iidx < 0 || iidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", iidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                float val = ((float*)tarr->items)[iidx];  // 直接读取 float 值，零提取零转换！
+                FLOAT_PUSH(val);  // 压入 float 栈，零包装！
                 break;
             }
             case OPC_INDEX_GET: {

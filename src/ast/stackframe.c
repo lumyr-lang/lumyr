@@ -434,6 +434,20 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                     }
                     p->double_vals[i] = dv;
                 }
+                /* 当设置为 float 类型时，同时更新 float_vals */
+                if(type_tag == 17 /* CAST_FLOAT */ && p->float_vals) {
+                    Value v = p->vals[i];
+                    float fv = 0.0f;
+                    switch(v.type) {
+                        case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                            fv = (float)v.v.i; break;
+                        case 2:  // VAL_DOUBLE
+                            fv = (float)v.v.d; break;
+                        default:
+                            fv = 0.0f; break;
+                    }
+                    p->float_vals[i] = fv;
+                }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
             }
@@ -673,6 +687,73 @@ void stackframe_bind_double(StackFrame* f, const char* name, double dv)
         f->vals[f->cnt].v.d = dv;
         if(f->double_vals) f->double_vals[f->cnt] = dv;  // 直接设置 double_vals，零提取！
         if(f->type_tags) f->type_tags[f->cnt] = 1;  // CAST_DOUBLE
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
+/* 获取 float 变量：直接从 float_vals 数组读取，零提取、零类型检查
+   直接从 float_vals 数组读取，用于 OPC_LOAD_FLOAT_VAR 指令
+   如果变量不存在或不是 float 类型，返回 0.0f 并置 *found=0 */
+float stackframe_get_float(StackFrame* f, const char* name, _Bool* found)
+{
+    if(found) *found = 0;
+    if(!f || !name) return 0.0f;
+    for(StackFrame* p = f; p; p = p->parent) {
+        int hl = p->shared ? (pthread_rwlock_rdlock(&p->rw), 1) : 0;
+        for(int i = 0; i < p->cnt; i++) {
+            if(strcmp(p->names[i], name) == 0) {
+                /* 检查变量是否标记为 float 类型（CAST_FLOAT = 21） */
+                int tag = (p->type_tags) ? p->type_tags[i] : -1;
+                if(tag == 17 /* CAST_FLOAT */ && p->float_vals) {
+                    float fv = p->float_vals[i];  // 直接读取，零提取
+                    if(hl) pthread_rwlock_unlock(&p->rw);
+                    if(found) *found = 1;
+                    return fv;
+                }
+                /* 不是 float 类型，回退到从 Value 提取 */
+                Value v = p->vals[i];
+                float fv = 0.0f;
+                switch(v.type) {
+                    case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                        fv = (float)v.v.i; break;
+                    case 2:  // VAL_DOUBLE
+                        fv = (float)v.v.d; break;
+                    default:
+                        fv = 0.0f; break;
+                }
+                if(hl) pthread_rwlock_unlock(&p->rw);
+                if(found) *found = 1;
+                return fv;
+            }
+        }
+        if(hl) pthread_rwlock_unlock(&p->rw);
+    }
+    return 0.0f;
+}
+
+/* 绑定 float 变量：同时更新 vals（包装成 Value）和 float_vals（原始 float 值），零重复提取
+   用于 OPC_STORE_FLOAT_VAR 指令，避免从 Value 重复提取 float 值 */
+void stackframe_bind_float(StackFrame* f, const char* name, float fv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        /* 变量已存在：更新 vals 和 float_vals */
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = 2;  // VAL_DOUBLE（float 用 VAL_DOUBLE 存储）
+        f->vals[idx].v.d = (double)fv;
+        if(f->float_vals) f->float_vals[idx] = fv;  // 直接更新 float_vals，零提取！
+        if(f->type_tags) f->type_tags[idx] = 21;  // CAST_FLOAT
+    } else {
+        /* 变量不存在：新建 */
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = 2;  // VAL_DOUBLE（float 用 VAL_DOUBLE 存储）
+        f->vals[f->cnt].v.d = (double)fv;
+        if(f->float_vals) f->float_vals[f->cnt] = fv;  // 直接设置 float_vals，零提取！
+        if(f->type_tags) f->type_tags[f->cnt] = 21;  // CAST_FLOAT
         f->cnt++;
     }
     if(hl) pthread_rwlock_unlock(&f->rw);
