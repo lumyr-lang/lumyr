@@ -17,6 +17,7 @@
 #include "parse/import.h"
 #include "i18n/lm_i18n.h"
 #include "ast/ast_runtime_sym.h"
+#include "ir/symbol_table.h"
 
 extern AstNode* root;
 extern int yyparse(void);
@@ -49,6 +50,7 @@ int main(int argc, char** argv) {
     /* Initialize i18n - auto-detect system language */
     lm_i18n_init();
     sym_init();
+    symbol_table_global_init();
 
     const char* src_file = NULL;
     const char* out_base = NULL;
@@ -215,5 +217,6 @@ int main(int argc, char** argv) {
         fclose(yyin);
     }
     if(used_pp_tmp) unlink(pp_tmp);
+    symbol_table_global_destroy();
     return ret;
 }
