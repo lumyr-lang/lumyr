@@ -529,8 +529,8 @@ void emit_insns(BytecodeFunc* fn)
                     /* class 类型：直接传递 Value，类型是 VAL_STRUCT_PTR */
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
                 } else if(_sname && strncmp(_sname, "interface:", 10) != 0) {
-                    /* struct 类型：传递指针整数 */
-                    fprintf(out, "    { Value __pv = {0}; __pv.type = VAL_INT; __pv.v.i = (long long)%s.v.struct_ptr; __stk[__sp++] = __pv; }\n", cvar_rw(nm));
+                    /* struct 类型：直接传递 VAL_STRUCT_PTR 类型的 Value（值类型，保持类型一致） */
+                    fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
                 } else {
                     /* 接口类型或普通类型：直接传递 Value */
                     fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));

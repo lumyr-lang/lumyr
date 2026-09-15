@@ -1,0 +1,35 @@
+// 简单 class + 结构体方法组合测试
+print("=== 简单 class + 结构体方法组合测试 ===");
+
+// 简单 class（没有继承）
+class SimpleClass {
+    name: string;
+    func greet(self) {
+        print("Hello from", self.name);
+    }
+}
+
+obj = SimpleClass();
+obj.name = "Test";
+obj.greet();
+
+// 结构体方法
+struct Point {
+    x: int;
+    y: int;
+    func distance(self, other) {
+        dx = self.x - other.x;
+        dy = self.y - other.y;
+        return dx * dx + dy * dy;
+    }
+}
+
+p1 = Point();
+p1.x = 0;
+p1.y = 0;
+p2 = Point();
+p2.x = 3;
+p2.y = 4;
+print("p1.distance(p2) =", p1.distance(p2));
+
+print("=== 简单 class + 结构体方法组合测试完成 ===");
