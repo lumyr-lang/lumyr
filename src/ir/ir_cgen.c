@@ -856,7 +856,14 @@ static void emit_func_wrap_cb(const char* class_name, const char* method_name, v
     wrap_name_add(fn->name);
     FILE* out = (FILE*)user_data;
     int has_caps = lambda_has_captures(fn->name);
-    fprintf(out, "static Value lum_wrap_%s(Value* a, int n, void* __ctx)\n{\n", fn->name);
+    /* class 方法加上 class 名前缀，避免多个 class 有相同方法名时包装函数名重复 */
+    const char* _wrap_name = fn->name;
+    char _wrap_name_buf[256];
+    if(fn->class_name) {
+        snprintf(_wrap_name_buf, sizeof(_wrap_name_buf), "%s_%s", fn->class_name, fn->name);
+        _wrap_name = _wrap_name_buf;
+    }
+    fprintf(out, "static Value lum_wrap_%s(Value* a, int n, void* __ctx)\n{\n", _wrap_name);
     for(int k = 0; k < fn->param_cnt; k++)
         fprintf(out, "    Value p%d = (n > %d) ? a[%d] : val_none();\n", k, k, k);
     if(fn->has_variadic) {
@@ -898,7 +905,7 @@ static void emit_func_wrap_cb(const char* class_name, const char* method_name, v
         fprintf(out, "    return __wrap_ret;\n}\n\n");
     }
     fprintf(out, "static RuntimeFunc lum_wrap_%s_rf = { (FuncEntry*)lum_wrap_%s, %d, %d, NULL, 0 };\n\n",
-            fn->name, fn->name, fn->param_cnt, fn->has_variadic ? 1 : 0);
+            _wrap_name, _wrap_name, fn->param_cnt, fn->has_variadic ? 1 : 0);
 }
 
 /* 回调函数：用于红黑树遍历生成函数原型 */
@@ -926,10 +933,17 @@ static void emit_wrap_proto_cb(const char* class_name, const char* method_name, 
     (void)class_name;
     (void)method_name;
     BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* class 方法加上 class 名前缀，避免多个 class 有相同方法名时包装函数名重复 */
+    const char* _wrap_name = fn->name;
+    char _wrap_name_buf[256];
+    if(fn->class_name) {
+        snprintf(_wrap_name_buf, sizeof(_wrap_name_buf), "%s_%s", fn->class_name, fn->name);
+        _wrap_name = _wrap_name_buf;
+    }
     /* 避免同名函数重复声明 */
-    if(wrap_name_exists(fn->name)) return;
+    if(wrap_name_exists(_wrap_name)) return;
     FILE* out = (FILE*)user_data;
-    fprintf(out, "static Value lum_wrap_%s(Value*, int, void*);\n", fn->name);
+    fprintf(out, "static Value lum_wrap_%s(Value*, int, void*);\n", _wrap_name);
 }
 
 /* 回调函数：用于红黑树遍历生成 lum_wrap_<name>_rf 前置声明 */
@@ -938,10 +952,17 @@ static void emit_wrap_rf_proto_cb(const char* class_name, const char* method_nam
     (void)class_name;
     (void)method_name;
     BytecodeFunc* fn = (BytecodeFunc*)data;
+    /* class 方法加上 class 名前缀，避免多个 class 有相同方法名时包装函数名重复 */
+    const char* _wrap_name = fn->name;
+    char _wrap_name_buf[256];
+    if(fn->class_name) {
+        snprintf(_wrap_name_buf, sizeof(_wrap_name_buf), "%s_%s", fn->class_name, fn->name);
+        _wrap_name = _wrap_name_buf;
+    }
     /* 避免同名函数重复声明 */
-    if(wrap_name_exists(fn->name)) return;
+    if(wrap_name_exists(_wrap_name)) return;
     FILE* out = (FILE*)user_data;
-    fprintf(out, "static RuntimeFunc lum_wrap_%s_rf;\n", fn->name);
+    fprintf(out, "static RuntimeFunc lum_wrap_%s_rf;\n", _wrap_name);
 }
 
 // 生成统一签名包装（Value(*)(Value*, int, void*)）与函数表：高阶函数调用入口

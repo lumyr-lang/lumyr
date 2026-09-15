@@ -457,8 +457,16 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, ";\n");
                 break;
             case OPC_GETFUNC: {
-                if(!ir_func_table_lookup_any(nm)) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
-                fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%s_rf; __stk[__sp++] = __f; }\n", nm);
+                BytecodeFunc* _gf_fn = ir_func_table_lookup_any(nm);
+                if(!_gf_fn) { fprintf(stderr, "codegen: 未定义函数: %s\n", nm); exit(EXIT_FAILURE); }
+                /* class 方法加上 class 名前缀，避免多个 class 有相同方法名时包装函数名重复 */
+                const char* _gf_wrap_name = nm;
+                char _gf_wrap_name_buf[256];
+                if(_gf_fn->class_name) {
+                    snprintf(_gf_wrap_name_buf, sizeof(_gf_wrap_name_buf), "%s_%s", _gf_fn->class_name, nm);
+                    _gf_wrap_name = _gf_wrap_name_buf;
+                }
+                fprintf(out, "    { Value __f = {0}; __f.type = VAL_FUNC; __f.v.func.ffi_func = NULL; __f.v.func.is_ffi = 0; __f.v.func.func_obj = (void*)&lum_wrap_%s_rf; __stk[__sp++] = __f; }\n", _gf_wrap_name);
                 break;
             }
             case OPC_MKCLOSURE: {

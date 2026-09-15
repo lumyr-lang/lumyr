@@ -1,0 +1,71 @@
+// 场景1 + 场景2 + 场景3 组合测试
+print("=== 场景1 + 场景2 + 场景3 组合测试 ===");
+
+// 场景1：多层继承
+class Animal {
+    name: string;
+    func speak(self) {
+        print("Animal speaks");
+    }
+    func get_name(self) {
+        return self.name;
+    }
+}
+
+class Dog extends Animal {
+    func speak(self) {
+        print("Dog barks");
+    }
+}
+
+class Puppy extends Dog {
+    func speak(self) {
+        print("Puppy yips");
+    }
+}
+
+puppy = Puppy();
+puppy.name = "Max";
+print("puppy.name =", puppy.get_name());
+puppy.speak();
+
+// 场景2：super 调用
+class Base {
+    func hello(self) {
+        print("Hello from Base");
+    }
+}
+
+class Derived extends Base {
+    func hello(self) {
+        super.hello();
+        print("Hello from Derived");
+    }
+}
+
+derived = Derived();
+derived.hello();
+
+// 场景3：构造函数链
+class Vehicle {
+    brand: string;
+    func __init__(self, brand) {
+        self.brand = brand;
+        print("Vehicle constructor: brand =", brand);
+    }
+}
+
+class Car extends Vehicle {
+    model: string;
+    func __init__(self, brand, model) {
+        super.__init__(brand);
+        self.model = model;
+        print("Car constructor: model =", model);
+    }
+}
+
+car = Car("Toyota", "Camry");
+print("car.brand =", car.brand);
+print("car.model =", car.model);
+
+print("=== 场景1 + 场景2 + 场景3 组合测试完成 ===");
