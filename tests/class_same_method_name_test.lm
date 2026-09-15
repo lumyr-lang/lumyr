@@ -1,0 +1,29 @@
+// 多个类相同方法名测试
+print("=== 多个类相同方法名测试 ===");
+
+class Circle {
+    func area(self) {
+        return 3.14 * 5 * 5;
+    }
+}
+
+class Rectangle {
+    func area(self) {
+        return 4 * 6;
+    }
+}
+
+class Triangle {
+    func area(self) {
+        return 0.5 * 3 * 4;
+    }
+}
+
+circle = Circle();
+rectangle = Rectangle();
+triangle = Triangle();
+print("circle.area() =", circle.area());
+print("rectangle.area() =", rectangle.area());
+print("triangle.area() =", triangle.area());
+
+print("=== 多个类相同方法名测试完成 ===");

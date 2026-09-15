@@ -1,0 +1,27 @@
+// 多层继承 + super 调用测试
+print("=== 多层继承 + super 调用测试 ===");
+
+class Base {
+    func hello(self) {
+        print("Hello from Base");
+    }
+}
+
+class Derived extends Base {
+    func hello(self) {
+        super.hello();
+        print("Hello from Derived");
+    }
+}
+
+class MoreDerived extends Derived {
+    func hello(self) {
+        super.hello();
+        print("Hello from MoreDerived");
+    }
+}
+
+obj = MoreDerived();
+obj.hello();  // 应该输出三行
+
+print("=== 多层继承 + super 调用测试完成 ===");

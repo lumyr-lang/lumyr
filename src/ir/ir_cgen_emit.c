@@ -694,17 +694,31 @@ void emit_insns(BytecodeFunc* fn)
                         for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
                         fprintf(out, "__classname__);\n");
                     } else {
-                        /* 判断是否是父类字段 */
-                        int _is_pf = 0;
-                        if(td && td->parent) {
-                            TypeDef* _ptd = type_lookup(td->parent);
+                        /* 遍历整个继承链，计算字段的 super. 前缀层数 */
+                        int _pf_depth = 0;
+                        TypeDef* _pf_cur = td;
+                        while(_pf_cur && _pf_cur->parent) {
+                            TypeDef* _ptd = type_lookup(_pf_cur->parent);
                             if(_ptd) {
+                                int _found = 0;
                                 for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
-                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _found = 1; break; }
                                 }
+                                if(_found) {
+                                    _pf_depth++;
+                                    _pf_cur = _ptd;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
                             }
                         }
-                        const char* _pf = _is_pf ? "super." : "";
+                        /* 生成 super. 前缀 */
+                        char _pf[256] = {0};
+                        for(int _pfi = 0; _pfi < _pf_depth; _pfi++) {
+                            strcat(_pf, "super.");
+                        }
                         if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
                             fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)((%s%s*)lmloc_self.v.struct_ptr)->%s%s);\n", struct_prefix, ss, _pf, fname);
                         } else if(ck == CAST_STRING) {
@@ -783,17 +797,31 @@ void emit_insns(BytecodeFunc* fn)
                         fprintf(out, "    lumyr_struct_%s* %s = &%s->%s;\n", nested_sname, tmp_ptr, _struct_access, fname);
                         emit_struct_to_value(nested_sname, tmp_ptr);
                     } else {
-                        /* 判断是否是父类字段 */
-                        int _is_pf = 0;
-                        if(td && td->parent) {
-                            TypeDef* _ptd = type_lookup(td->parent);
+                        /* 遍历整个继承链，计算字段的 super. 前缀层数 */
+                        int _pf_depth = 0;
+                        TypeDef* _pf_cur = td;
+                        while(_pf_cur && _pf_cur->parent) {
+                            TypeDef* _ptd = type_lookup(_pf_cur->parent);
                             if(_ptd) {
+                                int _found = 0;
                                 for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
-                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _found = 1; break; }
                                 }
+                                if(_found) {
+                                    _pf_depth++;
+                                    _pf_cur = _ptd;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
                             }
                         }
-                        const char* _pf = _is_pf ? "super." : "";
+                        /* 生成 super. 前缀 */
+                        char _pf[256] = {0};
+                        for(int _pfi = 0; _pfi < _pf_depth; _pfi++) {
+                            strcat(_pf, "super.");
+                        }
                         if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
                             fprintf(out, "    __stk[__sp++] = lumyr_make_double((double)%s->%s%s);\n", _struct_access, _pf, fname);
                         } else if(ck == CAST_STRING) {
@@ -853,17 +881,31 @@ void emit_insns(BytecodeFunc* fn)
                         for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
                         fprintf(out, "__classname__);\n");
                     } else {
-                        /* 判断是否是父类字段 */
-                        int _is_pf = 0;
-                        if(td && td->parent) {
-                            TypeDef* _ptd = type_lookup(td->parent);
+                        /* 遍历整个继承链，计算字段的 super. 前缀层数 */
+                        int _pf_depth = 0;
+                        TypeDef* _pf_cur = td;
+                        while(_pf_cur && _pf_cur->parent) {
+                            TypeDef* _ptd = type_lookup(_pf_cur->parent);
                             if(_ptd) {
+                                int _found = 0;
                                 for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
-                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _found = 1; break; }
                                 }
+                                if(_found) {
+                                    _pf_depth++;
+                                    _pf_cur = _ptd;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
                             }
                         }
-                        const char* _pf = _is_pf ? "super." : "";
+                        /* 生成 super. 前缀 */
+                        char _pf[256] = {0};
+                        for(int _pfi = 0; _pfi < _pf_depth; _pfi++) {
+                            strcat(_pf, "super.");
+                        }
                         if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
                             fprintf(out, "        ((%s%s*)__self.v.struct_ptr)->%s%s = (%s)__v.v.d;\n", struct_prefix, ss, _pf, fname, ctype);
                         } else if(ck == CAST_STRING) {
@@ -922,17 +964,31 @@ void emit_insns(BytecodeFunc* fn)
                         for(int _cnd2 = 0; _cnd2 < _cn_depth2; _cnd2++) fprintf(out, "super.");
                         fprintf(out, "__classname__);\n");
                     } else {
-                        /* 判断是否是父类字段 */
-                        int _is_pf = 0;
-                        if(td && td->parent) {
-                            TypeDef* _ptd = type_lookup(td->parent);
+                        /* 遍历整个继承链，计算字段的 super. 前缀层数 */
+                        int _pf_depth = 0;
+                        TypeDef* _pf_cur = td;
+                        while(_pf_cur && _pf_cur->parent) {
+                            TypeDef* _ptd = type_lookup(_pf_cur->parent);
                             if(_ptd) {
+                                int _found = 0;
                                 for(int _pfi = 0; _pfi < _ptd->nprops; _pfi++) {
-                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _is_pf = 1; break; }
+                                    if(strcmp(_ptd->props[_pfi], fname) == 0) { _found = 1; break; }
                                 }
+                                if(_found) {
+                                    _pf_depth++;
+                                    _pf_cur = _ptd;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
                             }
                         }
-                        const char* _pf = _is_pf ? "super." : "";
+                        /* 生成 super. 前缀 */
+                        char _pf[256] = {0};
+                        for(int _pfi = 0; _pfi < _pf_depth; _pfi++) {
+                            strcat(_pf, "super.");
+                        }
                         if(ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE) {
                             fprintf(out, "        %s->%s%s = (%s)__v.v.d;\n", _store_access, _pf, fname, ctype);
                         } else if(ck == CAST_STRING) {
