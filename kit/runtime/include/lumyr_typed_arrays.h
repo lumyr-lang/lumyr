@@ -499,6 +499,71 @@ void ptr_array_sort(PtrArray* arr);
 void struct_array_sort(StructArray* arr);
 void class_array_sort(ClassArray* arr);
 
+/* ==================== 集合操作函数声明（addAll、removeAll、containsAll 等） ==================== */
+
+/* IntArray */
+void int_array_add_all(IntArray* arr, IntArray* other);
+void int_array_remove_all(IntArray* arr, IntArray* other);
+int int_array_contains_all(IntArray* arr, IntArray* other);
+void int_array_retain_all(IntArray* arr, IntArray* other);
+IntArray* int_array_copy(IntArray* arr);
+IntArray* int_array_subarray(IntArray* arr, int start, int end);
+void int_array_swap(IntArray* arr, int i, int j);
+int int_array_min(IntArray* arr);
+int int_array_max(IntArray* arr);
+int int_array_sum(IntArray* arr);
+
+/* DoubleArray */
+void double_array_add_all(DoubleArray* arr, DoubleArray* other);
+void double_array_remove_all(DoubleArray* arr, DoubleArray* other);
+int double_array_contains_all(DoubleArray* arr, DoubleArray* other);
+void double_array_retain_all(DoubleArray* arr, DoubleArray* other);
+DoubleArray* double_array_copy(DoubleArray* arr);
+DoubleArray* double_array_subarray(DoubleArray* arr, int start, int end);
+void double_array_swap(DoubleArray* arr, int i, int j);
+double double_array_min(DoubleArray* arr);
+double double_array_max(DoubleArray* arr);
+double double_array_sum(DoubleArray* arr);
+
+/* StringArray */
+void string_array_add_all(StringArray* arr, StringArray* other);
+void string_array_remove_all(StringArray* arr, StringArray* other);
+int string_array_contains_all(StringArray* arr, StringArray* other);
+void string_array_retain_all(StringArray* arr, StringArray* other);
+StringArray* string_array_copy(StringArray* arr);
+StringArray* string_array_subarray(StringArray* arr, int start, int end);
+void string_array_swap(StringArray* arr, int i, int j);
+
+/* PtrArray */
+void ptr_array_add_all(PtrArray* arr, PtrArray* other);
+void ptr_array_remove_all(PtrArray* arr, PtrArray* other);
+int ptr_array_contains_all(PtrArray* arr, PtrArray* other);
+void ptr_array_retain_all(PtrArray* arr, PtrArray* other);
+PtrArray* ptr_array_copy(PtrArray* arr);
+PtrArray* ptr_array_subarray(PtrArray* arr, int start, int end);
+void ptr_array_swap(PtrArray* arr, int i, int j);
+int ptr_array_index_of_object(PtrArray* arr, void* obj);
+
+/* StructArray */
+void struct_array_add_all(StructArray* arr, StructArray* other);
+void struct_array_remove_all(StructArray* arr, StructArray* other);
+int struct_array_contains_all(StructArray* arr, StructArray* other);
+void struct_array_retain_all(StructArray* arr, StructArray* other);
+StructArray* struct_array_copy(StructArray* arr);
+StructArray* struct_array_subarray(StructArray* arr, int start, int end);
+void struct_array_swap(StructArray* arr, int i, int j);
+int struct_array_index_of_object(StructArray* arr, void* obj);
+
+/* ClassArray */
+void class_array_add_all(ClassArray* arr, ClassArray* other);
+void class_array_remove_all(ClassArray* arr, ClassArray* other);
+int class_array_contains_all(ClassArray* arr, ClassArray* other);
+void class_array_retain_all(ClassArray* arr, ClassArray* other);
+ClassArray* class_array_copy(ClassArray* arr);
+ClassArray* class_array_subarray(ClassArray* arr, int start, int end);
+void class_array_swap(ClassArray* arr, int i, int j);
+int class_array_index_of_object(ClassArray* arr, void* obj);
+
 /* ==================== 通用数组操作宏（用于批量生成函数声明） ==================== */
 /*
 #define TYPED_ARRAY_DECLARE(prefix, type) \

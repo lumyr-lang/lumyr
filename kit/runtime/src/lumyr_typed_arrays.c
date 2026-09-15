@@ -868,3 +868,152 @@ void string_array_sort(StringArray* arr) { string_array_sort_with(arr, string_de
 void ptr_array_sort(PtrArray* arr) { ptr_array_sort_with(arr, ptr_default_compare); }
 void struct_array_sort(StructArray* arr) { struct_array_sort_with(arr, ptr_default_compare); }
 void class_array_sort(ClassArray* arr) { class_array_sort_with(arr, ptr_default_compare); }
+
+/* ==================== 集合操作实现（addAll、removeAll、containsAll 等） ==================== */
+
+/* 通用集合操作宏（用于批量生成函数） */
+#define TYPED_ARRAY_COLLECTION_OPS(prefix, type, struct_name) \
+void prefix##_array_add_all(struct_name* arr, struct_name* other) { \
+    if(!arr || !other) return; \
+    for(int i = 0; i < other->len; i++) { \
+        prefix##_array_add(arr, other->items[i]); \
+    } \
+} \
+void prefix##_array_remove_all(struct_name* arr, struct_name* other) { \
+    if(!arr || !other) return; \
+    for(int i = arr->len - 1; i >= 0; i--) { \
+        if(prefix##_array_contains(other, arr->items[i])) { \
+            prefix##_array_remove(arr, i); \
+        } \
+    } \
+} \
+int prefix##_array_contains_all(struct_name* arr, struct_name* other) { \
+    if(!arr || !other) return 0; \
+    for(int i = 0; i < other->len; i++) { \
+        if(!prefix##_array_contains(arr, other->items[i])) return 0; \
+    } \
+    return 1; \
+} \
+void prefix##_array_retain_all(struct_name* arr, struct_name* other) { \
+    if(!arr || !other) return; \
+    for(int i = arr->len - 1; i >= 0; i--) { \
+        if(!prefix##_array_contains(other, arr->items[i])) { \
+            prefix##_array_remove(arr, i); \
+        } \
+    } \
+} \
+struct_name* prefix##_array_copy(struct_name* arr) { \
+    if(!arr) return NULL; \
+    struct_name* result = prefix##_array_new(arr->len); \
+    if(!result) return NULL; \
+    for(int i = 0; i < arr->len; i++) { \
+        result->items[i] = arr->items[i]; \
+    } \
+    result->len = arr->len; \
+    return result; \
+} \
+struct_name* prefix##_array_subarray(struct_name* arr, int start, int end) { \
+    if(!arr || start < 0 || end > arr->len || start >= end) return NULL; \
+    int len = end - start; \
+    struct_name* result = prefix##_array_new(len); \
+    if(!result) return NULL; \
+    for(int i = 0; i < len; i++) { \
+        result->items[i] = arr->items[start + i]; \
+    } \
+    result->len = len; \
+    return result; \
+} \
+void prefix##_array_swap(struct_name* arr, int i, int j) { \
+    if(!arr || i < 0 || i >= arr->len || j < 0 || j >= arr->len) return; \
+    type tmp = arr->items[i]; \
+    arr->items[i] = arr->items[j]; \
+    arr->items[j] = tmp; \
+}
+
+/* 为主要类型生成集合操作 */
+TYPED_ARRAY_COLLECTION_OPS(int, int, IntArray)
+TYPED_ARRAY_COLLECTION_OPS(double, double, DoubleArray)
+TYPED_ARRAY_COLLECTION_OPS(string, char*, StringArray)
+TYPED_ARRAY_COLLECTION_OPS(ptr, void*, PtrArray)
+TYPED_ARRAY_COLLECTION_OPS(struct, void*, StructArray)
+TYPED_ARRAY_COLLECTION_OPS(class, void*, ClassArray)
+
+/* 数值类型的 min/max/sum 操作 */
+int int_array_min(IntArray* arr) {
+    if(!arr || arr->len == 0) return 0;
+    int min_val = arr->items[0];
+    for(int i = 1; i < arr->len; i++) {
+        if(arr->items[i] < min_val) min_val = arr->items[i];
+    }
+    return min_val;
+}
+
+int int_array_max(IntArray* arr) {
+    if(!arr || arr->len == 0) return 0;
+    int max_val = arr->items[0];
+    for(int i = 1; i < arr->len; i++) {
+        if(arr->items[i] > max_val) max_val = arr->items[i];
+    }
+    return max_val;
+}
+
+int int_array_sum(IntArray* arr) {
+    if(!arr) return 0;
+    int sum = 0;
+    for(int i = 0; i < arr->len; i++) {
+        sum += arr->items[i];
+    }
+    return sum;
+}
+
+double double_array_min(DoubleArray* arr) {
+    if(!arr || arr->len == 0) return 0.0;
+    double min_val = arr->items[0];
+    for(int i = 1; i < arr->len; i++) {
+        if(arr->items[i] < min_val) min_val = arr->items[i];
+    }
+    return min_val;
+}
+
+double double_array_max(DoubleArray* arr) {
+    if(!arr || arr->len == 0) return 0.0;
+    double max_val = arr->items[0];
+    for(int i = 1; i < arr->len; i++) {
+        if(arr->items[i] > max_val) max_val = arr->items[i];
+    }
+    return max_val;
+}
+
+double double_array_sum(DoubleArray* arr) {
+    if(!arr) return 0.0;
+    double sum = 0.0;
+    for(int i = 0; i < arr->len; i++) {
+        sum += arr->items[i];
+    }
+    return sum;
+}
+
+/* 指针类型的 indexOfObject 操作 */
+int ptr_array_index_of_object(PtrArray* arr, void* obj) {
+    if(!arr) return -1;
+    for(int i = 0; i < arr->len; i++) {
+        if(arr->items[i] == obj) return i;
+    }
+    return -1;
+}
+
+int struct_array_index_of_object(StructArray* arr, void* obj) {
+    if(!arr) return -1;
+    for(int i = 0; i < arr->len; i++) {
+        if(arr->items[i] == obj) return i;
+    }
+    return -1;
+}
+
+int class_array_index_of_object(ClassArray* arr, void* obj) {
+    if(!arr) return -1;
+    for(int i = 0; i < arr->len; i++) {
+        if(arr->items[i] == obj) return i;
+    }
+    return -1;
+}
