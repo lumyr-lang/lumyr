@@ -2915,6 +2915,64 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 BYTE_PUSH(val);
                 break;
             }
+            case OPC_INT8_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT8;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int8_t), VAL_TYPED_ARRAY);
+                    int8_t* i8items = (int8_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        i8items[k] = INT8_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_INT8;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(int8_t), VAL_TYPED_ARRAY);
+                    int8_t* i8items = (int8_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        i8items[k] = (v.type == VAL_INT8) ? (int8_t)v.v.i : (int8_t)lumyr_cast_int(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_INT8_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int i8idx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_INT8_ARRAY_GET 需要 int8 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_INT8) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 int8，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(i8idx < 0 || i8idx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", i8idx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                int8_t val = ((int8_t*)tarr->items)[i8idx];
+                INT8_PUSH(val);
+                break;
+            }
             case OPC_INDEX_GET: {
                 Value idx = stack[--sp];
                 Value c = stack[--sp];
@@ -3224,6 +3282,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 从 byte 栈弹出并打印（零开销，用于声明为 byte 的变量） */
                 unsigned char byv = BYTE_POP();
                 printf("%d\n", (int)byv);
+                break;
+            }
+            case OPC_PRINT_INT8: {
+                /* 从 int8 栈弹出并打印（零开销，用于声明为 int8 的变量） */
+                int8_t i8v = INT8_POP();
+                printf("%d\n", (int)i8v);
                 break;
             }
             case OPC_TO_BOOL:
