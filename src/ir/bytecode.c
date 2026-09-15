@@ -256,6 +256,11 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;
         case OPC_UINT16_ARRAY_GET:
             return -2;
+        case OPC_UINT64_ARRAY_LIT:
+            if(in.a == 1) return +1;
+            return -in.b + 1;
+        case OPC_UINT64_ARRAY_GET:
+            return -2;
         case OPC_MAP_LIT:
             return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
         case OPC_CLASS_NEW:
@@ -289,6 +294,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT_INT64:
         case OPC_PRINT_UINT8:
         case OPC_PRINT_UINT16:
+        case OPC_PRINT_UINT64:
             return 0;  /* 从专用栈弹出值，不改变 Value 栈深度 */
         case OPC_TO_BOOL:
         case OPC_JMP:

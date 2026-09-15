@@ -110,6 +110,12 @@ uint16_t stackframe_get_uint16(StackFrame* f, const char* name, _Bool* found);
 // 绑定 uint16 变量：同时更新 vals 和 uint16_vals，零重复提取
 void stackframe_bind_uint16(StackFrame* f, const char* name, uint16_t u16v);
 
+// 获取 uint64 类型变量的原始 uint64 值，零提取、零类型检查
+uint64_t stackframe_get_uint64(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 uint64 变量：同时更新 vals 和 uint64_vals，零重复提取
+void stackframe_bind_uint64(StackFrame* f, const char* name, uint64_t u64v);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
