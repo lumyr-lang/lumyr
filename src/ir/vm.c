@@ -2056,7 +2056,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value c = stack[--sp];
                 Value result;
                 /* 判断是否是 class 结构体实例 */
-                if((c.type == VAL_STRUCT_PTR || c.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(c)) {
+                if(c.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(c)) {
                     /* 结构体实例：先从字段中查找，再从 vtable 方法中查找 */
                     const char* field_name = lumyr_str_cstr(&idx);
                     if(field_name) {
@@ -2157,7 +2157,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value idx = stack[--sp];
                 Value arr = stack[--sp];
                 /* 判断是否是 class 结构体实例 */
-                if((arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(arr)) {
+                if(arr.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(arr)) {
                     /* 结构体实例：用新的方式设置字段 */
                     const char* field_name = lumyr_str_cstr(&idx);
                     if(field_name) {
@@ -2177,7 +2177,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
                 /* 判断是否是 class 结构体实例 */
-                if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(obj)) {
+                if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
                     /* 结构体实例：用新的方式读取字段 */
                     const char* field_name = lumyr_str_cstr(&fname);
                     if(field_name) {
@@ -2199,7 +2199,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
                 /* 判断是否是 class 结构体实例 */
-                if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(obj)) {
+                if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
                     /* 结构体实例：用新的方式写入字段 */
                     const char* field_name = lumyr_str_cstr(&fname);
                     if(field_name) {
@@ -2414,7 +2414,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         int n = argc < td->nprops ? argc : td->nprops;
                         for(int i = 0; i < n; i++) {
                             Value arg = stack[sp - argc + i];
-                            if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(obj)) {
+                            if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
                                 /* 结构体实例：用新的方式设置字段 */
                                 lumyr_class_instance_set_field(obj, td->props[i], arg);
                             } else {
@@ -2438,7 +2438,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     const char* iface_name = (iface_val.type == VAL_STRING) ? lumyr_str_cstr(&iface_val) : "";
                     _Bool impl = 0;
                     /* class 实例（VAL_STRUCT_PTR）：通过 lumyr_obj_implements_interface 判断 */
-                    if((obj.type == VAL_STRUCT_PTR || obj.type == VAL_CLASS_PTR) && obj.v.struct_ptr && lumyr_is_class_instance(obj)) {
+                    if(obj.type == VAL_CLASS_PTR && obj.v.struct_ptr) {
                         impl = lumyr_obj_implements_interface(obj, iface_name);
                     }
                     /* map（type/class 类型）：通过 type_lookup 和 TypeDef 的 interfaces 字段判断 */
@@ -2679,7 +2679,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                            lumyr_map_has(self_val, lumyr_make_string("__classname__"))) {
                             Value cn = lumyr_map_get(self_val, lumyr_make_string("__classname__"));
                             if(cn.type == VAL_STRING) ctor_class_name = lumyr_str_cstr(&cn);
-                        } else if((self_val.type == VAL_STRUCT_PTR || self_val.type == VAL_CLASS_PTR) && lumyr_is_class_instance_value(self_val)) {
+                        } else if(self_val.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(self_val)) {
                             ClassInstance* inst = (ClassInstance*)self_val.v.struct_ptr;
                             if(inst && inst->vtable) ctor_class_name = inst->vtable->class_name;
                         }
