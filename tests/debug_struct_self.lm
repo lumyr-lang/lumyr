@@ -1,0 +1,29 @@
+// 调试结构体方法 self 参数的测试
+print("=== 调试结构体方法 self 参数 ===");
+
+// 简单 class（没有方法）
+class SimpleClass {
+    name: string;
+}
+
+obj = SimpleClass();
+obj.name = "Test";
+print("obj.name =", obj.name);
+
+// 结构体方法
+struct Point {
+    x: int;
+    y: int;
+    func debug_self(self) {
+        print("self.x =", self.x);
+        print("self.y =", self.y);
+    }
+}
+
+p1 = Point();
+p1.x = 10;
+p1.y = 20;
+print("调用 p1.debug_self()");
+p1.debug_self();
+
+print("=== 调试完成 ===");
