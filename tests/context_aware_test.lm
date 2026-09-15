@@ -1,0 +1,35 @@
+// 测试：变量类型声明 + int 泛型数组（上下文感知零检查零转换）
+print("=== 上下文感知零检查零转换测试 ===\n");
+
+// 声明为 int 类型的变量
+a = <int>5;
+b = <int>10;
+c = <int>15;
+
+print("a = ", a, "\n");
+print("b = ", b, "\n");
+print("c = ", c, "\n");
+
+// 使用声明为 int 的变量创建 int 泛型数组（应该走零检查零转换路径）
+arr = <int>[a, b, c];
+print("arr type = ", type(arr), "\n");
+print("arr len = ", len(arr), "\n");
+print("arr[0] = ", arr[0], "\n");
+print("arr[1] = ", arr[1], "\n");
+print("arr[2] = ", arr[2], "\n");
+
+// 未声明类型的变量 + int 泛型数组（应该走内联类型转换路径）
+x = 100;
+y = 200;
+arr2 = <int>[x, y];
+print("\narr2 type = ", type(arr2), "\n");
+print("arr2 len = ", len(arr2), "\n");
+print("arr2[0] = ", arr2[0], "\n");
+print("arr2[1] = ", arr2[1], "\n");
+
+// 全常量数组
+arr3 = <int>[1, 2, 3, 4, 5];
+print("\narr3 type = ", type(arr3), "\n");
+print("arr3 len = ", len(arr3), "\n");
+
+print("\n=== 测试完成 ===\n");

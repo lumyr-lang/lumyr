@@ -2117,21 +2117,24 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_INT_ARRAY_LIT: {
-                /* int 泛型数组：优先从 int 栈读取（零检查零转换），
-                   如果 int 栈元素不足，则回退到 Value 栈读取（兼容混合场景） */
+                /* int 泛型数组：
+                   a=1: 从 int 栈读取（零检查零转换）
+                   a=0: 从 Value 栈读取（内联类型转换） */
                 int n = in.b;
                 Value arr = val_int_array(n);
                 TypedArray* tarr = arr.v.typed_array;
                 if(tarr && tarr->items) {
                     int* iitems = (int*)tarr->items;
-                    if(vm_int_sp >= n) {
-                        /* int 栈有足够元素：零检查零转换，直接从 int 栈读取 */
+                    if(in.a == 1) {
+                        /* 从 int 栈读取：零检查零转换 */
                         for(int k = 0; k < n; k++) {
                             iitems[k] = vm_int_stack[vm_int_sp - n + k];
                         }
                         vm_int_sp -= n;
+                        /* Value 栈没有元素需要弹出，直接压入数组 */
+                        stack[sp++] = arr;
                     } else {
-                        /* int 栈元素不足：回退到 Value 栈读取（兼容混合场景） */
+                        /* 从 Value 栈读取：内联类型转换 */
                         for(int k = 0; k < n; k++) {
                             Value v = stack[sp - n + k];
                             switch(v.type) {
@@ -2150,10 +2153,13 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                             }
                         }
                         sp = sp - n + 1;
+                        sp--; stack[sp++] = arr;
                     }
                     tarr->len = n;
+                } else {
+                    /* 数组创建失败，直接压入 */
+                    stack[sp++] = arr;
                 }
-                sp--; stack[sp++] = arr;
                 break;
             }
             case OPC_MAP_LIT: {

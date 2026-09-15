@@ -1,0 +1,12 @@
+// 简单测试：int 泛型数组基本功能
+print("=== 简单测试 ===\n");
+
+// 全常量数组
+arr = <int>[1, 2, 3, 4, 5];
+print("arr type = ", type(arr), "\n");
+print("arr len = ", len(arr), "\n");
+print("arr[0] = ", arr[0], "\n");
+print("arr[1] = ", arr[1], "\n");
+print("arr[2] = ", arr[2], "\n");
+
+print("\n=== 测试完成 ===\n");

@@ -284,6 +284,7 @@ Value lumyr_array_get(Value arr, Value idx) {
 // len(x)：数组长度 / 字符串字符数
 Value lumyr_len(Value v) {
     if(v.type == VAL_ARRAY) return lumyr_make_int(v.v.array->len);
+    if(v.type == VAL_TYPED_ARRAY) return lumyr_make_int(v.v.typed_array->len);
     if(v.type == VAL_STRING) {
         /* 已知是字符串，直接内联访问，跳过 lumyr_str_len 的冗余 type 检查 */
         int l = v.str_inline ? (int)v.v.sso.len : (int)(v.v.s ? strlen(v.v.s) : 0);
@@ -324,6 +325,29 @@ Value lumyr_index_get(Value c, Value idx) {
         return val_none();
     }
     long long i = array_index_of(idx);
+    if(c.type == VAL_TYPED_ARRAY) {
+        /* 类型化数组：根据元素类型返回对应值 */
+        if(i < 0 || i >= c.v.typed_array->len) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "数组下标越界: %lld (长度 %d)", i, c.v.typed_array->len);
+            runtime_error(buf);
+        }
+        TypedArray* tarr = c.v.typed_array;
+        switch(tarr->elem_type) {
+            case VAL_INT:
+            case VAL_BYTE:
+            case VAL_CHAR:
+            case VAL_BOOL:
+                return lumyr_make_int(((int*)tarr->items)[i]);
+            case VAL_DOUBLE:
+                return lumyr_make_double(((double*)tarr->items)[i]);
+            case VAL_STRING:
+                return lumyr_make_string(((char**)tarr->items)[i]);
+            default:
+                runtime_error("类型化数组索引访问暂不支持该元素类型");
+                return val_none();
+        }
+    }
     if(c.type == VAL_ARRAY) {
         if(i < 0 || i >= c.v.array->len) {
             char buf[128];

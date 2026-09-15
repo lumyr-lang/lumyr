@@ -455,6 +455,37 @@ static void c_args(Ctx* c, AstNode* args, int* argc)
     c_args_ref(c, args, argc, NULL, &ref_idx);
 }
 
+// 检查变量是否声明为 int 类型
+static int is_int_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_INT);
+}
+
+// 检查数组所有元素是否都是声明为 int 类型的变量
+static int all_int_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_int_vars(c, e->u.seq.first) && all_int_vars(c, e->u.seq.second);
+    }
+    return is_int_var(c, e);
+}
+
+// 编译 int 泛型数组元素：全部使用 OPC_LOAD_INT_VAR 压入 int 栈（零检查零转换）
+static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_int_array_elems(c, e->u.seq.first, n);
+        compile_int_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    /* 声明为 int 类型的变量：使用 OPC_LOAD_INT_VAR，直接压入 int 栈 */
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 递归检测 AST_SEQ 树中是否含 AST_SPREAD
 static int has_spread_node(AstNode* e) {
     if(!e) return 0;
@@ -1194,16 +1225,24 @@ static void c_expr(Ctx* c, AstNode* node)
             int elem_type = node->u.array_lit.elem_type;
             if(!has_spread_node(node->u.array_lit.elems)) {
                 int n = 0;
-                c_args(c, node->u.array_lit.elems, &n);
-                if(elem_type == VAL_INT) {
-                    // int 泛型数组：使用专门的 OPC_INT_ARRAY_LIT 指令，内联类型转换
-                    emit(c, OPC_INT_ARRAY_LIT, elem_type, n);
+                if(elem_type == VAL_INT && all_int_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 int 类型的变量：使用 OPC_LOAD_INT_VAR 压入 int 栈，
+                       OPC_INT_ARRAY_LIT(a=1) 从 int 栈读取，实现零检查零转换 */
+                    compile_int_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_INT_ARRAY_LIT, 1, n);  /* a=1: 从 int 栈读取 */
                 } else {
-                    emit(c, OPC_ARRAY_LIT, elem_type, n);
+                    /* 混合场景：使用普通 c_args 编译压入 Value 栈，
+                       OPC_INT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
+                    c_args(c, node->u.array_lit.elems, &n);
+                    if(elem_type == VAL_INT) {
+                        emit(c, OPC_INT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else {
+                        emit(c, OPC_ARRAY_LIT, elem_type, n);
+                    }
                 }
             } else {
                 if(elem_type == VAL_INT) {
-                    emit(c, OPC_INT_ARRAY_LIT, elem_type, 0);
+                    emit(c, OPC_INT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }
