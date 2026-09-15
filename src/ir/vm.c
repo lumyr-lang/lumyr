@@ -2096,10 +2096,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                     result.v.func.is_ffi = 0;
                                 } else {
                                     /* vtable 方法表为空，用红黑树封装好的方法 ir_func_table_lookup_class 查找 class 方法 */
-                                    /* 方法名格式是 <类名>_<方法名>，所以需要拼接完整方法名 */
-                                    char full_method_name[256];
-                                    snprintf(full_method_name, sizeof(full_method_name), "%s_%s", vt->class_name, field_name);
-                                    BytecodeFunc* method_bf = ir_func_table_lookup_class(vt->class_name, full_method_name);
+                                    /* 方法名直接使用 field_name，因为 ir_func_table_lookup_class 使用 class_name 作为 scope */
+                                    BytecodeFunc* method_bf = ir_func_table_lookup_class(vt->class_name, field_name);
                                     if(method_bf) {
                                         /* 把 BytecodeFunc* 包装成 RuntimeFunc* */
                                         RuntimeFunc* rf = (RuntimeFunc*)malloc(sizeof(RuntimeFunc));
@@ -2139,16 +2137,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 } else {
                     /* map 或其他类型：用旧的方式 */
                     result = lumyr_index_get(c, idx);
-                    /* 扩展方法：如果对象没有该属性，且属性名是字符串，查找全局符号表中的扩展方法 */
-                    if(result.type == VAL_NONE && idx.type == VAL_STRING) {
-                        const char* method_name = lumyr_str_cstr(&idx);
-                        if(method_name != NULL && sym_has(method_name)) {
-                            Value fv = sym_get(method_name);
-                            if(fv.type == VAL_FUNC) {
-                                result = fv;
-                            }
-                        }
-                    }
+                    /* 解耦：不允许回退到全局符号表查找扩展方法
+                       如果对象没有该属性，直接返回 VAL_NONE，由调用方处理 */
                 }
                 stack[sp++] = result;
                 break;
@@ -2179,10 +2169,78 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if(!fnd) runtime_undefined("变量", vname);
                 /* 判断是否是 class 结构体实例 */
                 if(obj.type == VAL_CLASS_PTR) {
-                    /* 结构体实例：用新的方式读取字段 */
+                    /* 结构体实例：先从字段中查找，再从 vtable 方法中查找 */
                     const char* field_name = lumyr_str_cstr(&fname);
                     if(field_name) {
-                        stack[sp++] = lumyr_class_instance_get_field(obj, field_name);
+                        Value field_val = lumyr_class_instance_get_field(obj, field_name);
+                        if(field_val.type == VAL_NONE) {
+                            /* 字段没找到，从 vtable 方法中查找 */
+                            ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
+                            ClassVTable* vt = inst ? inst->vtable : NULL;
+                            if(vt) {
+                                RuntimeFunc* method = NULL;
+                                /* 先在当前类的方法表中查找 */
+                                for(int mi = 0; mi < vt->nmethods; mi++) {
+                                    if(vt->method_names && strcmp(vt->method_names[mi], field_name) == 0) {
+                                        method = vt->methods[mi];
+                                        break;
+                                    }
+                                }
+                                /* 再在父类的方法表中查找（递归） */
+                                if(!method && vt->parent) {
+                                    ClassVTable* pvt = vt->parent;
+                                    while(pvt && !method) {
+                                        for(int mi = 0; mi < pvt->nmethods; mi++) {
+                                            if(pvt->method_names && strcmp(pvt->method_names[mi], field_name) == 0) {
+                                                method = pvt->methods[mi];
+                                                break;
+                                            }
+                                        }
+                                        pvt = pvt->parent;
+                                    }
+                                }
+                                if(method) {
+                                    /* 把 RuntimeFunc* 包装成 Value */
+                                    field_val.type = VAL_FUNC;
+                                    field_val.v.func.func_obj = method;
+                                    field_val.v.func.ffi_func = NULL;
+                                    field_val.v.func.is_ffi = 0;
+                                } else {
+                                    /* vtable 方法表为空，用红黑树封装好的方法 ir_func_table_lookup_class 查找 class 方法 */
+                                    BytecodeFunc* method_bf = ir_func_table_lookup_class(vt->class_name, field_name);
+                                    if(method_bf) {
+                                        /* 把 BytecodeFunc* 包装成 RuntimeFunc* */
+                                        RuntimeFunc* rf = (RuntimeFunc*)malloc(sizeof(RuntimeFunc));
+                                        memset(rf, 0, sizeof(RuntimeFunc));
+                                        rf->entry = vm_func_entry;
+                                        rf->param_count = method_bf->param_cnt;
+                                        rf->has_variadic = method_bf->has_variadic;
+                                        rf->captures = NULL;
+                                        rf->capture_count = -1;
+                                        InterpFuncPayload* pl = (InterpFuncPayload*)malloc(sizeof(InterpFuncPayload));
+                                        memset(pl, 0, sizeof(InterpFuncPayload));
+                                        pl->body = NULL;
+                                        pl->bytecode = method_bf;
+                                        pl->param_names = method_bf->params;
+                                        pl->param_cnt = method_bf->param_cnt;
+                                        pl->has_variadic = method_bf->has_variadic;
+                                        pl->default_vals = NULL;
+                                        pl->has_default = NULL;
+                                        pl->param_is_ref = method_bf->param_is_ref;
+                                        pl->captured_names = NULL;
+                                        pl->captured_cells = NULL;
+                                        pl->captured_cell_count = 0;
+                                        pl->is_generator = method_bf->is_generator;
+                                        rf->captures = (Value*)pl;
+                                        field_val.type = VAL_FUNC;
+                                        field_val.v.func.func_obj = rf;
+                                        field_val.v.func.ffi_func = NULL;
+                                        field_val.v.func.is_ffi = 0;
+                                    }
+                                }
+                            }
+                        }
+                        stack[sp++] = field_val;
                     } else {
                         stack[sp++] = val_none();
                     }
@@ -2709,11 +2767,63 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value func_val;
                 _Bool fnd = 0;
                 Value gv = stackframe_get(frame, fname, &fnd);
-                if(fnd && gv.type == VAL_FUNC) func_val = gv;
-                else if(sym_has(fname)) func_val = sym_get(fname);
-                else {
-                    /* 从函数表（红黑树）中查找
-                       当第一个参数是 class 实例时，优先查找 class 方法，然后再查找全局函数 */
+                /* 解耦：当第一个参数是 class 实例时，只查找 class 方法，不查找全局函数
+                   如果找不到 class 方法，就抛异常 */
+                const char* class_name_for_call = NULL;
+                if(argc > 0) {
+                    Value obj_for_call = stack[sp - argc];
+                    if(obj_for_call.type == VAL_CLASS_PTR) {
+                        ClassInstance* inst_for_call = (ClassInstance*)obj_for_call.v.struct_ptr;
+                        if(inst_for_call && inst_for_call->vtable) class_name_for_call = inst_for_call->vtable->class_name;
+                    }
+                }
+                if(class_name_for_call) {
+                    /* class 实例：跳过帧链和全局函数表查找，直接从函数表中查找 class 方法 */
+                    func_val = val_none();
+                    fnd = 0;
+                    /* 从函数表（红黑树）中查找 class 方法 */
+                    BytecodeFunc* bf_fn = ir_func_table_lookup_class(class_name_for_call, fname);
+                    if(bf_fn) {
+                        /* 把 BytecodeFunc* 包装成 RuntimeFunc* */
+                        RuntimeFunc* rf_ptr = (RuntimeFunc*)malloc(sizeof(RuntimeFunc));
+                        memset(rf_ptr, 0, sizeof(RuntimeFunc));
+                        rf_ptr->entry = vm_func_entry;
+                        rf_ptr->param_count = bf_fn->param_cnt;
+                        rf_ptr->has_variadic = bf_fn->has_variadic;
+                        rf_ptr->captures = NULL;
+                        rf_ptr->capture_count = -1;
+                        InterpFuncPayload* pl = (InterpFuncPayload*)malloc(sizeof(InterpFuncPayload));
+                        memset(pl, 0, sizeof(InterpFuncPayload));
+                        pl->body = NULL;
+                        pl->bytecode = bf_fn;
+                        pl->param_names = bf_fn->params;
+                        pl->param_cnt = bf_fn->param_cnt;
+                        pl->has_variadic = bf_fn->has_variadic;
+                        pl->default_vals = NULL;
+                        pl->has_default = NULL;
+                        pl->param_is_ref = bf_fn->param_is_ref;
+                        pl->captured_names = NULL;
+                        pl->captured_cells = NULL;
+                        pl->captured_cell_count = 0;
+                        pl->is_generator = bf_fn->is_generator;
+                        rf_ptr->captures = (Value*)pl;
+                        func_val.type = VAL_FUNC;
+                        func_val.v.func.func_obj = rf_ptr;
+                        func_val.v.func.ffi_func = NULL;
+                        func_val.v.func.is_ffi = 0;
+                        fnd = 1;
+                    } else {
+                        /* 找不到 class 方法，抛异常 */
+                        char msg[256];
+                        snprintf(msg, sizeof(msg), "类 \"%s\" 没有方法 \"%s\"", class_name_for_call, fname);
+                        runtime_error(msg);
+                    }
+                } else if(fnd && gv.type == VAL_FUNC) {
+                    func_val = gv;
+                } else if(sym_has(fname)) {
+                    func_val = sym_get(fname);
+                } else {
+                    /* 从函数表（红黑树）中查找 */
                     BytecodeFunc* bf_fn = NULL;
                     const char* class_name = NULL;
                     if(argc > 0) {
