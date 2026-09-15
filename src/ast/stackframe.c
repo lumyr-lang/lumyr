@@ -1406,6 +1406,47 @@ void stackframe_bind_ulong(StackFrame* f, const char* name, unsigned long ulv)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+size_t stackframe_get_size_t(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            size_t stv = fr->size_t_vals ? fr->size_t_vals[idx] : (size_t)fr->vals[idx].v.i;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return stv;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_size_t(StackFrame* f, const char* name, size_t stv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_SIZE_T;
+        f->vals[idx].v.i = (long long)stv;
+        if(f->size_t_vals) f->size_t_vals[idx] = stv;
+        if(f->type_tags) f->type_tags[idx] = CAST_SIZE_T;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_SIZE_T;
+        f->vals[f->cnt].v.i = (long long)stv;
+        if(f->size_t_vals) f->size_t_vals[f->cnt] = stv;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_SIZE_T;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 // cell 表扩容（调用方须已持锁）
 static void cell_ensure(StackFrame* f, int need)
 {

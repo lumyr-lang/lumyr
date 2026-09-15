@@ -128,6 +128,12 @@ unsigned long stackframe_get_ulong(StackFrame* f, const char* name, _Bool* found
 // 绑定 unsigned long 变量：同时更新 vals 和 ulong_vals，零重复提取
 void stackframe_bind_ulong(StackFrame* f, const char* name, unsigned long ulv);
 
+// 获取 size_t 类型变量的原始 size_t 值，零提取、零类型检查
+size_t stackframe_get_size_t(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 size_t 变量：同时更新 vals 和 size_t_vals，零重复提取
+void stackframe_bind_size_t(StackFrame* f, const char* name, size_t stv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
