@@ -1,0 +1,52 @@
+// 测试：赋值给 int 变量的零开销优化
+// 验证 a = <int>arr[0] 场景是否使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
+
+print("=== 赋值给 int 变量零开销测试 ===\n");
+
+// 测试 1：基本赋值
+arr = <int>[10, 20, 30, 40, 50];
+print("arr type = \n");
+print(type(arr));
+print("\n");
+
+a = <int>arr[0];
+print("a = \n");
+print(a);
+print(" (期望 10)\n");
+
+b = <int>arr[2];
+print("b = \n");
+print(b);
+print(" (期望 30)\n");
+
+// 测试 2：链式赋值
+c = <int>arr[1];
+d = <int>c;
+print("d = \n");
+print(d);
+print(" (期望 20)\n");
+
+// 测试 3：赋值后使用
+e = <int>arr[4];
+arr2 = <int>[e, e + 1, e + 2];
+print("arr2 len = \n");
+print(len(arr2));
+print("\n");
+print("arr2[0] = \n");
+print(arr2[0]);
+print(" (期望 50)\n");
+print("arr2[1] = \n");
+print(arr2[1]);
+print(" (期望 51)\n");
+print("arr2[2] = \n");
+print(arr2[2]);
+print(" (期望 52)\n");
+
+// 测试 4：变量索引
+i = <int>2;
+f = <int>arr[i];
+print("f = \n");
+print(f);
+print(" (期望 30)\n");
+
+print("\n=== 测试完成 ===\n");

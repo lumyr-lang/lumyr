@@ -352,6 +352,33 @@ void stackframe_bind(StackFrame* f, const char* name, Value v)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+/* 绑定 int 变量：同时更新 vals（包装成 Value）和 int_vals（原始 int 值），零重复提取
+   用于 OPC_STORE_INT_VAR 指令，避免从 Value 重复提取 int 值 */
+void stackframe_bind_int(StackFrame* f, const char* name, int iv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        /* 变量已存在：更新 vals 和 int_vals */
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = 1;  // VAL_INT
+        f->vals[idx].v.i = iv;
+        if(f->int_vals) f->int_vals[idx] = iv;  // 直接更新 int_vals，零提取！
+        if(f->type_tags) f->type_tags[idx] = 2;  // CAST_INT
+    } else {
+        /* 变量不存在：新建 */
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = 1;  // VAL_INT
+        f->vals[f->cnt].v.i = iv;
+        if(f->int_vals) f->int_vals[f->cnt] = iv;  // 直接设置 int_vals，零提取！
+        if(f->type_tags) f->type_tags[f->cnt] = 2;  // CAST_INT
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 // cell 表扩容（调用方须已持锁）
 static void cell_ensure(StackFrame* f, int need)
 {

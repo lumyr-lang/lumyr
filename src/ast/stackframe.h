@@ -34,6 +34,9 @@ int stackframe_get_int(StackFrame* f, const char* name, _Bool* found);
 // 绑定语义（参数绑定用）：只在当前帧查找/创建，不向上查找，遮蔽父帧同名变量
 void stackframe_bind(StackFrame* f, const char* name, Value v);
 
+// 绑定 int 变量：同时更新 vals（包装成 Value）和 int_vals（原始 int 值），零重复提取
+void stackframe_bind_int(StackFrame* f, const char* name, int iv);
+
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);

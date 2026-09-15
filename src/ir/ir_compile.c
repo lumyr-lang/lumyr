@@ -806,8 +806,28 @@ static void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
-            c_expr(c, node->u.assign.expr);
-            emit(c, OPC_STORE_VAR, var_idx, 0);
+            /* 优化：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
+               零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
+            if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */ &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INDEX) {
+                AstNode* index_node = node->u.assign.expr->u.type_annotation.expr;
+                AstNode* arr = index_node->u.index.arr;
+                AstNode* idx = index_node->u.index.idx;
+                /* 编译 arr 和 idx（压入 Value 栈） */
+                c_expr(c, arr);
+                c_expr(c, idx);
+                /* OPC_INT_ARRAY_GET：直接读取 int 值，压入 int 栈，零包装 */
+                emit(c, OPC_INT_ARRAY_GET, 0, 0);
+                /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                /* 记录变量类型标记为 int */
+                c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+            } else {
+                c_expr(c, node->u.assign.expr);
+                emit(c, OPC_STORE_VAR, var_idx, 0);
+            }
             break;
         }
         case AST_BINOP: {

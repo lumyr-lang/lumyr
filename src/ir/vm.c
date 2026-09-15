@@ -1937,6 +1937,20 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = vv;
                 break;
             }
+            case OPC_STORE_INT_VAR: {
+                /* 从 int 栈弹出 int 值，直接存储到 int 变量，零重复提取
+                   stackframe_bind_int 同时更新 vals 和 int_vals，避免从 Value 重复提取 */
+                const char* name = bf->syms[in.a];
+                int iv = INT_POP();  // 从 int 栈弹出 int 值
+                /* 直接绑定 int 变量（同时更新 vals 和 int_vals，零重复提取） */
+                stackframe_bind_int(frame, name, iv);
+                /* 包装成 Value 压回（赋值表达式有返回值，如 a = b = 5） */
+                Value ret;
+                ret.type = 1;  // VAL_INT
+                ret.v.i = iv;
+                stack[sp++] = ret;
+                break;
+            }
             case OPC_STORE_VAR: {
                 const char* name = bf->syms[in.a];
                 Value v = stack[--sp];

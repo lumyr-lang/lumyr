@@ -138,6 +138,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;
         case OPC_LOAD_INT_VAR:
             return 0;                        /* 压入 int 栈，不改变 Value 栈深度 */
+        case OPC_STORE_INT_VAR:
+            return +1;                       /* 从 int 栈弹出 int，包装成 Value 压回（赋值表达式有返回值） */
         case OPC_POP:
         case OPC_PEND_RETURN:
         case OPC_THROW:
