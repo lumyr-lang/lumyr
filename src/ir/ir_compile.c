@@ -28,6 +28,9 @@
 #define VAR_TYPE_FLOAT_ARRAY 1002
 /* 变量类型标记特殊值：1003 表示变量是 uint 类型化数组（用于上下文感知类型推导） */
 #define VAR_TYPE_UINT_ARRAY 1003
+#define VAR_TYPE_BOOL_ARRAY 1004
+#define VAR_TYPE_CHAR_ARRAY 1005
+#define VAR_TYPE_BYTE_ARRAY 1006
 
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
@@ -652,6 +655,132 @@ static void compile_uint_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 bool 类型
+static int is_bool_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_BOOL);
+}
+
+// 检查数组所有元素是否都是 bool 类型
+static int all_bool_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_bool_vars(c, e->u.seq.first) && all_bool_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        return 1;
+    }
+    return is_bool_var(c, e);
+}
+
+// 编译 bool 泛型数组元素：全部压入 bool 栈
+static void compile_bool_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_bool_array_elems(c, e->u.seq.first, n);
+        compile_bool_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_BOOL_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
+    (*n)++;
+}
+
+// 检查变量是否声明为 char 类型
+static int is_char_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_CHAR);
+}
+
+// 检查数组所有元素是否都是 char 类型
+static int all_char_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_char_vars(c, e->u.seq.first) && all_char_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        return 1;
+    }
+    return is_char_var(c, e);
+}
+
+// 编译 char 泛型数组元素：全部压入 char 栈
+static void compile_char_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_char_array_elems(c, e->u.seq.first, n);
+        compile_char_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_CHAR_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
+    (*n)++;
+}
+
+// 检查变量是否声明为 byte 类型
+static int is_byte_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_BYTE);
+}
+
+// 检查数组所有元素是否都是 byte 类型
+static int all_byte_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_byte_vars(c, e->u.seq.first) && all_byte_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        return 1;
+    }
+    return is_byte_var(c, e);
+}
+
+// 编译 byte 泛型数组元素：全部压入 byte 栈
+static void compile_byte_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_byte_array_elems(c, e->u.seq.first, n);
+        compile_byte_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_BYTE_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 递归检测 AST_SEQ 树中是否含 AST_SPREAD
 static int has_spread_node(AstNode* e) {
     if(!e) return 0;
@@ -895,6 +1024,18 @@ static void c_expr(Ctx* c, AstNode* node)
                           node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT32) {
                     /* <uint32>[...] 形式：变量是 uint 类型化数组，设置特殊标记用于上下文感知类型推导 */
                     c->fn->var_type_tags[var_idx] = VAR_TYPE_UINT_ARRAY;
+                } else if(inner && inner->type == AST_ARRAY_LIT &&
+                          node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL) {
+                    /* <bool>[...] 形式：变量是 bool 类型化数组，设置特殊标记用于上下文感知类型推导 */
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_BOOL_ARRAY;
+                } else if(inner && inner->type == AST_ARRAY_LIT &&
+                          node->u.assign.expr->u.type_annotation.cast_type == CAST_CHAR) {
+                    /* <char>[...] 形式：变量是 char 类型化数组，设置特殊标记用于上下文感知类型推导 */
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_CHAR_ARRAY;
+                } else if(inner && inner->type == AST_ARRAY_LIT &&
+                          node->u.assign.expr->u.type_annotation.cast_type == CAST_BYTE) {
+                    /* <byte>[...] 形式：变量是 byte 类型化数组，设置特殊标记用于上下文感知类型推导 */
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_BYTE_ARRAY;
                 } else {
                     /* 其他数组/map字面量的类型标注不设置变量类型标记 */
                     c->fn->var_type_tags[var_idx] = -1;
@@ -1624,6 +1765,21 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_UINT_ARRAY_LIT(a=1) 从 uint 栈读取，实现零检查零转换 */
                     compile_uint_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_UINT_ARRAY_LIT, 1, n);  /* a=1: 从 uint 栈读取 */
+                } else if(elem_type == VAL_BOOL && all_bool_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 bool 类型的变量：使用 OPC_LOAD_BOOL_VAR 压入 bool 栈，
+                       OPC_BOOL_ARRAY_LIT(a=1) 从 bool 栈读取，实现零检查零转换 */
+                    compile_bool_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_BOOL_ARRAY_LIT, 1, n);  /* a=1: 从 bool 栈读取 */
+                } else if(elem_type == VAL_CHAR && all_char_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 char 类型的变量：使用 OPC_LOAD_CHAR_VAR 压入 char 栈，
+                       OPC_CHAR_ARRAY_LIT(a=1) 从 char 栈读取，实现零检查零转换 */
+                    compile_char_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_CHAR_ARRAY_LIT, 1, n);  /* a=1: 从 char 栈读取 */
+                } else if(elem_type == VAL_BYTE && all_byte_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 byte 类型的变量：使用 OPC_LOAD_BYTE_VAR 压入 byte 栈，
+                       OPC_BYTE_ARRAY_LIT(a=1) 从 byte 栈读取，实现零检查零转换 */
+                    compile_byte_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_BYTE_ARRAY_LIT, 1, n);  /* a=1: 从 byte 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
                        OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_FLOAT_ARRAY_LIT(a=0)/OPC_UINT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
@@ -1636,6 +1792,12 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_FLOAT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT32) {
                         emit(c, OPC_UINT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_BOOL) {
+                        emit(c, OPC_BOOL_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_CHAR) {
+                        emit(c, OPC_CHAR_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_BYTE) {
+                        emit(c, OPC_BYTE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
@@ -1649,6 +1811,12 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_FLOAT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT32) {
                     emit(c, OPC_UINT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_BOOL) {
+                    emit(c, OPC_BOOL_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_CHAR) {
+                    emit(c, OPC_CHAR_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_BYTE) {
+                    emit(c, OPC_BYTE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }

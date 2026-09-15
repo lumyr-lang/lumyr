@@ -1,0 +1,49 @@
+// 测试：bool、char、byte 类型零开销路径（基本功能）
+print("=== bool、char、byte 类型零开销测试 ===\n");
+
+// 测试 1：bool 数组创建
+bool_arr = <bool>[true, false, true, false];
+print("bool_arr type = \n");
+print(type(bool_arr));
+print("\n");
+print("bool_arr len = \n");
+print(len(bool_arr));
+print("\n");
+print("bool_arr[0] = \n");
+print(bool_arr[0]);
+print(" (期望 true)\n");
+print("bool_arr[1] = \n");
+print(bool_arr[1]);
+print(" (期望 false)\n");
+
+// 测试 2：char 数组创建
+char_arr = <char>['a', 'b', 'c', 'd'];
+print("char_arr type = \n");
+print(type(char_arr));
+print("\n");
+print("char_arr len = \n");
+print(len(char_arr));
+print("\n");
+print("char_arr[0] = \n");
+print(char_arr[0]);
+print(" (期望 a)\n");
+print("char_arr[2] = \n");
+print(char_arr[2]);
+print(" (期望 c)\n");
+
+// 测试 3：byte 数组创建
+byte_arr = <byte>[10, 20, 30, 40, 50];
+print("byte_arr type = \n");
+print(type(byte_arr));
+print("\n");
+print("byte_arr len = \n");
+print(len(byte_arr));
+print("\n");
+print("byte_arr[0] = \n");
+print(byte_arr[0]);
+print(" (期望 10)\n");
+print("byte_arr[4] = \n");
+print(byte_arr[4]);
+print(" (期望 50)\n");
+
+print("\n=== 测试完成 ===\n");

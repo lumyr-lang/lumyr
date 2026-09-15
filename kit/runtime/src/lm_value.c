@@ -335,10 +335,13 @@ Value lumyr_index_get(Value c, Value idx) {
         TypedArray* tarr = c.v.typed_array;
         switch(tarr->elem_type) {
             case VAL_INT:
-            case VAL_BYTE:
-            case VAL_CHAR:
-            case VAL_BOOL:
                 return lumyr_make_int(((int*)tarr->items)[i]);
+            case VAL_BOOL:
+                return lumyr_make_int((long long)((_Bool*)tarr->items)[i]);
+            case VAL_CHAR:
+                return lumyr_make_char(((char*)tarr->items)[i]);
+            case VAL_BYTE:
+                return lumyr_make_int((long long)((unsigned char*)tarr->items)[i]);
             case VAL_DOUBLE:
                 return lumyr_make_double(((double*)tarr->items)[i]);
             case VAL_FLOAT:
