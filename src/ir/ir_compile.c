@@ -463,21 +463,38 @@ static int is_int_var(Ctx* c, AstNode* node) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_INT);
 }
 
-// 检查数组所有元素是否都是声明为 int 类型的变量
+// 检查数组所有元素是否都是 int 类型（声明为 int 的变量或 int 类型化数组的元素访问）
 static int all_int_vars(Ctx* c, AstNode* e) {
     if(!e) return 1;
     if(e->type == AST_SEQ) {
         return all_int_vars(c, e->u.seq.first) && all_int_vars(c, e->u.seq.second);
     }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 int 候选，运行时 OPC_INT_ARRAY_GET 会检查是否是 int 类型化数组 */
+        return 1;
+    }
     return is_int_var(c, e);
 }
 
-// 编译 int 泛型数组元素：全部使用 OPC_LOAD_INT_VAR 压入 int 栈（零检查零转换）
+// 编译 int 泛型数组元素：全部压入 int 栈（零检查零转换）
+// 支持：声明为 int 的变量（OPC_LOAD_INT_VAR）、int 类型化数组元素访问（OPC_INT_ARRAY_GET）
 static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
         compile_int_array_elems(c, e->u.seq.first, n);
         compile_int_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_INT_ARRAY_GET
+           运行时会检查是否是 int 类型化数组，如果是直接读取 int 值压入 int 栈，零包装！
+           如果不是，回退到普通数组访问（包装成 Value，然后需要转换） */
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_INT_ARRAY_GET, 0, 0);
+        (*n)++;
         return;
     }
     /* 声明为 int 类型的变量：使用 OPC_LOAD_INT_VAR，直接压入 int 栈 */

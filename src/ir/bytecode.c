@@ -168,6 +168,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT_ARRAY_LIT:
             if(in.a == 1) return +1;          /* 从 int 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
             return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
+        case OPC_INT_ARRAY_GET:
+            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 int 栈（Value栈净变化-2） */
         case OPC_MAP_LIT:
             return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
         case OPC_CLASS_NEW:

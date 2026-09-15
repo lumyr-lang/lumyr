@@ -2168,6 +2168,33 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 sp--; stack[sp++] = m;     /* 安全原地写 */
                 break;
             }
+            case OPC_INT_ARRAY_GET: {
+                /* int 类型化数组元素访问：直接读取 int 值，压入 int 栈，零包装零 Value 开销
+                   严格类型检查：必须是 int 类型化数组，否则直接抛异常，无须兼容和回退 */
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                int iidx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arr.type != 14 /* VAL_TYPED_ARRAY */ || !arr.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_INT_ARRAY_GET 需要 int 类型化数组，实际类型为 %s", val_typename(arr.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arr.v.typed_array;
+                if(tarr->elem_type != 1 /* VAL_INT */) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 int，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(!tarr->items) {
+                    runtime_error("数组错误：int 类型化数组 items 指针为空");
+                }
+                if(iidx < 0 || iidx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", iidx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                int val = ((int*)tarr->items)[iidx];  // 直接读取 int 值，零提取零转换！
+                INT_PUSH(val);  // 压入 int 栈，零包装！
+                break;
+            }
             case OPC_INDEX_GET: {
                 Value idx = stack[--sp];
                 Value c = stack[--sp];
