@@ -2056,7 +2056,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value c = stack[--sp];
                 Value result;
                 /* 判断是否是 class 结构体实例 */
-                if(c.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(c)) {
+                if(c.type == VAL_CLASS_PTR) {
                     /* 结构体实例：先从字段中查找，再从 vtable 方法中查找 */
                     const char* field_name = lumyr_str_cstr(&idx);
                     if(field_name) {
@@ -2157,7 +2157,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value idx = stack[--sp];
                 Value arr = stack[--sp];
                 /* 判断是否是 class 结构体实例 */
-                if(arr.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(arr)) {
+                if(arr.type == VAL_CLASS_PTR) {
                     /* 结构体实例：用新的方式设置字段 */
                     const char* field_name = lumyr_str_cstr(&idx);
                     if(field_name) {
@@ -2177,7 +2177,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
                 /* 判断是否是 class 结构体实例 */
-                if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                if(obj.type == VAL_CLASS_PTR) {
                     /* 结构体实例：用新的方式读取字段 */
                     const char* field_name = lumyr_str_cstr(&fname);
                     if(field_name) {
@@ -2199,7 +2199,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value obj = stackframe_get(frame, vname, &fnd);
                 if(!fnd) runtime_undefined("变量", vname);
                 /* 判断是否是 class 结构体实例 */
-                if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                if(obj.type == VAL_CLASS_PTR) {
                     /* 结构体实例：用新的方式写入字段 */
                     const char* field_name = lumyr_str_cstr(&fname);
                     if(field_name) {
@@ -2414,7 +2414,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         int n = argc < td->nprops ? argc : td->nprops;
                         for(int i = 0; i < n; i++) {
                             Value arg = stack[sp - argc + i];
-                            if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                            if(obj.type == VAL_CLASS_PTR) {
                                 /* 结构体实例：用新的方式设置字段 */
                                 lumyr_class_instance_set_field(obj, td->props[i], arg);
                             } else {
@@ -2649,7 +2649,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                            lumyr_map_has(self_val, lumyr_make_string("__classname__"))) {
                             Value cn = lumyr_map_get(self_val, lumyr_make_string("__classname__"));
                             if(cn.type == VAL_STRING) ctor_class_name = lumyr_str_cstr(&cn);
-                        } else if(self_val.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(self_val)) {
+                        } else if(self_val.type == VAL_CLASS_PTR) {
                             ClassInstance* inst = (ClassInstance*)self_val.v.struct_ptr;
                             if(inst && inst->vtable) ctor_class_name = inst->vtable->class_name;
                         }
@@ -2716,7 +2716,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(!bf_fn && argc > 0) {
                         /* 可能是 class 方法调用：从接收者类型推断类名 */
                         Value obj = stack[sp - argc];
-                        if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                        if(obj.type == VAL_CLASS_PTR) {
                             ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
                             if(inst && inst->vtable) class_name = inst->vtable->class_name;
                         }
@@ -2757,7 +2757,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     /* 可能是 class 方法调用：检查第一个参数是否是 class 实例 */
                     Value obj = stack[sp - argc];
                     const char* class_name = NULL;
-                    if(obj.type == VAL_CLASS_PTR && lumyr_is_class_instance_value(obj)) {
+                    if(obj.type == VAL_CLASS_PTR) {
                         /* class 实例：从 vtable 中获取 class 名 */
                         ClassInstance* inst = (ClassInstance*)obj.v.struct_ptr;
                         if(inst && inst->vtable) class_name = inst->vtable->class_name;
