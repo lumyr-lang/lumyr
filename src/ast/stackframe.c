@@ -290,6 +290,20 @@ void stackframe_set(StackFrame* f, const char* name, Value v)
             if(idx >= 0) {
                 slot_release(&owner->vals[idx]);
                 owner->vals[idx] = v;
+                /* 同步更新 int_vals：如果变量标记为 int 类型，同时更新原始 int 值 */
+                int tag = (owner->type_tags) ? owner->type_tags[idx] : -1;
+                if(tag == 2 /* CAST_INT */ && owner->int_vals) {
+                    int iv = 0;
+                    switch(v.type) {
+                        case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                            iv = (int)v.v.i; break;
+                        case 2:  // VAL_DOUBLE
+                            iv = (int)v.v.d; break;
+                        default:
+                            iv = 0; break;
+                    }
+                    owner->int_vals[idx] = iv;
+                }
             }
         }
         if(hl) pthread_rwlock_unlock(&owner->rw);
@@ -313,10 +327,26 @@ void stackframe_bind(StackFrame* f, const char* name, Value v)
     if(idx >= 0) {
         slot_release(&f->vals[idx]);
         f->vals[idx] = v;
+        /* 同步更新 int_vals：如果变量标记为 int 类型，同时更新原始 int 值 */
+        int tag = (f->type_tags) ? f->type_tags[idx] : -1;
+        if(tag == 2 /* CAST_INT */ && f->int_vals) {
+            int iv = 0;
+            switch(v.type) {
+                case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
+                    iv = (int)v.v.i; break;
+                case 2:  // VAL_DOUBLE
+                    iv = (int)v.v.d; break;
+                default:
+                    iv = 0; break;
+            }
+            f->int_vals[idx] = iv;
+        }
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt] = v;
+        /* 新建变量时 int_vals 初始化为 0（frame_ensure 已初始化）
+           后续通过 stackframe_set_type_tag 设置类型标记时会更新 int_vals */
         f->cnt++;
     }
     if(hl) pthread_rwlock_unlock(&f->rw);

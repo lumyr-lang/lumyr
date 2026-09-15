@@ -1,0 +1,42 @@
+// 测试：int 变量重新赋值后，int 泛型数组是否能读取到新值
+// 验证 stackframe_set/stackframe_bind 是否正确同步 int_vals
+
+print("=== int 变量重新赋值测试 ===\n");
+
+// 测试 1：基本重新赋值
+a = <int>5;
+print("初始 a = \n");
+print(a);
+print("\n");
+a = 10;
+print("重新赋值后 a = \n");
+print(a);
+print("\n");
+arr1 = <int>[a];
+print("arr1[0] = \n");
+print(arr1[0]);
+print(" (期望 10)\n");
+
+// 测试 2：多次重新赋值
+b = <int>1;
+b = 2;
+b = 3;
+arr2 = <int>[b];
+print("arr2[0] = \n");
+print(arr2[0]);
+print(" (期望 3)\n");
+
+// 测试 3：多个变量重新赋值
+x = <int>100;
+y = <int>200;
+x = 150;
+y = 250;
+arr3 = <int>[x, y];
+print("arr3[0] = \n");
+print(arr3[0]);
+print(" (期望 150)\n");
+print("arr3[1] = \n");
+print(arr3[1]);
+print(" (期望 250)\n");
+
+print("\n=== 测试完成 ===\n");
