@@ -1,0 +1,63 @@
+// 测试：变量赋值上下文感知 - int 变量赋值自动感知为 int 类型
+// 验证：a = <int>5; b = a; 时，b 自动感知为 int 类型，并使用零开销路径
+
+print("=== 变量赋值上下文感知测试 ===\n");
+
+// 测试 1：基本变量赋值上下文感知
+a = <int>10;
+print("a = \n");
+print(a);
+print("\n");
+
+// b 没有显式声明 <int>，但应该自动感知为 int 类型
+b = a;
+print("b = \n");
+print(b);
+print(" (期望 10)\n");
+
+// 测试 2：链式变量赋值
+c = b;
+print("c = \n");
+print(c);
+print(" (期望 10)\n");
+
+d = c;
+print("d = \n");
+print(d);
+print(" (期望 10)\n");
+
+// 测试 3：上下文感知后，变量可以直接用于 int 泛型数组
+arr = <int>[a, b, c, d];
+print("arr len = \n");
+print(len(arr));
+print("\n");
+print("arr[0] = \n");
+print(arr[0]);
+print(" (期望 10)\n");
+print("arr[1] = \n");
+print(arr[1]);
+print(" (期望 10)\n");
+print("arr[2] = \n");
+print(arr[2]);
+print(" (期望 10)\n");
+print("arr[3] = \n");
+print(arr[3]);
+print(" (期望 10)\n");
+
+// 测试 4：int 变量和 int 数组元素混合
+arr2 = <int>[100, 200, 300];
+e = arr2[0];  // e 自动感知为 int
+f = e;         // f 也自动感知为 int
+print("f = \n");
+print(f);
+print(" (期望 100)\n");
+
+// 测试 5：多次赋值后仍然保持 int 类型
+g = <int>5;
+g = g + 1;
+h = g;
+print("h = \n");
+print(h);
+print(" (期望 6)\n");
+
+print("\n=== 测试完成 ===\n");

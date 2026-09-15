@@ -857,6 +857,25 @@ static void c_expr(Ctx* c, AstNode* node)
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
+            }
+            /* 优化3：上下文感知 - 赋值为变量 b = a 且 a 是 int 类型时，自动感知为 int 类型
+               即使左侧变量没有显式声明 <int>，也自动推导为 int 类型，并使用优化路径 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_VAR) {
+                const char* rhs_name = node->u.assign.expr->u.varname;
+                int rhs_idx = bf_sym(c->fn, rhs_name);
+                /* 检查右侧变量是否标记为 int 类型（CAST_INT = 2） */
+                if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == 2 /* CAST_INT */) {
+                    /* OPC_LOAD_INT_VAR：直接从 int_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_INT_VAR, rhs_idx, 0);
+                    /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 int 类型 */
+                    c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             } else {
                 c_expr(c, node->u.assign.expr);
                 emit(c, OPC_STORE_VAR, var_idx, 0);
