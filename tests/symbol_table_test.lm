@@ -1,0 +1,81 @@
+// 统一符号表测试
+// 测试普通变量、普通函数、class 方法的注册和查找
+
+print("=== 统一符号表测试 ===");
+
+// 1. 普通变量
+x = 10;
+y = "hello";
+print("1. 普通变量:");
+print("   x =", x);
+print("   y =", y);
+
+// 2. 普通函数
+func add(a, b) {
+    return a + b;
+}
+print("2. 普通函数:");
+print("   add(3, 4) =", add(3, 4));
+
+// 3. class 定义和方法重写
+class Animal {
+    name: string;
+    func speak(self) {
+        print("   Animal speaks");
+    }
+}
+
+class Dog extends Animal {
+    func speak(self) {
+        print("   Dog barks");
+    }
+}
+
+class Cat extends Animal {
+    func speak(self) {
+        print("   Cat meows");
+    }
+}
+
+print("3. class 方法重写:");
+dog = Dog();
+dog.name = "Buddy";
+print("   dog.name =", dog.name);
+dog.speak();  // 应该输出 "Dog barks"
+
+cat = Cat();
+cat.name = "Whiskers";
+print("   cat.name =", cat.name);
+cat.speak();  // 应该输出 "Cat meows"
+
+// 4. 结构体
+struct Point {
+    x: int;
+    y: int;
+    func get_x(self) {
+        return self.x;
+    }
+}
+
+print("4. 结构体:");
+p = Point();
+p.x = 3;
+p.y = 4;
+print("   p.x =", p.x);
+print("   p.y =", p.y);
+print("   p.get_x() =", p.get_x());
+
+// 5. 变量修改
+print("5. 变量修改:");
+x = 20;
+print("   x after modify =", x);
+
+// 6. 函数递归
+func factorial(n) {
+    if (n <= 1) return 1;
+    return n * factorial(n - 1);
+}
+print("6. 函数递归:");
+print("   factorial(5) =", factorial(5));
+
+print("=== 统一符号表测试完成 ===");

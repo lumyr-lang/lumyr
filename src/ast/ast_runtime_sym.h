@@ -13,6 +13,10 @@ void sym_init(void);
 /* 清空符号表（在 main 函数结束时调用） */
 void sym_clear(void);
 
+/* 设置/获取当前文件名（用于跨文件命名冲突处理） */
+void sym_set_current_file(const char* file_name);
+const char* sym_get_current_file(void);
+
 /* 设置符号（class_name 为 NULL 表示普通符号） */
 void sym_set(const char* n, Value v);
 void sym_set_class(const char* class_name, const char* n, Value v);
