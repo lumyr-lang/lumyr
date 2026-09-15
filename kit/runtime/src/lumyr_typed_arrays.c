@@ -768,3 +768,103 @@ ClassArray* class_array_flat(ClassArray** arrays, int count) {
     }
     return result;
 }
+
+/* ==================== 排序操作实现（快速排序） ==================== */
+
+/* 默认比较函数实现 */
+int int_default_compare(int a, int b) { return (a > b) - (a < b); }
+int int8_default_compare(int8_t a, int8_t b) { return (a > b) - (a < b); }
+int int16_default_compare(int16_t a, int16_t b) { return (a > b) - (a < b); }
+int int32_default_compare(int32_t a, int32_t b) { return (a > b) - (a < b); }
+int int64_default_compare(int64_t a, int64_t b) { return (a > b) - (a < b); }
+int long_default_compare(long a, long b) { return (a > b) - (a < b); }
+int char_default_compare(char a, char b) { return (a > b) - (a < b); }
+int uint8_default_compare(uint8_t a, uint8_t b) { return (a > b) - (a < b); }
+int uint16_default_compare(uint16_t a, uint16_t b) { return (a > b) - (a < b); }
+int uint32_default_compare(uint32_t a, uint32_t b) { return (a > b) - (a < b); }
+int uint64_default_compare(uint64_t a, uint64_t b) { return (a > b) - (a < b); }
+int ulong_default_compare(unsigned long a, unsigned long b) { return (a > b) - (a < b); }
+int uchar_default_compare(unsigned char a, unsigned char b) { return (a > b) - (a < b); }
+int size_t_default_compare(size_t a, size_t b) { return (a > b) - (a < b); }
+int ssize_t_default_compare(ssize_t a, ssize_t b) { return (a > b) - (a < b); }
+int bool_default_compare(_Bool a, _Bool b) { return (a > b) - (a < b); }
+int float_default_compare(float a, float b) { return (a > b) - (a < b); }
+int double_default_compare(double a, double b) { return (a > b) - (a < b); }
+int string_default_compare(char* a, char* b) {
+    if(!a && !b) return 0;
+    if(!a) return -1;
+    if(!b) return 1;
+    return strcmp(a, b);
+}
+int ptr_default_compare(void* a, void* b) { return (a > b) - (a < b); }
+
+/* 快速排序宏（用于批量生成排序函数） */
+#define TYPED_ARRAY_SORT_IMPL(prefix, type, struct_name, cmp_type) \
+static void prefix##_quick_sort(type* items, int low, int high, cmp_type cmp) { \
+    if(low < high) { \
+        type pivot = items[high]; \
+        int i = low - 1; \
+        for(int j = low; j < high; j++) { \
+            if(cmp(items[j], pivot) <= 0) { \
+                i++; \
+                type tmp = items[i]; items[i] = items[j]; items[j] = tmp; \
+            } \
+        } \
+        type tmp = items[i + 1]; items[i + 1] = items[high]; items[high] = tmp; \
+        int pi = i + 1; \
+        prefix##_quick_sort(items, low, pi - 1, cmp); \
+        prefix##_quick_sort(items, pi + 1, high, cmp); \
+    } \
+} \
+void prefix##_array_sort_with(struct_name* arr, cmp_type cmp) { \
+    if(!arr || !cmp || arr->len < 2) return; \
+    prefix##_quick_sort(arr->items, 0, arr->len - 1, cmp); \
+}
+
+/* 为所有类型化数组生成排序函数 */
+TYPED_ARRAY_SORT_IMPL(int, int, IntArray, IntCompareFunc)
+TYPED_ARRAY_SORT_IMPL(int8, int8_t, Int8Array, Int8CompareFunc)
+TYPED_ARRAY_SORT_IMPL(int16, int16_t, Int16Array, Int16CompareFunc)
+TYPED_ARRAY_SORT_IMPL(int32, int32_t, Int32Array, Int32CompareFunc)
+TYPED_ARRAY_SORT_IMPL(int64, int64_t, Int64Array, Int64CompareFunc)
+TYPED_ARRAY_SORT_IMPL(long, long, LongArray, LongCompareFunc)
+TYPED_ARRAY_SORT_IMPL(char, char, CharArray, CharCompareFunc)
+TYPED_ARRAY_SORT_IMPL(uint8, uint8_t, UInt8Array, UInt8CompareFunc)
+TYPED_ARRAY_SORT_IMPL(uint16, uint16_t, UInt16Array, UInt16CompareFunc)
+TYPED_ARRAY_SORT_IMPL(uint32, uint32_t, UInt32Array, UInt32CompareFunc)
+TYPED_ARRAY_SORT_IMPL(uint64, uint64_t, UInt64Array, UInt64CompareFunc)
+TYPED_ARRAY_SORT_IMPL(ulong, unsigned long, ULongArray, ULongCompareFunc)
+TYPED_ARRAY_SORT_IMPL(uchar, unsigned char, UCharArray, UCharCompareFunc)
+TYPED_ARRAY_SORT_IMPL(size_t, size_t, SizeTArray, SizeTCompareFunc)
+TYPED_ARRAY_SORT_IMPL(ssize_t, ssize_t, SSizeTArray, SSizeTCompareFunc)
+TYPED_ARRAY_SORT_IMPL(bool, _Bool, BoolArray, BoolCompareFunc)
+TYPED_ARRAY_SORT_IMPL(float, float, FloatArray, FloatCompareFunc)
+TYPED_ARRAY_SORT_IMPL(double, double, DoubleArray, DoubleCompareFunc)
+TYPED_ARRAY_SORT_IMPL(string, char*, StringArray, StringCompareFunc)
+TYPED_ARRAY_SORT_IMPL(ptr, void*, PtrArray, PtrCompareFunc)
+TYPED_ARRAY_SORT_IMPL(struct, void*, StructArray, PtrCompareFunc)
+TYPED_ARRAY_SORT_IMPL(class, void*, ClassArray, PtrCompareFunc)
+
+/* 使用默认比较函数排序（升序） */
+void int_array_sort(IntArray* arr) { int_array_sort_with(arr, int_default_compare); }
+void int8_array_sort(Int8Array* arr) { int8_array_sort_with(arr, int8_default_compare); }
+void int16_array_sort(Int16Array* arr) { int16_array_sort_with(arr, int16_default_compare); }
+void int32_array_sort(Int32Array* arr) { int32_array_sort_with(arr, int32_default_compare); }
+void int64_array_sort(Int64Array* arr) { int64_array_sort_with(arr, int64_default_compare); }
+void long_array_sort(LongArray* arr) { long_array_sort_with(arr, long_default_compare); }
+void char_array_sort(CharArray* arr) { char_array_sort_with(arr, char_default_compare); }
+void uint8_array_sort(UInt8Array* arr) { uint8_array_sort_with(arr, uint8_default_compare); }
+void uint16_array_sort(UInt16Array* arr) { uint16_array_sort_with(arr, uint16_default_compare); }
+void uint32_array_sort(UInt32Array* arr) { uint32_array_sort_with(arr, uint32_default_compare); }
+void uint64_array_sort(UInt64Array* arr) { uint64_array_sort_with(arr, uint64_default_compare); }
+void ulong_array_sort(ULongArray* arr) { ulong_array_sort_with(arr, ulong_default_compare); }
+void uchar_array_sort(UCharArray* arr) { uchar_array_sort_with(arr, uchar_default_compare); }
+void size_t_array_sort(SizeTArray* arr) { size_t_array_sort_with(arr, size_t_default_compare); }
+void ssize_t_array_sort(SSizeTArray* arr) { ssize_t_array_sort_with(arr, ssize_t_default_compare); }
+void bool_array_sort(BoolArray* arr) { bool_array_sort_with(arr, bool_default_compare); }
+void float_array_sort(FloatArray* arr) { float_array_sort_with(arr, float_default_compare); }
+void double_array_sort(DoubleArray* arr) { double_array_sort_with(arr, double_default_compare); }
+void string_array_sort(StringArray* arr) { string_array_sort_with(arr, string_default_compare); }
+void ptr_array_sort(PtrArray* arr) { ptr_array_sort_with(arr, ptr_default_compare); }
+void struct_array_sort(StructArray* arr) { struct_array_sort_with(arr, ptr_default_compare); }
+void class_array_sort(ClassArray* arr) { class_array_sort_with(arr, ptr_default_compare); }

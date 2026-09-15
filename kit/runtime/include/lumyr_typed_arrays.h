@@ -192,6 +192,50 @@ typedef int (*IntReduceFunc)(int, int);
 typedef double (*DoubleReduceFunc)(double, double);
 typedef void* (*PtrReduceFunc)(void*, void*);
 
+/* 比较函数：接受两个元素，返回负数（a<b）、零（a==b）、正数（a>b） */
+typedef int (*IntCompareFunc)(int, int);
+typedef int (*Int8CompareFunc)(int8_t, int8_t);
+typedef int (*Int16CompareFunc)(int16_t, int16_t);
+typedef int (*Int32CompareFunc)(int32_t, int32_t);
+typedef int (*Int64CompareFunc)(int64_t, int64_t);
+typedef int (*LongCompareFunc)(long, long);
+typedef int (*CharCompareFunc)(char, char);
+typedef int (*UInt8CompareFunc)(uint8_t, uint8_t);
+typedef int (*UInt16CompareFunc)(uint16_t, uint16_t);
+typedef int (*UInt32CompareFunc)(uint32_t, uint32_t);
+typedef int (*UInt64CompareFunc)(uint64_t, uint64_t);
+typedef int (*ULongCompareFunc)(unsigned long, unsigned long);
+typedef int (*UCharCompareFunc)(unsigned char, unsigned char);
+typedef int (*SizeTCompareFunc)(size_t, size_t);
+typedef int (*SSizeTCompareFunc)(ssize_t, ssize_t);
+typedef int (*BoolCompareFunc)(_Bool, _Bool);
+typedef int (*FloatCompareFunc)(float, float);
+typedef int (*DoubleCompareFunc)(double, double);
+typedef int (*StringCompareFunc)(char*, char*);
+typedef int (*PtrCompareFunc)(void*, void*);
+
+/* 默认比较函数 */
+int int_default_compare(int a, int b);
+int int8_default_compare(int8_t a, int8_t b);
+int int16_default_compare(int16_t a, int16_t b);
+int int32_default_compare(int32_t a, int32_t b);
+int int64_default_compare(int64_t a, int64_t b);
+int long_default_compare(long a, long b);
+int char_default_compare(char a, char b);
+int uint8_default_compare(uint8_t a, uint8_t b);
+int uint16_default_compare(uint16_t a, uint16_t b);
+int uint32_default_compare(uint32_t a, uint32_t b);
+int uint64_default_compare(uint64_t a, uint64_t b);
+int ulong_default_compare(unsigned long a, unsigned long b);
+int uchar_default_compare(unsigned char a, unsigned char b);
+int size_t_default_compare(size_t a, size_t b);
+int ssize_t_default_compare(ssize_t a, ssize_t b);
+int bool_default_compare(_Bool a, _Bool b);
+int float_default_compare(float a, float b);
+int double_default_compare(double a, double b);
+int string_default_compare(char* a, char* b);
+int ptr_default_compare(void* a, void* b);
+
 /* 结构体数组（类型安全，存储 VAL_STRUCT_PTR 类型的指针） */
 typedef struct {
     void** items;      /* 结构体指针数组，每个元素都是 VAL_STRUCT_PTR 类型 */
@@ -404,6 +448,56 @@ StructArray* struct_array_flat(StructArray** arrays, int count);
 /* ClassArray */
 ClassArray* class_array_filter(ClassArray* arr, PtrFilterFunc func);
 ClassArray* class_array_flat(ClassArray** arrays, int count);
+
+/* ==================== 排序操作函数声明 ==================== */
+
+/* 使用自定义比较函数排序 */
+void int_array_sort_with(IntArray* arr, IntCompareFunc cmp);
+void int8_array_sort_with(Int8Array* arr, Int8CompareFunc cmp);
+void int16_array_sort_with(Int16Array* arr, Int16CompareFunc cmp);
+void int32_array_sort_with(Int32Array* arr, Int32CompareFunc cmp);
+void int64_array_sort_with(Int64Array* arr, Int64CompareFunc cmp);
+void long_array_sort_with(LongArray* arr, LongCompareFunc cmp);
+void char_array_sort_with(CharArray* arr, CharCompareFunc cmp);
+void uint8_array_sort_with(UInt8Array* arr, UInt8CompareFunc cmp);
+void uint16_array_sort_with(UInt16Array* arr, UInt16CompareFunc cmp);
+void uint32_array_sort_with(UInt32Array* arr, UInt32CompareFunc cmp);
+void uint64_array_sort_with(UInt64Array* arr, UInt64CompareFunc cmp);
+void ulong_array_sort_with(ULongArray* arr, ULongCompareFunc cmp);
+void uchar_array_sort_with(UCharArray* arr, UCharCompareFunc cmp);
+void size_t_array_sort_with(SizeTArray* arr, SizeTCompareFunc cmp);
+void ssize_t_array_sort_with(SSizeTArray* arr, SSizeTCompareFunc cmp);
+void bool_array_sort_with(BoolArray* arr, BoolCompareFunc cmp);
+void float_array_sort_with(FloatArray* arr, FloatCompareFunc cmp);
+void double_array_sort_with(DoubleArray* arr, DoubleCompareFunc cmp);
+void string_array_sort_with(StringArray* arr, StringCompareFunc cmp);
+void ptr_array_sort_with(PtrArray* arr, PtrCompareFunc cmp);
+void struct_array_sort_with(StructArray* arr, PtrCompareFunc cmp);
+void class_array_sort_with(ClassArray* arr, PtrCompareFunc cmp);
+
+/* 使用默认比较函数排序（升序） */
+void int_array_sort(IntArray* arr);
+void int8_array_sort(Int8Array* arr);
+void int16_array_sort(Int16Array* arr);
+void int32_array_sort(Int32Array* arr);
+void int64_array_sort(Int64Array* arr);
+void long_array_sort(LongArray* arr);
+void char_array_sort(CharArray* arr);
+void uint8_array_sort(UInt8Array* arr);
+void uint16_array_sort(UInt16Array* arr);
+void uint32_array_sort(UInt32Array* arr);
+void uint64_array_sort(UInt64Array* arr);
+void ulong_array_sort(ULongArray* arr);
+void uchar_array_sort(UCharArray* arr);
+void size_t_array_sort(SizeTArray* arr);
+void ssize_t_array_sort(SSizeTArray* arr);
+void bool_array_sort(BoolArray* arr);
+void float_array_sort(FloatArray* arr);
+void double_array_sort(DoubleArray* arr);
+void string_array_sort(StringArray* arr);
+void ptr_array_sort(PtrArray* arr);
+void struct_array_sort(StructArray* arr);
+void class_array_sort(ClassArray* arr);
 
 /* ==================== 通用数组操作宏（用于批量生成函数声明） ==================== */
 /*
