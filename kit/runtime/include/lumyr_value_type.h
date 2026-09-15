@@ -102,43 +102,9 @@ typedef enum {
 //          items 缓冲区也由 gc_alloc(vtype=VAL_ARRAY) 管理，扩容用 gc_realloc。
 // stack_alloc：0=堆分配（默认，有 GCObject 头），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过自身）
 // items_stack_alloc：0=items 堆分配（默认），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过 items 自身但仍递归标记 items[i]）
-// elem_type：数组元素类型（VAL_NONE 表示通用类型，使用 Value* items；其他类型使用对应的类型化数组，避免 Value 结构体转换开销）
-// typed_items union 包含所有 C 标准类型的数组，与 ValueType 枚举对齐
+// 注意：ValueArray 只用于存储 Value 类型数组；类型化数组（IntArray、DoubleArray 等）请使用 lumyr_typed_arrays.h 中的专门结构体
 typedef struct {
-    int elem_type;             // 元素类型（ValueType 枚举，-1=通用类型，VAL_INT=int类型，VAL_DOUBLE=double类型，...）
-    Value* items;              // 通用类型数组（elem_type == -1 时有效，向后兼容）
-    union {
-        /* 整数类型（有符号） */
-        int* ints;                 // int / int32_t
-        int8_t* int8s;             // int8_t / signed char
-        int16_t* int16s;           // int16_t / short
-        int32_t* int32s;           // int32_t / int
-        int64_t* int64s;           // int64_t / long long
-        long* longs;                // long
-        char* chars;                // char / signed char
-        /* 整数类型（无符号） */
-        uint8_t* uint8s;            // uint8_t / unsigned char / byte
-        uint16_t* uint16s;          // uint16_t / unsigned short
-        uint32_t* uint32s;          // uint32_t / unsigned int / uint
-        uint64_t* uint64s;          // uint64_t / unsigned long long
-        unsigned long* ulongs;       // unsigned long
-        unsigned char* uchars;       // unsigned char
-        /* 平台相关类型 */
-        size_t* size_ts;             // size_t
-        ssize_t* ssize_ts;           // ssize_t / ptrdiff_t
-        /* 布尔类型 */
-        _Bool* bools;                // bool / _Bool
-        /* 浮点类型 */
-        float* floats;               // float（单精度）
-        double* doubles;             // double（双精度）
-        /* 指针/字符串类型 */
-        char** strings;              // const char* / char*（字符串）
-        void** ptrs;                 // void* / 任意指针 / 句柄 / 数组 / 结构体指针
-        /* 回调函数 */
-        void (**callbacks)();        // 回调函数（函数指针）
-        /* 原始指针，用于类型转换 */
-        void* raw;
-    } typed_items;              // 类型化数组（elem_type != VAL_NONE 时有效）
+    Value* items;              // Value 类型数组
     int len;
     int cap;  // 预分配容量（>= len），add 时按需 2x 扩容
     uint8_t stack_alloc;        // 0=堆分配，1=编译通道栈分配

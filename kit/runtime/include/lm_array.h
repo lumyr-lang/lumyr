@@ -31,36 +31,4 @@ Value lumyr_array_flat(Value v, int depth);
 // addAll(a, b)：数组原地追加 / 字典原地合并，返回 a
 Value lumyr_array_addall(Value* a, Value b);
 
-// ==================== 类型化数组支持 ====================
-// 类型化数组：数组元素用对应的 C 类型存储，避免 Value 结构体转换开销
-// elem_type 使用 ValueType 枚举，与 FFI 类型系统对齐
-
-// 创建指定类型的数组
-Value lumyr_typed_array_new(int elem_type, int cap);
-
-// 类型化数组添加元素（自动类型转换）
-Value lumyr_typed_array_add(Value* arr, Value val);
-
-// 类型化数组获取元素（自动包装为 Value）
-Value lumyr_typed_array_get(Value arr, int idx);
-
-// 类型化数组设置元素（自动类型转换）
-Value lumyr_typed_array_set(Value arr, int idx, Value val);
-
-// 类型化数组删除元素
-Value lumyr_typed_array_remove(Value* arr, int idx);
-
-// 类型化数组清空
-Value lumyr_typed_array_clear(Value* arr);
-
-// 类型化数组长度
-int lumyr_typed_array_len(Value arr);
-
-// 类型化数组首元素
-Value lumyr_typed_array_first(Value arr);
-
-// 类型化数组尾元素
-Value lumyr_typed_array_last(Value arr);
-
-// 类型化数组查找元素下标
-int lumyr_typed_array_index_of(Value arr, Value x);
+// 注意：ValueArray 只用于存储 Value 类型数组；类型化数组（IntArray、DoubleArray 等）请使用 lumyr_typed_arrays.h 中的专门结构体

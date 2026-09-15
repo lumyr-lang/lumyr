@@ -1,0 +1,286 @@
+#ifndef LUMYR_TYPED_ARRAYS_H
+#define LUMYR_TYPED_ARRAYS_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+/* ==================== 类型化数组结构体 ==================== */
+/* 每个类型化数组都有独立的结构体，避免大 union 的内存浪费和类型转换开销 */
+
+/* 整数类型数组（有符号） */
+typedef struct {
+    int* items;
+    int len;
+    int cap;
+} IntArray;
+
+typedef struct {
+    int8_t* items;
+    int len;
+    int cap;
+} Int8Array;
+
+typedef struct {
+    int16_t* items;
+    int len;
+    int cap;
+} Int16Array;
+
+typedef struct {
+    int32_t* items;
+    int len;
+    int cap;
+} Int32Array;
+
+typedef struct {
+    int64_t* items;
+    int len;
+    int cap;
+} Int64Array;
+
+typedef struct {
+    long* items;
+    int len;
+    int cap;
+} LongArray;
+
+typedef struct {
+    char* items;
+    int len;
+    int cap;
+} CharArray;
+
+/* 整数类型数组（无符号） */
+typedef struct {
+    uint8_t* items;
+    int len;
+    int cap;
+} UInt8Array;
+
+typedef struct {
+    uint16_t* items;
+    int len;
+    int cap;
+} UInt16Array;
+
+typedef struct {
+    uint32_t* items;
+    int len;
+    int cap;
+} UInt32Array;
+
+typedef struct {
+    uint64_t* items;
+    int len;
+    int cap;
+} UInt64Array;
+
+typedef struct {
+    unsigned long* items;
+    int len;
+    int cap;
+} ULongArray;
+
+typedef struct {
+    unsigned char* items;
+    int len;
+    int cap;
+} UCharArray;
+
+/* 平台相关类型数组 */
+typedef struct {
+    size_t* items;
+    int len;
+    int cap;
+} SizeTArray;
+
+typedef struct {
+    ssize_t* items;
+    int len;
+    int cap;
+} SSizeTArray;
+
+/* 布尔类型数组 */
+typedef struct {
+    _Bool* items;
+    int len;
+    int cap;
+} BoolArray;
+
+/* 浮点类型数组 */
+typedef struct {
+    float* items;
+    int len;
+    int cap;
+} FloatArray;
+
+typedef struct {
+    double* items;
+    int len;
+    int cap;
+} DoubleArray;
+
+/* 指针/字符串类型数组 */
+typedef struct {
+    char** items;
+    int len;
+    int cap;
+} StringArray;
+
+typedef struct {
+    void** items;
+    int len;
+    int cap;
+} PtrArray;
+
+/* 回调函数数组 */
+typedef struct {
+    void (**items)();
+    int len;
+    int cap;
+} CallbackArray;
+
+/* ==================== 类型化数组统一访问宏 ==================== */
+/* 通过这些宏可以统一访问不同类型的数组，避免重复代码 */
+
+#define TYPED_ARRAY_LEN(arr) ((arr)->len)
+#define TYPED_ARRAY_CAP(arr) ((arr)->cap)
+#define TYPED_ARRAY_ITEMS(arr, type) ((type*)((arr)->items))
+
+/* ==================== 类型化数组创建/销毁函数声明 ==================== */
+
+/* 整数类型 */
+IntArray* int_array_new(int cap);
+void int_array_free(IntArray* arr);
+void int_array_add(IntArray* arr, int val);
+int int_array_get(IntArray* arr, int idx);
+void int_array_set(IntArray* arr, int idx, int val);
+
+Int8Array* int8_array_new(int cap);
+void int8_array_free(Int8Array* arr);
+void int8_array_add(Int8Array* arr, int8_t val);
+int8_t int8_array_get(Int8Array* arr, int idx);
+void int8_array_set(Int8Array* arr, int idx, int8_t val);
+
+Int16Array* int16_array_new(int cap);
+void int16_array_free(Int16Array* arr);
+void int16_array_add(Int16Array* arr, int16_t val);
+int16_t int16_array_get(Int16Array* arr, int idx);
+void int16_array_set(Int16Array* arr, int idx, int16_t val);
+
+Int32Array* int32_array_new(int cap);
+void int32_array_free(Int32Array* arr);
+void int32_array_add(Int32Array* arr, int32_t val);
+int32_t int32_array_get(Int32Array* arr, int idx);
+void int32_array_set(Int32Array* arr, int idx, int32_t val);
+
+Int64Array* int64_array_new(int cap);
+void int64_array_free(Int64Array* arr);
+void int64_array_add(Int64Array* arr, int64_t val);
+int64_t int64_array_get(Int64Array* arr, int idx);
+void int64_array_set(Int64Array* arr, int idx, int64_t val);
+
+LongArray* long_array_new(int cap);
+void long_array_free(LongArray* arr);
+void long_array_add(LongArray* arr, long val);
+long long_array_get(LongArray* arr, int idx);
+void long_array_set(LongArray* arr, int idx, long val);
+
+CharArray* char_array_new(int cap);
+void char_array_free(CharArray* arr);
+void char_array_add(CharArray* arr, char val);
+char char_array_get(CharArray* arr, int idx);
+void char_array_set(CharArray* arr, int idx, char val);
+
+/* 无符号整数类型 */
+UInt8Array* uint8_array_new(int cap);
+void uint8_array_free(UInt8Array* arr);
+void uint8_array_add(UInt8Array* arr, uint8_t val);
+uint8_t uint8_array_get(UInt8Array* arr, int idx);
+void uint8_array_set(UInt8Array* arr, int idx, uint8_t val);
+
+UInt16Array* uint16_array_new(int cap);
+void uint16_array_free(UInt16Array* arr);
+void uint16_array_add(UInt16Array* arr, uint16_t val);
+uint16_t uint16_array_get(UInt16Array* arr, int idx);
+void uint16_array_set(UInt16Array* arr, int idx, uint16_t val);
+
+UInt32Array* uint32_array_new(int cap);
+void uint32_array_free(UInt32Array* arr);
+void uint32_array_add(UInt32Array* arr, uint32_t val);
+uint32_t uint32_array_get(UInt32Array* arr, int idx);
+void uint32_array_set(UInt32Array* arr, int idx, uint32_t val);
+
+UInt64Array* uint64_array_new(int cap);
+void uint64_array_free(UInt64Array* arr);
+void uint64_array_add(UInt64Array* arr, uint64_t val);
+uint64_t uint64_array_get(UInt64Array* arr, int idx);
+void uint64_array_set(UInt64Array* arr, int idx, uint64_t val);
+
+ULongArray* ulong_array_new(int cap);
+void ulong_array_free(ULongArray* arr);
+void ulong_array_add(ULongArray* arr, unsigned long val);
+unsigned long ulong_array_get(ULongArray* arr, int idx);
+void ulong_array_set(ULongArray* arr, int idx, unsigned long val);
+
+UCharArray* uchar_array_new(int cap);
+void uchar_array_free(UCharArray* arr);
+void uchar_array_add(UCharArray* arr, unsigned char val);
+unsigned char uchar_array_get(UCharArray* arr, int idx);
+void uchar_array_set(UCharArray* arr, int idx, unsigned char val);
+
+/* 平台相关类型 */
+SizeTArray* size_t_array_new(int cap);
+void size_t_array_free(SizeTArray* arr);
+void size_t_array_add(SizeTArray* arr, size_t val);
+size_t size_t_array_get(SizeTArray* arr, int idx);
+void size_t_array_set(SizeTArray* arr, int idx, size_t val);
+
+SSizeTArray* ssize_t_array_new(int cap);
+void ssize_t_array_free(SSizeTArray* arr);
+void ssize_t_array_add(SSizeTArray* arr, ssize_t val);
+ssize_t ssize_t_array_get(SSizeTArray* arr, int idx);
+void ssize_t_array_set(SSizeTArray* arr, int idx, ssize_t val);
+
+/* 布尔类型 */
+BoolArray* bool_array_new(int cap);
+void bool_array_free(BoolArray* arr);
+void bool_array_add(BoolArray* arr, _Bool val);
+_Bool bool_array_get(BoolArray* arr, int idx);
+void bool_array_set(BoolArray* arr, int idx, _Bool val);
+
+/* 浮点类型 */
+FloatArray* float_array_new(int cap);
+void float_array_free(FloatArray* arr);
+void float_array_add(FloatArray* arr, float val);
+float float_array_get(FloatArray* arr, int idx);
+void float_array_set(FloatArray* arr, int idx, float val);
+
+DoubleArray* double_array_new(int cap);
+void double_array_free(DoubleArray* arr);
+void double_array_add(DoubleArray* arr, double val);
+double double_array_get(DoubleArray* arr, int idx);
+void double_array_set(DoubleArray* arr, int idx, double val);
+
+/* 指针/字符串类型 */
+StringArray* string_array_new(int cap);
+void string_array_free(StringArray* arr);
+void string_array_add(StringArray* arr, char* val);
+char* string_array_get(StringArray* arr, int idx);
+void string_array_set(StringArray* arr, int idx, char* val);
+
+PtrArray* ptr_array_new(int cap);
+void ptr_array_free(PtrArray* arr);
+void ptr_array_add(PtrArray* arr, void* val);
+void* ptr_array_get(PtrArray* arr, int idx);
+void ptr_array_set(PtrArray* arr, int idx, void* val);
+
+/* 回调函数类型 */
+CallbackArray* callback_array_new(int cap);
+void callback_array_free(CallbackArray* arr);
+void callback_array_add(CallbackArray* arr, void (*val)());
+void (*callback_array_get(CallbackArray* arr, int idx))();
+void callback_array_set(CallbackArray* arr, int idx, void (*val)());
+
+#endif /* LUMYR_TYPED_ARRAYS_H */

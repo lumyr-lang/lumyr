@@ -97,6 +97,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_time.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_qs.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_ffi.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_log.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_typed_arrays.c
 # Value 类型定义已迁移到 kit/runtime/
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_value.c
 
