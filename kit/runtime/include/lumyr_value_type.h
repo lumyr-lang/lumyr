@@ -206,13 +206,39 @@ typedef struct StackFrame {
     Value* vals;
     /* 类型化变量存储（与 names/vals 平行数组）
        声明为对应类型的变量同时存储在 vals（作为 Value）和类型化数组（作为原始值）
-       OPC_LOAD_*_VAR 直接从类型化数组读取，实现零提取、零类型检查 */
-    int* int_vals;         /* int 类型变量 */
-    double* double_vals;   /* double 类型变量 */
-    _Bool* bool_vals;      /* bool 类型变量 */
-    char* char_vals;       /* char 类型变量 */
-    unsigned char* byte_vals;  /* byte 类型变量（uint8_t） */
-    char** string_vals;    /* string 类型变量（char* 指针，引用语义） */
+       OPC_LOAD_*_VAR 直接从类型化数组读取，实现零提取、零类型检查
+       覆盖所有 C 标准类型，与 CastKind 枚举对齐 */
+    /* 基础整数类型 */
+    int* int_vals;                 /* int 类型变量 */
+    long long* longlong_vals;      /* long long 类型变量（64位有符号） */
+    long* long_vals;               /* long 类型变量（平台相关） */
+    short* short_vals;             /* short 类型变量（16位有符号） */
+    /* 固定宽度有符号整数 */
+    int8_t* int8_vals;             /* int8_t / signed char */
+    int16_t* int16_vals;           /* int16_t / short */
+    int32_t* int32_vals;           /* int32_t / int */
+    int64_t* int64_vals;           /* int64_t / long long */
+    /* 固定宽度无符号整数 */
+    uint8_t* uint8_vals;           /* uint8_t / unsigned char / byte */
+    uint16_t* uint16_vals;         /* uint16_t / unsigned short */
+    uint32_t* uint32_vals;         /* uint32_t / unsigned int */
+    uint64_t* uint64_vals;         /* uint64_t / unsigned long long */
+    /* 其他无符号整数 */
+    unsigned char* uchar_vals;     /* unsigned char */
+    unsigned short* ushort_vals;   /* unsigned short */
+    unsigned long* ulong_vals;     /* unsigned long */
+    size_t* size_t_vals;           /* size_t（无符号整数，平台相关） */
+    ssize_t* ssize_t_vals;         /* ssize_t（有符号整数，平台相关） */
+    /* 浮点类型 */
+    float* float_vals;              /* float（32位单精度） */
+    double* double_vals;            /* double（64位双精度） */
+    long double* longdouble_vals;   /* long double（扩展精度） */
+    /* 其他基础类型 */
+    _Bool* bool_vals;               /* bool 类型变量 */
+    char* char_vals;                /* char 类型变量 */
+    unsigned char* byte_vals;       /* byte 类型变量（uint8_t，与 uint8_vals 同义） */
+    char** string_vals;             /* string 类型变量（char* 指针，引用语义） */
+    void** ptr_vals;                /* 指针/句柄类型变量（void* 指针） */
     int cnt;
     int cap;
     struct StackFrame* parent;

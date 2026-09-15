@@ -93,63 +93,206 @@ static void frame_ensure(StackFrame* f, int need)
     f->type_tags = nt;
     free(old_tags);
 
-    /* 扩容 int_vals：malloc + memcpy，更新指针后 free 旧缓冲区
-       int_vals 存储声明为 int 类型的变量的原始 int 值，用于 OPC_LOAD_INT_VAR 零提取 */
-    int* niv = (int*)malloc((size_t)newcap * sizeof(int));
-    if(!niv) { perror("stackframe expand int_vals"); exit(EXIT_FAILURE); }
-    if(f->int_vals) {
-        memcpy(niv, f->int_vals, (size_t)f->cap * sizeof(int));
-    }
-    /* 新槽位初始化为 0 */
-    for(int i = f->cap; i < newcap; i++) niv[i] = 0;
+    /* 扩容 int_vals */
+    int* nint_vals = (int*)malloc((size_t)newcap * sizeof(int));
+    if(!nint_vals) { perror("stackframe expand int_vals"); exit(EXIT_FAILURE); }
+    if(f->int_vals) memcpy(nint_vals, f->int_vals, (size_t)f->cap * sizeof(int));
+    for(int i = f->cap; i < newcap; i++) nint_vals[i] = (int)0;
     int* old_int_vals = f->int_vals;
-    f->int_vals = niv;
+    f->int_vals = nint_vals;
     free(old_int_vals);
-
+    /* 扩容 longlong_vals */
+    long long* nlonglong_vals = (long long*)malloc((size_t)newcap * sizeof(long long));
+    if(!nlonglong_vals) { perror("stackframe expand longlong_vals"); exit(EXIT_FAILURE); }
+    if(f->longlong_vals) memcpy(nlonglong_vals, f->longlong_vals, (size_t)f->cap * sizeof(long long));
+    for(int i = f->cap; i < newcap; i++) nlonglong_vals[i] = (long long)0;
+    long long* old_longlong_vals = f->longlong_vals;
+    f->longlong_vals = nlonglong_vals;
+    free(old_longlong_vals);
+    /* 扩容 long_vals */
+    long* nlong_vals = (long*)malloc((size_t)newcap * sizeof(long));
+    if(!nlong_vals) { perror("stackframe expand long_vals"); exit(EXIT_FAILURE); }
+    if(f->long_vals) memcpy(nlong_vals, f->long_vals, (size_t)f->cap * sizeof(long));
+    for(int i = f->cap; i < newcap; i++) nlong_vals[i] = (long)0;
+    long* old_long_vals = f->long_vals;
+    f->long_vals = nlong_vals;
+    free(old_long_vals);
+    /* 扩容 short_vals */
+    short* nshort_vals = (short*)malloc((size_t)newcap * sizeof(short));
+    if(!nshort_vals) { perror("stackframe expand short_vals"); exit(EXIT_FAILURE); }
+    if(f->short_vals) memcpy(nshort_vals, f->short_vals, (size_t)f->cap * sizeof(short));
+    for(int i = f->cap; i < newcap; i++) nshort_vals[i] = (short)0;
+    short* old_short_vals = f->short_vals;
+    f->short_vals = nshort_vals;
+    free(old_short_vals);
+    /* 扩容 int8_vals */
+    int8_t* nint8_vals = (int8_t*)malloc((size_t)newcap * sizeof(int8_t));
+    if(!nint8_vals) { perror("stackframe expand int8_vals"); exit(EXIT_FAILURE); }
+    if(f->int8_vals) memcpy(nint8_vals, f->int8_vals, (size_t)f->cap * sizeof(int8_t));
+    for(int i = f->cap; i < newcap; i++) nint8_vals[i] = (int8_t)0;
+    int8_t* old_int8_vals = f->int8_vals;
+    f->int8_vals = nint8_vals;
+    free(old_int8_vals);
+    /* 扩容 int16_vals */
+    int16_t* nint16_vals = (int16_t*)malloc((size_t)newcap * sizeof(int16_t));
+    if(!nint16_vals) { perror("stackframe expand int16_vals"); exit(EXIT_FAILURE); }
+    if(f->int16_vals) memcpy(nint16_vals, f->int16_vals, (size_t)f->cap * sizeof(int16_t));
+    for(int i = f->cap; i < newcap; i++) nint16_vals[i] = (int16_t)0;
+    int16_t* old_int16_vals = f->int16_vals;
+    f->int16_vals = nint16_vals;
+    free(old_int16_vals);
+    /* 扩容 int32_vals */
+    int32_t* nint32_vals = (int32_t*)malloc((size_t)newcap * sizeof(int32_t));
+    if(!nint32_vals) { perror("stackframe expand int32_vals"); exit(EXIT_FAILURE); }
+    if(f->int32_vals) memcpy(nint32_vals, f->int32_vals, (size_t)f->cap * sizeof(int32_t));
+    for(int i = f->cap; i < newcap; i++) nint32_vals[i] = (int32_t)0;
+    int32_t* old_int32_vals = f->int32_vals;
+    f->int32_vals = nint32_vals;
+    free(old_int32_vals);
+    /* 扩容 int64_vals */
+    int64_t* nint64_vals = (int64_t*)malloc((size_t)newcap * sizeof(int64_t));
+    if(!nint64_vals) { perror("stackframe expand int64_vals"); exit(EXIT_FAILURE); }
+    if(f->int64_vals) memcpy(nint64_vals, f->int64_vals, (size_t)f->cap * sizeof(int64_t));
+    for(int i = f->cap; i < newcap; i++) nint64_vals[i] = (int64_t)0;
+    int64_t* old_int64_vals = f->int64_vals;
+    f->int64_vals = nint64_vals;
+    free(old_int64_vals);
+    /* 扩容 uint8_vals */
+    uint8_t* nuint8_vals = (uint8_t*)malloc((size_t)newcap * sizeof(uint8_t));
+    if(!nuint8_vals) { perror("stackframe expand uint8_vals"); exit(EXIT_FAILURE); }
+    if(f->uint8_vals) memcpy(nuint8_vals, f->uint8_vals, (size_t)f->cap * sizeof(uint8_t));
+    for(int i = f->cap; i < newcap; i++) nuint8_vals[i] = (uint8_t)0;
+    uint8_t* old_uint8_vals = f->uint8_vals;
+    f->uint8_vals = nuint8_vals;
+    free(old_uint8_vals);
+    /* 扩容 uint16_vals */
+    uint16_t* nuint16_vals = (uint16_t*)malloc((size_t)newcap * sizeof(uint16_t));
+    if(!nuint16_vals) { perror("stackframe expand uint16_vals"); exit(EXIT_FAILURE); }
+    if(f->uint16_vals) memcpy(nuint16_vals, f->uint16_vals, (size_t)f->cap * sizeof(uint16_t));
+    for(int i = f->cap; i < newcap; i++) nuint16_vals[i] = (uint16_t)0;
+    uint16_t* old_uint16_vals = f->uint16_vals;
+    f->uint16_vals = nuint16_vals;
+    free(old_uint16_vals);
+    /* 扩容 uint32_vals */
+    uint32_t* nuint32_vals = (uint32_t*)malloc((size_t)newcap * sizeof(uint32_t));
+    if(!nuint32_vals) { perror("stackframe expand uint32_vals"); exit(EXIT_FAILURE); }
+    if(f->uint32_vals) memcpy(nuint32_vals, f->uint32_vals, (size_t)f->cap * sizeof(uint32_t));
+    for(int i = f->cap; i < newcap; i++) nuint32_vals[i] = (uint32_t)0;
+    uint32_t* old_uint32_vals = f->uint32_vals;
+    f->uint32_vals = nuint32_vals;
+    free(old_uint32_vals);
+    /* 扩容 uint64_vals */
+    uint64_t* nuint64_vals = (uint64_t*)malloc((size_t)newcap * sizeof(uint64_t));
+    if(!nuint64_vals) { perror("stackframe expand uint64_vals"); exit(EXIT_FAILURE); }
+    if(f->uint64_vals) memcpy(nuint64_vals, f->uint64_vals, (size_t)f->cap * sizeof(uint64_t));
+    for(int i = f->cap; i < newcap; i++) nuint64_vals[i] = (uint64_t)0;
+    uint64_t* old_uint64_vals = f->uint64_vals;
+    f->uint64_vals = nuint64_vals;
+    free(old_uint64_vals);
+    /* 扩容 uchar_vals */
+    unsigned char* nuchar_vals = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
+    if(!nuchar_vals) { perror("stackframe expand uchar_vals"); exit(EXIT_FAILURE); }
+    if(f->uchar_vals) memcpy(nuchar_vals, f->uchar_vals, (size_t)f->cap * sizeof(unsigned char));
+    for(int i = f->cap; i < newcap; i++) nuchar_vals[i] = (unsigned char)0;
+    unsigned char* old_uchar_vals = f->uchar_vals;
+    f->uchar_vals = nuchar_vals;
+    free(old_uchar_vals);
+    /* 扩容 ushort_vals */
+    unsigned short* nushort_vals = (unsigned short*)malloc((size_t)newcap * sizeof(unsigned short));
+    if(!nushort_vals) { perror("stackframe expand ushort_vals"); exit(EXIT_FAILURE); }
+    if(f->ushort_vals) memcpy(nushort_vals, f->ushort_vals, (size_t)f->cap * sizeof(unsigned short));
+    for(int i = f->cap; i < newcap; i++) nushort_vals[i] = (unsigned short)0;
+    unsigned short* old_ushort_vals = f->ushort_vals;
+    f->ushort_vals = nushort_vals;
+    free(old_ushort_vals);
+    /* 扩容 ulong_vals */
+    unsigned long* nulong_vals = (unsigned long*)malloc((size_t)newcap * sizeof(unsigned long));
+    if(!nulong_vals) { perror("stackframe expand ulong_vals"); exit(EXIT_FAILURE); }
+    if(f->ulong_vals) memcpy(nulong_vals, f->ulong_vals, (size_t)f->cap * sizeof(unsigned long));
+    for(int i = f->cap; i < newcap; i++) nulong_vals[i] = (unsigned long)0;
+    unsigned long* old_ulong_vals = f->ulong_vals;
+    f->ulong_vals = nulong_vals;
+    free(old_ulong_vals);
+    /* 扩容 size_t_vals */
+    size_t* nsize_t_vals = (size_t*)malloc((size_t)newcap * sizeof(size_t));
+    if(!nsize_t_vals) { perror("stackframe expand size_t_vals"); exit(EXIT_FAILURE); }
+    if(f->size_t_vals) memcpy(nsize_t_vals, f->size_t_vals, (size_t)f->cap * sizeof(size_t));
+    for(int i = f->cap; i < newcap; i++) nsize_t_vals[i] = (size_t)0;
+    size_t* old_size_t_vals = f->size_t_vals;
+    f->size_t_vals = nsize_t_vals;
+    free(old_size_t_vals);
+    /* 扩容 ssize_t_vals */
+    ssize_t* nssize_t_vals = (ssize_t*)malloc((size_t)newcap * sizeof(ssize_t));
+    if(!nssize_t_vals) { perror("stackframe expand ssize_t_vals"); exit(EXIT_FAILURE); }
+    if(f->ssize_t_vals) memcpy(nssize_t_vals, f->ssize_t_vals, (size_t)f->cap * sizeof(ssize_t));
+    for(int i = f->cap; i < newcap; i++) nssize_t_vals[i] = (ssize_t)0;
+    ssize_t* old_ssize_t_vals = f->ssize_t_vals;
+    f->ssize_t_vals = nssize_t_vals;
+    free(old_ssize_t_vals);
+    /* 扩容 float_vals */
+    float* nfloat_vals = (float*)malloc((size_t)newcap * sizeof(float));
+    if(!nfloat_vals) { perror("stackframe expand float_vals"); exit(EXIT_FAILURE); }
+    if(f->float_vals) memcpy(nfloat_vals, f->float_vals, (size_t)f->cap * sizeof(float));
+    for(int i = f->cap; i < newcap; i++) nfloat_vals[i] = (float)0.0f;
+    float* old_float_vals = f->float_vals;
+    f->float_vals = nfloat_vals;
+    free(old_float_vals);
     /* 扩容 double_vals */
-    double* ndv = (double*)malloc((size_t)newcap * sizeof(double));
-    if(!ndv) { perror("stackframe expand double_vals"); exit(EXIT_FAILURE); }
-    if(f->double_vals) memcpy(ndv, f->double_vals, (size_t)f->cap * sizeof(double));
-    for(int i = f->cap; i < newcap; i++) ndv[i] = 0.0;
+    double* ndouble_vals = (double*)malloc((size_t)newcap * sizeof(double));
+    if(!ndouble_vals) { perror("stackframe expand double_vals"); exit(EXIT_FAILURE); }
+    if(f->double_vals) memcpy(ndouble_vals, f->double_vals, (size_t)f->cap * sizeof(double));
+    for(int i = f->cap; i < newcap; i++) ndouble_vals[i] = (double)0.0;
     double* old_double_vals = f->double_vals;
-    f->double_vals = ndv;
+    f->double_vals = ndouble_vals;
     free(old_double_vals);
-
+    /* 扩容 longdouble_vals */
+    long double* nlongdouble_vals = (long double*)malloc((size_t)newcap * sizeof(long double));
+    if(!nlongdouble_vals) { perror("stackframe expand longdouble_vals"); exit(EXIT_FAILURE); }
+    if(f->longdouble_vals) memcpy(nlongdouble_vals, f->longdouble_vals, (size_t)f->cap * sizeof(long double));
+    for(int i = f->cap; i < newcap; i++) nlongdouble_vals[i] = (long double)0.0L;
+    long double* old_longdouble_vals = f->longdouble_vals;
+    f->longdouble_vals = nlongdouble_vals;
+    free(old_longdouble_vals);
     /* 扩容 bool_vals */
-    _Bool* nbv = (_Bool*)malloc((size_t)newcap * sizeof(_Bool));
-    if(!nbv) { perror("stackframe expand bool_vals"); exit(EXIT_FAILURE); }
-    if(f->bool_vals) memcpy(nbv, f->bool_vals, (size_t)f->cap * sizeof(_Bool));
-    for(int i = f->cap; i < newcap; i++) nbv[i] = 0;
+    _Bool* nbool_vals = (_Bool*)malloc((size_t)newcap * sizeof(_Bool));
+    if(!nbool_vals) { perror("stackframe expand bool_vals"); exit(EXIT_FAILURE); }
+    if(f->bool_vals) memcpy(nbool_vals, f->bool_vals, (size_t)f->cap * sizeof(_Bool));
+    for(int i = f->cap; i < newcap; i++) nbool_vals[i] = (_Bool)0;
     _Bool* old_bool_vals = f->bool_vals;
-    f->bool_vals = nbv;
+    f->bool_vals = nbool_vals;
     free(old_bool_vals);
-
     /* 扩容 char_vals */
-    char* ncv = (char*)malloc((size_t)newcap * sizeof(char));
-    if(!ncv) { perror("stackframe expand char_vals"); exit(EXIT_FAILURE); }
-    if(f->char_vals) memcpy(ncv, f->char_vals, (size_t)f->cap * sizeof(char));
-    for(int i = f->cap; i < newcap; i++) ncv[i] = 0;
+    char* nchar_vals = (char*)malloc((size_t)newcap * sizeof(char));
+    if(!nchar_vals) { perror("stackframe expand char_vals"); exit(EXIT_FAILURE); }
+    if(f->char_vals) memcpy(nchar_vals, f->char_vals, (size_t)f->cap * sizeof(char));
+    for(int i = f->cap; i < newcap; i++) nchar_vals[i] = (char)0;
     char* old_char_vals = f->char_vals;
-    f->char_vals = ncv;
+    f->char_vals = nchar_vals;
     free(old_char_vals);
-
     /* 扩容 byte_vals */
-    unsigned char* nbyv = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
-    if(!nbyv) { perror("stackframe expand byte_vals"); exit(EXIT_FAILURE); }
-    if(f->byte_vals) memcpy(nbyv, f->byte_vals, (size_t)f->cap * sizeof(unsigned char));
-    for(int i = f->cap; i < newcap; i++) nbyv[i] = 0;
+    unsigned char* nbyte_vals = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
+    if(!nbyte_vals) { perror("stackframe expand byte_vals"); exit(EXIT_FAILURE); }
+    if(f->byte_vals) memcpy(nbyte_vals, f->byte_vals, (size_t)f->cap * sizeof(unsigned char));
+    for(int i = f->cap; i < newcap; i++) nbyte_vals[i] = (unsigned char)0;
     unsigned char* old_byte_vals = f->byte_vals;
-    f->byte_vals = nbyv;
+    f->byte_vals = nbyte_vals;
     free(old_byte_vals);
-
     /* 扩容 string_vals */
-    char** nsv = (char**)malloc((size_t)newcap * sizeof(char*));
-    if(!nsv) { perror("stackframe expand string_vals"); exit(EXIT_FAILURE); }
-    if(f->string_vals) memcpy(nsv, f->string_vals, (size_t)f->cap * sizeof(char*));
-    for(int i = f->cap; i < newcap; i++) nsv[i] = NULL;
+    char** nstring_vals = (char**)malloc((size_t)newcap * sizeof(char*));
+    if(!nstring_vals) { perror("stackframe expand string_vals"); exit(EXIT_FAILURE); }
+    if(f->string_vals) memcpy(nstring_vals, f->string_vals, (size_t)f->cap * sizeof(char*));
+    for(int i = f->cap; i < newcap; i++) nstring_vals[i] = NULL;
     char** old_string_vals = f->string_vals;
-    f->string_vals = nsv;
+    f->string_vals = nstring_vals;
     free(old_string_vals);
+    /* 扩容 ptr_vals */
+    void** nptr_vals = (void**)malloc((size_t)newcap * sizeof(void*));
+    if(!nptr_vals) { perror("stackframe expand ptr_vals"); exit(EXIT_FAILURE); }
+    if(f->ptr_vals) memcpy(nptr_vals, f->ptr_vals, (size_t)f->cap * sizeof(void*));
+    for(int i = f->cap; i < newcap; i++) nptr_vals[i] = NULL;
+    void** old_ptr_vals = f->ptr_vals;
+    f->ptr_vals = nptr_vals;
+    free(old_ptr_vals);
 
     f->cap = newcap;
 }
@@ -163,12 +306,37 @@ void stackframe_destroy(StackFrame* f)
     }
     free(f->names);
     free(f->vals);
+    /* 基础整数类型 */
     free(f->int_vals);
+    free(f->longlong_vals);
+    free(f->long_vals);
+    free(f->short_vals);
+    /* 固定宽度有符号整数 */
+    free(f->int8_vals);
+    free(f->int16_vals);
+    free(f->int32_vals);
+    free(f->int64_vals);
+    /* 固定宽度无符号整数 */
+    free(f->uint8_vals);
+    free(f->uint16_vals);
+    free(f->uint32_vals);
+    free(f->uint64_vals);
+    /* 其他无符号整数 */
+    free(f->uchar_vals);
+    free(f->ushort_vals);
+    free(f->ulong_vals);
+    free(f->size_t_vals);
+    free(f->ssize_t_vals);
+    /* 浮点类型 */
+    free(f->float_vals);
     free(f->double_vals);
+    free(f->longdouble_vals);
+    /* 其他基础类型 */
     free(f->bool_vals);
     free(f->char_vals);
     free(f->byte_vals);
     free(f->string_vals);
+    free(f->ptr_vals);
     /* cell 表：cell 指针本身由闭包持有，这里只释放表项名与指针数组 */
     for(int i = 0; i < f->cell_cnt; i++) {
         free(f->cell_names[i]);
