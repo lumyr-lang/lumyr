@@ -2198,7 +2198,7 @@ void emit_insns(BytecodeFunc* fn)
                         if(!_is_ref) {
                             fprintf(out, "        if(__args[%d].type == VAL_MAP && lumyr_map_has(__args[%d], lumyr_make_string(\"__mapname__\"))) {\n", _tk, _tk);
                             fprintf(out, "            __args[%d] = lumyr_map_shallow_copy(__args[%d]);\n", _tk, _tk);
-                            fprintf(out, "        } else if(__args[%d].type == VAL_STRUCT_PTR && !lumyr_is_class_instance(__args[%d])) {\n", _tk, _tk);
+                            fprintf(out, "        } else if(__args[%d].type == VAL_STRUCT_PTR) {\n", _tk, _tk);
                             fprintf(out, "            __args[%d] = lumyr_struct_shallow_copy(__args[%d]);\n", _tk, _tk);
                             fprintf(out, "        }\n");
                         }
@@ -2336,7 +2336,7 @@ void emit_insns(BytecodeFunc* fn)
                         fprintf(out, "    { Value __v = __stk[--__sp]; gc_pop_cframe(); __stk[__sp++] = __v; goto __gen_end; }\n");
                     } else {
                         /* struct 类型返回值在堆上分配拷贝（避免返回指向局部变量的指针），class 是引用类型不需要拷贝 */
-                        fprintf(out, "    { Value __v = __stk[--__sp]; if(__v.type == VAL_STRUCT_PTR && !lumyr_is_class_instance(__v)) { __v = lumyr_struct_shallow_copy(__v); } gc_pop_cframe(); gc_protect_push(__v); gc_protect_pop(); return __v; }\n");
+                        fprintf(out, "    { Value __v = __stk[--__sp]; if(__v.type == VAL_STRUCT_PTR) { __v = lumyr_struct_shallow_copy(__v); } gc_pop_cframe(); gc_protect_push(__v); gc_protect_pop(); return __v; }\n");
                     }
                 } else {
                     fprintf(out, "    gc_pop_cframe();\n");
