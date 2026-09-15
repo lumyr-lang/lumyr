@@ -110,6 +110,21 @@ static void rbtree_insert_fixup(RBTree* tree, RBNode* z) {
 
 /* 插入节点 */
 void rbtree_insert(RBTree* tree, const char* class_name, const char* method_name, void* data) {
+    /* 先查找是否已存在相同键的节点，如果存在则覆盖数据（避免重复节点导致查找返回旧数据） */
+    RBNode* exist = tree->root;
+    while(exist != tree->nil) {
+        int cmp = rbtree_compare(class_name, method_name, exist->class_name, exist->method_name);
+        if(cmp == 0) {
+            /* 键相同，覆盖数据（不释放旧数据，由调用方管理内存） */
+            exist->data = data;
+            return;
+        } else if(cmp < 0) {
+            exist = exist->left;
+        } else {
+            exist = exist->right;
+        }
+    }
+
     RBNode* z = (RBNode*)malloc(sizeof(RBNode));
     z->class_name = class_name ? strdup(class_name) : NULL;
     z->method_name = strdup(method_name);
