@@ -106,6 +106,51 @@ static void frame_ensure(StackFrame* f, int need)
     f->int_vals = niv;
     free(old_int_vals);
 
+    /* 扩容 double_vals */
+    double* ndv = (double*)malloc((size_t)newcap * sizeof(double));
+    if(!ndv) { perror("stackframe expand double_vals"); exit(EXIT_FAILURE); }
+    if(f->double_vals) memcpy(ndv, f->double_vals, (size_t)f->cap * sizeof(double));
+    for(int i = f->cap; i < newcap; i++) ndv[i] = 0.0;
+    double* old_double_vals = f->double_vals;
+    f->double_vals = ndv;
+    free(old_double_vals);
+
+    /* 扩容 bool_vals */
+    _Bool* nbv = (_Bool*)malloc((size_t)newcap * sizeof(_Bool));
+    if(!nbv) { perror("stackframe expand bool_vals"); exit(EXIT_FAILURE); }
+    if(f->bool_vals) memcpy(nbv, f->bool_vals, (size_t)f->cap * sizeof(_Bool));
+    for(int i = f->cap; i < newcap; i++) nbv[i] = 0;
+    _Bool* old_bool_vals = f->bool_vals;
+    f->bool_vals = nbv;
+    free(old_bool_vals);
+
+    /* 扩容 char_vals */
+    char* ncv = (char*)malloc((size_t)newcap * sizeof(char));
+    if(!ncv) { perror("stackframe expand char_vals"); exit(EXIT_FAILURE); }
+    if(f->char_vals) memcpy(ncv, f->char_vals, (size_t)f->cap * sizeof(char));
+    for(int i = f->cap; i < newcap; i++) ncv[i] = 0;
+    char* old_char_vals = f->char_vals;
+    f->char_vals = ncv;
+    free(old_char_vals);
+
+    /* 扩容 byte_vals */
+    unsigned char* nbyv = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
+    if(!nbyv) { perror("stackframe expand byte_vals"); exit(EXIT_FAILURE); }
+    if(f->byte_vals) memcpy(nbyv, f->byte_vals, (size_t)f->cap * sizeof(unsigned char));
+    for(int i = f->cap; i < newcap; i++) nbyv[i] = 0;
+    unsigned char* old_byte_vals = f->byte_vals;
+    f->byte_vals = nbyv;
+    free(old_byte_vals);
+
+    /* 扩容 string_vals */
+    char** nsv = (char**)malloc((size_t)newcap * sizeof(char*));
+    if(!nsv) { perror("stackframe expand string_vals"); exit(EXIT_FAILURE); }
+    if(f->string_vals) memcpy(nsv, f->string_vals, (size_t)f->cap * sizeof(char*));
+    for(int i = f->cap; i < newcap; i++) nsv[i] = NULL;
+    char** old_string_vals = f->string_vals;
+    f->string_vals = nsv;
+    free(old_string_vals);
+
     f->cap = newcap;
 }
 
@@ -119,6 +164,11 @@ void stackframe_destroy(StackFrame* f)
     free(f->names);
     free(f->vals);
     free(f->int_vals);
+    free(f->double_vals);
+    free(f->bool_vals);
+    free(f->char_vals);
+    free(f->byte_vals);
+    free(f->string_vals);
     /* cell 表：cell 指针本身由闭包持有，这里只释放表项名与指针数组 */
     for(int i = 0; i < f->cell_cnt; i++) {
         free(f->cell_names[i]);
