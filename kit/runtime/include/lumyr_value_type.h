@@ -81,8 +81,18 @@ typedef enum {
 //          items 缓冲区也由 gc_alloc(vtype=VAL_ARRAY) 管理，扩容用 gc_realloc。
 // stack_alloc：0=堆分配（默认，有 GCObject 头），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过自身）
 // items_stack_alloc：0=items 堆分配（默认），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过 items 自身但仍递归标记 items[i]）
+// elem_type：数组元素类型（VAL_NONE 表示通用类型，使用 Value* items；其他类型使用对应的类型化数组，避免 Value 结构体转换开销）
 typedef struct {
-    Value* items;
+    ValueType elem_type;       // 元素类型（VAL_NONE=通用类型，VAL_INT=int类型，VAL_DOUBLE=double类型，VAL_STRING=string类型，...）
+    Value* items;              // 通用类型数组（elem_type == VAL_NONE 时有效，向后兼容）
+    union {
+        int* ints;             // int 类型数组（elem_type == VAL_INT 时有效）
+        double* doubles;       // double 类型数组（elem_type == VAL_DOUBLE 时有效）
+        char** strings;        // string 类型数组（elem_type == VAL_STRING 时有效）
+        _Bool* bools;          // bool 类型数组（elem_type == VAL_BOOL 时有效）
+        char* chars;           // char 类型数组（elem_type == VAL_CHAR 时有效）
+        void* raw;             // 原始指针，用于类型转换
+    } typed_items;              // 类型化数组（elem_type != VAL_NONE 时有效）
     int len;
     int cap;  // 预分配容量（>= len），add 时按需 2x 扩容
     uint8_t stack_alloc;        // 0=堆分配，1=编译通道栈分配
