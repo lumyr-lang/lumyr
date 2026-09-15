@@ -134,6 +134,13 @@ Value lumyr_make_long(long lv) {
     return v;
 }
 
+Value lumyr_make_ulong(unsigned long ulv) {
+    Value v;
+    v.type = VAL_ULONG;
+    v.v.i = (long long)ulv;
+    return v;
+}
+
 // 获取value的数值，int转double
 double value_as_number(Value x) {
     if(x.type == VAL_INT)
@@ -420,6 +427,8 @@ Value lumyr_index_get(Value c, Value idx) {
                 return lumyr_make_uint64(((uint64_t*)tarr->items)[i]);
             case VAL_LONG:
                 return lumyr_make_long(((long*)tarr->items)[i]);
+            case VAL_ULONG:
+                return lumyr_make_ulong(((unsigned long*)tarr->items)[i]);
             case VAL_STRING:
                 return lumyr_make_string(((char**)tarr->items)[i]);
             default:
@@ -1084,6 +1093,9 @@ void lumyr_print_inline(Value v) {
             break;
         case VAL_LONG:
             printf("%ld", (long)v.v.i);
+            break;
+        case VAL_ULONG:
+            printf("%lu", (unsigned long)v.v.i);
             break;
         case VAL_NONE:
             printf("null");
