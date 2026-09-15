@@ -1,0 +1,20 @@
+[src/ir/ir_cgen.c:1595] ir_cgen_file called: out_c_path=tests\class_basic_test.c, main_fn=00000265b63ceba0
+[src/ir/ir_cgen.c:1602] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1634] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:925] emit_func_def_cb called: name=speak, class_name=Animal
+[src/ir/ir_cgen.c:589] emit_func_def: name=speak, class_name=Animal, final_name=Animal_speak_1, param_cnt=1
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1636] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1638] ir_cgen_file: done
+[src/ir/ir_cgen.c:1595] ir_cgen_file called: out_c_path=tests\struct_basic_test.c, main_fn=000002c09c776fa0
+[src/ir/ir_cgen.c:1602] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1634] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:925] emit_func_def_cb called: name=get_x, class_name=(null)
+[src/ir/ir_cgen.c:589] emit_func_def: name=get_x, class_name=(null), final_name=get_x, param_cnt=1
+[src/ir/ir_cgen.c:925] emit_func_def_cb called: name=make_point, class_name=(null)
+[src/ir/ir_cgen.c:589] emit_func_def: name=make_point, class_name=(null), final_name=make_point, param_cnt=2
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1636] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1638] ir_cgen_file: done

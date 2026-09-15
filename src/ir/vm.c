@@ -2432,6 +2432,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_CALL: {
                 const char* fname = bf->syms[in.a];
                 int argc = in.b;
+                LOG_PUSH_CALL("OPC_CALL fname=%s argc=%d", fname, argc);
                 /* 特殊处理：lumyr_interface_cast 内置函数（接口类型转换） */
                 if(strcmp(fname, "lumyr_interface_cast") == 0 && argc >= 2) {
                     Value obj = stack[sp - argc];
