@@ -759,7 +759,9 @@ void lumyr_class_instance_set_field(Value obj, const char* field_name, Value val
                     break;
                 case CLASS_FIELD_STRING:
                     if(value.type == VAL_STRING) {
-                        *(const char**)field_ptr = lumyr_str_cstr(&value);
+                        /* 字符串字段需要深拷贝，避免指向栈上临时变量的无效指针 */
+                        if(*(char**)field_ptr) free(*(char**)field_ptr);
+                        *(char**)field_ptr = strdup(lumyr_str_cstr(&value));
                     }
                     break;
                 case CLASS_FIELD_PTR:
