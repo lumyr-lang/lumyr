@@ -164,20 +164,6 @@ void* rbtree_find(RBTree* tree, const char* class_name, const char* method_name)
     return NULL;
 }
 
-/* 查找第一个匹配 method_name 的节点（用于兼容旧代码） */
-static void* rbtree_find_by_name_helper(RBNode* node, RBNode* nil, const char* method_name) {
-    if(node == nil) return NULL;
-    if(node->method_name && strcmp(node->method_name, method_name) == 0)
-        return node->data;
-    void* left = rbtree_find_by_name_helper(node->left, nil, method_name);
-    if(left) return left;
-    return rbtree_find_by_name_helper(node->right, nil, method_name);
-}
-
-void* rbtree_find_by_name(RBTree* tree, const char* method_name) {
-    return rbtree_find_by_name_helper(tree->root, tree->nil, method_name);
-}
-
 /* 中序遍历 */
 static void rbtree_foreach_helper(RBNode* node, RBNode* nil, void (*callback)(const char*, const char*, void*, void*), void* user_data) {
     if(node == nil) return;

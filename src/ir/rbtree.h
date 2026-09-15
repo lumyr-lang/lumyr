@@ -35,8 +35,6 @@ void rbtree_insert(RBTree* tree, const char* class_name, const char* method_name
 /* 查找节点 - 精确匹配 (class_name, method_name) */
 void* rbtree_find(RBTree* tree, const char* class_name, const char* method_name);
 
-/* 查找第一个匹配 method_name 的节点（用于兼容旧代码） */
-void* rbtree_find_by_name(RBTree* tree, const char* method_name);
 
 /* 删除节点 */
 void rbtree_delete(RBTree* tree, const char* class_name, const char* method_name);
