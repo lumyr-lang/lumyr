@@ -1,0 +1,59 @@
+// 测试：上下文感知类型推导 - 数组元素赋值自动感知为 int 类型
+// 验证：arr = <int>[1,2,3]; a = arr[0]; 时，a 自动感知为 int 类型，并使用零开销路径
+
+print("=== 上下文感知类型推导测试 ===\n");
+
+// 测试 1：基本上下文感知
+arr = <int>[10, 20, 30, 40, 50];
+print("arr type = \n");
+print(type(arr));
+print("\n");
+
+// a 没有显式声明 <int>，但应该自动感知为 int 类型
+a = arr[0];
+print("a = \n");
+print(a);
+print(" (期望 10)\n");
+
+b = arr[2];
+print("b = \n");
+print(b);
+print(" (期望 30)\n");
+
+// 测试 2：上下文感知后，a 可以直接用于 int 泛型数组
+arr2 = <int>[a, b, a + b];
+print("arr2 len = \n");
+print(len(arr2));
+print("\n");
+print("arr2[0] = \n");
+print(arr2[0]);
+print(" (期望 10)\n");
+print("arr2[1] = \n");
+print(arr2[1]);
+print(" (期望 30)\n");
+print("arr2[2] = \n");
+print(arr2[2]);
+print(" (期望 40)\n");
+
+// 测试 3：链式上下文感知
+c = arr[1];  // c 自动感知为 int
+d = c;        // d 也应该感知为 int（因为 c 是 int）
+print("d = \n");
+print(d);
+print(" (期望 20)\n");
+
+// 测试 4：变量索引
+i = <int>2;
+e = arr[i];
+print("e = \n");
+print(e);
+print(" (期望 30)\n");
+
+// 测试 5：多次赋值后仍然保持 int 类型
+f = arr[4];
+f = f + 1;
+print("f = \n");
+print(f);
+print(" (期望 51)\n");
+
+print("\n=== 测试完成 ===\n");

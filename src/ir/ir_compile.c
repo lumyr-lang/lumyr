@@ -20,6 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 变量类型标记特殊值：1000 表示变量是 int 类型化数组（用于上下文感知类型推导） */
+#define VAR_TYPE_INT_ARRAY 1000
+
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
 // 动态扩容，无硬上限。
@@ -730,8 +733,12 @@ static void c_expr(Ctx* c, AstNode* node)
                 AstNode* inner = node->u.assign.expr->u.type_annotation.expr;
                 if(inner && inner->type != AST_ARRAY_LIT && inner->type != AST_MAP_LIT) {
                     c->fn->var_type_tags[var_idx] = node->u.assign.expr->u.type_annotation.cast_type;
+                } else if(inner && inner->type == AST_ARRAY_LIT &&
+                          node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */) {
+                    /* <int>[...] 形式：变量是 int 类型化数组，设置特殊标记用于上下文感知类型推导 */
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_INT_ARRAY;
                 } else {
-                    /* 数组/map字面量的类型标注不设置变量类型标记 */
+                    /* 其他数组/map字面量的类型标注不设置变量类型标记 */
                     c->fn->var_type_tags[var_idx] = -1;
                 }
             } else if(node->u.assign.expr && node->u.assign.expr->type == AST_INTERFACE_ANNOTATION) {
@@ -806,7 +813,7 @@ static void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
-            /* 优化：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
+            /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */ &&
@@ -824,6 +831,32 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                 /* 记录变量类型标记为 int */
                 c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+            }
+            /* 优化2：上下文感知 - 赋值为 arr[idx] 且 arr 是 int 类型化数组时，自动感知为 int 类型
+               即使左侧变量没有显式声明 <int>，也自动推导为 int 类型，并使用优化路径 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_INDEX &&
+                    node->u.assign.expr->u.index.arr &&
+                    node->u.assign.expr->u.index.arr->type == AST_VAR) {
+                const char* arr_name = node->u.assign.expr->u.index.arr->u.varname;
+                int arr_idx = bf_sym(c->fn, arr_name);
+                /* 检查数组变量是否标记为 int 类型化数组 */
+                if(arr_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[arr_idx] == VAR_TYPE_INT_ARRAY) {
+                    AstNode* arr = node->u.assign.expr->u.index.arr;
+                    AstNode* idx = node->u.assign.expr->u.index.idx;
+                    /* 编译 arr 和 idx（压入 Value 栈） */
+                    c_expr(c, arr);
+                    c_expr(c, idx);
+                    /* OPC_INT_ARRAY_GET：直接读取 int 值，压入 int 栈，零包装 */
+                    emit(c, OPC_INT_ARRAY_GET, 0, 0);
+                    /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 int 类型 */
+                    c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             } else {
                 c_expr(c, node->u.assign.expr);
                 emit(c, OPC_STORE_VAR, var_idx, 0);
