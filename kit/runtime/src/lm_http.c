@@ -145,7 +145,13 @@ Value lumyr_http_request(const char* method, Value url, Value params, Value conf
         }
         if(lumyr_map_has(config, lumyr_make_string("timeout"))) {
             Value tv = lumyr_map_get(config, lumyr_make_string("timeout"));
-            if(tv.type == VAL_INT) timeout_s = tv.v.i;
+            /* 支持所有整数类型作为timeout参数 */
+            if(tv.type == VAL_INT || tv.type == VAL_INT8 || tv.type == VAL_INT16 || tv.type == VAL_INT32 || tv.type == VAL_INT64 ||
+               tv.type == VAL_BYTE || tv.type == VAL_UINT8 || tv.type == VAL_UINT16 || tv.type == VAL_UINT32 || tv.type == VAL_UINT64 ||
+               tv.type == VAL_LONG || tv.type == VAL_ULONG || tv.type == VAL_SIZE_T || tv.type == VAL_SSIZE_T ||
+               tv.type == VAL_BOOL || tv.type == VAL_CHAR || tv.type == VAL_DOUBLE) {
+                timeout_s = lumyr_extract_ll(tv);
+            }
         }
     }
 

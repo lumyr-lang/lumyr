@@ -140,8 +140,13 @@ Value lumyr_contains(Value hay, Value needle)
 Value lumyr_repeat(Value s, Value n)
 {
     if(s.type != VAL_STRING) runtime_error("repeat() 第一个参数必须是字符串");
-    if(n.type != VAL_INT) runtime_error("repeat() 次数必须是整数");
-    long long k = n.v.i;
+    /* 支持所有整数类型作为次数参数 */
+    if(n.type != VAL_INT && n.type != VAL_INT8 && n.type != VAL_INT16 && n.type != VAL_INT32 && n.type != VAL_INT64 &&
+       n.type != VAL_BYTE && n.type != VAL_UINT8 && n.type != VAL_UINT16 && n.type != VAL_UINT32 && n.type != VAL_UINT64 &&
+       n.type != VAL_LONG && n.type != VAL_ULONG && n.type != VAL_SIZE_T && n.type != VAL_SSIZE_T &&
+       n.type != VAL_BOOL && n.type != VAL_CHAR && n.type != VAL_DOUBLE)
+        runtime_error("repeat() 次数必须是整数");
+    long long k = lumyr_extract_ll(n);
     if(k < 0) runtime_error("repeat() 次数不能为负数");
     size_t len = strlen(lumyr_str_cstr(&s));
     if(k > 0 && len > (size_t)((1ULL << 40) / k)) runtime_error("repeat() 结果过大");
