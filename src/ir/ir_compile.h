@@ -3,6 +3,13 @@
 
 #include "bytecode.h"
 #include "ast/ast_node.h"
+#include "ir_types.h"
+#include "ir_emit.h"
+
+/* ========== 函数声明 ========== */
+
+/* 编译表达式（递归） */
+void c_expr(Ctx* c, AstNode* node);
 
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name);

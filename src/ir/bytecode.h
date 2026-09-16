@@ -245,6 +245,54 @@ typedef enum {
     OPC_LONG_DOUBLE_LE,         // 弹2个 long double，小于等于比较
     OPC_LONG_DOUBLE_EQ,         // 弹2个 long double，等于比较
     OPC_LONG_DOUBLE_NE,         // 弹2个 long double，不等于比较
+    /* ===== int8 类型专用算术/比较运算指令（零开销优化） ===== */
+    OPC_INT8_ADD,       // 弹2个 int8，相加，结果压入 int8 专用栈
+    OPC_INT8_SUB,       // 弹2个 int8，相减
+    OPC_INT8_MUL,       // 弹2个 int8，相乘
+    OPC_INT8_DIV,       // 弹2个 int8，相除（检查除零）
+    OPC_INT8_MOD,       // 弹2个 int8，取模
+    OPC_INT8_GT,        // 弹2个 int8，大于比较，结果 bool 压入 Value 栈
+    OPC_INT8_LT,        // 弹2个 int8，小于比较
+    OPC_INT8_GE,        // 弹2个 int8，大于等于比较
+    OPC_INT8_LE,        // 弹2个 int8，小于等于比较
+    OPC_INT8_EQ,        // 弹2个 int8，等于比较
+    OPC_INT8_NE,        // 弹2个 int8，不等于比较
+    /* ===== int16 类型专用算术/比较运算指令（零开销优化） ===== */
+    OPC_INT16_ADD,      // 弹2个 int16，相加
+    OPC_INT16_SUB,      // 弹2个 int16，相减
+    OPC_INT16_MUL,      // 弹2个 int16，相乘
+    OPC_INT16_DIV,      // 弹2个 int16，相除
+    OPC_INT16_MOD,      // 弹2个 int16，取模
+    OPC_INT16_GT,       // 弹2个 int16，大于比较
+    OPC_INT16_LT,       // 弹2个 int16，小于比较
+    OPC_INT16_GE,       // 弹2个 int16，大于等于比较
+    OPC_INT16_LE,       // 弹2个 int16，小于等于比较
+    OPC_INT16_EQ,       // 弹2个 int16，等于比较
+    OPC_INT16_NE,       // 弹2个 int16，不等于比较
+    /* ===== int32 类型专用算术/比较运算指令（零开销优化） ===== */
+    OPC_INT32_ADD,      // 弹2个 int32，相加
+    OPC_INT32_SUB,      // 弹2个 int32，相减
+    OPC_INT32_MUL,      // 弹2个 int32，相乘
+    OPC_INT32_DIV,      // 弹2个 int32，相除
+    OPC_INT32_MOD,      // 弹2个 int32，取模
+    OPC_INT32_GT,       // 弹2个 int32，大于比较
+    OPC_INT32_LT,       // 弹2个 int32，小于比较
+    OPC_INT32_GE,       // 弹2个 int32，大于等于比较
+    OPC_INT32_LE,       // 弹2个 int32，小于等于比较
+    OPC_INT32_EQ,       // 弹2个 int32，等于比较
+    OPC_INT32_NE,       // 弹2个 int32，不等于比较
+    /* ===== int64 类型专用算术/比较运算指令（零开销优化） ===== */
+    OPC_INT64_ADD,      // 弹2个 int64，相加
+    OPC_INT64_SUB,      // 弹2个 int64，相减
+    OPC_INT64_MUL,      // 弹2个 int64，相乘
+    OPC_INT64_DIV,      // 弹2个 int64，相除
+    OPC_INT64_MOD,      // 弹2个 int64，取模
+    OPC_INT64_GT,       // 弹2个 int64，大于比较
+    OPC_INT64_LT,       // 弹2个 int64，小于比较
+    OPC_INT64_GE,       // 弹2个 int64，大于等于比较
+    OPC_INT64_LE,       // 弹2个 int64，小于等于比较
+    OPC_INT64_EQ,       // 弹2个 int64，等于比较
+    OPC_INT64_NE,       // 弹2个 int64，不等于比较
     OPC_TO_BOOL,      // 弹1压1 bool
     OPC_DUP,          // 复制栈顶
     OPC_POP,          // 丢弃栈顶

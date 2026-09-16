@@ -178,32 +178,9 @@ static Value intern_string(const char* s)
 
 // ---------------- 编译上下文 ----------------
 
-typedef struct {
-    int kind;              // 0=循环 1=switch
-    int* brk; int brk_cnt, brk_cap;    // 未定 break 跳转位置（JMP.a）
-    int* cont; int cont_cnt, cont_cap; // 未定 continue 跳转位置（循环，JMP.a）
-    int* brk_fin; int brk_fin_cnt, brk_fin_cap;   // try-finally 内 break 的 FIN_PUSH 位置（patch b）
-    int* cont_fin; int cont_fin_cnt, cont_fin_cap; // try-finally 内 continue 的 FIN_PUSH 位置（patch b）
-    int cont_target;       // 已知 continue 目标（while 的 cond 开头）或 -1
-} Layer;
 
-typedef struct {
-    BytecodeFunc* fn;
-    Layer* layers;           // 动态：循环/switch 嵌套无硬上限
-    int layer_depth;
-    int layers_cap;
-    /* finally 上下文：fin_depth>0 表示当前编译位置在 try-finally 内；
-       fin_pend[depth][*] = body/catch 中 PEND_RETURN(b=0) 的位置，fstart 确定后统一 patch b
-       行/列均动态扩容，try-finally 嵌套与每层挂起数无硬上限 */
-    int** fin_pend;
-    int* fin_pend_n;
-    int* fin_pend_cap;
-    int** fin_jmp;            // try-finally 内 break/continue 的 JMP 位置（patch a=fstart）
-    int* fin_jmp_n;
-    int* fin_jmp_cap;
-    int fin_depth;
-    int fin_cap;
-} Ctx;
+
+
 
 /* 控制层/ finally 行 扩容 helper */
 static void ctx_ensure_layers(Ctx* c, int need)
@@ -269,13 +246,13 @@ static void fin_jmp_add(Ctx* c, int pos)
     c->fin_jmp[c->fin_depth][c->fin_jmp_n[c->fin_depth]++] = pos;
 }
 
-static int here(Ctx* c) { return c->fn->code_len; }
 
-static void emit(Ctx* c, OpCode op, int a, int b) { bf_emit(c->fn, op, a, b); }
 
-static int emit_here(Ctx* c, OpCode op, int a, int b) { return bf_emit_here(c->fn, op, a, b); }
 
-static void patch_to(Ctx* c, int pos) { bf_patch(c->fn, pos, here(c)); }
+
+
+
+
 
 // ---------------- 控制层（break/continue） ----------------
 
@@ -366,7 +343,7 @@ static int extract_int_literal_value(AstNode* expr, long long* out_val) {
 }
 
 static void c_stmt(Ctx* c, AstNode* node);
-static void c_expr(Ctx* c, AstNode* node);
+void c_expr(Ctx* c, AstNode* node);
 
 /* ===== type 构造（type Person { name, age } → Person("张三", 18) 编译为 map 字面量） ===== */
 static int type_arg_count(AstNode* chain)
@@ -612,33 +589,7 @@ static int is_float_var(Ctx* c, AstNode* node) {
 /* 表达式类型枚举（用于算术运算结果类型推断，编译期调用，零运行时开销）
    注意：数值大小不完全对应类型优先级，有符号/无符号混合运算需通过expr_type_promote函数处理
    类型提升规则参考C语言标准：浮点 > 整数，64位 > 32位 > 16位 > 8位 */
-typedef enum {
-    EXPR_TYPE_NONE = 0,
-    /* 布尔和字符类型 */
-    EXPR_TYPE_BOOL = 1,
-    EXPR_TYPE_CHAR = 2,
-    /* 有符号整数类型（按位宽递增） */
-    EXPR_TYPE_INT8 = 3,
-    EXPR_TYPE_INT16 = 4,
-    EXPR_TYPE_INT = 5,           /* int32 */
-    EXPR_TYPE_INT64 = 6,
-    EXPR_TYPE_LONG_LONG = 7,
-    EXPR_TYPE_LONG = 8,
-    /* 无符号整数类型（按位宽递增） */
-    EXPR_TYPE_BYTE = 9,          /* uint8 */
-    EXPR_TYPE_UINT8 = 10,
-    EXPR_TYPE_UINT16 = 11,
-    EXPR_TYPE_UINT = 12,         /* uint32 */
-    EXPR_TYPE_UINT64 = 13,
-    EXPR_TYPE_ULONG = 14,
-    /* 大小类型 */
-    EXPR_TYPE_SIZE_T = 15,
-    EXPR_TYPE_SSIZE_T = 16,
-    /* 浮点类型（按精度递增） */
-    EXPR_TYPE_FLOAT = 17,
-    EXPR_TYPE_DOUBLE = 18,
-    EXPR_TYPE_LONG_DOUBLE = 19,
-} ExprType;
+
 
 /* 类型提升辅助函数：根据C语言标准的常用算术转换规则，返回两个类型提升后的结果类型
    简化规则：浮点 > 整数，64位 > 32位 > 16位 > 8位，无符号 > 有符号（相同位宽时） */
@@ -1749,7 +1700,7 @@ static void emit_mixed_type_promote(Ctx* c, int src_type, int dst_type) {
     }
 }
 
-static void c_expr(Ctx* c, AstNode* node)
+void c_expr(Ctx* c, AstNode* node)
 {
     if(!node) { emit(c, OPC_LOAD_CONST, bf_const(c->fn, val_none()), 0); return; }
     switch(node->type) {
@@ -2409,6 +2360,23 @@ static void c_expr(Ctx* c, AstNode* node)
                         c_expr(c, binop);
                         emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
+                    } else if(result_type == EXPR_TYPE_INT8) {
+                        /* int8类型算术运算：结果在int8专用栈中，直接使用OPC_STORE_INT8_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_INT8;
+                    } else if(result_type == EXPR_TYPE_INT16) {
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_INT16;
+                    } else if(result_type == EXPR_TYPE_INT) {
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_INT32;
+                    } else if(result_type == EXPR_TYPE_INT64) {
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_INT64;
                     } else {
                         /* 无法推断结果类型，走通用路径 */
                         c_expr(c, node->u.assign.expr);
@@ -2640,6 +2608,22 @@ static void c_expr(Ctx* c, AstNode* node)
             int right_is_long_double = is_long_double_var(c, node->u.bin.right);
             int is_long_double_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV);
             int is_long_double_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_int8 = is_int8_var(c, node->u.bin.left);
+            int right_is_int8 = is_int8_var(c, node->u.bin.right);
+            int is_int8_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_int8_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_int16 = is_int16_var(c, node->u.bin.left);
+            int right_is_int16 = is_int16_var(c, node->u.bin.right);
+            int is_int16_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_int16_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_int32 = is_int32_var(c, node->u.bin.left);
+            int right_is_int32 = is_int32_var(c, node->u.bin.right);
+            int is_int32_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_int32_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_int64 = is_int64_var(c, node->u.bin.left);
+            int right_is_int64 = is_int64_var(c, node->u.bin.right);
+            int is_int64_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_int64_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
             if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
@@ -2777,6 +2761,86 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_LE] = OPC_LONG_DOUBLE_LE, [OP_EQ] = OPC_LONG_DOUBLE_EQ, [OP_NE] = OPC_LONG_DOUBLE_NE,
                     };
                     emit(c, long_double_cmp_map[bop], 0, 0);
+                }
+            }
+            /* int8 类型专用算术/比较运算指令（零检查零转换零 Value 开销） */
+            else if(left_is_int8 && right_is_int8 && (is_int8_arith || is_int8_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_INT8_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT8_VAR, right_idx, 0);
+                if(is_int8_arith) {
+                    static const OpCode int8_arith_map[] = {
+                        [OP_ADD] = OPC_INT8_ADD, [OP_SUB] = OPC_INT8_SUB, [OP_MUL] = OPC_INT8_MUL,
+                        [OP_DIV] = OPC_INT8_DIV, [OP_MOD] = OPC_INT8_MOD,
+                    };
+                    emit(c, int8_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode int8_cmp_map[] = {
+                        [OP_GT] = OPC_INT8_GT, [OP_LT] = OPC_INT8_LT, [OP_GE] = OPC_INT8_GE,
+                        [OP_LE] = OPC_INT8_LE, [OP_EQ] = OPC_INT8_EQ, [OP_NE] = OPC_INT8_NE,
+                    };
+                    emit(c, int8_cmp_map[bop], 0, 0);
+                }
+            }
+            /* int16 类型专用算术/比较运算指令 */
+            else if(left_is_int16 && right_is_int16 && (is_int16_arith || is_int16_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_INT16_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT16_VAR, right_idx, 0);
+                if(is_int16_arith) {
+                    static const OpCode int16_arith_map[] = {
+                        [OP_ADD] = OPC_INT16_ADD, [OP_SUB] = OPC_INT16_SUB, [OP_MUL] = OPC_INT16_MUL,
+                        [OP_DIV] = OPC_INT16_DIV, [OP_MOD] = OPC_INT16_MOD,
+                    };
+                    emit(c, int16_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode int16_cmp_map[] = {
+                        [OP_GT] = OPC_INT16_GT, [OP_LT] = OPC_INT16_LT, [OP_GE] = OPC_INT16_GE,
+                        [OP_LE] = OPC_INT16_LE, [OP_EQ] = OPC_INT16_EQ, [OP_NE] = OPC_INT16_NE,
+                    };
+                    emit(c, int16_cmp_map[bop], 0, 0);
+                }
+            }
+            /* int32 类型专用算术/比较运算指令 */
+            else if(left_is_int32 && right_is_int32 && (is_int32_arith || is_int32_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_INT32_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT32_VAR, right_idx, 0);
+                if(is_int32_arith) {
+                    static const OpCode int32_arith_map[] = {
+                        [OP_ADD] = OPC_INT32_ADD, [OP_SUB] = OPC_INT32_SUB, [OP_MUL] = OPC_INT32_MUL,
+                        [OP_DIV] = OPC_INT32_DIV, [OP_MOD] = OPC_INT32_MOD,
+                    };
+                    emit(c, int32_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode int32_cmp_map[] = {
+                        [OP_GT] = OPC_INT32_GT, [OP_LT] = OPC_INT32_LT, [OP_GE] = OPC_INT32_GE,
+                        [OP_LE] = OPC_INT32_LE, [OP_EQ] = OPC_INT32_EQ, [OP_NE] = OPC_INT32_NE,
+                    };
+                    emit(c, int32_cmp_map[bop], 0, 0);
+                }
+            }
+            /* int64 类型专用算术/比较运算指令 */
+            else if(left_is_int64 && right_is_int64 && (is_int64_arith || is_int64_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
+                if(is_int64_arith) {
+                    static const OpCode int64_arith_map[] = {
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
+                    };
+                    emit(c, int64_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode int64_cmp_map[] = {
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
+                    };
+                    emit(c, int64_cmp_map[bop], 0, 0);
                 }
             }
             /* 混合类型算术运算（类型提升，零包装零Value开销）
@@ -3914,6 +3978,22 @@ static void c_stmt(Ctx* c, AstNode* node)
                         /* long double 类型算术运算结果：直接生成 OPC_PRINT_LONG_DOUBLE */
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_INT8) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_INT8, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_INT16) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_INT16, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_INT) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_INT32, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_INT64) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     }
                 }

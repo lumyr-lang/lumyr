@@ -1,5 +1,7 @@
 // 字节码 VM 执行器
 // 指令语义与 ast_interp.c 对齐（栈帧链变量、调用绑定、return 深拷贝、break/continue 编译期跳转）。
+#include "vm_types.h"
+#include "vm_try_context.h"
 #include "vm.h"
 #include "lumyr_log.h"
 #include "ir_compile.h"
@@ -34,19 +36,6 @@ static _Thread_local int tls_skip_vm_unregister = 0;
 
 /* try/catch 错误处理器栈（VM 侧；C 生成侧用局部 jmp_buf）：动态扩容，无硬上限。
  * 注意 jmp_buf 经 realloc 移动时内容整体拷贝，setjmp 后再 longjmp(vm_jbs[d]) 语义不变。 */
-static _Thread_local jmp_buf* vm_jbs = NULL;
-static _Thread_local jmp_buf** vm_prev = NULL;
-static _Thread_local int vm_depth = 0;
-static _Thread_local int* vm_sp = NULL;
-static _Thread_local int* vm_target = NULL;   /* 每层的 catch 目标（longjmp 后自动变量不可靠） */
-static _Thread_local int* vm_tn = NULL;       /* 每层 TRY 时的调用栈深度（GET_ERR 截断残留） */
-static _Thread_local int* vm_fn = NULL;       /* 每层 TRY 时的 finally 完成栈深度 */
-static _Thread_local int* vm_fin_act = NULL;  /* finally 完成动作：1=JMP 2=RETHROW 3=BREAK 4=CONT 5=RETURN */
-static _Thread_local int* vm_fin_tgt = NULL;
-static _Thread_local int* vm_fin_dep = NULL;  /* FIN_PUSH 时的恢复深度（FINISH act=1/3/4 恢复，防循环内 depth 漂移） */
-static _Thread_local int vm_fin_n = 0;
-static _Thread_local int vm_cap = 0;          /* 错误处理器栈容量 */
-static _Thread_local Value vm_pend_val;   /* 挂起返回的值（PEND_RETURN 存，FINISH act5 恢复） */
 
 /* ========== 类型化专用栈（使用统一栈管理模块 stack_manager） ========== */
 /* 原来的静态变量和栈操作函数已删除，统一使用 stack_manager 模块管理 */
@@ -104,65 +93,10 @@ static _Thread_local Value vm_pend_val;   /* 挂起返回的值（PEND_RETURN �
 
 
 /* ========== 生成器支持 ========== */
-/* 包装生成器类型枚举 */
-typedef enum {
-    WRAP_NONE = 0,       /* 非包装生成器（默认值） */
-    WRAP_MAP = 1,       /* map：转换每个元素 */
-    WRAP_FILTER = 2,    /* filter：过滤元素 */
-    WRAP_SKIP = 3,      /* skip：跳过前 n 个元素 */
-    WRAP_TAKE = 4,      /* take：取前 n 个元素 */
-    WRAP_ENUMERATE = 5, /* enumerate：枚举 [index, value] */
-    WRAP_CHAIN = 6,     /* chain：连接两个生成器 */
-    WRAP_ZIP = 7        /* zip：压缩两个生成器 */
-} WrapType;
 
-/* 生成器对象前向声明 */
-typedef struct GeneratorObject GeneratorObject;
-/* 生成器对象：保存冻结的执行状态 */
-typedef struct GeneratorObject {
-    BytecodeFunc* bf;        /* 函数字节码 */
-    StackFrame* frame;       /* 栈帧（局部变量） */
-    Value* stack;            /* 执行栈 */
-    int sp;                  /* 栈指针 */
-    int pc;                  /* 指令指针 */
-    int max_stack;           /* 最大栈深度 */
-    int finished;            /* 是否执行完毕 */
-    int started;             /* 是否已开始执行 */
-    jmp_buf resume_point;    /* 恢复点（longjmp 用） */
-    Value yield_value;       /* yield 的值 */
-    Value send_value;        /* send() 发送的值（作为 yield 表达式的返回值） */
-    int has_send_value;      /* 是否有 send_value（第一次 next() 没有） */
-    EvalCtx* ctx;            /* 求值上下文 */
-    int saved_depth;         /* 保存的 try 深度 */
-    jmp_buf* saved_gj;       /* 保存的错误跳转点 */
-    int saved_fin;           /* 保存的 finally 深度 */
-    Value* old_gc_stack;     /* 保存的 GC 栈 */
-    int* old_gc_sp;          /* 保存的 GC sp */
-    StackFrame* old_gc_frame; /* 保存的 GC frame */
-    /* try-catch 上下文保存（yield 时保存，恢复时恢复） */
-    int saved_vm_depth;      /* 保存的 try 深度 */
-    jmp_buf* saved_vm_jbs;   /* 保存的 jmp_buf 数组 */
-    jmp_buf** saved_vm_prev;  /* 保存的 jmp_buf* 数组 */
-    int* saved_vm_sp;        /* 保存的 sp 数组 */
-    int* saved_vm_target;    /* 保存的 target 数组 */
-    int* saved_vm_tn;        /* 保存的 tn 数组 */
-    int* saved_vm_fn;        /* 保存的 fn 数组 */
-    int saved_vm_fin_n;      /* 保存的 finally 完成栈深度 */
-    int* saved_vm_fin_act;   /* 保存的 fin_act 数组 */
-    int* saved_vm_fin_tgt;   /* 保存的 fin_tgt 数组 */
-    int* saved_vm_fin_dep;   /* 保存的 fin_dep 数组 */
-    jmp_buf* saved_g_err_jmp; /* 保存的当前错误跳转点 */
-    Value pending_exception;  /* 待抛出的异常（GenThrow() 设置，恢复时抛出） */
-    int has_pending_exception; /* 是否有待抛出的异常 */
-    /* 包装生成器：map/filter/skip/take/enumerate/chain/zip */
-    int is_wrapped;           /* 是否是包装生成器 */
-    int wrap_type;            /* 包装类型：1=map 2=filter 3=skip 4=take 5=enumerate 6=chain 7=zip */
-    GeneratorObject* wrapped_gen; /* 被包装的原始生成器 */
-    RuntimeFunc* wrap_fn;     /* 转换/过滤函数 */
-    int wrap_arg;             /* 额外参数（skip/take 的 n） */
-    GeneratorObject* wrapped_gen2; /* 第二个生成器（chain/zip） */
-    int wrap_index;           /* enumerate 的索引 */
-} GeneratorObject;
+
+
+
 
 /* 当前正在执行的生成器（NULL = 普通执行） */
 static _Thread_local GeneratorObject* s_current_gen = NULL;
@@ -240,213 +174,74 @@ static void mark_generator_refs(GeneratorObject* gen, int depth) {
 }
 
 /* GC 标记回调：遍历所有暂停生成器，标记其 stack 和 frame 中的 Value */
-void lumyr_gc_mark_paused_generators(void) {
-    for(int i = 0; i < s_paused_gen_cnt; i++) {
-        GeneratorObject* gen = s_paused_gens[i];
-        mark_generator_refs(gen, 0);
-    }
-}
 
-/* GC 标记回调：标记单个生成器 Value 持有的所有引用。
- * gc_mark 遇到 VAL_GENERATOR 时调用此函数，确保生成器无论在栈上、数组中、
- * map 中还是暂停列表中，其持有的引用（wrapped_gen/wrap_fn/stack/frame 等）
- * 都能被正确标记，避免 GC 错误回收导致堆破坏。 */
-void lumyr_gc_mark_generator(Value v) {
-    if(v.type != VAL_GENERATOR || !v.v.generator) return;
-    GeneratorObject* gen = (GeneratorObject*)v.v.generator;
-    mark_generator_refs(gen, 0);
-}
 
-static void vm_ensure(int need)
-{
-    if(need <= vm_cap) return;
-    int nc = vm_cap > 0 ? vm_cap * 2 : 64;
-    jmp_buf* nj = (jmp_buf*)realloc(vm_jbs, (size_t)nc * sizeof(jmp_buf));
-    if(!nj) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_jbs = nj;
-    jmp_buf** np = (jmp_buf**)realloc(vm_prev, (size_t)nc * sizeof(jmp_buf*));
-    if(!np) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_prev = np;
-    int* na = (int*)realloc(vm_sp, (size_t)nc * sizeof(int));
-    if(!na) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_sp = na;
-    int* nt = (int*)realloc(vm_target, (size_t)nc * sizeof(int));
-    if(!nt) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_target = nt;
-    int* nn = (int*)realloc(vm_tn, (size_t)nc * sizeof(int));
-    if(!nn) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_tn = nn;
-    int* nf = (int*)realloc(vm_fn, (size_t)nc * sizeof(int));
-    if(!nf) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_fn = nf;
-    int* nfa = (int*)realloc(vm_fin_act, (size_t)nc * sizeof(int));
-    if(!nfa) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_fin_act = nfa;
-    int* nft = (int*)realloc(vm_fin_tgt, (size_t)nc * sizeof(int));
-    if(!nft) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_fin_tgt = nft;
-    int* nfd = (int*)realloc(vm_fin_dep, (size_t)nc * sizeof(int));
-    if(!nfd) { LOG_ERROR("vm: try 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_fin_dep = nfd;
-    vm_cap = nc;
-}
+
+
 
 /* ========== 生成器实现 ========== */
 
-/* 创建生成器对象（不开始执行） */
-static GeneratorObject* generator_new(BytecodeFunc* bf, StackFrame* parent_frame,
-                                        int arg_cnt, const Value* args)
-{
-    GeneratorObject* gen = (GeneratorObject*)calloc(1, sizeof(GeneratorObject));
-    if(!gen) { LOG_ERROR("generator_new: 内存不足\n"); exit(EXIT_FAILURE); }
-    gen->bf = bf;
-    /* 生成器使用独立栈帧，不持有父栈帧指针（避免父栈帧被释放后的 UAF）。
-       生成器通过全局符号表访问全局变量和函数；局部变量在生成器自己的栈帧中。 */
-    gen->frame = stackframe_new(NULL);
-    (void)parent_frame;  /* 保留参数兼容性，实际不使用 */
-    gen->max_stack = bc_analyze_stack(bf, NULL, 0);
-    if(gen->max_stack < 0) gen->max_stack = 64;
-    gen->stack = (Value*)malloc(sizeof(Value) * (gen->max_stack + 64));
-    gen->sp = 0;
-    gen->pc = 0;
-    gen->finished = 0;
-    gen->started = 0;
-    gen->ctx = NULL;
-    /* 绑定参数到栈帧 */
-    for(int i = 0; i < bf->param_cnt && i < arg_cnt; i++) {
-        if(bf->params[i]) stackframe_bind(gen->frame, bf->params[i], args[i]);
-    }
-    return gen;
-}
-
 /* 前向声明 */
-static void generator_free_try_context(GeneratorObject* gen);
-
-/* 销毁生成器对象 */
-static void generator_free(GeneratorObject* gen)
-{
-    if(!gen) return;
-    paused_gen_remove(gen);
-    generator_free_try_context(gen);
-    if(gen->stack) free(gen->stack);
-    if(gen->frame) stackframe_destroy(gen->frame);
-    free(gen);
-}
-
-/* 生成器执行函数：恢复状态，执行到下一个 yield 或 return
- * 返回 1 = 正常 yield，结果在 *result；返回 0 = 生成器结束 */
-/* vm_run 前向声明（generator_resume 需要调用） */
 static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx);
-
-/* 生成器执行函数：恢复状态，调用 vm_run 执行到下一个 yield 或 return
- * 返回 1 = 正常 yield，结果在 *result；返回 0 = 生成器结束 */
-/* 保存当前 try-catch 上下文到生成器对象（yield 时调用） */
-static void generator_save_try_context(GeneratorObject* gen)
-{
-    int depth = vm_depth;
-    int fin_n = vm_fin_n;
-    gen->saved_vm_depth = depth;
-    gen->saved_vm_fin_n = fin_n;
-    gen->saved_g_err_jmp = g_err_jmp;
-
-    /* 先释放旧数组，避免多次 yield 导致内存泄漏 */
-    generator_free_try_context(gen);
-
-    /* 分配内存保存数组 */
-    if(depth > 0) {
-        gen->saved_vm_jbs = (jmp_buf*)malloc((size_t)depth * sizeof(jmp_buf));
-        gen->saved_vm_prev = (jmp_buf**)malloc((size_t)depth * sizeof(jmp_buf*));
-        gen->saved_vm_sp = (int*)malloc((size_t)depth * sizeof(int));
-        gen->saved_vm_target = (int*)malloc((size_t)depth * sizeof(int));
-        gen->saved_vm_tn = (int*)malloc((size_t)depth * sizeof(int));
-        gen->saved_vm_fn = (int*)malloc((size_t)depth * sizeof(int));
-        memcpy(gen->saved_vm_jbs, vm_jbs, (size_t)depth * sizeof(jmp_buf));
-        memcpy(gen->saved_vm_prev, vm_prev, (size_t)depth * sizeof(jmp_buf*));
-        memcpy(gen->saved_vm_sp, vm_sp, (size_t)depth * sizeof(int));
-        memcpy(gen->saved_vm_target, vm_target, (size_t)depth * sizeof(int));
-        memcpy(gen->saved_vm_tn, vm_tn, (size_t)depth * sizeof(int));
-        memcpy(gen->saved_vm_fn, vm_fn, (size_t)depth * sizeof(int));
-    } else {
-        gen->saved_vm_jbs = NULL;
-        gen->saved_vm_prev = NULL;
-        gen->saved_vm_sp = NULL;
-        gen->saved_vm_target = NULL;
-        gen->saved_vm_tn = NULL;
-        gen->saved_vm_fn = NULL;
-    }
-
-    if(fin_n > 0) {
-        gen->saved_vm_fin_act = (int*)malloc((size_t)fin_n * sizeof(int));
-        gen->saved_vm_fin_tgt = (int*)malloc((size_t)fin_n * sizeof(int));
-        gen->saved_vm_fin_dep = (int*)malloc((size_t)fin_n * sizeof(int));
-        memcpy(gen->saved_vm_fin_act, vm_fin_act, (size_t)fin_n * sizeof(int));
-        memcpy(gen->saved_vm_fin_tgt, vm_fin_tgt, (size_t)fin_n * sizeof(int));
-        memcpy(gen->saved_vm_fin_dep, vm_fin_dep, (size_t)fin_n * sizeof(int));
-    } else {
-        gen->saved_vm_fin_act = NULL;
-        gen->saved_vm_fin_tgt = NULL;
-        gen->saved_vm_fin_dep = NULL;
-    }
-}
-
-/* 从生成器对象恢复 try-catch 上下文（恢复执行时调用） */
-static void generator_restore_try_context(GeneratorObject* gen)
-{
-    int depth = gen->saved_vm_depth;
-    int fin_n = gen->saved_vm_fin_n;
-
-    /* 确保数组容量足够 */
-    vm_ensure(depth > fin_n ? depth : fin_n);
-
-    vm_depth = depth;
-    vm_fin_n = fin_n;
-    /* g_err_jmp/vm_jbs/vm_prev 不恢复：它们指向 yield 时的旧 C 栈帧，
-     * 生成器恢复时旧栈帧已销毁，longjmp 到旧缓冲区是未定义行为（0xC0000005）。
-     * 这些指针/缓冲区在 vm_run 中通过重新执行 setjmp 在当前栈帧重建。
-     * 这里只恢复不依赖 C 栈帧的逻辑状态（vm_sp/vm_target/vm_tn/vm_fn）。 */
-
-    if(depth > 0) {
-        memcpy(vm_sp, gen->saved_vm_sp, (size_t)depth * sizeof(int));
-        memcpy(vm_target, gen->saved_vm_target, (size_t)depth * sizeof(int));
-        memcpy(vm_tn, gen->saved_vm_tn, (size_t)depth * sizeof(int));
-        memcpy(vm_fn, gen->saved_vm_fn, (size_t)depth * sizeof(int));
-    }
-
-    if(fin_n > 0) {
-        memcpy(vm_fin_act, gen->saved_vm_fin_act, (size_t)fin_n * sizeof(int));
-        memcpy(vm_fin_tgt, gen->saved_vm_fin_tgt, (size_t)fin_n * sizeof(int));
-        memcpy(vm_fin_dep, gen->saved_vm_fin_dep, (size_t)fin_n * sizeof(int));
-    }
-}
-
-/* 释放生成器保存的 try-catch 上下文 */
-static void generator_free_try_context(GeneratorObject* gen)
-{
-    free(gen->saved_vm_jbs);
-    free(gen->saved_vm_prev);
-    free(gen->saved_vm_sp);
-    free(gen->saved_vm_target);
-    free(gen->saved_vm_tn);
-    free(gen->saved_vm_fn);
-    free(gen->saved_vm_fin_act);
-    free(gen->saved_vm_fin_tgt);
-    free(gen->saved_vm_fin_dep);
-    gen->saved_vm_jbs = NULL;
-    gen->saved_vm_prev = NULL;
-    gen->saved_vm_sp = NULL;
-    gen->saved_vm_target = NULL;
-    gen->saved_vm_tn = NULL;
-    gen->saved_vm_fn = NULL;
-    gen->saved_vm_fin_act = NULL;
-    gen->saved_vm_fin_tgt = NULL;
-    gen->saved_vm_fin_dep = NULL;
-}
-
-/* 前向声明 */
-static int generator_resume(GeneratorObject* gen, Value* result, Value* send_val, StackFrame* frame, EvalCtx* ctx);
 static Value vm_call_rf(RuntimeFunc* rf, Value* args, int argc, StackFrame* parent, EvalCtx* ctx);
+static void generator_free_try_context(GeneratorObject* gen);
+static int wrapped_gen_next(GeneratorObject* gen, Value* result, StackFrame* frame, EvalCtx* ctx);
+static int generator_resume(GeneratorObject* gen, Value* result, Value* send_val, StackFrame* frame, EvalCtx* ctx);
 
-/* 包装生成器的 next() 处理 */
+static void runtime_undefined(const char* what, const char* name)
+{
+    LOG_ERROR("Runtime Error: 未定义%s: %s\n", what, name);
+    exit(EXIT_FAILURE);
+}
+
+static int generator_resume(GeneratorObject* gen, Value* result, Value* send_val, StackFrame* frame, EvalCtx* ctx)
+{
+    if(gen->finished) { *result = val_none(); return 0; }
+    /* 包装生成器：直接调用包装逻辑，不执行字节码 */
+    if(gen->is_wrapped) {
+        /* 包装生成器恢复时从暂停 GC 根列表移除，返回值（暂停）时重新添加。
+         * 包装生成器不是通过 OPC_YIELD 暂停，而是 wrapped_gen_next 返回值暂停，
+         * 因此需要在这里单独管理 GC 根注册，否则内部持有的 GC 对象会被错误回收。 */
+        paused_gen_remove(gen);
+        int has = wrapped_gen_next(gen, result, frame, ctx);
+        if(has) paused_gen_add(gen);
+        return has;
+    }
+
+    /* 设置 send_value（如果有） */
+    if(send_val) {
+        gen->send_value = *send_val;
+        gen->has_send_value = 1;
+    } else {
+        gen->has_send_value = 0;
+    }
+
+    /* setjmp 恢复点：vm_run 中遇到 OPC_YIELD 时 longjmp 到这里 */
+    if(setjmp(gen->resume_point) == 0) {
+        /* 第一次进入或从 next 恢复：调用 vm_run 执行字节码 */
+        s_current_gen = gen;
+        paused_gen_remove(gen);  /* 恢复执行前从暂停 GC 根列表移除（执行期间 stack/frame 是当前 VM 根） */
+        EvalCtx ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        gen->ctx = &ctx;
+        Value ret = vm_run(gen->bf, gen->frame, &ctx);
+        /* vm_run 正常返回：生成器结束，释放 try-catch 上下文 */
+        s_current_gen = NULL;
+        gen->finished = 1;
+        generator_free_try_context(gen);
+        paused_gen_remove(gen);  /* 生成器结束时从暂停 GC 根列表移除 */
+        *result = ret;
+        return 0;
+    } else {
+        /* 从 yield longjmp 回来：返回 yield 的值。
+         * 注意：不调用 paused_gen_remove(gen)，生成器保持在暂停 GC 根列表中，
+         * 因为它仍然持有 GC 对象引用（stack/frame 中的 Value），直到下次恢复或被释放。 */
+        s_current_gen = NULL;
+        *result = s_gen_yield_result;
+        return 1;
+    }
+}
+
 static int wrapped_gen_next(GeneratorObject* gen, Value* result, StackFrame* frame, EvalCtx* ctx)
 {
     if(gen->finished) { *result = val_none(); return 0; }
@@ -534,71 +329,141 @@ static int wrapped_gen_next(GeneratorObject* gen, Value* result, StackFrame* fra
     return 0;
 }
 
-static int generator_resume(GeneratorObject* gen, Value* result, Value* send_val, StackFrame* frame, EvalCtx* ctx)
+static void generator_free_try_context(GeneratorObject* gen)
 {
-    if(gen->finished) { *result = val_none(); return 0; }
-    /* 包装生成器：直接调用包装逻辑，不执行字节码 */
-    if(gen->is_wrapped) {
-        /* 包装生成器恢复时从暂停 GC 根列表移除，返回值（暂停）时重新添加。
-         * 包装生成器不是通过 OPC_YIELD 暂停，而是 wrapped_gen_next 返回值暂停，
-         * 因此需要在这里单独管理 GC 根注册，否则内部持有的 GC 对象会被错误回收。 */
-        paused_gen_remove(gen);
-        int has = wrapped_gen_next(gen, result, frame, ctx);
-        if(has) paused_gen_add(gen);
-        return has;
+    free(gen->saved_vm_jbs);
+    free(gen->saved_vm_prev);
+    free(gen->saved_vm_sp);
+    free(gen->saved_vm_target);
+    free(gen->saved_vm_tn);
+    free(gen->saved_vm_fn);
+    free(gen->saved_vm_fin_act);
+    free(gen->saved_vm_fin_tgt);
+    free(gen->saved_vm_fin_dep);
+    gen->saved_vm_jbs = NULL;
+    gen->saved_vm_prev = NULL;
+    gen->saved_vm_sp = NULL;
+    gen->saved_vm_target = NULL;
+    gen->saved_vm_tn = NULL;
+    gen->saved_vm_fn = NULL;
+    gen->saved_vm_fin_act = NULL;
+    gen->saved_vm_fin_tgt = NULL;
+    gen->saved_vm_fin_dep = NULL;
+}
+
+static void generator_restore_try_context(GeneratorObject* gen)
+{
+    int depth = gen->saved_vm_depth;
+    int fin_n = gen->saved_vm_fin_n;
+
+    /* 确保数组容量足够 */
+    vm_ensure(depth > fin_n ? depth : fin_n);
+
+    vm_depth = depth;
+    vm_fin_n = fin_n;
+    /* g_err_jmp/vm_jbs/vm_prev 不恢复：它们指向 yield 时的旧 C 栈帧，
+     * 生成器恢复时旧栈帧已销毁，longjmp 到旧缓冲区是未定义行为（0xC0000005）。
+     * 这些指针/缓冲区在 vm_run 中通过重新执行 setjmp 在当前栈帧重建。
+     * 这里只恢复不依赖 C 栈帧的逻辑状态（vm_sp/vm_target/vm_tn/vm_fn）。 */
+
+    if(depth > 0) {
+        memcpy(vm_sp, gen->saved_vm_sp, (size_t)depth * sizeof(int));
+        memcpy(vm_target, gen->saved_vm_target, (size_t)depth * sizeof(int));
+        memcpy(vm_tn, gen->saved_vm_tn, (size_t)depth * sizeof(int));
+        memcpy(vm_fn, gen->saved_vm_fn, (size_t)depth * sizeof(int));
     }
 
-    /* 设置 send_value（如果有） */
-    if(send_val) {
-        gen->send_value = *send_val;
-        gen->has_send_value = 1;
-    } else {
-        gen->has_send_value = 0;
-    }
-
-    /* setjmp 恢复点：vm_run 中遇到 OPC_YIELD 时 longjmp 到这里 */
-    if(setjmp(gen->resume_point) == 0) {
-        /* 第一次进入或从 next 恢复：调用 vm_run 执行字节码 */
-        s_current_gen = gen;
-        paused_gen_remove(gen);  /* 恢复执行前从暂停 GC 根列表移除（执行期间 stack/frame 是当前 VM 根） */
-        EvalCtx ctx;
-        memset(&ctx, 0, sizeof(ctx));
-        gen->ctx = &ctx;
-        Value ret = vm_run(gen->bf, gen->frame, &ctx);
-        /* vm_run 正常返回：生成器结束，释放 try-catch 上下文 */
-        s_current_gen = NULL;
-        gen->finished = 1;
-        generator_free_try_context(gen);
-        paused_gen_remove(gen);  /* 生成器结束时从暂停 GC 根列表移除 */
-        *result = ret;
-        return 0;
-    } else {
-        /* 从 yield longjmp 回来：返回 yield 的值。
-         * 注意：不调用 paused_gen_remove(gen)，生成器保持在暂停 GC 根列表中，
-         * 因为它仍然持有 GC 对象引用（stack/frame 中的 Value），直到下次恢复或被释放。 */
-        s_current_gen = NULL;
-        *result = s_gen_yield_result;
-        return 1;
+    if(fin_n > 0) {
+        memcpy(vm_fin_act, gen->saved_vm_fin_act, (size_t)fin_n * sizeof(int));
+        memcpy(vm_fin_tgt, gen->saved_vm_fin_tgt, (size_t)fin_n * sizeof(int));
+        memcpy(vm_fin_dep, gen->saved_vm_fin_dep, (size_t)fin_n * sizeof(int));
     }
 }
 
-
-// 未定义变量/函数：统一报错退出（与 ast_interp.c 输出一致）
-static void runtime_undefined(const char* what, const char* name)
+static void generator_save_try_context(GeneratorObject* gen)
 {
-    LOG_ERROR("Runtime Error: 未定义%s: %s\n", what, name);
-    exit(EXIT_FAILURE);
+    int depth = vm_depth;
+    int fin_n = vm_fin_n;
+    gen->saved_vm_depth = depth;
+    gen->saved_vm_fin_n = fin_n;
+    gen->saved_g_err_jmp = g_err_jmp;
+
+    /* 先释放旧数组，避免多次 yield 导致内存泄漏 */
+    generator_free_try_context(gen);
+
+    /* 分配内存保存数组 */
+    if(depth > 0) {
+        gen->saved_vm_jbs = (jmp_buf*)malloc((size_t)depth * sizeof(jmp_buf));
+        gen->saved_vm_prev = (jmp_buf**)malloc((size_t)depth * sizeof(jmp_buf*));
+        gen->saved_vm_sp = (int*)malloc((size_t)depth * sizeof(int));
+        gen->saved_vm_target = (int*)malloc((size_t)depth * sizeof(int));
+        gen->saved_vm_tn = (int*)malloc((size_t)depth * sizeof(int));
+        gen->saved_vm_fn = (int*)malloc((size_t)depth * sizeof(int));
+        memcpy(gen->saved_vm_jbs, vm_jbs, (size_t)depth * sizeof(jmp_buf));
+        memcpy(gen->saved_vm_prev, vm_prev, (size_t)depth * sizeof(jmp_buf*));
+        memcpy(gen->saved_vm_sp, vm_sp, (size_t)depth * sizeof(int));
+        memcpy(gen->saved_vm_target, vm_target, (size_t)depth * sizeof(int));
+        memcpy(gen->saved_vm_tn, vm_tn, (size_t)depth * sizeof(int));
+        memcpy(gen->saved_vm_fn, vm_fn, (size_t)depth * sizeof(int));
+    } else {
+        gen->saved_vm_jbs = NULL;
+        gen->saved_vm_prev = NULL;
+        gen->saved_vm_sp = NULL;
+        gen->saved_vm_target = NULL;
+        gen->saved_vm_tn = NULL;
+        gen->saved_vm_fn = NULL;
+    }
+
+    if(fin_n > 0) {
+        gen->saved_vm_fin_act = (int*)malloc((size_t)fin_n * sizeof(int));
+        gen->saved_vm_fin_tgt = (int*)malloc((size_t)fin_n * sizeof(int));
+        gen->saved_vm_fin_dep = (int*)malloc((size_t)fin_n * sizeof(int));
+        memcpy(gen->saved_vm_fin_act, vm_fin_act, (size_t)fin_n * sizeof(int));
+        memcpy(gen->saved_vm_fin_tgt, vm_fin_tgt, (size_t)fin_n * sizeof(int));
+        memcpy(gen->saved_vm_fin_dep, vm_fin_dep, (size_t)fin_n * sizeof(int));
+    } else {
+        gen->saved_vm_fin_act = NULL;
+        gen->saved_vm_fin_tgt = NULL;
+        gen->saved_vm_fin_dep = NULL;
+    }
 }
 
-static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx);
+static void generator_free(GeneratorObject* gen)
+{
+    if(!gen) return;
+    paused_gen_remove(gen);
+    generator_free_try_context(gen);
+    if(gen->stack) free(gen->stack);
+    if(gen->frame) stackframe_destroy(gen->frame);
+    free(gen);
+}
+
+static GeneratorObject* generator_new(BytecodeFunc* bf, StackFrame* parent_frame,
+                                        int arg_cnt, const Value* args)
+{
+    GeneratorObject* gen = (GeneratorObject*)calloc(1, sizeof(GeneratorObject));
+    if(!gen) { LOG_ERROR("generator_new: 内存不足\n"); exit(EXIT_FAILURE); }
+    gen->bf = bf;
+    /* 生成器使用独立栈帧，不持有父栈帧指针（避免父栈帧被释放后的 UAF）。
+       生成器通过全局符号表访问全局变量和函数；局部变量在生成器自己的栈帧中。 */
+    gen->frame = stackframe_new(NULL);
+    (void)parent_frame;  /* 保留参数兼容性，实际不使用 */
+    gen->max_stack = bc_analyze_stack(bf, NULL, 0);
+    if(gen->max_stack < 0) gen->max_stack = 64;
+    gen->stack = (Value*)malloc(sizeof(Value) * (gen->max_stack + 64));
+    gen->sp = 0;
+    gen->pc = 0;
+    gen->finished = 0;
+    gen->started = 0;
+    gen->ctx = NULL;
+    /* 绑定参数到栈帧 */
+    for(int i = 0; i < bf->param_cnt && i < arg_cnt; i++) {
+        if(bf->params[i]) stackframe_bind(gen->frame, bf->params[i], args[i]);
+    }
+    return gen;
+}
 
 
-// 线程参数（VM 通道）：函数 + 全局帧。全局变量存 vm_run_main 的顶层帧，
-// 线程函数经 parent 链访问；data 由线程体消费后 free。
-typedef struct {
-    RuntimeFunc* rf;
-    StackFrame* global_frame;
-} VmThreadArg;
 
 /* 当前线程的全局帧（主线程 = vm_run_main 的 top；线程体启动时从 data 继承并写入本线程 TLS） */
 static _Thread_local StackFrame* s_global_frame = NULL;
@@ -4895,6 +4760,282 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_LONG_DOUBLE_NE: {
                 long double b = LONG_DOUBLE_POP();
                 long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            /* ===== int8 类型专用算术/比较运算指令 ===== */
+            case OPC_INT8_ADD: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                INT8_PUSH(a + b);
+                break;
+            }
+            case OPC_INT8_SUB: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                INT8_PUSH(a - b);
+                break;
+            }
+            case OPC_INT8_MUL: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                INT8_PUSH(a * b);
+                break;
+            }
+            case OPC_INT8_DIV: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                if(b == 0) runtime_error("division by zero: int8 division");
+                INT8_PUSH(a / b);
+                break;
+            }
+            case OPC_INT8_MOD: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                if(b == 0) runtime_error("division by zero: int8 modulo");
+                INT8_PUSH(a % b);
+                break;
+            }
+            case OPC_INT8_GT: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_INT8_LT: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_INT8_GE: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_INT8_LE: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_INT8_EQ: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_INT8_NE: {
+                int8_t b = INT8_POP();
+                int8_t a = INT8_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            /* ===== int16 类型专用算术/比较运算指令 ===== */
+            case OPC_INT16_ADD: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                INT16_PUSH(a + b);
+                break;
+            }
+            case OPC_INT16_SUB: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                INT16_PUSH(a - b);
+                break;
+            }
+            case OPC_INT16_MUL: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                INT16_PUSH(a * b);
+                break;
+            }
+            case OPC_INT16_DIV: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                if(b == 0) runtime_error("division by zero: int16 division");
+                INT16_PUSH(a / b);
+                break;
+            }
+            case OPC_INT16_MOD: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                if(b == 0) runtime_error("division by zero: int16 modulo");
+                INT16_PUSH(a % b);
+                break;
+            }
+            case OPC_INT16_GT: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_INT16_LT: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_INT16_GE: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_INT16_LE: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_INT16_EQ: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_INT16_NE: {
+                int16_t b = INT16_POP();
+                int16_t a = INT16_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            /* ===== int32 类型专用算术/比较运算指令 ===== */
+            case OPC_INT32_ADD: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                INT32_PUSH(a + b);
+                break;
+            }
+            case OPC_INT32_SUB: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                INT32_PUSH(a - b);
+                break;
+            }
+            case OPC_INT32_MUL: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                INT32_PUSH(a * b);
+                break;
+            }
+            case OPC_INT32_DIV: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                if(b == 0) runtime_error("division by zero: int32 division");
+                INT32_PUSH(a / b);
+                break;
+            }
+            case OPC_INT32_MOD: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                if(b == 0) runtime_error("division by zero: int32 modulo");
+                INT32_PUSH(a % b);
+                break;
+            }
+            case OPC_INT32_GT: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_INT32_LT: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_INT32_GE: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_INT32_LE: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_INT32_EQ: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_INT32_NE: {
+                int32_t b = INT32_POP();
+                int32_t a = INT32_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            /* ===== int64 类型专用算术/比较运算指令 ===== */
+            case OPC_INT64_ADD: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                INT64_PUSH(a + b);
+                break;
+            }
+            case OPC_INT64_SUB: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                INT64_PUSH(a - b);
+                break;
+            }
+            case OPC_INT64_MUL: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                INT64_PUSH(a * b);
+                break;
+            }
+            case OPC_INT64_DIV: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                if(b == 0) runtime_error("division by zero: int64 division");
+                INT64_PUSH(a / b);
+                break;
+            }
+            case OPC_INT64_MOD: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                if(b == 0) runtime_error("division by zero: int64 modulo");
+                INT64_PUSH(a % b);
+                break;
+            }
+            case OPC_INT64_GT: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_INT64_LT: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_INT64_GE: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_INT64_LE: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_INT64_EQ: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_INT64_NE: {
+                int64_t b = INT64_POP();
+                int64_t a = INT64_POP();
                 stack[sp++] = lumyr_make_bool(a != b);
                 break;
             }

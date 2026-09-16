@@ -404,6 +404,34 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LONG_DOUBLE_EQ:
         case OPC_LONG_DOUBLE_NE:
             return 1;  /* 从专用栈弹出2个，比较结果 bool 压入 Value 栈 */
+        /* ===== int8 类型专用算术/比较运算指令 ===== */
+        case OPC_INT8_ADD: case OPC_INT8_SUB: case OPC_INT8_MUL:
+        case OPC_INT8_DIV: case OPC_INT8_MOD:
+            return 0;  /* 弹2个 int8，压1个 int8（专用栈），Value栈深度不变 */
+        case OPC_INT8_GT: case OPC_INT8_LT: case OPC_INT8_GE:
+        case OPC_INT8_LE: case OPC_INT8_EQ: case OPC_INT8_NE:
+            return 1;  /* 弹2个 int8，压1个 bool 到 Value 栈 */
+        /* ===== int16 类型专用算术/比较运算指令 ===== */
+        case OPC_INT16_ADD: case OPC_INT16_SUB: case OPC_INT16_MUL:
+        case OPC_INT16_DIV: case OPC_INT16_MOD:
+            return 0;
+        case OPC_INT16_GT: case OPC_INT16_LT: case OPC_INT16_GE:
+        case OPC_INT16_LE: case OPC_INT16_EQ: case OPC_INT16_NE:
+            return 1;
+        /* ===== int32 类型专用算术/比较运算指令 ===== */
+        case OPC_INT32_ADD: case OPC_INT32_SUB: case OPC_INT32_MUL:
+        case OPC_INT32_DIV: case OPC_INT32_MOD:
+            return 0;
+        case OPC_INT32_GT: case OPC_INT32_LT: case OPC_INT32_GE:
+        case OPC_INT32_LE: case OPC_INT32_EQ: case OPC_INT32_NE:
+            return 1;
+        /* ===== int64 类型专用算术/比较运算指令 ===== */
+        case OPC_INT64_ADD: case OPC_INT64_SUB: case OPC_INT64_MUL:
+        case OPC_INT64_DIV: case OPC_INT64_MOD:
+            return 0;
+        case OPC_INT64_GT: case OPC_INT64_LT: case OPC_INT64_GE:
+        case OPC_INT64_LE: case OPC_INT64_EQ: case OPC_INT64_NE:
+            return 1;
         case OPC_TO_BOOL:
         case OPC_JMP:
         case OPC_RETURN_NIL:
@@ -815,6 +843,54 @@ static const char* opc_name(OpCode op)
         case OPC_LONG_DOUBLE_LE: return "LONG_DOUBLE_LE";
         case OPC_LONG_DOUBLE_EQ: return "LONG_DOUBLE_EQ";
         case OPC_LONG_DOUBLE_NE: return "LONG_DOUBLE_NE";
+        /* ===== int8 类型专用算术/比较运算指令 ===== */
+        case OPC_INT8_ADD: return "INT8_ADD";
+        case OPC_INT8_SUB: return "INT8_SUB";
+        case OPC_INT8_MUL: return "INT8_MUL";
+        case OPC_INT8_DIV: return "INT8_DIV";
+        case OPC_INT8_MOD: return "INT8_MOD";
+        case OPC_INT8_GT: return "INT8_GT";
+        case OPC_INT8_LT: return "INT8_LT";
+        case OPC_INT8_GE: return "INT8_GE";
+        case OPC_INT8_LE: return "INT8_LE";
+        case OPC_INT8_EQ: return "INT8_EQ";
+        case OPC_INT8_NE: return "INT8_NE";
+        /* ===== int16 类型专用算术/比较运算指令 ===== */
+        case OPC_INT16_ADD: return "INT16_ADD";
+        case OPC_INT16_SUB: return "INT16_SUB";
+        case OPC_INT16_MUL: return "INT16_MUL";
+        case OPC_INT16_DIV: return "INT16_DIV";
+        case OPC_INT16_MOD: return "INT16_MOD";
+        case OPC_INT16_GT: return "INT16_GT";
+        case OPC_INT16_LT: return "INT16_LT";
+        case OPC_INT16_GE: return "INT16_GE";
+        case OPC_INT16_LE: return "INT16_LE";
+        case OPC_INT16_EQ: return "INT16_EQ";
+        case OPC_INT16_NE: return "INT16_NE";
+        /* ===== int32 类型专用算术/比较运算指令 ===== */
+        case OPC_INT32_ADD: return "INT32_ADD";
+        case OPC_INT32_SUB: return "INT32_SUB";
+        case OPC_INT32_MUL: return "INT32_MUL";
+        case OPC_INT32_DIV: return "INT32_DIV";
+        case OPC_INT32_MOD: return "INT32_MOD";
+        case OPC_INT32_GT: return "INT32_GT";
+        case OPC_INT32_LT: return "INT32_LT";
+        case OPC_INT32_GE: return "INT32_GE";
+        case OPC_INT32_LE: return "INT32_LE";
+        case OPC_INT32_EQ: return "INT32_EQ";
+        case OPC_INT32_NE: return "INT32_NE";
+        /* ===== int64 类型专用算术/比较运算指令 ===== */
+        case OPC_INT64_ADD: return "INT64_ADD";
+        case OPC_INT64_SUB: return "INT64_SUB";
+        case OPC_INT64_MUL: return "INT64_MUL";
+        case OPC_INT64_DIV: return "INT64_DIV";
+        case OPC_INT64_MOD: return "INT64_MOD";
+        case OPC_INT64_GT: return "INT64_GT";
+        case OPC_INT64_LT: return "INT64_LT";
+        case OPC_INT64_GE: return "INT64_GE";
+        case OPC_INT64_LE: return "INT64_LE";
+        case OPC_INT64_EQ: return "INT64_EQ";
+        case OPC_INT64_NE: return "INT64_NE";
         /* 跳转指令 */
         case OPC_JMP_IF_NULL: return "JMP_IF_NULL";
     }

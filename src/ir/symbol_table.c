@@ -12,21 +12,21 @@
 #define BLACK 1
 
 /* 红黑树节点 */
-typedef struct RBNode {
+typedef struct SymbolRBNode {
     char* file_name;
     char* scope;
     char* name;
     SymbolEntry* entry;
     int color;
-    struct RBNode* left;
-    struct RBNode* right;
-    struct RBNode* parent;
-} RBNode;
+    struct SymbolRBNode* left;
+    struct SymbolRBNode* right;
+    struct SymbolRBNode* parent;
+} SymbolRBNode;
 
 /* 符号表结构 */
 struct SymbolTable {
-    RBNode* root;
-    RBNode* nil;
+    SymbolRBNode* root;
+    SymbolRBNode* nil;
     size_t count;
 };
 
@@ -69,8 +69,8 @@ static int rbtree_compare(const char* file1, const char* scope1, const char* nam
 }
 
 /* 创建哨兵节点 */
-static RBNode* rbtree_create_nil(void) {
-    RBNode* nil = (RBNode*)malloc(sizeof(RBNode));
+static SymbolRBNode* rbtree_create_nil(void) {
+    SymbolRBNode* nil = (SymbolRBNode*)malloc(sizeof(SymbolRBNode));
     nil->color = BLACK;
     nil->left = nil->right = nil->parent = nil;
     nil->file_name = NULL;
@@ -90,8 +90,8 @@ SymbolTable* symbol_table_create(void) {
 }
 
 /* 左旋 */
-static void rbtree_left_rotate(SymbolTable* table, RBNode* x) {
-    RBNode* y = x->right;
+static void rbtree_left_rotate(SymbolTable* table, SymbolRBNode* x) {
+    SymbolRBNode* y = x->right;
     x->right = y->left;
     if(y->left != table->nil) y->left->parent = x;
     y->parent = x->parent;
@@ -107,8 +107,8 @@ static void rbtree_left_rotate(SymbolTable* table, RBNode* x) {
 }
 
 /* 右旋 */
-static void rbtree_right_rotate(SymbolTable* table, RBNode* y) {
-    RBNode* x = y->left;
+static void rbtree_right_rotate(SymbolTable* table, SymbolRBNode* y) {
+    SymbolRBNode* x = y->left;
     y->left = x->right;
     if(x->right != table->nil) x->right->parent = y;
     x->parent = y->parent;
@@ -124,10 +124,10 @@ static void rbtree_right_rotate(SymbolTable* table, RBNode* y) {
 }
 
 /* 插入修复 */
-static void rbtree_insert_fixup(SymbolTable* table, RBNode* z) {
+static void rbtree_insert_fixup(SymbolTable* table, SymbolRBNode* z) {
     while(z->parent->color == RED) {
         if(z->parent == z->parent->parent->left) {
-            RBNode* y = z->parent->parent->right;
+            SymbolRBNode* y = z->parent->parent->right;
             if(y->color == RED) {
                 z->parent->color = BLACK;
                 y->color = BLACK;
@@ -143,7 +143,7 @@ static void rbtree_insert_fixup(SymbolTable* table, RBNode* z) {
                 rbtree_right_rotate(table, z->parent->parent);
             }
         } else {
-            RBNode* y = z->parent->parent->left;
+            SymbolRBNode* y = z->parent->parent->left;
             if(y->color == RED) {
                 z->parent->color = BLACK;
                 y->color = BLACK;
@@ -188,7 +188,7 @@ int symbol_table_add(SymbolTable* table, const char* file_name, const char* scop
     entry->next = NULL;
 
     /* 创建红黑树节点 */
-    RBNode* z = (RBNode*)malloc(sizeof(RBNode));
+    SymbolRBNode* z = (SymbolRBNode*)malloc(sizeof(SymbolRBNode));
     z->file_name = entry->file_name;
     z->scope = entry->scope;
     z->name = entry->name;
@@ -197,8 +197,8 @@ int symbol_table_add(SymbolTable* table, const char* file_name, const char* scop
     z->left = z->right = z->parent = table->nil;
 
     /* 插入 */
-    RBNode* y = table->nil;
-    RBNode* x = table->root;
+    SymbolRBNode* y = table->nil;
+    SymbolRBNode* x = table->root;
     while(x != table->nil) {
         y = x;
         int cmp = rbtree_compare(file_name, scope, name, x->file_name, x->scope, x->name);
@@ -236,7 +236,7 @@ SymbolEntry* symbol_table_find(SymbolTable* table, const char* file_name,
                                 const char* scope, const char* name) {
     if(!table || !name) return NULL;
 
-    RBNode* x = table->root;
+    SymbolRBNode* x = table->root;
     while(x != table->nil) {
         int cmp = rbtree_compare(file_name, scope, name, x->file_name, x->scope, x->name);
         if(cmp == 0) return x->entry;
@@ -250,7 +250,7 @@ SymbolEntry* symbol_table_find(SymbolTable* table, const char* file_name,
 }
 
 /* 按名字查找辅助函数（中序遍历） */
-static SymbolEntry* rbtree_find_by_name_helper(RBNode* node, RBNode* nil, const char* name) {
+static SymbolEntry* rbtree_find_by_name_helper(SymbolRBNode* node, SymbolRBNode* nil, const char* name) {
     if(node == nil) return NULL;
     SymbolEntry* left = rbtree_find_by_name_helper(node->left, nil, name);
     if(left) return left;
@@ -265,7 +265,7 @@ SymbolEntry* symbol_table_find_by_name(SymbolTable* table, const char* name) {
 }
 
 /* 按 scope 和 name 查找辅助函数 */
-static SymbolEntry* rbtree_find_by_scope_name_helper(RBNode* node, RBNode* nil,
+static SymbolEntry* rbtree_find_by_scope_name_helper(SymbolRBNode* node, SymbolRBNode* nil,
                                                        const char* scope, const char* name) {
     if(node == nil) return NULL;
     SymbolEntry* left = rbtree_find_by_scope_name_helper(node->left, nil, scope, name);
@@ -300,7 +300,7 @@ int symbol_table_remove(SymbolTable* table, const char* file_name, const char* s
 }
 
 /* 遍历辅助函数 */
-static void rbtree_foreach_helper(RBNode* node, RBNode* nil,
+static void rbtree_foreach_helper(SymbolRBNode* node, SymbolRBNode* nil,
                                    SymbolTableCallback callback, void* user_data) {
     if(node == nil) return;
     rbtree_foreach_helper(node->left, nil, callback, user_data);
@@ -359,7 +359,7 @@ char* symbol_table_gen_c_name(const char* file_name, const char* scope, const ch
 }
 
 /* 销毁辅助函数 */
-static void rbtree_destroy_helper(RBNode* node, RBNode* nil) {
+static void rbtree_destroy_helper(SymbolRBNode* node, SymbolRBNode* nil) {
     if(node == nil) return;
     rbtree_destroy_helper(node->left, nil);
     rbtree_destroy_helper(node->right, nil);
