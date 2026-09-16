@@ -63,6 +63,19 @@ typedef enum {
     OPC_STORE_FLOAT_VAR,  // a=符号表下标；从 float 栈弹出 float 值，直接存储到变量的 float_vals（零包装零转换）
     OPC_FLOAT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 float，创建 float 泛型数组
     OPC_FLOAT_ARRAY_GET, // 弹 arr,idx；直接从 float 类型化数组读取元素，压入 float 栈（零包装零 Value 开销）
+    OPC_PUSH_FLOAT_CONST, // a=常量池下标；float 常量零开销压栈，直接压入 float 栈（不创建Value）
+    OPC_FLOAT_ADD,        // 从 float 栈弹出两个 float，相加，结果压回 float 栈（零检查零转换零 Value 开销）
+    OPC_FLOAT_SUB,        // 从 float 栈弹出两个 float，相减，结果压回 float 栈（零检查零转换零 Value 开销）
+    OPC_FLOAT_MUL,        // 从 float 栈弹出两个 float，相乘，结果压回 float 栈（零检查零转换零 Value 开销）
+    OPC_FLOAT_DIV,        // 从 float 栈弹出两个 float，相除，结果压回 float 栈（零检查零转换零 Value 开销）
+    OPC_FLOAT_TO_VALUE,   // 从 float 栈弹出一个 float，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
+    OPC_FLOAT_GT,         // 从 float 栈弹出两个 float，大于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_LT,         // 从 float 栈弹出两个 float，小于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_GE,         // 从 float 栈弹出两个 float，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_LE,         // 从 float 栈弹出两个 float，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_EQ,         // 从 float 栈弹出两个 float，等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_NE,         // 从 float 栈弹出两个 float，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_FLOAT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 float 栈弹出值，写入 float 类型化数组（零转换）
     OPC_LOAD_UINT_VAR,   // a=符号表下标；加载声明为 uint 的变量，直接压入 uint 栈（零检查零转换）
     OPC_STORE_UINT_VAR,  // a=符号表下标；从 uint 栈弹出 uint 值，直接存储到变量的 uint_vals（零包装零转换）
     OPC_UINT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint，创建 uint 泛型数组
