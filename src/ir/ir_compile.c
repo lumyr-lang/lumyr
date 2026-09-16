@@ -588,28 +588,40 @@ static int is_float_var(Ctx* c, AstNode* node) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_FLOAT);
 }
 
+/* 表达式类型枚举（数值大小对应类型优先级，可直接用于类型提升）
+   优先级顺序：int/uint < long long < float < double
+   用于算术运算结果类型推断，编译期调用，零运行时开销 */
+typedef enum {
+    EXPR_TYPE_NONE = 0,
+    EXPR_TYPE_INT = 1,
+    EXPR_TYPE_UINT = 2,
+    EXPR_TYPE_LONG_LONG = 3,
+    EXPR_TYPE_FLOAT = 4,
+    EXPR_TYPE_DOUBLE = 5,
+} ExprType;
+
 /* 判断表达式的类型（用于算术运算结果类型推断，编译期调用，零运行时开销）
-   返回值：0=none, 1=int, 2=uint, 3=float, 4=double */
-static int get_expr_type(Ctx* c, AstNode* node) {
+   返回ExprType枚举值 */
+static ExprType get_expr_type(Ctx* c, AstNode* node) {
     if(!node || !c || !c->fn) return 0;
     if(node->type == AST_VAR) {
         int var_idx = bf_sym(c->fn, node->u.varname);
         if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
         int tag = c->fn->var_type_tags ? c->fn->var_type_tags[var_idx] : -1;
-        if(tag == CAST_INT) return 1;
-        if(tag == CAST_UINT32) return 2;
-        if(tag == CAST_FLOAT) return 3;
-        if(tag == 1 /* CAST_DOUBLE */) return 4;
-        if(tag == CAST_LONGLONG) return 5;  /* long long 类型 */
-        return 0;
+        if(tag == CAST_INT) return EXPR_TYPE_INT;
+        if(tag == CAST_UINT32) return EXPR_TYPE_UINT;
+        if(tag == CAST_FLOAT) return EXPR_TYPE_FLOAT;
+        if(tag == 1 /* CAST_DOUBLE */) return EXPR_TYPE_DOUBLE;
+        if(tag == CAST_LONGLONG) return EXPR_TYPE_LONG_LONG;  /* long long 类型 */
+        return EXPR_TYPE_NONE;
     }
     if(node->type == AST_BINOP) {
         BinOp bop = node->u.bin.op;
         int is_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
         if(!is_arith) return 0; /* 比较运算结果是bool，走通用路径 */
-        int left_type = get_expr_type(c, node->u.bin.left);
-        int right_type = get_expr_type(c, node->u.bin.right);
-        if(left_type == 0 || right_type == 0) return 0;
+        ExprType left_type = get_expr_type(c, node->u.bin.left);
+        ExprType right_type = get_expr_type(c, node->u.bin.right);
+        if(left_type == EXPR_TYPE_NONE || right_type == EXPR_TYPE_NONE) return EXPR_TYPE_NONE;
         return left_type > right_type ? left_type : right_type;
     }
     return 0;
@@ -1990,28 +2002,28 @@ static void c_expr(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, binop->u.bin.right);
                     int left_is_float = is_float_var(c, binop->u.bin.left);
                     int right_is_float = is_float_var(c, binop->u.bin.right);
-                    int result_type = get_expr_type(c, binop);
-                    if(result_type == 1) {
+                    ExprType result_type = get_expr_type(c, binop);
+                    if(result_type == EXPR_TYPE_INT) {
                         /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT;
-                    } else if(result_type == 2) {
+                    } else if(result_type == EXPR_TYPE_UINT) {
                         /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_UINT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_UINT32;
-                    } else if(result_type == 3) {
+                    } else if(result_type == EXPR_TYPE_FLOAT) {
                         /* float类型算术运算：结果在float专用栈中，直接使用OPC_STORE_FLOAT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_FLOAT;
-                    } else if(result_type == 4) {
+                    } else if(result_type == EXPR_TYPE_DOUBLE) {
                         /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
-                    } else if(result_type == 5) {
+                    } else if(result_type == EXPR_TYPE_LONG_LONG) {
                         /* long long类型算术运算：结果在long long专用栈中，直接使用OPC_STORE_LONG_LONG_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
@@ -3350,24 +3362,24 @@ static void c_stmt(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, single_arg->u.bin.right);
                     int left_is_float = is_float_var(c, single_arg->u.bin.left);
                     int right_is_float = is_float_var(c, single_arg->u.bin.right);
-                    int result_type = get_expr_type(c, single_arg);
-                    if(result_type == 1) {
+                    ExprType result_type = get_expr_type(c, single_arg);
+                    if(result_type == EXPR_TYPE_INT) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT, 0, 0);
                         break;
-                    } else if(result_type == 2) {
+                    } else if(result_type == EXPR_TYPE_UINT) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_UINT, 0, 0);
                         break;
-                    } else if(result_type == 3) {
+                    } else if(result_type == EXPR_TYPE_FLOAT) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_FLOAT, 0, 0);
                         break;
-                    } else if(result_type == 4) {
+                    } else if(result_type == EXPR_TYPE_DOUBLE) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
-                    } else if(result_type == 5) {
+                    } else if(result_type == EXPR_TYPE_LONG_LONG) {
                         /* long long 类型算术运算结果：直接生成 OPC_PRINT_LONG_LONG */
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_LONG_LONG, 0, 0);
