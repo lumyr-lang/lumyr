@@ -2348,6 +2348,19 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT64_PUSH(i64val);
                 break;
             }
+            case OPC_PUSH_UINT8_CONST: {
+                UINT8_PUSH((uint8_t)in.a);
+                break;
+            }
+            case OPC_PUSH_UINT16_CONST: {
+                UINT16_PUSH((uint16_t)in.a);
+                break;
+            }
+            case OPC_PUSH_UINT64_CONST: {
+                uint64_t u64val = (uint64_t)((uint32_t)in.a) | ((uint64_t)(uint32_t)in.b << 32);
+                UINT64_PUSH(u64val);
+                break;
+            }
             case OPC_LOAD_BOOL_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;

@@ -2013,6 +2013,37 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_INT64;
             }
+            /* 优化0uint8：赋值为 <uint8>字面量 形式时，使用 OPC_PUSH_UINT8_CONST + OPC_STORE_UINT8_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT8 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                uint8_t literal_val = (uint8_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_UINT8_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_UINT8_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_UINT8;
+            }
+            /* 优化0uint16：赋值为 <uint16>字面量 形式时，使用 OPC_PUSH_UINT16_CONST + OPC_STORE_UINT16_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT16 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                uint16_t literal_val = (uint16_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_UINT16_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_UINT16_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_UINT16;
+            }
+            /* 优化0uint64：赋值为 <uint64>字面量 形式时，使用 OPC_PUSH_UINT64_CONST + OPC_STORE_UINT64_VAR
+               64位值合并：in.a低32位 + in.b高32位 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT64 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                uint64_t literal_val = (uint64_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_UINT64_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
+                emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_UINT64;
+            }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2320,6 +2351,27 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
                     emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT64;
+                }
+                /* 检查右侧变量是否标记为 uint8 类型（CAST_UINT8） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_UINT8) {
+                    emit(c, OPC_LOAD_UINT8_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_UINT8_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_UINT8;
+                }
+                /* 检查右侧变量是否标记为 uint16 类型（CAST_UINT16） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_UINT16) {
+                    emit(c, OPC_LOAD_UINT16_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_UINT16_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_UINT16;
+                }
+                /* 检查右侧变量是否标记为 uint64 类型（CAST_UINT64） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_UINT64) {
+                    emit(c, OPC_LOAD_UINT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_UINT64;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&

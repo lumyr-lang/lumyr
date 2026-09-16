@@ -925,6 +925,30 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __uint_stack[__uint_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_UINT8_CONST: {
+                fprintf(out, "    __uint8_stack[__uint8_stack_sp++] = (uint8_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_UINT8_VAR: {
+                fprintf(out, "    __uint8_stack[__uint8_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_UINT16_CONST: {
+                fprintf(out, "    __uint16_stack[__uint16_stack_sp++] = (uint16_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_UINT16_VAR: {
+                fprintf(out, "    __uint16_stack[__uint16_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_UINT64_CONST: {
+                fprintf(out, "    __uint64_stack[__uint64_stack_sp++] = (uint64_t)((uint32_t)%d) | ((uint64_t)(uint32_t)%d << 32);\n", in.a, in.b);
+                break;
+            }
+            case OPC_LOAD_UINT64_VAR: {
+                fprintf(out, "    __uint64_stack[__uint64_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_UINT_CONST: {
                 /* uint 常量零开销压栈：直接把常量值压入uint专用栈，不创建Value
                    用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
@@ -1109,6 +1133,18 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_STORE_INT64_VAR: {
                 fprintf(out, "    { int64_t __i64v = __int64_stack[--__int64_stack_sp]; %s = __i64v; __stk[__stk_sp++] = lumyr_make_int64(__i64v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_UINT8_VAR: {
+                fprintf(out, "    { uint8_t __u8v = __uint8_stack[--__uint8_stack_sp]; %s = __u8v; __stk[__stk_sp++] = lumyr_make_uint8(__u8v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_UINT16_VAR: {
+                fprintf(out, "    { uint16_t __u16v = __uint16_stack[--__uint16_stack_sp]; %s = __u16v; __stk[__stk_sp++] = lumyr_make_uint16(__u16v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_UINT64_VAR: {
+                fprintf(out, "    { uint64_t __u64v = __uint64_stack[--__uint64_stack_sp]; %s = __u64v; __stk[__stk_sp++] = lumyr_make_uint64(__u64v); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2299,6 +2335,18 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_UINT: {
                 /* uint 类型零开销打印：直接从uint专用栈弹出uint值并打印，不转换为Value */
                 fprintf(out, "    { unsigned int __uiv = __uint_stack[--__uint_stack_sp]; printf(\"%%u\\n\", __uiv); }\n");
+                break;
+            }
+            case OPC_PRINT_UINT8: {
+                fprintf(out, "    { uint8_t __u8v = __uint8_stack[--__uint8_stack_sp]; printf(\"%%u\\n\", __u8v); }\n");
+                break;
+            }
+            case OPC_PRINT_UINT16: {
+                fprintf(out, "    { uint16_t __u16v = __uint16_stack[--__uint16_stack_sp]; printf(\"%%u\\n\", __u16v); }\n");
+                break;
+            }
+            case OPC_PRINT_UINT64: {
+                fprintf(out, "    { uint64_t __u64v = __uint64_stack[--__uint64_stack_sp]; printf(\"%%llu\\n\", __u64v); }\n");
                 break;
             }
             case OPC_INT_ARRAY_LIT: {
