@@ -72,6 +72,22 @@ build/
 # 调试脚本
 debug_*.sh
 
+# 调试日志
+lumyr_debug.log
+*.log
+
 # Windows 预编译依赖库和工具（入库，免去其他开发者编译）
 !third_party/**/*.a
 !third_party/**/*.exe
+
+# 规则文件（不入库）
+开发规则.md
+
+# tests 下面的 .c 文件（生成的代码，不入库）
+tests/*.c
+
+# IDE 配置文件（不入库）
+.idea/
+.vscode/
+*.swp
+*.swo

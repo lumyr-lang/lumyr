@@ -1569,7 +1569,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 if(inner && inner->type != AST_ARRAY_LIT && inner->type != AST_MAP_LIT) {
                     c->fn->var_type_tags[var_idx] = node->u.assign.expr->u.type_annotation.cast_type;
                 } else if(inner && inner->type == AST_ARRAY_LIT &&
-                          node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */) {
+                          node->u.assign.expr->u.type_annotation.cast_type == CAST_INT) {
                     /* <int>[...] 形式：变量是 int 类型化数组，设置特殊标记用于上下文感知类型推导 */
                     c->fn->var_type_tags[var_idx] = VAR_TYPE_INT_ARRAY;
                 } else if(inner && inner->type == AST_ARRAY_LIT &&
@@ -1675,7 +1675,7 @@ static void c_expr(Ctx* c, AstNode* node)
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
-               node->u.assign.expr->u.type_annotation.cast_type == 2 /* CAST_INT */ &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_INT &&
                node->u.assign.expr->u.type_annotation.expr &&
                node->u.assign.expr->u.type_annotation.expr->type == AST_INDEX) {
                 AstNode* index_node = node->u.assign.expr->u.type_annotation.expr;
@@ -1689,7 +1689,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
                 emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                 /* 记录变量类型标记为 int */
-                c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                c->fn->var_type_tags[var_idx] = CAST_INT;
             }
             /* 优化1b：赋值为 <double>arr[idx] 形式时，使用 OPC_DOUBLE_ARRAY_GET + OPC_STORE_DOUBLE_VAR
                零包装零重复提取，直接从 double 类型化数组读取并存储到 double 变量 */
@@ -1768,7 +1768,7 @@ static void c_expr(Ctx* c, AstNode* node)
                     /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
                     emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
-                    c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                    c->fn->var_type_tags[var_idx] = CAST_INT;
                 }
                 /* 检查数组变量是否标记为 double 类型化数组 */
                 else if(arr_idx >= 0 && c->fn->var_type_tags &&
@@ -1826,13 +1826,13 @@ static void c_expr(Ctx* c, AstNode* node)
                 int rhs_idx = bf_sym(c->fn, rhs_name);
                 /* 检查右侧变量是否标记为 int 类型（CAST_INT = 2） */
                 if(rhs_idx >= 0 && c->fn->var_type_tags &&
-                   c->fn->var_type_tags[rhs_idx] == 2 /* CAST_INT */) {
+                   c->fn->var_type_tags[rhs_idx] == CAST_INT) {
                     /* OPC_LOAD_INT_VAR：直接从 int_vals 读取，零提取 */
                     emit(c, OPC_LOAD_INT_VAR, rhs_idx, 0);
                     /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
                     emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
-                    c->fn->var_type_tags[var_idx] = 2; /* CAST_INT */
+                    c->fn->var_type_tags[var_idx] = CAST_INT;
                 }
                 /* 检查右侧变量是否标记为 double 类型（CAST_DOUBLE = 1） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
