@@ -527,6 +527,38 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __int_stack[__int_sp++] = %d;\n", in.a);
                 break;
             }
+            case OPC_INT_ADD: {
+                /* int 加法零开销：直接从int专用栈弹出两个int，相加，结果压回int专用栈
+                   完全不涉及Value栈，零检查零转换零Value开销 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __int_stack[__int_sp++] = __ia + __ib; }\n");
+                break;
+            }
+            case OPC_INT_SUB: {
+                /* int 减法零开销 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __int_stack[__int_sp++] = __ia - __ib; }\n");
+                break;
+            }
+            case OPC_INT_MUL: {
+                /* int 乘法零开销 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __int_stack[__int_sp++] = __ia * __ib; }\n");
+                break;
+            }
+            case OPC_INT_DIV: {
+                /* int 除法零开销，需要检查除零 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; if(__ib == 0) runtime_error(\"division by zero: int division\"); __int_stack[__int_sp++] = __ia / __ib; }\n");
+                break;
+            }
+            case OPC_INT_MOD: {
+                /* int 取模零开销，需要检查除零 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; if(__ib == 0) runtime_error(\"division by zero: int modulo\"); __int_stack[__int_sp++] = __ia %% __ib; }\n");
+                break;
+            }
+            case OPC_INT_TO_VALUE: {
+                /* 把 int 专用栈顶的 int 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑 */
+                fprintf(out, "    { int __iv = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_int((long long)__iv); }\n");
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));

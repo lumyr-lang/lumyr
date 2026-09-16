@@ -1951,6 +1951,53 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT_PUSH(in.a);
                 break;
             }
+            case OPC_INT_ADD: {
+                /* int 加法：直接从 int 栈弹出两个 int，相加，结果压回 int 栈
+                   零检查零转换零 Value 开销，完全不涉及 Value 栈 */
+                int b = INT_POP();
+                int a = INT_POP();
+                INT_PUSH(a + b);
+                break;
+            }
+            case OPC_INT_SUB: {
+                /* int 减法：直接从 int 栈弹出两个 int，相减，结果压回 int 栈 */
+                int b = INT_POP();
+                int a = INT_POP();
+                INT_PUSH(a - b);
+                break;
+            }
+            case OPC_INT_MUL: {
+                /* int 乘法：直接从 int 栈弹出两个 int，相乘，结果压回 int 栈 */
+                int b = INT_POP();
+                int a = INT_POP();
+                INT_PUSH(a * b);
+                break;
+            }
+            case OPC_INT_DIV: {
+                /* int 除法：直接从 int 栈弹出两个 int，相除，结果压回 int 栈
+                   需要检查除零 */
+                int b = INT_POP();
+                int a = INT_POP();
+                if(b == 0) runtime_error("除零错误：int 除法除数为零");
+                INT_PUSH(a / b);
+                break;
+            }
+            case OPC_INT_MOD: {
+                /* int 取模：直接从 int 栈弹出两个 int，取模，结果压回 int 栈
+                   需要检查除零 */
+                int b = INT_POP();
+                int a = INT_POP();
+                if(b == 0) runtime_error("除零错误：int 取模除数为零");
+                INT_PUSH(a % b);
+                break;
+            }
+            case OPC_INT_TO_VALUE: {
+                /* 把 int 专用栈顶的 int 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                int iv = INT_POP();
+                stack[sp++] = lumyr_make_int((long long)iv);
+                break;
+            }
             case OPC_LOAD_DOUBLE_VAR: {
                 /* 声明为 double 类型的变量：直接从栈帧的 double_vals 数组读取，零提取、零类型检查
                    stackframe_get_double 直接返回原始 double 值，不需要从 Value 联合体提取 */

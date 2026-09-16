@@ -1930,15 +1930,38 @@ static void c_expr(Ctx* c, AstNode* node)
                 bf_patch(c->fn, jend, c->fn->code_len);
                 break;
             }
-            c_expr(c, node->u.bin.left);
-            c_expr(c, node->u.bin.right);
-            static const OpCode map[] = {
-                [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
-                [OP_MOD] = OPC_MOD,
-                [OP_GT] = OPC_GT, [OP_LT] = OPC_LT, [OP_GE] = OPC_GE, [OP_LE] = OPC_LE,
-                [OP_EQ] = OPC_EQ, [OP_NE] = OPC_NE, [OP_IMPLEMENTS] = OPC_IMPLEMENTS,
-            };
-            emit(c, map[bop], 0, 0);
+            /* 优化：int 类型专用算术运算指令（零检查零转换零 Value 开销）
+               如果左右操作数都是声明为 int 的变量，使用 OPC_INT_ADD 等专用指令，
+               直接从 int 专用栈弹出两个 int，运算后结果压回 int 专用栈，完全不涉及 Value 栈 */
+            int left_is_int = is_int_var(c, node->u.bin.left);
+            int right_is_int = is_int_var(c, node->u.bin.right);
+            if(left_is_int && right_is_int && (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD)) {
+                /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
+                /* 生成 int 专用算术运算指令 */
+                static const OpCode int_map[] = {
+                    [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
+                    [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
+                };
+                emit(c, int_map[bop], 0, 0);
+                /* 把结果从 int 专用栈弹出，包装成 Value，压入 Value 栈
+                   以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                emit(c, OPC_INT_TO_VALUE, 0, 0);
+            } else {
+                /* 通用路径：编译左右操作数，生成通用指令 */
+                c_expr(c, node->u.bin.left);
+                c_expr(c, node->u.bin.right);
+                static const OpCode map[] = {
+                    [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
+                    [OP_MOD] = OPC_MOD,
+                    [OP_GT] = OPC_GT, [OP_LT] = OPC_LT, [OP_GE] = OPC_GE, [OP_LE] = OPC_LE,
+                    [OP_EQ] = OPC_EQ, [OP_NE] = OPC_NE, [OP_IMPLEMENTS] = OPC_IMPLEMENTS,
+                };
+                emit(c, map[bop], 0, 0);
+            }
             break;
         }
         case AST_UNARY: {
