@@ -1,0 +1,4 @@
+a = <float>1.5;
+b = <float>2.5;
+c = a + b;
+print(c);

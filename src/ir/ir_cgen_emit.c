@@ -2136,6 +2136,32 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    }\n");
                 break;
             }
+            /* 类型转换指令：专用栈之间的转换，零包装零Value开销 */
+            case OPC_INT_TO_FLOAT: {
+                /* 从 int 栈弹出一个 int，转换为 float，压入 float 栈 */
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __float_stack[__float_stack_sp++] = (float)__iv; }\n");
+                break;
+            }
+            case OPC_INT_TO_DOUBLE: {
+                /* 从 int 栈弹出一个 int，转换为 double，压入 double 栈 */
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __double_stack[__double_stack_sp++] = (double)__iv; }\n");
+                break;
+            }
+            case OPC_UINT_TO_FLOAT: {
+                /* 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈 */
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __float_stack[__float_stack_sp++] = (float)__uv; }\n");
+                break;
+            }
+            case OPC_UINT_TO_DOUBLE: {
+                /* 从 uint 栈弹出一个 uint，转换为 double，压入 double 栈 */
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __double_stack[__double_stack_sp++] = (double)__uv; }\n");
+                break;
+            }
+            case OPC_FLOAT_TO_DOUBLE: {
+                /* 从 float 栈弹出一个 float，转换为 double，压入 double 栈 */
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; __double_stack[__double_stack_sp++] = (double)__fv; }\n");
+                break;
+            }
             case OPC_UINT_ARRAY_LIT: {
                 /* uint 类型零开销数组字面量：
                    a=1: 从 uint 专用栈读取（零检查零转换）

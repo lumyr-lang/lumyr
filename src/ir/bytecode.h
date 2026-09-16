@@ -93,6 +93,12 @@ typedef enum {
     OPC_UINT_EQ,         // 从 uint 栈弹出两个 uint，等于比较，结果(bool)压入 Value 栈（零检查零转换）
     OPC_UINT_NE,         // 从 uint 栈弹出两个 uint，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
     OPC_UINT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 uint 栈弹出值，写入 uint 类型化数组（零转换）
+    // 类型转换指令（专用栈之间的转换，零包装零Value开销）
+    OPC_INT_TO_FLOAT,    // 从 int 栈弹出一个 int，转换为 float，压入 float 栈（零包装零Value开销）
+    OPC_INT_TO_DOUBLE,   // 从 int 栈弹出一个 int，转换为 double，压入 double 栈（零包装零Value开销）
+    OPC_UINT_TO_FLOAT,   // 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈（零包装零Value开销）
+    OPC_UINT_TO_DOUBLE,  // 从 uint 栈弹出一个 uint，转换为 double，压入 double 栈（零包装零Value开销）
+    OPC_FLOAT_TO_DOUBLE, // 从 float 栈弹出一个 float，转换为 double，压入 double 栈（零包装零Value开销）
     OPC_LOAD_BOOL_VAR,   // a=符号表下标；加载声明为 bool 的变量，直接压入 bool 栈（零检查零转换）
     OPC_STORE_BOOL_VAR,  // a=符号表下标；从 bool 栈弹出 bool 值，直接存储到变量的 bool_vals（零包装零转换）
     OPC_BOOL_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 bool，创建 bool 泛型数组

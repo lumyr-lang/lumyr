@@ -588,6 +588,32 @@ static int is_float_var(Ctx* c, AstNode* node) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_FLOAT);
 }
 
+/* 判断表达式的类型（用于算术运算结果类型推断，编译期调用，零运行时开销）
+   返回值：0=none, 1=int, 2=uint, 3=float, 4=double */
+static int get_expr_type(Ctx* c, AstNode* node) {
+    if(!node || !c || !c->fn) return 0;
+    if(node->type == AST_VAR) {
+        int var_idx = bf_sym(c->fn, node->u.varname);
+        if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+        int tag = c->fn->var_type_tags ? c->fn->var_type_tags[var_idx] : -1;
+        if(tag == CAST_INT) return 1;
+        if(tag == CAST_UINT32) return 2;
+        if(tag == CAST_FLOAT) return 3;
+        if(tag == 1 /* CAST_DOUBLE */) return 4;
+        return 0;
+    }
+    if(node->type == AST_BINOP) {
+        BinOp bop = node->u.bin.op;
+        int is_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+        if(!is_arith) return 0; /* 比较运算结果是bool，走通用路径 */
+        int left_type = get_expr_type(c, node->u.bin.left);
+        int right_type = get_expr_type(c, node->u.bin.right);
+        if(left_type == 0 || right_type == 0) return 0;
+        return left_type > right_type ? left_type : right_type;
+    }
+    return 0;
+}
+
 // 检查数组所有元素是否都是 float 类型（声明为 float 的变量或 float 类型化数组的元素访问）
 static int all_float_vars(Ctx* c, AstNode* e) {
     if(!e) return 1;
@@ -1902,28 +1928,29 @@ static void c_expr(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, binop->u.bin.right);
                     int left_is_float = is_float_var(c, binop->u.bin.left);
                     int right_is_float = is_float_var(c, binop->u.bin.right);
-                    if(left_is_int && right_is_int) {
+                    int result_type = get_expr_type(c, binop);
+                    if(result_type == 1) {
                         /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT;
-                    } else if(left_is_uint && right_is_uint) {
+                    } else if(result_type == 2) {
                         /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_UINT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_UINT32;
-                    } else if(left_is_double && right_is_double) {
-                        /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
-                        c_expr(c, binop);
-                        emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
-                        c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
-                    } else if(left_is_float && right_is_float) {
+                    } else if(result_type == 3) {
                         /* float类型算术运算：结果在float专用栈中，直接使用OPC_STORE_FLOAT_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_FLOAT;
+                    } else if(result_type == 4) {
+                        /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
                     } else {
-                        /* 混合类型算术运算：走通用路径 */
+                        /* 无法推断结果类型，走通用路径 */
                         c_expr(c, node->u.assign.expr);
                         emit(c, OPC_STORE_VAR, var_idx, 0);
                     }
@@ -2044,6 +2071,10 @@ static void c_expr(Ctx* c, AstNode* node)
             int right_is_double = is_double_var(c, node->u.bin.right);
             int is_double_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV);
             int is_double_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_float = is_float_var(c, node->u.bin.left);
+            int right_is_float = is_float_var(c, node->u.bin.right);
+            int is_float_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV);
+            int is_float_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
             if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
@@ -2117,6 +2148,97 @@ static void c_expr(Ctx* c, AstNode* node)
                     };
                     emit(c, double_cmp_map[bop], 0, 0);
                 }
+            }
+            /* float 类型专用算术/比较运算指令（零检查零转换零 Value 开销） */
+            else if(left_is_float && right_is_float && (is_float_arith || is_float_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_FLOAT_VAR, right_idx, 0);
+                if(is_float_arith) {
+                    static const OpCode float_arith_map[] = {
+                        [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
+                        [OP_DIV] = OPC_FLOAT_DIV,
+                    };
+                    emit(c, float_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode float_cmp_map[] = {
+                        [OP_GT] = OPC_FLOAT_GT, [OP_LT] = OPC_FLOAT_LT, [OP_GE] = OPC_FLOAT_GE,
+                        [OP_LE] = OPC_FLOAT_LE, [OP_EQ] = OPC_FLOAT_EQ, [OP_NE] = OPC_FLOAT_NE,
+                    };
+                    emit(c, float_cmp_map[bop], 0, 0);
+                }
+            }
+            /* 混合类型算术运算（类型提升，零包装零Value开销）
+               类型提升规则：int/uint -> float -> double
+               先把小类型转换为大类型，然后执行大类型的算术运算 */
+            else if(is_int_arith || is_uint_arith || is_float_arith || is_double_arith) {
+                int left_idx = -1, right_idx = -1;
+                int left_type = 0, right_type = 0; /* 0=none, 1=int, 2=uint, 3=float, 4=double */
+                if(left_is_int) { left_type = 1; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
+                else if(left_is_uint) { left_type = 2; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
+                else if(left_is_float) { left_type = 3; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
+                else if(left_is_double) { left_type = 4; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
+                if(right_is_int) { right_type = 1; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                else if(right_is_uint) { right_type = 2; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                else if(right_is_float) { right_type = 3; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                else if(right_is_double) { right_type = 4; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
+                if(left_type > 0 && right_type > 0) {
+                    int result_type = left_type > right_type ? left_type : right_type;
+                    /* 加载左操作数到对应专用栈 */
+                    if(left_type == 1) emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
+                    else if(left_type == 2) emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
+                    else if(left_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
+                    else if(left_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
+                    /* 左操作数类型提升（从专用栈A弹出，转换后压入专用栈B） */
+                    if(left_type < result_type) {
+                        if(left_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
+                        else if(left_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+                        else if(left_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
+                        else if(left_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+                        else if(left_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+                    }
+                    /* 加载右操作数到对应专用栈 */
+                    if(right_type == 1) emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
+                    else if(right_type == 2) emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
+                    else if(right_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, right_idx, 0);
+                    else if(right_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
+                    /* 右操作数类型提升 */
+                    if(right_type < result_type) {
+                        if(right_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
+                        else if(right_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+                        else if(right_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
+                        else if(right_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+                        else if(right_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+                    }
+                    /* 执行大类型的算术运算（结果在大类型专用栈中） */
+                    if(result_type == 3) { /* float */
+                        static const OpCode float_arith_map[] = {
+                            [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
+                            [OP_DIV] = OPC_FLOAT_DIV,
+                        };
+                        emit(c, float_arith_map[bop], 0, 0);
+                    } else if(result_type == 4) { /* double */
+                        static const OpCode double_arith_map[] = {
+                            [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                            [OP_DIV] = OPC_DOUBLE_DIV,
+                        };
+                        emit(c, double_arith_map[bop], 0, 0);
+                    }
+                    /* 结果保持在大类型专用栈中，后续操作通过上下文感知处理
+                       （赋值时用 OPC_STORE_FLOAT_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_FLOAT/OPC_PRINT_DOUBLE） */
+                    break;
+                }
+                /* 左右操作数不都是已知类型，走通用路径 */
+                c_expr(c, node->u.bin.left);
+                c_expr(c, node->u.bin.right);
+                static const OpCode map[] = {
+                    [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
+                    [OP_MOD] = OPC_MOD,
+                };
+                emit(c, map[bop], 0, 0);
+                break;
             } else {
                 /* 通用路径：编译左右操作数，生成通用指令 */
                 c_expr(c, node->u.bin.left);
@@ -3117,21 +3239,22 @@ static void c_stmt(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, single_arg->u.bin.right);
                     int left_is_float = is_float_var(c, single_arg->u.bin.left);
                     int right_is_float = is_float_var(c, single_arg->u.bin.right);
-                    if(left_is_int && right_is_int) {
+                    int result_type = get_expr_type(c, single_arg);
+                    if(result_type == 1) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT, 0, 0);
                         break;
-                    } else if(left_is_uint && right_is_uint) {
+                    } else if(result_type == 2) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_UINT, 0, 0);
                         break;
-                    } else if(left_is_double && right_is_double) {
-                        c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
-                        break;
-                    } else if(left_is_float && right_is_float) {
+                    } else if(result_type == 3) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        break;
+                    } else if(result_type == 4) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     }
                 }

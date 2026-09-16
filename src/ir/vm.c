@@ -3259,6 +3259,37 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_uint32(val);
                 break;
             }
+            /* 类型转换指令：专用栈之间的转换，零包装零Value开销 */
+            case OPC_INT_TO_FLOAT: {
+                /* 从 int 栈弹出一个 int，转换为 float，压入 float 栈 */
+                int iv = INT_POP();
+                FLOAT_PUSH((float)iv);
+                break;
+            }
+            case OPC_INT_TO_DOUBLE: {
+                /* 从 int 栈弹出一个 int，转换为 double，压入 double 栈 */
+                int iv = INT_POP();
+                DOUBLE_PUSH((double)iv);
+                break;
+            }
+            case OPC_UINT_TO_FLOAT: {
+                /* 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈 */
+                unsigned int uv = UINT_POP();
+                FLOAT_PUSH((float)uv);
+                break;
+            }
+            case OPC_UINT_TO_DOUBLE: {
+                /* 从 uint 栈弹出一个 uint，转换为 double，压入 double 栈 */
+                unsigned int uv = UINT_POP();
+                DOUBLE_PUSH((double)uv);
+                break;
+            }
+            case OPC_FLOAT_TO_DOUBLE: {
+                /* 从 float 栈弹出一个 float，转换为 double，压入 double 栈 */
+                float fv = FLOAT_POP();
+                DOUBLE_PUSH((double)fv);
+                break;
+            }
             case OPC_BOOL_ARRAY_LIT: {
                 int n = in.b;
                 if(in.a == 1) {

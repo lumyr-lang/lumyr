@@ -150,6 +150,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LOAD_LONG_VAR: case OPC_LOAD_ULONG_VAR:
         case OPC_LOAD_BOOL_VAR: case OPC_LOAD_CHAR_VAR: case OPC_LOAD_BYTE_VAR:
         case OPC_LOAD_FLOAT_VAR:
+        case OPC_LOAD_UINT_VAR:
         case OPC_LOAD_SIZE_T_VAR: case OPC_LOAD_SSIZE_T_VAR:
         case OPC_LOAD_LONG_DOUBLE_VAR:
             return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
@@ -158,6 +159,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_STORE_LONG_VAR: case OPC_STORE_ULONG_VAR:
         case OPC_STORE_BOOL_VAR: case OPC_STORE_CHAR_VAR: case OPC_STORE_BYTE_VAR:
         case OPC_STORE_FLOAT_VAR:
+        case OPC_STORE_UINT_VAR:
         case OPC_STORE_SIZE_T_VAR: case OPC_STORE_SSIZE_T_VAR:
         case OPC_STORE_LONG_DOUBLE_VAR:
             return +1;                       /* 从专用栈弹出，包装成 Value 压回（赋值表达式有返回值） */
@@ -165,7 +167,6 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT_UINT8: case OPC_PRINT_UINT16: case OPC_PRINT_UINT32: case OPC_PRINT_UINT64:
         case OPC_PRINT_LONG: case OPC_PRINT_ULONG:
         case OPC_PRINT_BOOL: case OPC_PRINT_CHAR: case OPC_PRINT_BYTE:
-        case OPC_PRINT_FLOAT:
             return -1;                       /* 从专用栈弹出并打印，Value栈变化-1 */
         case OPC_YIELD:
             return 0;                        /* 生成器yield，栈不变 */
@@ -185,6 +186,13 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;                       /* 从 uint 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
         case OPC_UINT_ARRAY_SET:
             return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 uint 栈弹出值(1个) */
+        /* 类型转换指令：专用栈之间的转换，不改变 Value 栈深度（零包装零Value开销） */
+        case OPC_INT_TO_FLOAT:
+        case OPC_INT_TO_DOUBLE:
+        case OPC_UINT_TO_FLOAT:
+        case OPC_UINT_TO_DOUBLE:
+        case OPC_FLOAT_TO_DOUBLE:
+            return 0;                        /* 从一个专用栈弹出1个，转换后压入另一个专用栈，不改变 Value 栈深度 */
         case OPC_POP:
         case OPC_PEND_RETURN:
         case OPC_THROW:
@@ -331,6 +339,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT:
             return -(in.a > 0 ? in.a : 1);  /* 多参数打印：弹出所有参数（向后兼容：a<=0 时弹1） */
         case OPC_PRINT_INT:
+        case OPC_PRINT_UINT:
+        case OPC_PRINT_FLOAT:
         case OPC_PRINT_DOUBLE:
         case OPC_PRINT_SIZE_T:
         case OPC_PRINT_SSIZE_T:
@@ -559,6 +569,11 @@ static const char* opc_name(OpCode op)
         case OPC_UINT_EQ: return "UINT_EQ";
         case OPC_UINT_NE: return "UINT_NE";
         case OPC_UINT_ARRAY_SET: return "UINT_ARRAY_SET";
+        case OPC_INT_TO_FLOAT: return "INT_TO_FLOAT";
+        case OPC_INT_TO_DOUBLE: return "INT_TO_DOUBLE";
+        case OPC_UINT_TO_FLOAT: return "UINT_TO_FLOAT";
+        case OPC_UINT_TO_DOUBLE: return "UINT_TO_DOUBLE";
+        case OPC_FLOAT_TO_DOUBLE: return "FLOAT_TO_DOUBLE";
         case OPC_PRINT_UINT: return "PRINT_UINT";
         /* double专用指令 */
         case OPC_LOAD_DOUBLE_VAR: return "LOAD_DOUBLE_VAR";
