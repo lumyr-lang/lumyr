@@ -1186,43 +1186,43 @@ void lumyr_print_inline(Value v) {
             printf("%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
             break;
         case VAL_INT8:
-            printf("%lld", v.v.i);
+            printf("%d", (int)v.v.i8);  // 使用专用的i8成员
             break;
         case VAL_INT16:
-            printf("%lld", v.v.i);
+            printf("%d", (int)v.v.i16);  // 使用专用的i16成员
             break;
         case VAL_INT32:
-            printf("%lld", v.v.i);
+            printf("%d", (int)v.v.i32);  // 使用专用的i32成员
             break;
         case VAL_INT64:
             printf("%lld", v.v.i);
             break;
         case VAL_UINT8:
-            printf("%u", (unsigned int)v.v.i);
+            printf("%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
             break;
         case VAL_UINT16:
-            printf("%u", (unsigned int)v.v.i);
+            printf("%u", (unsigned int)v.v.u16);  // 使用专用的u16成员
             break;
         case VAL_UINT32:
-            printf("%u", (unsigned int)v.v.i);
+            printf("%u", (unsigned int)v.v.u32);  // 使用专用的u32成员
             break;
         case VAL_UINT64:
-            printf("%llu", (unsigned long long)v.v.i);
+            printf("%llu", (unsigned long long)v.v.u64);  // 使用专用的u64成员
             break;
         case VAL_LONG:
-            printf("%ld", (long)v.v.i);
+            printf("%ld", v.v.l);  // 使用专用的l成员
             break;
         case VAL_ULONG:
-            printf("%lu", (unsigned long)v.v.i);
+            printf("%lu", v.v.ul);  // 使用专用的ul成员
             break;
         case VAL_SIZE_T:
-            printf("%zu", (size_t)v.v.i);
+            printf("%zu", v.v.st);  // 使用专用的st成员
             break;
         case VAL_SSIZE_T:
-            printf("%zd", (ssize_t)v.v.i);
+            printf("%zd", v.v.sst);  // 使用专用的sst成员
             break;
         case VAL_LONG_DOUBLE:
-            printf("%Lf", (long double)v.v.d);
+            printf("%Lf", v.v.ld);  // 使用专用的ld成员
             break;
         case VAL_NONE:
             printf("null");
