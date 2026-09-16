@@ -8,7 +8,8 @@
 #include "lumyr_value.h"
 
 // 构造
-Value lumyr_make_int(long long i);
+Value lumyr_make_int(int i);  // int：32位有符号整数（与C语言int对齐）
+Value lumyr_make_long_long(long long ll);  // long long：64位有符号整数（与C语言long long对齐）
 Value lumyr_make_double(double d);
 Value lumyr_make_float(float f);  // float：单精度浮点数
 Value lumyr_make_bool(_Bool b);
@@ -98,6 +99,7 @@ Value lumyr_cast_longlong(Value v);
 Value lumyr_cast_float(Value v);
 
 int lumyr_extract_int(Value v);
+long long lumyr_extract_long_long(Value v);
 double lumyr_extract_double(Value v);
 float lumyr_extract_float(Value v);
 _Bool lumyr_extract_bool(Value v);

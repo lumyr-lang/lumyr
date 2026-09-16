@@ -12,10 +12,17 @@
 #include <ctype.h>
 
 // 字典辅助（VAL_MAP）前向声明：lumyr_eq 等在定义之前引用
-Value lumyr_make_int(long long i) {
+Value lumyr_make_int(int i) {
     Value v;
     v.type = VAL_INT;
-    v.v.i = i;
+    v.v.i = i;  // 使用专用的i成员，32位有符号整数
+    return v;
+}
+
+Value lumyr_make_long_long(long long ll) {
+    Value v;
+    v.type = VAL_LONG_LONG;
+    v.v.ll = ll;  // 使用专用的ll成员，64位有符号整数
     return v;
 }
 
@@ -200,7 +207,7 @@ char* value_to_str(Value v) {
     switch(v.type)
     {
         case VAL_INT:
-            snprintf(buf, sizeof(buf), "%lld", v.v.i);
+            snprintf(buf, sizeof(buf), "%d", v.v.i);  // int类型用%d格式符
             break;
         case VAL_DOUBLE:
             snprintf(buf, sizeof(buf), "%g", v.v.d);
@@ -249,7 +256,7 @@ Value lumyr_unary_plus(Value v) {
 
 Value lumyr_unary_minus(Value v) {
     if(v.type == VAL_INT) {
-        if(v.v.i == LLONG_MIN) return lumyr_make_double(-(double)v.v.i);  // 溢出保护
+        if(v.v.i == INT_MIN) return lumyr_make_double(-(double)v.v.i);  // 溢出保护，int类型用INT_MIN
         return lumyr_make_int(-v.v.i);
     }
     double num = value_as_number(v);
@@ -1084,6 +1091,14 @@ int lumyr_extract_int(Value v) {
     return 0;
 }
 
+long long lumyr_extract_long_long(Value v) {
+    Value llv = lumyr_cast_longlong(v);
+    if (llv.type == VAL_LONG_LONG) {
+        return llv.v.ll;
+    }
+    return 0;
+}
+
 double lumyr_extract_double(Value v) {
     Value dv = lumyr_cast_double(v);
     if (dv.type == VAL_DOUBLE) {
@@ -1157,7 +1172,7 @@ void lumyr_print(Value v) {
     switch(v.type)
     {
         case VAL_INT:
-            printf("%lld\n", v.v.i);
+            printf("%d\n", v.v.i);  // int类型用%d格式符
             break;
         case VAL_DOUBLE:
             printf("%g\n", v.v.d);
@@ -1200,7 +1215,7 @@ void lumyr_print_inline(Value v) {
     switch(v.type)
     {
         case VAL_INT:
-            printf("%lld", v.v.i);
+            printf("%d", v.v.i);  // int类型用%d格式符
             break;
         case VAL_DOUBLE:
             printf("%g", v.v.d);
@@ -1227,7 +1242,7 @@ void lumyr_print_inline(Value v) {
             printf("%d", (int)v.v.i32);  // 使用专用的i32成员
             break;
         case VAL_INT64:
-            printf("%lld", v.v.i);
+            printf("%d", v.v.i);  // int类型用%d格式符
             break;
         case VAL_UINT8:
             printf("%u", (unsigned int)v.v.u8);  // 使用专用的u8成员

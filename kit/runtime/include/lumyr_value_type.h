@@ -83,6 +83,7 @@ typedef enum {
     VAL_INT16,        // int16_t / short
     VAL_INT32,        // int32_t / int
     VAL_INT64,        // int64_t / long long
+    VAL_LONG_LONG,    // long long：64位有符号整数（与C语言long long对齐）
     VAL_LONG,         // long
     VAL_UINT8,        // uint8_t / unsigned char / byte
     VAL_UINT16,       // uint16_t / unsigned short
@@ -150,7 +151,8 @@ struct Value {
     // 偏移5-7：3字节填充（编译器自动对齐）
     union {                  // 24字节，偏移8
         // ===== 有符号整数类型 =====
-        long long i;          // VAL_INT / VAL_INT64：64位有符号整数
+        int i;                // VAL_INT：32位有符号整数（与C语言int对齐）
+        long long ll;         // VAL_LONG_LONG / VAL_INT64：64位有符号整数（与C语言long long对齐）
         int8_t i8;            // VAL_INT8：8位有符号整数
         int16_t i16;          // VAL_INT16 / VAL_SHORT：16位有符号整数
         int32_t i32;          // VAL_INT32：32位有符号整数
