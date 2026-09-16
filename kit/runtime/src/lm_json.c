@@ -284,7 +284,7 @@ static void jq_stringify(SB* b, Value v, Value enc)
         }
         case VAL_BYTE: {
             char tmp[16];
-            snprintf(tmp, sizeof(tmp), "%lld", v.v.i & 0xFF);
+            snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
             sb_puts(b, tmp);
             break;
         }
