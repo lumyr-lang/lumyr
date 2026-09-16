@@ -526,6 +526,16 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __int_stack[__int_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_BOOL_CONST: {
+                /* bool常量零开销压栈：直接把常量值压入bool专用栈，不创建Value */
+                fprintf(out, "    __bool_stack[__bool_stack_sp++] = %d;\n", in.a ? 1 : 0);
+                break;
+            }
+            case OPC_LOAD_BOOL_VAR: {
+                /* bool 类型零开销加载：直接从变量读取bool值，压入bool专用栈，不转换为Value */
+                fprintf(out, "    __bool_stack[__bool_stack_sp++] = %s ? 1 : 0;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_LONG_LONG_CONST: {
                 /* long long 常量零开销压栈：直接把常量值压入long long专用栈，不创建Value
                    用于 <long long>42 字面量赋值等场景，避免创建 Value 再提取的开销
@@ -1013,6 +1023,12 @@ void emit_insns(BytecodeFunc* fn)
                     /* Value类型或其他类型：包装成Value后赋值 */
                     fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; %s = lumyr_make_int((long long)__iv); __stk[__stk_sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
                 }
+                break;
+            }
+            case OPC_STORE_BOOL_VAR: {
+                /* bool 类型零开销存储：从bool专用栈弹出bool值，直接赋给变量，零转换
+                   然后把bool值包装成Value压回Value栈（赋值表达式有返回值） */
+                fprintf(out, "    { int __bv = __bool_stack[--__bool_stack_sp]; %s = __bv; __stk[__stk_sp++] = lumyr_make_bool(__bv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2167,6 +2183,11 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_INT: {
                 /* int 类型零开销打印：直接从int专用栈弹出int值并打印，不转换为Value */
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; printf(\"%%d\\n\", __iv); }\n");
+                break;
+            }
+            case OPC_PRINT_BOOL: {
+                /* bool 类型零开销打印：直接从bool专用栈弹出bool值并打印，不转换为Value */
+                fprintf(out, "    { int __bv = __bool_stack[--__bool_stack_sp]; printf(\"%%s\\n\", __bv ? \"true\" : \"false\"); }\n");
                 break;
             }
             case OPC_PRINT_UINT: {

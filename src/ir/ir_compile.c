@@ -1902,6 +1902,21 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
             }
+            /* 优化0b：赋值为 <bool>字面量 形式时，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
+               零包装零重复提取，直接把字面量值压入 bool 栈并存储到 bool 变量
+               避免创建 Value 再提取的开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_BOOL) {
+                int literal_val = node->u.assign.expr->u.type_annotation.expr->u.bval ? 1 : 0;
+                /* OPC_PUSH_BOOL_CONST：直接把常量值压入 bool 栈，零检查零转换 */
+                emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
+                emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                /* 记录变量类型标记为 bool */
+                c->fn->var_type_tags[var_idx] = CAST_BOOL;
+            }
             /* 优化0ll：赋值为 <long long>字面量 形式时，使用 OPC_PUSH_LONG_LONG_CONST + OPC_STORE_LONG_LONG_VAR
                零包装零重复提取，直接把字面量值压入 long long 栈并存储到 long long 变量
                避免创建 Value 再提取的开销 */
@@ -1992,6 +2007,21 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
+            }
+            /* 优化0b：赋值为 <bool>字面量 形式时，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
+               零包装零重复提取，直接把字面量值压入 bool 栈并存储到 bool 变量
+               避免创建 Value 再提取的开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_BOOL) {
+                int literal_val = node->u.assign.expr->u.type_annotation.expr->u.bval ? 1 : 0;
+                /* OPC_PUSH_BOOL_CONST：直接把常量值压入 bool 栈，零检查零转换 */
+                emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
+                emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                /* 记录变量类型标记为 bool */
+                c->fn->var_type_tags[var_idx] = CAST_BOOL;
             }
             /* 优化2：上下文感知 - 赋值为 arr[idx] 且 arr 是 int 类型化数组时，自动感知为 int 类型
                即使左侧变量没有显式声明 <int>，也自动推导为 int 类型，并使用优化路径 */

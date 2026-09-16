@@ -119,6 +119,7 @@ typedef enum {
     OPC_LONG_LONG_ARRAY_LIT,  // b=元素个数；弹 b 个元素，创建 long long 类型化数组
     OPC_LONG_LONG_ARRAY_GET,  // 弹 arr,idx；直接从 long long 类型化数组读取元素，压入 long long 栈
     OPC_PRINT_LONG_LONG,      // 从 long long 栈弹出 long long 值并打印（零包装零Value开销）
+    OPC_PUSH_BOOL_CONST,  // a=0或1；直接把bool常量值压入bool栈（零检查零转换，用于<bool>true/false字面量）
     OPC_LOAD_BOOL_VAR,   // a=符号表下标；加载声明为 bool 的变量，直接压入 bool 栈（零检查零转换）
     OPC_STORE_BOOL_VAR,  // a=符号表下标；从 bool 栈弹出 bool 值，直接存储到变量的 bool_vals（零包装零转换）
     OPC_BOOL_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 bool，创建 bool 泛型数组

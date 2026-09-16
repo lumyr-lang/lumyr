@@ -2311,6 +2311,11 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 UINT_PUSH(uv);
                 break;
             }
+            case OPC_PUSH_BOOL_CONST: {
+                /* bool常量零开销压栈：直接把常量值压入bool专用栈，不创建Value */
+                BOOL_PUSH(in.a ? 1 : 0);
+                break;
+            }
             case OPC_LOAD_BOOL_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;
