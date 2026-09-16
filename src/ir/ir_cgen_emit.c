@@ -2495,6 +2495,22 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; __double_stack[__double_stack_sp++] = (double)__fv; }\n");
                 break;
             }
+            case OPC_INT_TO_LONG_LONG: {
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __long_long_stack[__long_long_stack_sp++] = (long long)__iv; }\n");
+                break;
+            }
+            case OPC_UINT_TO_LONG_LONG: {
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __long_long_stack[__long_long_stack_sp++] = (long long)__uv; }\n");
+                break;
+            }
+            case OPC_FLOAT_TO_LONG_LONG: {
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; __long_long_stack[__long_long_stack_sp++] = (long long)__fv; }\n");
+                break;
+            }
+            case OPC_DOUBLE_TO_LONG_LONG: {
+                fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; __long_long_stack[__long_long_stack_sp++] = (long long)__dv; }\n");
+                break;
+            }
             case OPC_UINT_ARRAY_LIT: {
                 /* uint 类型零开销数组字面量：
                    a=1: 从 uint 专用栈读取（零检查零转换）

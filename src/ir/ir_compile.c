@@ -2692,17 +2692,19 @@ static void c_expr(Ctx* c, AstNode* node)
             /* 混合类型算术运算（类型提升，零包装零Value开销）
                类型提升规则：int/uint -> float -> double
                先把小类型转换为大类型，然后执行大类型的算术运算 */
-            else if(is_int_arith || is_uint_arith || is_float_arith || is_double_arith) {
+            else if(is_int_arith || is_uint_arith || is_float_arith || is_double_arith || is_long_long_arith) {
                 int left_idx = -1, right_idx = -1;
-                int left_type = 0, right_type = 0; /* 0=none, 1=int, 2=uint, 3=float, 4=double */
+                int left_type = 0, right_type = 0; /* 0=none, 1=int, 2=uint, 3=float, 4=double, 5=long long */
                 if(left_is_int) { left_type = 1; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
                 else if(left_is_uint) { left_type = 2; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
                 else if(left_is_float) { left_type = 3; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
                 else if(left_is_double) { left_type = 4; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
+                else if(left_is_long_long) { left_type = 5; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
                 if(right_is_int) { right_type = 1; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 else if(right_is_uint) { right_type = 2; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 else if(right_is_float) { right_type = 3; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 else if(right_is_double) { right_type = 4; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                else if(right_is_long_long) { right_type = 5; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
                     int result_type = left_type > right_type ? left_type : right_type;
@@ -2711,26 +2713,36 @@ static void c_expr(Ctx* c, AstNode* node)
                     else if(left_type == 2) emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
                     else if(left_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
                     else if(left_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
+                    else if(left_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, left_idx, 0);
                     /* 左操作数类型提升（从专用栈A弹出，转换后压入专用栈B） */
                     if(left_type < result_type) {
                         if(left_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
                         else if(left_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+                        else if(left_type == 1 && result_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
                         else if(left_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
                         else if(left_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+                        else if(left_type == 2 && result_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
                         else if(left_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+                        else if(left_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
+                        else if(left_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
                     }
                     /* 加载右操作数到对应专用栈 */
                     if(right_type == 1) emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
                     else if(right_type == 2) emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
                     else if(right_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, right_idx, 0);
                     else if(right_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
+                    else if(right_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, right_idx, 0);
                     /* 右操作数类型提升 */
                     if(right_type < result_type) {
                         if(right_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
                         else if(right_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+                        else if(right_type == 1 && result_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
                         else if(right_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
                         else if(right_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+                        else if(right_type == 2 && result_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
                         else if(right_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+                        else if(right_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
+                        else if(right_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
                     }
                     /* 执行大类型的算术运算（结果在大类型专用栈中） */
                     if(result_type == 3) { /* float */
@@ -2745,6 +2757,12 @@ static void c_expr(Ctx* c, AstNode* node)
                             [OP_DIV] = OPC_DOUBLE_DIV,
                         };
                         emit(c, double_arith_map[bop], 0, 0);
+                    } else if(result_type == 5) { /* long long */
+                        static const OpCode long_long_arith_map[] = {
+                            [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
+                            [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
+                        };
+                        emit(c, long_long_arith_map[bop], 0, 0);
                     }
                     /* 结果保持在大类型专用栈中，后续操作通过上下文感知处理
                        （赋值时用 OPC_STORE_FLOAT_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_FLOAT/OPC_PRINT_DOUBLE） */
