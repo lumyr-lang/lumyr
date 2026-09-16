@@ -1,0 +1,6 @@
+a = <int16>1000;
+b = <int16>2000;
+c = a;
+print(a);
+print(b);
+print(c);

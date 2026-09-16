@@ -1972,6 +1972,47 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 byte */
                 c->fn->var_type_tags[var_idx] = CAST_BYTE;
             }
+            /* 优化0int8：赋值为 <int8>字面量 形式时，使用 OPC_PUSH_INT8_CONST + OPC_STORE_INT8_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_INT8 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                int8_t literal_val = (int8_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_INT8_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_INT8;
+            }
+            /* 优化0int16：赋值为 <int16>字面量 形式时，使用 OPC_PUSH_INT16_CONST + OPC_STORE_INT16_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_INT16 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                int16_t literal_val = (int16_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_INT16_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_INT16;
+            }
+            /* 优化0int32：赋值为 <int32>字面量 形式时，使用 OPC_PUSH_INT32_CONST + OPC_STORE_INT32_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_INT32 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                int32_t literal_val = (int32_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_INT32_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_INT32;
+            }
+            /* 优化0int64：赋值为 <int64>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
+               64位值合并：in.a低32位 + in.b高32位，in.b强制转换为unsigned int避免符号扩展 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_INT64 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                int64_t literal_val = (int64_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_INT64;
+            }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2242,16 +2283,43 @@ static void c_expr(Ctx* c, AstNode* node)
                     /* 上下文感知：自动将左侧变量标记为 uint 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
                 }
-                /* 检查右侧变量是否标记为 long long 类型（CAST_LONGLONG 或 CAST_INT64） */
+                /* 检查右侧变量是否标记为 long long 类型（CAST_LONGLONG） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
-                   (c->fn->var_type_tags[rhs_idx] == CAST_LONGLONG ||
-                    c->fn->var_type_tags[rhs_idx] == CAST_INT64)) {
+                   c->fn->var_type_tags[rhs_idx] == CAST_LONGLONG) {
                     /* OPC_LOAD_LONG_LONG_VAR：直接从 longlong_vals 读取，零提取 */
                     emit(c, OPC_LOAD_LONG_LONG_VAR, rhs_idx, 0);
                     /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
                     emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 long long 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+                }
+                /* 检查右侧变量是否标记为 int8 类型（CAST_INT8） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_INT8) {
+                    emit(c, OPC_LOAD_INT8_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT8;
+                }
+                /* 检查右侧变量是否标记为 int16 类型（CAST_INT16） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_INT16) {
+                    emit(c, OPC_LOAD_INT16_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT16;
+                }
+                /* 检查右侧变量是否标记为 int32 类型（CAST_INT32） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_INT32) {
+                    emit(c, OPC_LOAD_INT32_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT32;
+                }
+                /* 检查右侧变量是否标记为 int64 类型（CAST_INT64） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_INT64) {
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT64;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&

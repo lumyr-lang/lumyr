@@ -1,0 +1,6 @@
+a = <int64>1000000000;
+b = <int64>2000000000;
+c = a;
+print(a);
+print(b);
+print(c);

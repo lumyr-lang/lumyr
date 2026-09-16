@@ -2326,6 +2326,28 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 BYTE_PUSH((unsigned char)in.a);
                 break;
             }
+            case OPC_PUSH_INT8_CONST: {
+                /* int8常量零开销压栈：直接把常量值压入int8专用栈，不创建Value */
+                INT8_PUSH((int8_t)in.a);
+                break;
+            }
+            case OPC_PUSH_INT16_CONST: {
+                /* int16常量零开销压栈：直接把常量值压入int16专用栈，不创建Value */
+                INT16_PUSH((int16_t)in.a);
+                break;
+            }
+            case OPC_PUSH_INT32_CONST: {
+                /* int32常量零开销压栈：直接把常量值压入int32专用栈，不创建Value */
+                INT32_PUSH((int32_t)in.a);
+                break;
+            }
+            case OPC_PUSH_INT64_CONST: {
+                /* int64常量零开销压栈：直接把常量值压入int64专用栈，不创建Value
+                   64位值合并：in.a低32位 + in.b高32位，in.b强制转换为unsigned int避免符号扩展 */
+                int64_t i64val = (int64_t)((uint32_t)in.a) | ((int64_t)(uint32_t)in.b << 32);
+                INT64_PUSH(i64val);
+                break;
+            }
             case OPC_LOAD_BOOL_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;

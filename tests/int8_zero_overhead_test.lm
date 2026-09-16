@@ -1,0 +1,6 @@
+a = <int8>65;
+b = <int8>66;
+c = a;
+print(a);
+print(b);
+print(c);

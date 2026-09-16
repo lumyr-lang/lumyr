@@ -170,6 +170,10 @@ typedef enum {
     OPC_INT64_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int64，创建 int64 泛型数组
     OPC_INT64_ARRAY_GET, // 弹 arr,idx；直接从 int64 类型化数组读取元素，压入 int64 栈（零包装零 Value 开销）
     OPC_PRINT_INT64,     // 从 int64 栈弹出并打印（零开销，用于声明为 int64 的变量）
+    OPC_PUSH_INT8_CONST, // a=int8值；直接压入 int8 栈（零检查零转换）
+    OPC_PUSH_INT16_CONST, // a=int16值；直接压入 int16 栈（零检查零转换）
+    OPC_PUSH_INT32_CONST, // a=int32值；直接压入 int32 栈（零检查零转换）
+    OPC_PUSH_INT64_CONST, // a=低32位, b=高32位；直接压入 int64 栈（零检查零转换）
     OPC_LOAD_UINT8_VAR,   // a=符号表下标；加载声明为 uint8 的变量，直接压入 uint8 栈（零检查零转换）
     OPC_STORE_UINT8_VAR,  // a=符号表下标；从 uint8 栈弹出 uint8 值，直接存储到变量的 uint8_vals（零包装零转换）
     OPC_UINT8_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint8，创建 uint8 泛型数组

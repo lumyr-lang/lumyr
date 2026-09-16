@@ -556,6 +556,38 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __byte_stack[__byte_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_INT8_CONST: {
+                fprintf(out, "    __int8_stack[__int8_stack_sp++] = (int8_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_INT8_VAR: {
+                fprintf(out, "    __int8_stack[__int8_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_INT16_CONST: {
+                fprintf(out, "    __int16_stack[__int16_stack_sp++] = (int16_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_INT16_VAR: {
+                fprintf(out, "    __int16_stack[__int16_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_INT32_CONST: {
+                fprintf(out, "    __int32_stack[__int32_stack_sp++] = (int32_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_INT32_VAR: {
+                fprintf(out, "    __int32_stack[__int32_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_INT64_CONST: {
+                fprintf(out, "    __int64_stack[__int64_stack_sp++] = (int64_t)((uint32_t)%d) | ((int64_t)(uint32_t)%d << 32);\n", in.a, in.b);
+                break;
+            }
+            case OPC_LOAD_INT64_VAR: {
+                fprintf(out, "    __int64_stack[__int64_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_LONG_LONG_CONST: {
                 /* long long 常量零开销压栈：直接把常量值压入long long专用栈，不创建Value
                    用于 <long long>42 字面量赋值等场景，避免创建 Value 再提取的开销
@@ -1061,6 +1093,22 @@ void emit_insns(BytecodeFunc* fn)
                 /* byte 类型零开销存储：从byte专用栈弹出byte值，直接赋给变量，零转换
                    然后把byte值包装成Value压回Value栈（赋值表达式有返回值） */
                 fprintf(out, "    { unsigned char __bv = __byte_stack[--__byte_stack_sp]; %s = __bv; __stk[__stk_sp++] = lumyr_make_byte(__bv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_INT8_VAR: {
+                fprintf(out, "    { int8_t __i8v = __int8_stack[--__int8_stack_sp]; %s = __i8v; __stk[__stk_sp++] = lumyr_make_int8(__i8v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_INT16_VAR: {
+                fprintf(out, "    { int16_t __i16v = __int16_stack[--__int16_stack_sp]; %s = __i16v; __stk[__stk_sp++] = lumyr_make_int16(__i16v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_INT32_VAR: {
+                fprintf(out, "    { int32_t __i32v = __int32_stack[--__int32_stack_sp]; %s = __i32v; __stk[__stk_sp++] = lumyr_make_int32(__i32v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_INT64_VAR: {
+                fprintf(out, "    { int64_t __i64v = __int64_stack[--__int64_stack_sp]; %s = __i64v; __stk[__stk_sp++] = lumyr_make_int64(__i64v); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2230,6 +2278,22 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_BYTE: {
                 /* byte 类型零开销打印：直接从byte专用栈弹出byte值并打印，不转换为Value */
                 fprintf(out, "    { unsigned char __bv = __byte_stack[--__byte_stack_sp]; printf(\"%%u\\n\", __bv); }\n");
+                break;
+            }
+            case OPC_PRINT_INT8: {
+                fprintf(out, "    { int8_t __i8v = __int8_stack[--__int8_stack_sp]; printf(\"%%d\\n\", __i8v); }\n");
+                break;
+            }
+            case OPC_PRINT_INT16: {
+                fprintf(out, "    { int16_t __i16v = __int16_stack[--__int16_stack_sp]; printf(\"%%d\\n\", __i16v); }\n");
+                break;
+            }
+            case OPC_PRINT_INT32: {
+                fprintf(out, "    { int32_t __i32v = __int32_stack[--__int32_stack_sp]; printf(\"%%d\\n\", __i32v); }\n");
+                break;
+            }
+            case OPC_PRINT_INT64: {
+                fprintf(out, "    { int64_t __i64v = __int64_stack[--__int64_stack_sp]; printf(\"%%lld\\n\", __i64v); }\n");
                 break;
             }
             case OPC_PRINT_UINT: {
