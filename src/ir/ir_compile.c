@@ -2011,6 +2011,11 @@ static void c_expr(Ctx* c, AstNode* node)
                         c_expr(c, binop);
                         emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                    } else if(result_type == 5) {
+                        /* long long类型算术运算：结果在long long专用栈中，直接使用OPC_STORE_LONG_LONG_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
                     } else {
                         /* 无法推断结果类型，走通用路径 */
                         c_expr(c, node->u.assign.expr);
@@ -2066,6 +2071,17 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 uint 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
+                }
+                /* 检查右侧变量是否标记为 long long 类型（CAST_LONGLONG 或 CAST_INT64） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   (c->fn->var_type_tags[rhs_idx] == CAST_LONGLONG ||
+                    c->fn->var_type_tags[rhs_idx] == CAST_INT64)) {
+                    /* OPC_LOAD_LONG_LONG_VAR：直接从 longlong_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_LONG_LONG_VAR, rhs_idx, 0);
+                    /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
+                    emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 long long 类型 */
+                    c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
