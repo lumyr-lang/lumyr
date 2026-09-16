@@ -2183,6 +2183,108 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_double(val);
                 break;
             }
+            case OPC_PUSH_FLOAT_CONST: {
+                /* float 常量：从常量池获取 float 值，直接压入 float 栈
+                   用于 <float>3.14 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                float fv = (float)bf->consts[in.a].v.f;
+                FLOAT_PUSH(fv);
+                break;
+            }
+            case OPC_FLOAT_ADD: {
+                /* float 加法：直接从 float 栈弹出两个 float，相加，结果压回 float 栈
+                   零检查零转换零 Value 开销，完全不涉及 Value 栈 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                FLOAT_PUSH(a + b);
+                break;
+            }
+            case OPC_FLOAT_SUB: {
+                /* float 减法 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                FLOAT_PUSH(a - b);
+                break;
+            }
+            case OPC_FLOAT_MUL: {
+                /* float 乘法 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                FLOAT_PUSH(a * b);
+                break;
+            }
+            case OPC_FLOAT_DIV: {
+                /* float 除法，需要检查除零 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                if(b == 0.0f) runtime_error("除零错误：float 除法除数为零");
+                FLOAT_PUSH(a / b);
+                break;
+            }
+            case OPC_FLOAT_TO_VALUE: {
+                /* 把 float 专用栈顶的 float 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑 */
+                float fv = FLOAT_POP();
+                stack[sp++] = lumyr_make_float(fv);
+                break;
+            }
+            case OPC_FLOAT_GT: {
+                /* float 大于比较：直接从 float 栈弹出两个 float，比较后结果(bool)压入 Value 栈 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_FLOAT_LT: {
+                /* float 小于比较 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_FLOAT_GE: {
+                /* float 大于等于比较 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_FLOAT_LE: {
+                /* float 小于等于比较 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_FLOAT_EQ: {
+                /* float 等于比较 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_FLOAT_NE: {
+                /* float 不等于比较 */
+                float b = FLOAT_POP();
+                float a = FLOAT_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            case OPC_FLOAT_ARRAY_SET: {
+                /* float 类型化数组元素赋值：从 Value 栈弹出数组和索引，从 float 栈弹出值，写入数组
+                   零转换，直接写入 float 类型化数组 */
+                float val = FLOAT_POP();
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                if(arr.type == VAL_TYPED_ARRAY && arr.v.typed_array->elem_type == VAL_FLOAT) {
+                    TypedArray* tarr = arr.v.typed_array;
+                    long long i = array_index_of(idx);
+                    ((float*)tarr->items)[i] = val;
+                } else {
+                    runtime_error("类型错误：期望 float 类型化数组");
+                }
+                stack[sp++] = lumyr_make_float(val);
+                break;
+            }
             case OPC_LOAD_FLOAT_VAR: {
                 /* 声明为 float 类型的变量：直接从栈帧的 float_vals 数组读取，零提取、零类型检查 */
                 const char* name = bf->syms[in.a];
