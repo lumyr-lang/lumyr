@@ -588,17 +588,77 @@ static int is_float_var(Ctx* c, AstNode* node) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_FLOAT);
 }
 
-/* 表达式类型枚举（数值大小对应类型优先级，可直接用于类型提升）
-   优先级顺序：int/uint < long long < float < double
-   用于算术运算结果类型推断，编译期调用，零运行时开销 */
+/* 表达式类型枚举（用于算术运算结果类型推断，编译期调用，零运行时开销）
+   注意：数值大小不完全对应类型优先级，有符号/无符号混合运算需通过expr_type_promote函数处理
+   类型提升规则参考C语言标准：浮点 > 整数，64位 > 32位 > 16位 > 8位 */
 typedef enum {
     EXPR_TYPE_NONE = 0,
-    EXPR_TYPE_INT = 1,
-    EXPR_TYPE_UINT = 2,
-    EXPR_TYPE_LONG_LONG = 3,
-    EXPR_TYPE_FLOAT = 4,
-    EXPR_TYPE_DOUBLE = 5,
+    /* 布尔和字符类型 */
+    EXPR_TYPE_BOOL = 1,
+    EXPR_TYPE_CHAR = 2,
+    /* 有符号整数类型（按位宽递增） */
+    EXPR_TYPE_INT8 = 3,
+    EXPR_TYPE_INT16 = 4,
+    EXPR_TYPE_INT = 5,           /* int32 */
+    EXPR_TYPE_INT64 = 6,
+    EXPR_TYPE_LONG_LONG = 7,
+    EXPR_TYPE_LONG = 8,
+    /* 无符号整数类型（按位宽递增） */
+    EXPR_TYPE_BYTE = 9,          /* uint8 */
+    EXPR_TYPE_UINT8 = 10,
+    EXPR_TYPE_UINT16 = 11,
+    EXPR_TYPE_UINT = 12,         /* uint32 */
+    EXPR_TYPE_UINT64 = 13,
+    EXPR_TYPE_ULONG = 14,
+    /* 大小类型 */
+    EXPR_TYPE_SIZE_T = 15,
+    EXPR_TYPE_SSIZE_T = 16,
+    /* 浮点类型（按精度递增） */
+    EXPR_TYPE_FLOAT = 17,
+    EXPR_TYPE_DOUBLE = 18,
+    EXPR_TYPE_LONG_DOUBLE = 19,
 } ExprType;
+
+/* 类型提升辅助函数：根据C语言标准的常用算术转换规则，返回两个类型提升后的结果类型
+   简化规则：浮点 > 整数，64位 > 32位 > 16位 > 8位，无符号 > 有符号（相同位宽时） */
+static ExprType expr_type_promote(ExprType a, ExprType b) {
+    if(a == EXPR_TYPE_NONE || b == EXPR_TYPE_NONE) return EXPR_TYPE_NONE;
+    /* 浮点类型优先级最高 */
+    int a_is_float = (a == EXPR_TYPE_FLOAT || a == EXPR_TYPE_DOUBLE || a == EXPR_TYPE_LONG_DOUBLE);
+    int b_is_float = (b == EXPR_TYPE_FLOAT || b == EXPR_TYPE_DOUBLE || b == EXPR_TYPE_LONG_DOUBLE);
+    if(a_is_float || b_is_float) {
+        if(a == EXPR_TYPE_LONG_DOUBLE || b == EXPR_TYPE_LONG_DOUBLE) return EXPR_TYPE_LONG_DOUBLE;
+        if(a == EXPR_TYPE_DOUBLE || b == EXPR_TYPE_DOUBLE) return EXPR_TYPE_DOUBLE;
+        return EXPR_TYPE_FLOAT;
+    }
+    /* 整数类型：按位宽和符号判断 */
+    /* 定义位宽等级：8位=1, 16位=2, 32位=3, 64位=4, long=5 */
+    int width_rank(ExprType t) {
+        switch(t) {
+            case EXPR_TYPE_BOOL: case EXPR_TYPE_CHAR: case EXPR_TYPE_INT8:
+            case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: return 1;
+            case EXPR_TYPE_INT16: case EXPR_TYPE_UINT16: return 2;
+            case EXPR_TYPE_INT: case EXPR_TYPE_UINT: case EXPR_TYPE_SIZE_T:
+            case EXPR_TYPE_SSIZE_T: return 3;
+            case EXPR_TYPE_INT64: case EXPR_TYPE_UINT64: case EXPR_TYPE_LONG_LONG: return 4;
+            case EXPR_TYPE_LONG: case EXPR_TYPE_ULONG: return 5;
+            default: return 0;
+        }
+    }
+    int is_unsigned(ExprType t) {
+        switch(t) {
+            case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: case EXPR_TYPE_UINT16:
+            case EXPR_TYPE_UINT: case EXPR_TYPE_UINT64: case EXPR_TYPE_ULONG:
+            case EXPR_TYPE_SIZE_T: return 1;
+            default: return 0;
+        }
+    }
+    int wa = width_rank(a), wb = width_rank(b);
+    if(wa != wb) return wa > wb ? a : b;
+    /* 相同位宽：无符号优先 */
+    if(is_unsigned(a) != is_unsigned(b)) return is_unsigned(a) ? a : b;
+    return a; /* 相同位宽相同符号，返回任意一个 */
+}
 
 /* 判断表达式的类型（用于算术运算结果类型推断，编译期调用，零运行时开销）
    返回ExprType枚举值 */
@@ -608,11 +668,29 @@ static ExprType get_expr_type(Ctx* c, AstNode* node) {
         int var_idx = bf_sym(c->fn, node->u.varname);
         if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
         int tag = c->fn->var_type_tags ? c->fn->var_type_tags[var_idx] : -1;
-        if(tag == CAST_INT) return EXPR_TYPE_INT;
+        /* 有符号整数类型 */
+        if(tag == CAST_INT8) return EXPR_TYPE_INT8;
+        if(tag == CAST_INT16) return EXPR_TYPE_INT16;
+        if(tag == CAST_INT || tag == CAST_INT32) return EXPR_TYPE_INT;
+        if(tag == CAST_INT64) return EXPR_TYPE_INT64;
+        if(tag == CAST_LONGLONG) return EXPR_TYPE_LONG_LONG;
+        if(tag == CAST_LONG) return EXPR_TYPE_LONG;
+        /* 无符号整数类型 */
+        if(tag == CAST_BYTE || tag == CAST_UINT8) return EXPR_TYPE_UINT8;
+        if(tag == CAST_UINT16) return EXPR_TYPE_UINT16;
         if(tag == CAST_UINT32) return EXPR_TYPE_UINT;
+        if(tag == CAST_UINT64) return EXPR_TYPE_UINT64;
+        if(tag == CAST_ULONG) return EXPR_TYPE_ULONG;
+        /* 布尔和字符类型 */
+        if(tag == CAST_BOOL) return EXPR_TYPE_BOOL;
+        if(tag == CAST_CHAR) return EXPR_TYPE_CHAR;
+        /* 大小类型 */
+        if(tag == CAST_SIZE_T) return EXPR_TYPE_SIZE_T;
+        if(tag == CAST_SSIZE_T) return EXPR_TYPE_SSIZE_T;
+        /* 浮点类型 */
         if(tag == CAST_FLOAT) return EXPR_TYPE_FLOAT;
         if(tag == 1 /* CAST_DOUBLE */) return EXPR_TYPE_DOUBLE;
-        if(tag == CAST_LONGLONG) return EXPR_TYPE_LONG_LONG;  /* long long 类型 */
+        if(tag == CAST_LONG_DOUBLE) return EXPR_TYPE_LONG_DOUBLE;
         return EXPR_TYPE_NONE;
     }
     if(node->type == AST_BINOP) {
@@ -622,7 +700,7 @@ static ExprType get_expr_type(Ctx* c, AstNode* node) {
         ExprType left_type = get_expr_type(c, node->u.bin.left);
         ExprType right_type = get_expr_type(c, node->u.bin.right);
         if(left_type == EXPR_TYPE_NONE || right_type == EXPR_TYPE_NONE) return EXPR_TYPE_NONE;
-        return left_type > right_type ? left_type : right_type;
+        return expr_type_promote(left_type, right_type);
     }
     return 0;
 }
