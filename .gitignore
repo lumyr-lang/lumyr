@@ -87,8 +87,143 @@ zero_overhead_implementation_steps.md
 # tests 下面的 .c 文件（生成的代码，不入库）
 tests/*.c
 
-# IDE 配置文件（不入库）
+# ==================== IDE 配置文件（不入库） ====================
+
+# JetBrains IDE (IntelliJ IDEA, PyCharm, WebStorm, CLion, etc.)
 .idea/
+.idea_modules/
+*.iml
+*.ipr
+*.iws
+*.idb
+
+# Visual Studio Code
 .vscode/
+*.code-workspace
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj.user
+*.vcxproj.filters
+
+# Vim
 *.swp
 *.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Emacs
+*~
+\#*\#
+.\#*
+.emacs.desktop
+.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.ido.last
+
+# Eclipse
+.project
+.classpath
+.settings/
+.factorypath
+.springBeans
+.sts4-cache
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+# Atom
+.atom/
+.atom-build.json
+.atom-test.json
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# TextMate
+.texting/
+*.tmproj
+*.tmproject
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# ==================== 其他工具配置文件（不入库） ====================
+
+# Docker
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+.jenkins
+.jenkinsrc
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
+
+# 日志文件
+*.log
+logs/
+
+# 缓存文件
+*.cache
+.cache/
+.temp/
+.tmp/
