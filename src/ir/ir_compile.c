@@ -344,6 +344,27 @@ static void layer_cont_add(Ctx* c, int pos)
 
 // ---------------- 表达式 / 语句编译 ----------------
 
+/*
+ * extract_int_literal_value: 提取整数字面量的值（包括负数字面量）
+ * 返回值：1表示成功，0表示失败
+ * 支持的节点类型：
+ *   - AST_INT：正整数字面量
+ *   - AST_UNARY（op=OP_UNARY_MINUS，child=AST_INT）：负整数字面量
+ */
+static int extract_int_literal_value(AstNode* expr, long long* out_val) {
+    if (!expr || !out_val) return 0;
+    if (expr->type == AST_INT) {
+        *out_val = expr->u.inum;
+        return 1;
+    }
+    if (expr->type == AST_UNARY && expr->u.uny.op == OP_UNARY_MINUS &&
+        expr->u.uny.child && expr->u.uny.child->type == AST_INT) {
+        *out_val = -expr->u.uny.child->u.inum;
+        return 1;
+    }
+    return 0;
+}
+
 static void c_stmt(Ctx* c, AstNode* node);
 static void c_expr(Ctx* c, AstNode* node);
 
@@ -1874,18 +1895,20 @@ static void c_expr(Ctx* c, AstNode* node)
             }
             /* 优化0：赋值为 <int>字面量 形式时，使用 OPC_PUSH_INT_CONST + OPC_STORE_INT_VAR
                零包装零重复提取，直接把字面量值压入 int 栈并存储到 int 变量
-               避免创建 Value 再提取的开销 */
+               避免创建 Value 再提取的开销
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                int literal_val = node->u.assign.expr->u.type_annotation.expr->u.inum;
-                /* OPC_PUSH_INT_CONST：直接把常量值压入 int 栈，零检查零转换 */
-                emit(c, OPC_PUSH_INT_CONST, literal_val, 0);
-                /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
-                emit(c, OPC_STORE_INT_VAR, var_idx, 0);
-                /* 记录变量类型标记为 int */
-                c->fn->var_type_tags[var_idx] = CAST_INT;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_INT_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化0u：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_UINT_CONST + OPC_STORE_UINT_VAR
                零包装零重复提取，直接把字面量值压入 uint 栈并存储到 uint 变量
@@ -1929,18 +1952,20 @@ static void c_expr(Ctx* c, AstNode* node)
             }
             /* 优化0ll：赋值为 <long long>字面量 形式时，使用 OPC_PUSH_LONG_LONG_CONST + OPC_STORE_LONG_LONG_VAR
                零包装零重复提取，直接把字面量值压入 long long 栈并存储到 long long 变量
-               避免创建 Value 再提取的开销 */
+               避免创建 Value 再提取的开销
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_LONGLONG &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                long long literal_val = (long long)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                                /* OPC_PUSH_LONG_LONG_CONST：直接把常量值压入 long long 栈，零检查零转换 */
-                emit(c, OPC_PUSH_LONG_LONG_CONST, (int)literal_val, (int)(literal_val >> 32));
-                                /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
-                emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
-                                /* 记录变量类型标记为 long long */
-                c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
+                    emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化0c：赋值为 <char>字面量 形式时，使用 OPC_PUSH_CHAR_CONST + OPC_STORE_CHAR_VAR
                零包装零重复提取，直接把字面量值压入 char 栈并存储到 char 变量
@@ -1972,46 +1997,66 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 byte */
                 c->fn->var_type_tags[var_idx] = CAST_BYTE;
             }
-            /* 优化0int8：赋值为 <int8>字面量 形式时，使用 OPC_PUSH_INT8_CONST + OPC_STORE_INT8_VAR */
+            /* 优化0int8：赋值为 <int8>字面量 形式时，使用 OPC_PUSH_INT8_CONST + OPC_STORE_INT8_VAR
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT8 &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                int8_t literal_val = (int8_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_INT8_CONST, (int)literal_val, 0);
-                emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_INT8;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_INT8_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT8;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
-            /* 优化0int16：赋值为 <int16>字面量 形式时，使用 OPC_PUSH_INT16_CONST + OPC_STORE_INT16_VAR */
+            /* 优化0int16：赋值为 <int16>字面量 形式时，使用 OPC_PUSH_INT16_CONST + OPC_STORE_INT16_VAR
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT16 &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                int16_t literal_val = (int16_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_INT16_CONST, (int)literal_val, 0);
-                emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_INT16;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_INT16_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT16;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
-            /* 优化0int32：赋值为 <int32>字面量 形式时，使用 OPC_PUSH_INT32_CONST + OPC_STORE_INT32_VAR */
+            /* 优化0int32：赋值为 <int32>字面量 形式时，使用 OPC_PUSH_INT32_CONST + OPC_STORE_INT32_VAR
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT32 &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                int32_t literal_val = (int32_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_INT32_CONST, (int)literal_val, 0);
-                emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_INT32;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_INT32_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT32;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化0int64：赋值为 <int64>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
-               64位值合并：in.a低32位 + in.b高32位，in.b强制转换为unsigned int避免符号扩展 */
+               64位值合并：in.a低32位 + in.b高32位，in.b强制转换为unsigned int避免符号扩展
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT64 &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                int64_t literal_val = (int64_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
-                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_INT64;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_INT64;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化0uint8：赋值为 <uint8>字面量 形式时，使用 OPC_PUSH_UINT8_CONST + OPC_STORE_UINT8_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2044,15 +2089,20 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_UINT64;
             }
-            /* 优化0long：赋值为 <long>字面量 形式时，使用 OPC_PUSH_LONG_CONST + OPC_STORE_LONG_VAR */
+            /* 优化0long：赋值为 <long>字面量 形式时，使用 OPC_PUSH_LONG_CONST + OPC_STORE_LONG_VAR
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_LONG &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                long literal_val = (long)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_LONG_CONST, (int)literal_val, 0);
-                emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_LONG;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_LONG_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_LONG;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化0ulong：赋值为 <ulong>字面量 形式时，使用 OPC_PUSH_ULONG_CONST + OPC_STORE_ULONG_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2074,15 +2124,20 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
             }
-            /* 优化0ssize_t：赋值为 <ssize_t>字面量 形式时，使用 OPC_PUSH_SSIZE_T_CONST + OPC_STORE_SSIZE_T_VAR */
+            /* 优化0ssize_t：赋值为 <ssize_t>字面量 形式时，使用 OPC_PUSH_SSIZE_T_CONST + OPC_STORE_SSIZE_T_VAR
+               支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_SSIZE_T &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
-                ssize_t literal_val = (ssize_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
-                emit(c, OPC_PUSH_SSIZE_T_CONST, (int)literal_val, 0);
-                emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
-                c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
+               node->u.assign.expr->u.type_annotation.expr) {
+                long long literal_val;
+                if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
+                    emit(c, OPC_PUSH_SSIZE_T_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
+                } else {
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
             }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
