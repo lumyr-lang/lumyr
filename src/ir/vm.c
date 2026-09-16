@@ -2079,6 +2079,110 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 DOUBLE_PUSH(dv);
                 break;
             }
+            case OPC_PUSH_DOUBLE_CONST: {
+                /* double 常量：从常量池获取 double 值，直接压入 double 栈
+                   用于 <double>3.14 字面量赋值等场景，避免创建 Value 再提取的开销
+                   直接从 bf->consts[in.a].v.d 获取原始 double 值 */
+                double dv = bf->consts[in.a].v.d;
+                DOUBLE_PUSH(dv);
+                break;
+            }
+            case OPC_DOUBLE_ADD: {
+                /* double 加法：直接从 double 栈弹出两个 double，相加，结果压回 double 栈
+                   零检查零转换零 Value 开销，完全不涉及 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                DOUBLE_PUSH(a + b);
+                break;
+            }
+            case OPC_DOUBLE_SUB: {
+                /* double 减法：直接从 double 栈弹出两个 double，相减，结果压回 double 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                DOUBLE_PUSH(a - b);
+                break;
+            }
+            case OPC_DOUBLE_MUL: {
+                /* double 乘法：直接从 double 栈弹出两个 double，相乘，结果压回 double 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                DOUBLE_PUSH(a * b);
+                break;
+            }
+            case OPC_DOUBLE_DIV: {
+                /* double 除法：直接从 double 栈弹出两个 double，相除，结果压回 double 栈
+                   需要检查除零 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                if(b == 0.0) runtime_error("除零错误：double 除法除数为零");
+                DOUBLE_PUSH(a / b);
+                break;
+            }
+            case OPC_DOUBLE_TO_VALUE: {
+                /* 把 double 专用栈顶的 double 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                double dv = DOUBLE_POP();
+                stack[sp++] = lumyr_make_double(dv);
+                break;
+            }
+            case OPC_DOUBLE_GT: {
+                /* double 大于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_DOUBLE_LT: {
+                /* double 小于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_DOUBLE_GE: {
+                /* double 大于等于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_DOUBLE_LE: {
+                /* double 小于等于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_DOUBLE_EQ: {
+                /* double 等于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_DOUBLE_NE: {
+                /* double 不等于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
+                double b = DOUBLE_POP();
+                double a = DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            case OPC_DOUBLE_ARRAY_SET: {
+                /* double 类型化数组元素赋值：从 Value 栈弹出数组和索引，从 double 栈弹出值，写入数组
+                   零转换，直接写入 double 类型化数组 */
+                double val = DOUBLE_POP();
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                if(arr.type == VAL_TYPED_ARRAY && arr.v.typed_array->elem_type == VAL_DOUBLE) {
+                    TypedArray* tarr = arr.v.typed_array;
+                    long long i = array_index_of(idx);
+                    ((double*)tarr->items)[i] = val;
+                } else {
+                    runtime_error("类型错误：期望 double 类型化数组");
+                }
+                stack[sp++] = lumyr_make_double(val);
+                break;
+            }
             case OPC_LOAD_FLOAT_VAR: {
                 /* 声明为 float 类型的变量：直接从栈帧的 float_vals 数组读取，零提取、零类型检查 */
                 const char* name = bf->syms[in.a];

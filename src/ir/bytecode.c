@@ -218,59 +218,23 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT_ARRAY_GET:
             return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 int 栈（Value栈净变化-2） */
         case OPC_LOAD_DOUBLE_VAR:
+        case OPC_PUSH_DOUBLE_CONST:
             return 0;                        /* 压入 double 栈，不改变 Value 栈深度 */
         case OPC_STORE_DOUBLE_VAR:
             return +1;                       /* 从 double 栈弹出 double，包装成 Value 压回（赋值表达式有返回值） */
+        case OPC_DOUBLE_ADD: case OPC_DOUBLE_SUB: case OPC_DOUBLE_MUL: case OPC_DOUBLE_DIV:
+            return 0;                        /* 从 double 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
+        case OPC_DOUBLE_TO_VALUE:
+            return +1;                       /* 从 double 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
+        case OPC_DOUBLE_GT: case OPC_DOUBLE_LT: case OPC_DOUBLE_GE: case OPC_DOUBLE_LE: case OPC_DOUBLE_EQ: case OPC_DOUBLE_NE:
+            return +1;                       /* 从 double 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
+        case OPC_DOUBLE_ARRAY_SET:
+            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 double 栈弹出值(1个) */
         case OPC_DOUBLE_ARRAY_LIT:
             if(in.a == 1) return +1;          /* 从 double 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
             return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
         case OPC_DOUBLE_ARRAY_GET:
             return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 double 栈（Value栈净变化-2） */
-        case OPC_LOAD_FLOAT_VAR:
-            return 0;                        /* 压入 float 栈，不改变 Value 栈深度 */
-        case OPC_STORE_FLOAT_VAR:
-            return +1;                       /* 从 float 栈弹出 float，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_FLOAT_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 float 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_FLOAT_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 float 栈（Value栈净变化-2） */
-        case OPC_LOAD_UINT_VAR:
-            return 0;                        /* 压入 uint 栈，不改变 Value 栈深度 */
-        case OPC_STORE_UINT_VAR:
-            return +1;                       /* 从 uint 栈弹出 uint，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_UINT_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 uint 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_UINT_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 uint 栈（Value栈净变化-2） */
-        case OPC_LOAD_BOOL_VAR:
-            return 0;                        /* 压入 bool 栈，不改变 Value 栈深度 */
-        case OPC_STORE_BOOL_VAR:
-            return +1;                       /* 从 bool 栈弹出 bool，包装成 Value 压回 */
-        case OPC_BOOL_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 bool 栈读取 b 元素，压 1 数组 */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_BOOL_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx，压入 bool 栈 */
-        case OPC_LOAD_CHAR_VAR:
-            return 0;
-        case OPC_STORE_CHAR_VAR:
-            return +1;
-        case OPC_CHAR_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_CHAR_ARRAY_GET:
-            return -2;
-        case OPC_LOAD_BYTE_VAR:
-            return 0;
-        case OPC_STORE_BYTE_VAR:
-            return +1;
-        case OPC_BYTE_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_BYTE_ARRAY_GET:
-            return -2;
         case OPC_INT8_ARRAY_LIT:
             if(in.a == 1) return +1;
             return -in.b + 1;
@@ -358,20 +322,6 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -(in.a > 0 ? in.a : 1);  /* 多参数打印：弹出所有参数（向后兼容：a<=0 时弹1） */
         case OPC_PRINT_INT:
         case OPC_PRINT_DOUBLE:
-        case OPC_PRINT_FLOAT:
-        case OPC_PRINT_UINT:
-        case OPC_PRINT_BOOL:
-        case OPC_PRINT_CHAR:
-        case OPC_PRINT_BYTE:
-        case OPC_PRINT_INT8:
-        case OPC_PRINT_INT16:
-        case OPC_PRINT_INT32:
-        case OPC_PRINT_INT64:
-        case OPC_PRINT_UINT8:
-        case OPC_PRINT_UINT16:
-        case OPC_PRINT_UINT64:
-        case OPC_PRINT_LONG:
-        case OPC_PRINT_ULONG:
         case OPC_PRINT_SIZE_T:
         case OPC_PRINT_SSIZE_T:
         case OPC_PRINT_LONG_DOUBLE:
@@ -568,6 +518,20 @@ static const char* opc_name(OpCode op)
         case OPC_INT_ARRAY_LIT: return "INT_ARRAY_LIT";
         case OPC_INT_ARRAY_GET: return "INT_ARRAY_GET";
         case OPC_PRINT_INT: return "PRINT_INT";
+        /* double专用指令 */
+        case OPC_PUSH_DOUBLE_CONST: return "PUSH_DOUBLE_CONST";
+        case OPC_DOUBLE_ADD: return "DOUBLE_ADD";
+        case OPC_DOUBLE_SUB: return "DOUBLE_SUB";
+        case OPC_DOUBLE_MUL: return "DOUBLE_MUL";
+        case OPC_DOUBLE_DIV: return "DOUBLE_DIV";
+        case OPC_DOUBLE_TO_VALUE: return "DOUBLE_TO_VALUE";
+        case OPC_DOUBLE_GT: return "DOUBLE_GT";
+        case OPC_DOUBLE_LT: return "DOUBLE_LT";
+        case OPC_DOUBLE_GE: return "DOUBLE_GE";
+        case OPC_DOUBLE_LE: return "DOUBLE_LE";
+        case OPC_DOUBLE_EQ: return "DOUBLE_EQ";
+        case OPC_DOUBLE_NE: return "DOUBLE_NE";
+        case OPC_DOUBLE_ARRAY_SET: return "DOUBLE_ARRAY_SET";
         /* uint专用指令 */
         case OPC_LOAD_UINT_VAR: return "LOAD_UINT_VAR";
         case OPC_STORE_UINT_VAR: return "STORE_UINT_VAR";

@@ -46,6 +46,19 @@ typedef enum {
     OPC_STORE_DOUBLE_VAR,  // a=符号表下标；从 double 栈弹出 double 值，直接存储到变量的 double_vals（零包装零转换）
     OPC_DOUBLE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 double，创建 double 泛型数组
     OPC_DOUBLE_ARRAY_GET, // 弹 arr,idx；直接从 double 类型化数组读取元素，压入 double 栈（零包装零 Value 开销）
+    OPC_PUSH_DOUBLE_CONST, // a=常量值索引；把 double 常量直接压入 double 栈（零检查零转换，用于 <double>3.14 字面量赋值）
+    OPC_DOUBLE_ADD,        // 从 double 栈弹出两个 double，相加，结果压回 double 栈（零检查零转换零 Value 开销）
+    OPC_DOUBLE_SUB,        // 从 double 栈弹出两个 double，相减，结果压回 double 栈（零检查零转换零 Value 开销）
+    OPC_DOUBLE_MUL,        // 从 double 栈弹出两个 double，相乘，结果压回 double 栈（零检查零转换零 Value 开销）
+    OPC_DOUBLE_DIV,        // 从 double 栈弹出两个 double，相除，结果压回 double 栈（零检查零转换零 Value 开销）
+    OPC_DOUBLE_TO_VALUE,   // 从 double 栈弹出一个 double，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
+    OPC_DOUBLE_GT,         // 从 double 栈弹出两个 double，大于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_LT,         // 从 double 栈弹出两个 double，小于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_GE,         // 从 double 栈弹出两个 double，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_LE,         // 从 double 栈弹出两个 double，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_EQ,         // 从 double 栈弹出两个 double，等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_NE,         // 从 double 栈弹出两个 double，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_DOUBLE_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 double 栈弹出值，写入 double 类型化数组（零转换）
     OPC_LOAD_FLOAT_VAR,   // a=符号表下标；加载声明为 float 的变量，直接压入 float 栈（零检查零转换）
     OPC_STORE_FLOAT_VAR,  // a=符号表下标；从 float 栈弹出 float 值，直接存储到变量的 float_vals（零包装零转换）
     OPC_FLOAT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 float，创建 float 泛型数组
