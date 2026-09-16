@@ -1,0 +1,16 @@
+// 测试直接print算术运算结果
+print("=== int print test ===\n");
+
+a = <int>10;
+b = <int>20;
+print(a + b);
+print("\n");
+
+print("=== double print test ===\n");
+
+x = <double>1.5;
+y = <double>2.5;
+print(x + y);
+print("\n");
+
+print("=== done ===\n");

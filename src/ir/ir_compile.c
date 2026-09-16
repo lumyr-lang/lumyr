@@ -1886,6 +1886,53 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
+            /* 优化3.5：上下文感知 - 赋值为算术运算结果 b = a + c
+               根据算术运算的结果类型自动推导左侧变量类型，并使用专用存储指令，零转换开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_BINOP) {
+                AstNode* binop = node->u.assign.expr;
+                BinOp bop = binop->u.bin.op;
+                int is_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+                /* 只处理算术运算，比较运算的结果是bool类型，走通用路径 */
+                if(is_arith) {
+                    int left_is_int = is_int_var(c, binop->u.bin.left);
+                    int right_is_int = is_int_var(c, binop->u.bin.right);
+                    int left_is_uint = is_uint_var(c, binop->u.bin.left);
+                    int right_is_uint = is_uint_var(c, binop->u.bin.right);
+                    int left_is_double = is_double_var(c, binop->u.bin.left);
+                    int right_is_double = is_double_var(c, binop->u.bin.right);
+                    int left_is_float = is_float_var(c, binop->u.bin.left);
+                    int right_is_float = is_float_var(c, binop->u.bin.right);
+                    if(left_is_int && right_is_int) {
+                        /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_INT;
+                    } else if(left_is_uint && right_is_uint) {
+                        /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_UINT_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_UINT32;
+                    } else if(left_is_double && right_is_double) {
+                        /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                    } else if(left_is_float && right_is_float) {
+                        /* float类型算术运算：结果在float专用栈中，直接使用OPC_STORE_FLOAT_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_FLOAT;
+                    } else {
+                        /* 混合类型算术运算：走通用路径 */
+                        c_expr(c, node->u.assign.expr);
+                        emit(c, OPC_STORE_VAR, var_idx, 0);
+                    }
+                } else {
+                    /* 比较运算等：结果是bool类型，走通用路径 */
+                    c_expr(c, node->u.assign.expr);
+                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                }
+            }
             /* 优化3：上下文感知 - 赋值为变量 b = a 且 a 是 int 类型时，自动感知为 int 类型
                即使左侧变量没有显式声明 <int>，也自动推导为 int 类型，并使用优化路径 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_VAR) {
@@ -2010,9 +2057,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
                     };
                     emit(c, int_arith_map[bop], 0, 0);
-                    /* 把结果从 int 专用栈弹出，包装成 Value，压入 Value 栈
-                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
-                    emit(c, OPC_INT_TO_VALUE, 0, 0);
+                    /* 结果保持在 int 专用栈中，后续操作通过上下文感知来处理
+                       （赋值给 int 变量时使用 OPC_STORE_INT_VAR，print 时使用 OPC_PRINT_INT 等） */
                 } else {
                     /* 生成 int 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode int_cmp_map[] = {
@@ -2036,9 +2082,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
                     };
                     emit(c, uint_arith_map[bop], 0, 0);
-                    /* 把结果从 uint 专用栈弹出，包装成 Value，压入 Value 栈
-                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
-                    emit(c, OPC_UINT_TO_VALUE, 0, 0);
+                    /* 结果保持在 uint 专用栈中，后续操作通过上下文感知来处理
+                       （赋值给 uint 变量时使用 OPC_STORE_UINT_VAR，print 时使用 OPC_PRINT_UINT 等） */
                 } else {
                     /* 生成 uint 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode uint_cmp_map[] = {
@@ -2062,9 +2107,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_DIV] = OPC_DOUBLE_DIV,
                     };
                     emit(c, double_arith_map[bop], 0, 0);
-                    /* 把结果从 double 专用栈弹出，包装成 Value，压入 Value 栈
-                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
-                    emit(c, OPC_DOUBLE_TO_VALUE, 0, 0);
+                    /* 结果保持在 double 专用栈中，后续操作通过上下文感知来处理
+                       （赋值给 double 变量时使用 OPC_STORE_DOUBLE_VAR，print 时使用 OPC_PRINT_DOUBLE 等） */
                 } else {
                     /* 生成 double 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode double_cmp_map[] = {
@@ -3054,6 +3098,39 @@ static void c_stmt(Ctx* c, AstNode* node)
                         c_expr(c, arr);
                         c_expr(c, idx);
                         emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
+                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        break;
+                    }
+                }
+            }
+            /* 优化：如果 print 只有一个参数，而且是一个算术运算表达式，
+               并且左右操作数都是对应类型的变量，使用专用打印指令（零开销） */
+            else if(single_arg && single_arg->type == AST_BINOP) {
+                BinOp bop = single_arg->u.bin.op;
+                int is_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+                if(is_arith) {
+                    int left_is_int = is_int_var(c, single_arg->u.bin.left);
+                    int right_is_int = is_int_var(c, single_arg->u.bin.right);
+                    int left_is_uint = is_uint_var(c, single_arg->u.bin.left);
+                    int right_is_uint = is_uint_var(c, single_arg->u.bin.right);
+                    int left_is_double = is_double_var(c, single_arg->u.bin.left);
+                    int right_is_double = is_double_var(c, single_arg->u.bin.right);
+                    int left_is_float = is_float_var(c, single_arg->u.bin.left);
+                    int right_is_float = is_float_var(c, single_arg->u.bin.right);
+                    if(left_is_int && right_is_int) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_INT, 0, 0);
+                        break;
+                    } else if(left_is_uint && right_is_uint) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        break;
+                    } else if(left_is_double && right_is_double) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
+                        break;
+                    } else if(left_is_float && right_is_float) {
+                        c_expr(c, single_arg);
                         emit(c, OPC_PRINT_FLOAT, 0, 0);
                         break;
                     }
