@@ -1,0 +1,9 @@
+// 测试uint类型的零开销打印
+a = <uint>42;
+print(a);
+
+b = <uint>100;
+print(b);
+
+c = a + b;
+print(c);

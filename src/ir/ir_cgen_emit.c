@@ -1904,6 +1904,11 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; printf(\"%d\\n\", __iv); }\n");
                 break;
             }
+            case OPC_PRINT_UINT: {
+                /* uint 类型零开销打印：直接从uint专用栈弹出uint值并打印，不转换为Value */
+                fprintf(out, "    { unsigned int __uiv = __uint_stack[--__uint_stack_sp]; printf(\"%u\\n\", __uiv); }\n");
+                break;
+            }
             case OPC_INT_ARRAY_LIT: {
                 /* int 类型零开销数组字面量：
                    a=1: 从 int 专用栈读取（零检查零转换）
