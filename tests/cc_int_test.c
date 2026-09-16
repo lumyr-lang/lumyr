@@ -150,18 +150,6 @@ int main(void){
     /* int 类型专用栈（零开销优化） */
     int __int_stack[8];
     int __int_sp = 0;
-    /* int8 类型专用栈（零开销优化） */
-    int8_t __int8_stack[8];
-    int __int8_sp = 0;
-    /* int16 类型专用栈（零开销优化） */
-    int16_t __int16_stack[8];
-    int __int16_sp = 0;
-    /* int32 类型专用栈（零开销优化） */
-    int32_t __int32_stack[8];
-    int __int32_sp = 0;
-    /* int64 类型专用栈（零开销优化） */
-    int64_t __int64_stack[8];
-    int __int64_sp = 0;
     /* 注册 class 字段信息表到运行时红黑树 */
 
     /* 注册 struct 字段信息表到运行时红黑树 */
