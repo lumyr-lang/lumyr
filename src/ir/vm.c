@@ -3485,6 +3485,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 LONG_LONG_PUSH(llv);
                 break;
             }
+            case OPC_LONG_LONG_TO_FLOAT: {
+                float fv = (float)LONG_LONG_POP();
+                FLOAT_PUSH(fv);
+                break;
+            }
+            case OPC_LONG_LONG_TO_DOUBLE: {
+                double dv = (double)LONG_LONG_POP();
+                DOUBLE_PUSH(dv);
+                break;
+            }
             case OPC_BOOL_ARRAY_LIT: {
                 int n = in.b;
                 if(in.a == 1) {

@@ -2707,7 +2707,19 @@ static void c_expr(Ctx* c, AstNode* node)
                 else if(right_is_long_long) { right_type = 5; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
-                    int result_type = left_type > right_type ? left_type : right_type;
+                    /* 类型提升规则：浮点类型(float=3/double=4)优先级高于整数类型(int=1/uint=2/long long=5)
+                       参考C语言标准：常用算术转换中，浮点类型总是优先于整数类型 */
+                    int left_is_float_type = (left_type == 3 || left_type == 4);
+                    int right_is_float_type = (right_type == 3 || right_type == 4);
+                    int result_type;
+                    if(left_is_float_type || right_is_float_type) {
+                        /* 有浮点类型：取优先级更高的浮点类型(double > float) */
+                        if(left_type == 4 || right_type == 4) result_type = 4; /* double */
+                        else result_type = 3; /* float */
+                    } else {
+                        /* 都是整数类型：取位宽更大的类型(long long > uint > int) */
+                        result_type = left_type > right_type ? left_type : right_type;
+                    }
                     /* 加载左操作数到对应专用栈 */
                     if(left_type == 1) emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
                     else if(left_type == 2) emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
@@ -2725,6 +2737,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         else if(left_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
                         else if(left_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
                         else if(left_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
+                        else if(left_type == 5 && result_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
+                        else if(left_type == 5 && result_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
                     }
                     /* 加载右操作数到对应专用栈 */
                     if(right_type == 1) emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
@@ -2743,6 +2757,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         else if(right_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
                         else if(right_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
                         else if(right_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
+                        else if(right_type == 5 && result_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
+                        else if(right_type == 5 && result_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
                     }
                     /* 执行大类型的算术运算（结果在大类型专用栈中） */
                     if(result_type == 3) { /* float */

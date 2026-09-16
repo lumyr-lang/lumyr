@@ -2511,6 +2511,14 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; __long_long_stack[__long_long_stack_sp++] = (long long)__dv; }\n");
                 break;
             }
+            case OPC_LONG_LONG_TO_FLOAT: {
+                fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; __float_stack[__float_stack_sp++] = (float)__llv; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_TO_DOUBLE: {
+                fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; __double_stack[__double_stack_sp++] = (double)__llv; }\n");
+                break;
+            }
             case OPC_UINT_ARRAY_LIT: {
                 /* uint 类型零开销数组字面量：
                    a=1: 从 uint 专用栈读取（零检查零转换）
