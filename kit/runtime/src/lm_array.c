@@ -8,6 +8,30 @@
 #include <math.h>
 #include <limits.h>
 
+/* 辅助函数：根据value的类型提取整数值（各数据类型专用，避免混用long long） */
+static long long array_extract_ll(Value v) {
+    switch(v.type) {
+        case VAL_INT:     return v.v.i;
+        case VAL_INT8:    return (long long)v.v.i8;
+        case VAL_INT16:   return (long long)v.v.i16;
+        case VAL_INT32:   return (long long)v.v.i32;
+        case VAL_INT64:   return v.v.i;
+        case VAL_BYTE:    return (long long)v.v.u8;
+        case VAL_UINT8:   return (long long)v.v.u8;
+        case VAL_UINT16:  return (long long)v.v.u16;
+        case VAL_UINT32:  return (long long)v.v.u32;
+        case VAL_UINT64:  return (long long)v.v.u64;
+        case VAL_LONG:    return (long long)v.v.l;
+        case VAL_ULONG:   return (long long)v.v.ul;
+        case VAL_SIZE_T:  return (long long)v.v.st;
+        case VAL_SSIZE_T: return (long long)v.v.sst;
+        case VAL_BOOL:    return v.v.b ? 1 : 0;
+        case VAL_CHAR:    return (long long)(unsigned char)v.v.c;
+        case VAL_DOUBLE:  return (long long)v.v.d;
+        default:          return 0;
+    }
+}
+
 // sort_cmp 排序方向（lumyr_sort 设置后调用 qsort）
 static _Thread_local int g_sort_numeric = 0;   /* TLS：多线程 sort 互不干扰 */
 
@@ -42,8 +66,8 @@ Value lumyr_del(Value* arr, Value idx)
         return *arr;
     }
     if(arr->type != VAL_ARRAY) runtime_error("del() 第一个参数必须是数组或字典");
-    if(idx.type != VAL_INT) runtime_error("del() 下标必须是整数");
-    long long i = idx.v.i;
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("del() 下标必须是整数");
+    long long i = array_extract_ll(idx);
     int n = arr->v.array->len;
     if(i < 0 || i >= n) { char b[96]; snprintf(b, sizeof b, "del() 下标 %lld 越界（长度 %d）", i, n); runtime_error(b); }
     for(int k = (int)i; k < n - 1; k++) arr->v.array->items[k] = arr->v.array->items[k + 1];
@@ -72,8 +96,8 @@ Value lumyr_array_add(Value* arr, Value val)
 Value lumyr_insert(Value* arr, Value idx, Value val)
 {
     if(arr->type != VAL_ARRAY) runtime_error("insert() 第一个参数必须是数组");
-    if(idx.type != VAL_INT) runtime_error("insert() 下标必须是整数");
-    long long i = idx.v.i;
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("insert() 下标必须是整数");
+    long long i = array_extract_ll(idx);
     int n = arr->v.array->len;
     if(i < 0 || i > n) { char b[96]; snprintf(b, sizeof b, "insert() 下标 %lld 越界（允许 0..%d）", i, n); runtime_error(b); }
     // 先追加一个元素（扩容）
@@ -109,8 +133,8 @@ Value lumyr_array_get_safe(Value arr, Value idx)
         return lumyr_map_get(arr, idx);
     }
     if(arr.type != VAL_ARRAY) return val_none();
-    if(idx.type != VAL_INT) return val_none();
-    long long i = idx.v.i;
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) return val_none();
+    long long i = array_extract_ll(idx);
     if(i < 0 || i >= arr.v.array->len) return val_none();
     return arr.v.array->items[i];
 }
@@ -124,8 +148,8 @@ Value lumyr_array_set_method(Value arr, Value idx, Value val)
         return arr;
     }
     if(arr.type != VAL_ARRAY) runtime_error("set() 第一个参数必须是数组或字典");
-    if(idx.type != VAL_INT) runtime_error("set() 下标必须是整数");
-    long long i = idx.v.i;
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("set() 下标必须是整数");
+    long long i = array_extract_ll(idx);
     if(i < 0 || i >= arr.v.array->len) {
         char b[96]; snprintf(b, sizeof b, "set() 下标 %lld 越界（长度 %d）", i, arr.v.array->len);
         runtime_error(b);
@@ -210,6 +234,7 @@ static double array_sum_d(Value arr, long long* isum, int* all_int)
         if(v.type == VAL_DOUBLE) *all_int = 0;
         dsum += value_as_number(v);
         if(v.type == VAL_INT) *isum += v.v.i;
+        else if(v.type == VAL_INT8 || v.type == VAL_INT16 || v.type == VAL_INT32 || v.type == VAL_INT64 || v.type == VAL_BYTE || v.type == VAL_UINT8 || v.type == VAL_UINT16 || v.type == VAL_UINT32 || v.type == VAL_UINT64 || v.type == VAL_LONG || v.type == VAL_ULONG || v.type == VAL_SIZE_T || v.type == VAL_SSIZE_T || v.type == VAL_BOOL || v.type == VAL_CHAR) *isum += array_extract_ll(v);
     }
     return dsum;
 }
