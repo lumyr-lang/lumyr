@@ -2572,10 +2572,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     double* ditems = (double*)tarr->items;
                     if(in.a == 1) {
                         /* 从 double 栈读取：零检查零转换 */
+                        StackCache double_cache;
+                        STACK_CACHE_INIT(double_cache, STACK_DOUBLE);
+                        double* double_stack_ptr = (double*)double_cache.stack;
+                        int* double_sp_ptr = double_cache.sp;
                         for(int k = 0; k < n; k++) {
-                            ditems[k] = ((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - n + k];
+                            ditems[k] = double_stack_ptr[(*double_sp_ptr) - n + k];
                         }
-                        (*stack_global_get_sp(STACK_DOUBLE)) -= n;
+                        (*double_sp_ptr) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
@@ -2618,10 +2622,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     float* fitems = (float*)tarr->items;
                     if(in.a == 1) {
                         /* 从 float 栈读取：零检查零转换 */
+                        StackCache float_cache;
+                        STACK_CACHE_INIT(float_cache, STACK_FLOAT);
+                        float* float_stack_ptr = (float*)float_cache.stack;
+                        int* float_sp_ptr = float_cache.sp;
                         for(int k = 0; k < n; k++) {
-                            fitems[k] = ((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT)) - n + k];
+                            fitems[k] = float_stack_ptr[(*float_sp_ptr) - n + k];
                         }
-                        (*stack_global_get_sp(STACK_FLOAT)) -= n;
+                        (*float_sp_ptr) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
@@ -2664,10 +2672,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     unsigned int* uitems = (unsigned int*)tarr->items;
                     if(in.a == 1) {
                         /* 从 uint 栈读取：零检查零转换 */
+                        StackCache uint_cache;
+                        STACK_CACHE_INIT(uint_cache, STACK_UINT);
+                        unsigned int* uint_stack_ptr = (unsigned int*)uint_cache.stack;
+                        int* uint_sp_ptr = uint_cache.sp;
                         for(int k = 0; k < n; k++) {
-                            uitems[k] = ((unsigned int*)stack_global_get_stack(STACK_UINT))[(*stack_global_get_sp(STACK_UINT)) - n + k];
+                            uitems[k] = uint_stack_ptr[(*uint_sp_ptr) - n + k];
                         }
-                        (*stack_global_get_sp(STACK_UINT)) -= n;
+                        (*uint_sp_ptr) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
