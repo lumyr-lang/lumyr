@@ -521,6 +521,11 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __long_long_stack[__long_long_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_LOAD_LONG_DOUBLE_VAR: {
+                /* long double 类型零开销加载：直接从变量读取long double值，压入long double专用栈，不转换为Value */
+                fprintf(out, "    __long_double_stack[__long_double_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_LOAD_INT_VAR: {
                 /* int 类型零开销加载：直接从变量读取int值，压入int专用栈，不转换为Value */
                 fprintf(out, "    __int_stack[__int_stack_sp++] = %s;\n", cvar_rw(nm));
@@ -595,6 +600,13 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __long_long_stack[__long_long_stack_sp++] = (long long)((unsigned int)%u) | ((long long)(unsigned int)%u << 32);\n", in.a, in.b);
                 break;
             }
+            case OPC_PUSH_LONG_DOUBLE_CONST: {
+                /* long double 常量零开销压栈：直接把常量值压入long double专用栈，不创建Value
+                   用于 <long double>3.14 字面量赋值等场景，避免创建 Value 再提取的开销
+                   注意：64位double位模式由in.a(低32位)和in.b(高32位)合并而成，再转换为long double */
+                fprintf(out, "    { double __ldd; uint64_t __ldbits = (uint64_t)((unsigned int)%u) | ((uint64_t)(unsigned int)%u << 32); memcpy(&__ldd, &__ldbits, sizeof(double)); __long_double_stack[__long_double_stack_sp++] = (long double)__ldd; }\n", in.a, in.b);
+                break;
+            }
             case OPC_PUSH_INT_CONST: {
                 /* int 常量零开销压栈：直接把常量值压入int专用栈，不创建Value
                    用于 <int>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
@@ -625,6 +637,26 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_LONG_LONG_MOD: {
                 /* long long 取模零开销 */
                 fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla %% __llb; }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_ADD: {
+                /* long double 加法零开销 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __long_double_stack[__long_double_stack_sp++] = __lda + __ldb; }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_SUB: {
+                /* long double 减法零开销 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __long_double_stack[__long_double_stack_sp++] = __lda - __ldb; }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_MUL: {
+                /* long double 乘法零开销 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __long_double_stack[__long_double_stack_sp++] = __lda * __ldb; }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_DIV: {
+                /* long double 除法零开销 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __long_double_stack[__long_double_stack_sp++] = __lda / __ldb; }\n");
                 break;
             }
             case OPC_INT_ADD: {
@@ -693,6 +725,36 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_LONG_LONG_NE: {
                 /* long long 不等于比较 */
                 fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla != __llb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_GT: {
+                /* long double 大于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda > __ldb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_LT: {
+                /* long double 小于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda < __ldb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_GE: {
+                /* long double 大于等于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda >= __ldb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_LE: {
+                /* long double 小于等于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda <= __ldb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_EQ: {
+                /* long double 等于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda == __ldb); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_NE: {
+                /* long double 不等于比较 */
+                fprintf(out, "    { long double __ldb = __long_double_stack[--__long_double_stack_sp]; long double __lda = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lda != __ldb); }\n");
                 break;
             }
             case OPC_INT_GT: {
@@ -1069,6 +1131,12 @@ void emit_insns(BytecodeFunc* fn)
                     /* 接口类型或普通类型：直接传递 Value */
                     fprintf(out, "    __stk[__stk_sp++] = %s;\n", cvar_rw(nm));
                 }
+                break;
+            }
+            case OPC_STORE_LONG_DOUBLE_VAR: {
+                /* long double 类型零开销存储：从long double专用栈弹出long double值，直接赋给变量，零转换
+                   然后把long double值包装成Value压回Value栈（赋值表达式有返回值） */
+                fprintf(out, "    { long double __ldv = __long_double_stack[--__long_double_stack_sp]; %s = __ldv; __stk[__stk_sp++] = lumyr_make_double((double)__ldv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_VAR: {
@@ -2342,6 +2410,11 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_LONG_LONG: {
                 /* long long 类型零开销打印：直接从long long专用栈弹出long long值并打印，不转换为Value */
                 fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; printf(\"%%lld\\n\", __llv); }\n");
+                break;
+            }
+            case OPC_PRINT_LONG_DOUBLE: {
+                /* long double 类型零开销打印：直接从long double专用栈弹出long double值并打印，不转换为Value */
+                fprintf(out, "    { long double __ldv = __long_double_stack[--__long_double_stack_sp]; printf(\"%%Lf\\n\", __ldv); }\n");
                 break;
             }
             case OPC_PRINT_INT: {

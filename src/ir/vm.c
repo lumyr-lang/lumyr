@@ -4828,10 +4828,13 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_PUSH_LONG_DOUBLE_CONST: {
-                /* long double常量压栈：in.a低32位 + in.b高32位，合并为64位，再转换为long double */
+                /* long double常量压栈：in.a低32位 + in.b高32位，合并为64位double值，再转换为long double
+                   注意：Windows平台下long double是128位(16字节)，但指令只能传递64位，
+                   所以先解析为double(64位)，再提升为long double，损失部分高精度但保证正确性 */
                 uint64_t bits = (uint64_t)(uint32_t)in.a | ((uint64_t)(uint32_t)in.b << 32);
-                long double ld = 0.0L;
-                memcpy(&ld, &bits, sizeof(long double) < sizeof(uint64_t) ? sizeof(long double) : sizeof(uint64_t));
+                double d = 0.0;
+                memcpy(&d, &bits, sizeof(double));
+                long double ld = (long double)d;
                 LONG_DOUBLE_PUSH(ld);
                 break;
             }

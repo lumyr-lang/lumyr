@@ -486,6 +486,7 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             case OPC_STORE_DOUBLE_VAR:
             case OPC_STORE_FLOAT_VAR:
             case OPC_STORE_LONG_LONG_VAR:
+            case OPC_STORE_LONG_DOUBLE_VAR:
             case OPC_STORE_BOOL_VAR:
             case OPC_STORE_CHAR_VAR:
             case OPC_STORE_BYTE_VAR:
@@ -504,8 +505,6 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             /* size_t/ssize_t 类型 */
             case OPC_STORE_SIZE_T_VAR:
             case OPC_STORE_SSIZE_T_VAR:
-            /* long double 类型 */
-            case OPC_STORE_LONG_DOUBLE_VAR:
                 if(in.a >= 0 && in.a < fn->sym_cnt) ns_add(set, fn->syms[in.a]);
                 break;
             case OPC_LOAD_VAR:
@@ -516,6 +515,7 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             case OPC_LOAD_DOUBLE_VAR:
             case OPC_LOAD_FLOAT_VAR:
             case OPC_LOAD_LONG_LONG_VAR:
+            case OPC_LOAD_LONG_DOUBLE_VAR:
             case OPC_LOAD_BOOL_VAR:
             case OPC_LOAD_CHAR_VAR:
             case OPC_LOAD_BYTE_VAR:
@@ -534,8 +534,6 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             /* size_t/ssize_t 类型 */
             case OPC_LOAD_SIZE_T_VAR:
             case OPC_LOAD_SSIZE_T_VAR:
-            /* long double 类型 */
-            case OPC_LOAD_LONG_DOUBLE_VAR:
                 if(include_load && in.a >= 0 && in.a < fn->sym_cnt) ns_add(set, fn->syms[in.a]);
                 break;
             default:

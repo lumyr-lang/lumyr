@@ -1928,11 +1928,27 @@ static void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
+            /* 优化0ld：赋值为 <long double>字面量 形式时，使用 OPC_PUSH_LONG_DOUBLE_CONST + OPC_STORE_LONG_DOUBLE_VAR
+               零包装零重复提取，直接把字面量值压入 long double 栈并存储到 long double 变量
+               注意：Windows平台下long double是128位(16字节)，但指令只能传递64位，
+               所以先转换为double(64位)，传递double的位模式，VM中再提升为long double */
+            if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_LONG_DOUBLE &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_NUM) {
+                double d_val = (double)node->u.assign.expr->u.type_annotation.expr->u.num;
+                /* 将 double 的位模式复制到 uint64_t，然后拆分为低32位和高32位 */
+                uint64_t bits = 0;
+                memcpy(&bits, &d_val, sizeof(double));
+                emit(c, OPC_PUSH_LONG_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
+                emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
+            }
             /* 优化0：赋值为 <int>字面量 形式时，使用 OPC_PUSH_INT_CONST + OPC_STORE_INT_VAR
                零包装零重复提取，直接把字面量值压入 int 栈并存储到 int 变量
                避免创建 Value 再提取的开销
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
-            if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
@@ -2388,6 +2404,11 @@ static void c_expr(Ctx* c, AstNode* node)
                         c_expr(c, binop);
                         emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+                    } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
+                        /* long double类型算术运算：结果在long double专用栈中，直接使用OPC_STORE_LONG_DOUBLE_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
                     } else {
                         /* 无法推断结果类型，走通用路径 */
                         c_expr(c, node->u.assign.expr);
@@ -2453,6 +2474,16 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 long long 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+                }
+                /* 检查右侧变量是否标记为 long double 类型（CAST_LONG_DOUBLE） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_LONG_DOUBLE) {
+                    /* OPC_LOAD_LONG_DOUBLE_VAR：直接从 longdouble_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_LONG_DOUBLE_VAR, rhs_idx, 0);
+                    /* OPC_STORE_LONG_DOUBLE_VAR：从 long double 栈弹出，存储到 longdouble_vals，零重复提取 */
+                    emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                    /* 上下文感知：自动将左侧变量标记为 long double 类型 */
+                    c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
                 }
                 /* 检查右侧变量是否标记为 int8 类型（CAST_INT8） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
@@ -2605,6 +2636,10 @@ static void c_expr(Ctx* c, AstNode* node)
             int right_is_long_long = is_long_long_var(c, node->u.bin.right);
             int is_long_long_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
             int is_long_long_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_long_double = is_long_double_var(c, node->u.bin.left);
+            int right_is_long_double = is_long_double_var(c, node->u.bin.right);
+            int is_long_double_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV);
+            int is_long_double_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
             if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
@@ -2722,6 +2757,26 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_LE] = OPC_FLOAT_LE, [OP_EQ] = OPC_FLOAT_EQ, [OP_NE] = OPC_FLOAT_NE,
                     };
                     emit(c, float_cmp_map[bop], 0, 0);
+                }
+            }
+            /* long double 类型专用算术/比较运算指令（零检查零转换零 Value 开销） */
+            else if(left_is_long_double && right_is_long_double && (is_long_double_arith || is_long_double_cmp)) {
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_LONG_DOUBLE_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_LONG_DOUBLE_VAR, right_idx, 0);
+                if(is_long_double_arith) {
+                    static const OpCode long_double_arith_map[] = {
+                        [OP_ADD] = OPC_LONG_DOUBLE_ADD, [OP_SUB] = OPC_LONG_DOUBLE_SUB, [OP_MUL] = OPC_LONG_DOUBLE_MUL,
+                        [OP_DIV] = OPC_LONG_DOUBLE_DIV,
+                    };
+                    emit(c, long_double_arith_map[bop], 0, 0);
+                } else {
+                    static const OpCode long_double_cmp_map[] = {
+                        [OP_GT] = OPC_LONG_DOUBLE_GT, [OP_LT] = OPC_LONG_DOUBLE_LT, [OP_GE] = OPC_LONG_DOUBLE_GE,
+                        [OP_LE] = OPC_LONG_DOUBLE_LE, [OP_EQ] = OPC_LONG_DOUBLE_EQ, [OP_NE] = OPC_LONG_DOUBLE_NE,
+                    };
+                    emit(c, long_double_cmp_map[bop], 0, 0);
                 }
             }
             /* 混合类型算术运算（类型提升，零包装零Value开销）
@@ -3630,6 +3685,10 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_LONG_LONG, 0, 0);
                         break;
+                    } else if(tag == CAST_LONG_DOUBLE) {
+                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        break;
                     } else if(tag == CAST_BOOL) {
                         emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_BOOL, 0, 0);
@@ -3851,6 +3910,11 @@ static void c_stmt(Ctx* c, AstNode* node)
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_LONG_LONG, 0, 0);
                         break;
+                    } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
+                        /* long double 类型算术运算结果：直接生成 OPC_PRINT_LONG_DOUBLE */
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        break;
                     }
                 }
             }
@@ -3878,6 +3942,10 @@ static void c_stmt(Ctx* c, AstNode* node)
                     } else if(tag == CAST_LONGLONG) {
                         emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_LONG_LONG, 0, 0);
+                        break;
+                    } else if(tag == CAST_LONG_DOUBLE) {
+                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_BOOL) {
                         emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
