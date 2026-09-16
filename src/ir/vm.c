@@ -1998,6 +1998,48 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_int((long long)iv);
                 break;
             }
+            case OPC_INT_GT: {
+                /* int 大于比较：直接从 int 栈弹出两个 int，比较后结果(bool)压入 Value 栈 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_INT_LT: {
+                /* int 小于比较 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_INT_GE: {
+                /* int 大于等于比较 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_INT_LE: {
+                /* int 小于等于比较 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_INT_EQ: {
+                /* int 等于比较 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_INT_NE: {
+                /* int 不等于比较 */
+                int b = INT_POP();
+                int a = INT_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
             case OPC_LOAD_DOUBLE_VAR: {
                 /* 声明为 double 类型的变量：直接从栈帧的 double_vals 数组读取，零提取、零类型检查
                    stackframe_get_double 直接返回原始 double 值，不需要从 Value 联合体提取 */

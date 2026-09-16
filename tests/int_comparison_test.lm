@@ -1,0 +1,78 @@
+// 测试：int类型专用比较运算指令（零检查零转换零Value开销）
+print("=== int类型专用比较运算测试 ===\n");
+
+// 声明int变量
+a = <int>10;
+b = <int>3;
+c = <int>10;
+
+print("a = ");
+print(a);
+print(", b = ");
+print(b);
+print(", c = ");
+print(c);
+print("\n");
+
+// 大于
+print("a > b = ");
+print(a > b);
+print("\n");
+print("b > a = ");
+print(b > a);
+print("\n");
+
+// 小于
+print("a < b = ");
+print(a < b);
+print("\n");
+print("b < a = ");
+print(b < a);
+print("\n");
+
+// 大于等于
+print("a >= c = ");
+print(a >= c);
+print("\n");
+print("a >= b = ");
+print(a >= b);
+print("\n");
+
+// 小于等于
+print("a <= c = ");
+print(a <= c);
+print("\n");
+print("b <= a = ");
+print(b <= a);
+print("\n");
+
+// 等于
+print("a == c = ");
+print(a == c);
+print("\n");
+print("a == b = ");
+print(a == b);
+print("\n");
+
+// 不等于
+print("a != b = ");
+print(a != b);
+print("\n");
+print("a != c = ");
+print(a != c);
+print("\n");
+
+// 条件判断中使用比较
+if(a > b) {
+    print("a > b is true\n");
+} else {
+    print("a > b is false\n");
+}
+
+if(a == c) {
+    print("a == c is true\n");
+} else {
+    print("a == c is false\n");
+}
+
+print("=== 测试完成 ===\n");

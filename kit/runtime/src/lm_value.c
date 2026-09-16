@@ -574,6 +574,43 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
         runtime_error("结构体属性写入必须是字符串键");
         return val;
     }
+    /* 支持类型化数组（VAL_TYPED_ARRAY）：直接写入对应类型的元素，零转换开销 */
+    if(arr.type == VAL_TYPED_ARRAY && arr.v.typed_array) {
+        TypedArray* tarr = arr.v.typed_array;
+        long long i = array_index_of(idx);
+        if(i < 0 || i >= tarr->len) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "类型化数组下标越界: %lld (长度 %d)", i, tarr->len);
+            runtime_error(buf);
+        }
+        /* 根据元素类型，把 val 转换为对应类型后写入
+           每个数据类型都使用自己的专用提取函数，避免混用 */
+        switch(tarr->elem_type) {
+            case VAL_INT:
+                ((int*)tarr->items)[i] = (int)lumyr_extract_int(val);
+                break;
+            case VAL_DOUBLE:
+                ((double*)tarr->items)[i] = lumyr_extract_double(val);
+                break;
+            case VAL_FLOAT:
+                ((float*)tarr->items)[i] = lumyr_extract_float(val);
+                break;
+            case VAL_BOOL:
+                ((_Bool*)tarr->items)[i] = lumyr_extract_bool(val);
+                break;
+            case VAL_CHAR:
+                ((char*)tarr->items)[i] = lumyr_extract_char(val);
+                break;
+            case VAL_BYTE:
+                ((unsigned char*)tarr->items)[i] = lumyr_extract_byte(val);
+                break;
+            default:
+                /* 其他类型：暂不支持，报错 */
+                runtime_error("类型化数组元素赋值：不支持的元素类型");
+                break;
+        }
+        return val;
+    }
     if(arr.type != VAL_ARRAY) runtime_error("下标访问的对象不是数组");
     long long i = array_index_of(idx);
     if(i < 0 || i >= arr.v.array->len) {
@@ -1036,6 +1073,42 @@ int lumyr_extract_int(Value v) {
     Value iv = lumyr_cast_int(v);
     if (iv.type == VAL_INT) {
         return iv.v.i;
+    }
+    return 0;
+}
+
+double lumyr_extract_double(Value v) {
+    Value dv = lumyr_cast_double(v);
+    if (dv.type == VAL_DOUBLE) {
+        return dv.v.d;
+    }
+    return 0.0;
+}
+
+float lumyr_extract_float(Value v) {
+    Value fv = lumyr_cast_float(v);
+    if (fv.type == VAL_DOUBLE) {
+        return (float)fv.v.d;
+    }
+    return 0.0f;
+}
+
+_Bool lumyr_extract_bool(Value v) {
+    return lumyr_to_bool(v);
+}
+
+char lumyr_extract_char(Value v) {
+    Value cv = lumyr_cast_char(v);
+    if (cv.type == VAL_CHAR) {
+        return cv.v.c;
+    }
+    return 0;
+}
+
+unsigned char lumyr_extract_byte(Value v) {
+    Value bv = lumyr_cast_byte(v);
+    if (bv.type == VAL_BYTE) {
+        return (unsigned char)bv.v.i;
     }
     return 0;
 }

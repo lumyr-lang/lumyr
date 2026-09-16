@@ -97,6 +97,11 @@ Value lumyr_cast_longlong(Value v);
 Value lumyr_cast_float(Value v);
 
 int lumyr_extract_int(Value v);
+double lumyr_extract_double(Value v);
+float lumyr_extract_float(Value v);
+_Bool lumyr_extract_bool(Value v);
+char lumyr_extract_char(Value v);
+unsigned char lumyr_extract_byte(Value v);
 
 void lumyr_print(Value v);
 void lumyr_print_inline(Value v);  /* 打印单个值不换行，用于多参数 print */

@@ -1930,26 +1930,37 @@ static void c_expr(Ctx* c, AstNode* node)
                 bf_patch(c->fn, jend, c->fn->code_len);
                 break;
             }
-            /* 优化：int 类型专用算术运算指令（零检查零转换零 Value 开销）
+            /* 优化：int 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
                如果左右操作数都是声明为 int 的变量，使用 OPC_INT_ADD 等专用指令，
                直接从 int 专用栈弹出两个 int，运算后结果压回 int 专用栈，完全不涉及 Value 栈 */
             int left_is_int = is_int_var(c, node->u.bin.left);
             int right_is_int = is_int_var(c, node->u.bin.right);
-            if(left_is_int && right_is_int && (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD)) {
+            int is_int_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_int_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
                 emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
                 emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
-                /* 生成 int 专用算术运算指令 */
-                static const OpCode int_map[] = {
-                    [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
-                    [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
-                };
-                emit(c, int_map[bop], 0, 0);
-                /* 把结果从 int 专用栈弹出，包装成 Value，压入 Value 栈
-                   以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
-                emit(c, OPC_INT_TO_VALUE, 0, 0);
+                if(is_int_arith) {
+                    /* 生成 int 专用算术运算指令 */
+                    static const OpCode int_arith_map[] = {
+                        [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
+                        [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
+                    };
+                    emit(c, int_arith_map[bop], 0, 0);
+                    /* 把结果从 int 专用栈弹出，包装成 Value，压入 Value 栈
+                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                    emit(c, OPC_INT_TO_VALUE, 0, 0);
+                } else {
+                    /* 生成 int 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
+                    static const OpCode int_cmp_map[] = {
+                        [OP_GT] = OPC_INT_GT, [OP_LT] = OPC_INT_LT, [OP_GE] = OPC_INT_GE,
+                        [OP_LE] = OPC_INT_LE, [OP_EQ] = OPC_INT_EQ, [OP_NE] = OPC_INT_NE,
+                    };
+                    emit(c, int_cmp_map[bop], 0, 0);
+                }
             } else {
                 /* 通用路径：编译左右操作数，生成通用指令 */
                 c_expr(c, node->u.bin.left);

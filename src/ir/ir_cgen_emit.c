@@ -559,6 +559,36 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int __iv = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_int((long long)__iv); }\n");
                 break;
             }
+            case OPC_INT_GT: {
+                /* int 大于比较：直接从 int 专用栈弹出两个 int，比较后结果(bool)压入 Value 栈 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia > __ib); }\n");
+                break;
+            }
+            case OPC_INT_LT: {
+                /* int 小于比较 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia < __ib); }\n");
+                break;
+            }
+            case OPC_INT_GE: {
+                /* int 大于等于比较 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia >= __ib); }\n");
+                break;
+            }
+            case OPC_INT_LE: {
+                /* int 小于等于比较 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia <= __ib); }\n");
+                break;
+            }
+            case OPC_INT_EQ: {
+                /* int 等于比较 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia == __ib); }\n");
+                break;
+            }
+            case OPC_INT_NE: {
+                /* int 不等于比较 */
+                fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia != __ib); }\n");
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
