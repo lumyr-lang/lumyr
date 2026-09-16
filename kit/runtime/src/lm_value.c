@@ -846,7 +846,7 @@ Value lumyr_cast_byte(Value v) {
             bv = (unsigned char)v.v.c;
             break;
         case VAL_BYTE:
-            bv = (unsigned long long)(v.v.i & 0xFF);
+            bv = (unsigned long long)v.v.u8;  // 使用专用的u8成员
             break;
         case VAL_STRING:
             bv = (unsigned long long)atoll(lumyr_str_cstr(&v) ? lumyr_str_cstr(&v) : "0") & 0xFFULL;
@@ -930,7 +930,7 @@ Value lumyr_cast_int(Value v) {
             iv = (unsigned char)v.v.c;
             break;
         case VAL_BYTE:
-            iv = v.v.i & 0xFF;
+            iv = (long long)v.v.u8;  // 使用专用的u8成员
             break;
         case VAL_STRING: {
             const char* t = lumyr_str_cstr(&v);
@@ -990,7 +990,7 @@ Value lumyr_cast_double(Value v) {
             dv = (double)(unsigned char)v.v.c;
             break;
         case VAL_BYTE:
-            dv = (double)(v.v.i & 0xFF);
+            dv = (double)v.v.u8;  // 使用专用的u8成员
             break;
         case VAL_STRING: {
             const char* t = lumyr_str_cstr(&v);
