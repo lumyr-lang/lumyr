@@ -612,6 +612,94 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    }\n");
                 break;
             }
+            /* ===== double 类型零开销专用指令（CC模式） ===== */
+            case OPC_LOAD_DOUBLE_VAR: {
+                /* double 类型零开销加载：直接从变量读取double值，压入double专用栈，不转换为Value */
+                fprintf(out, "    __double_stack[__double_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_DOUBLE_CONST: {
+                /* double 常量零开销压栈：直接从常量池读取double值，压入double专用栈，不创建Value */
+                fprintf(out, "    __double_stack[__double_stack_sp++] = bf->consts[%d].v.d;\n", in.a);
+                break;
+            }
+            case OPC_DOUBLE_ADD: {
+                /* double 加法零开销 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __double_stack[__double_stack_sp++] = __da + __db; }\n");
+                break;
+            }
+            case OPC_DOUBLE_SUB: {
+                /* double 减法零开销 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __double_stack[__double_stack_sp++] = __da - __db; }\n");
+                break;
+            }
+            case OPC_DOUBLE_MUL: {
+                /* double 乘法零开销 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __double_stack[__double_stack_sp++] = __da * __db; }\n");
+                break;
+            }
+            case OPC_DOUBLE_DIV: {
+                /* double 除法零开销，需要检查除零 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; if(__db == 0.0) runtime_error(\"division by zero: double division\"); __double_stack[__double_stack_sp++] = __da / __db; }\n");
+                break;
+            }
+            case OPC_DOUBLE_TO_VALUE: {
+                /* 把 double 专用栈顶的 double 值包装成 Value，压入 Value 栈 */
+                fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_double(__dv); }\n");
+                break;
+            }
+            case OPC_DOUBLE_GT: {
+                /* double 大于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da > __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_LT: {
+                /* double 小于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da < __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_GE: {
+                /* double 大于等于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da >= __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_LE: {
+                /* double 小于等于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da <= __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_EQ: {
+                /* double 等于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da == __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_NE: {
+                /* double 不等于比较 */
+                fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da != __db); }\n");
+                break;
+            }
+            case OPC_DOUBLE_ARRAY_SET: {
+                /* double 类型化数组元素赋值 */
+                fprintf(out, "    {\n");
+                fprintf(out, "        double __val = __double_stack[--__double_stack_sp];\n");
+                fprintf(out, "        Value __idx = __stk[--__stk_sp];\n");
+                fprintf(out, "        Value __arr = __stk[--__stk_sp];\n");
+                fprintf(out, "        if(__arr.type == VAL_TYPED_ARRAY && __arr.v.typed_array && __arr.v.typed_array->elem_type == VAL_DOUBLE) {\n");
+                fprintf(out, "            TypedArray* __tarr = __arr.v.typed_array;\n");
+                fprintf(out, "            long long __i = array_index_of(__idx);\n");
+                fprintf(out, "            if(__i < 0 || __i >= __tarr->len) {\n");
+                fprintf(out, "                char __buf[128];\n");
+                fprintf(out, "                snprintf(__buf, sizeof(__buf), \"double typed array index out of bounds: %%lld (len %%d)\", __i, __tarr->len);\n");
+                fprintf(out, "                runtime_error(__buf);\n");
+                fprintf(out, "            }\n");
+                fprintf(out, "            ((double*)__tarr->items)[__i] = __val;\n");
+                fprintf(out, "        } else {\n");
+                fprintf(out, "            runtime_error(\"OPC_DOUBLE_ARRAY_SET: array is not double typed array\");\n");
+                fprintf(out, "        }\n");
+                fprintf(out, "        __stk[__stk_sp++] = lumyr_make_double(__val);\n");
+                fprintf(out, "    }\n");
+                break;
+            }
             /* ===== uint 类型零开销专用指令（CC模式） ===== */
             case OPC_LOAD_UINT_VAR: {
                 /* uint 类型零开销加载：直接从变量读取uint值，压入uint专用栈，不转换为Value */
