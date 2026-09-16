@@ -4,30 +4,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* 辅助函数：根据value的类型提取整数值（各数据类型专用，避免混用long long） */
-static long long struct_extract_ll(Value v) {
-    switch(v.type) {
-        case VAL_INT:     return v.v.i;
-        case VAL_INT8:    return (long long)v.v.i8;
-        case VAL_INT16:   return (long long)v.v.i16;
-        case VAL_INT32:   return (long long)v.v.i32;
-        case VAL_INT64:   return v.v.i;
-        case VAL_BYTE:    return (long long)v.v.u8;
-        case VAL_UINT8:   return (long long)v.v.u8;
-        case VAL_UINT16:  return (long long)v.v.u16;
-        case VAL_UINT32:  return (long long)v.v.u32;
-        case VAL_UINT64:  return (long long)v.v.u64;
-        case VAL_LONG:    return (long long)v.v.l;
-        case VAL_ULONG:   return (long long)v.v.ul;
-        case VAL_SIZE_T:  return (long long)v.v.st;
-        case VAL_SSIZE_T: return (long long)v.v.sst;
-        case VAL_BOOL:    return v.v.b ? 1 : 0;
-        case VAL_CHAR:    return (long long)(unsigned char)v.v.c;
-        case VAL_DOUBLE:  return (long long)v.v.d;
-        default:          return 0;
-    }
-}
-
 /* ==================== 红黑树实现（用于存储 struct 信息，大型项目 struct 特别多时 O(log n) 查找） ==================== */
 
 typedef struct StructRBNode {
@@ -349,7 +325,7 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
         case STRUCT_FIELD_INT: {
             /* 根据字段宽度精确写入，避免越界写入相邻字段
                使用辅助函数根据value类型提取整数值，各数据类型专用 */
-            long long __ival = struct_extract_ll(value);
+            long long __ival = lumyr_extract_ll(value);
             if(fi->size == 1) { *(int8_t*)field_ptr = (int8_t)__ival; break; }
             if(fi->size == 2) { *(int16_t*)field_ptr = (int16_t)__ival; break; }
             if(fi->size == 4) { *(int32_t*)field_ptr = (int32_t)__ival; break; }
@@ -357,7 +333,7 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
             break;
         }
         case STRUCT_FIELD_DOUBLE:
-            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)struct_extract_ll(value);
+            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)lumyr_extract_ll(value);
             break;
         case STRUCT_FIELD_STRING:
             /* 字符串字段需要深拷贝 */
@@ -365,7 +341,7 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
             *(char**)field_ptr = strdup(lumyr_str_cstr(&value));
             break;
         case STRUCT_FIELD_BOOL:
-            *(int*)field_ptr = value.type == VAL_BOOL ? value.v.b : (struct_extract_ll(value) ? 1 : 0);
+            *(int*)field_ptr = value.type == VAL_BOOL ? value.v.b : (lumyr_extract_ll(value) ? 1 : 0);
             break;
         case STRUCT_FIELD_PTR:
             *(void**)field_ptr = value.v.struct_ptr;
@@ -407,7 +383,7 @@ int lumyr_struct_eq(Value a, Value b)
             if(!lumyr_struct_eq(va, vb)) return 0;
         }
         else {
-            if(struct_extract_ll(va) != struct_extract_ll(vb)) return 0;
+            if(lumyr_extract_ll(va) != lumyr_extract_ll(vb)) return 0;
         }
     }
     return 1;

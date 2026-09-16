@@ -1121,6 +1121,31 @@ uint32_t lumyr_extract_uint32(Value v) {
     return 0;
 }
 
+/* 公共辅助函数：根据value的类型提取整数值，各数据类型专用
+   用于替代各个文件中重复的extract_ll辅助函数 */
+long long lumyr_extract_ll(Value v) {
+    switch(v.type) {
+        case VAL_INT:     return v.v.i;
+        case VAL_INT8:    return (long long)v.v.i8;
+        case VAL_INT16:   return (long long)v.v.i16;
+        case VAL_INT32:   return (long long)v.v.i32;
+        case VAL_INT64:   return v.v.i;
+        case VAL_BYTE:    return (long long)v.v.u8;
+        case VAL_UINT8:   return (long long)v.v.u8;
+        case VAL_UINT16:  return (long long)v.v.u16;
+        case VAL_UINT32:  return (long long)v.v.u32;
+        case VAL_UINT64:  return (long long)v.v.u64;
+        case VAL_LONG:    return (long long)v.v.l;
+        case VAL_ULONG:   return (long long)v.v.ul;
+        case VAL_SIZE_T:  return (long long)v.v.st;
+        case VAL_SSIZE_T: return (long long)v.v.sst;
+        case VAL_BOOL:    return v.v.b ? 1 : 0;
+        case VAL_CHAR:    return (long long)(unsigned char)v.v.c;
+        case VAL_DOUBLE:  return (long long)v.v.d;
+        default:          return 0;
+    }
+}
+
 void lumyr_print(Value v) {
     switch(v.type)
     {

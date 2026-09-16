@@ -103,6 +103,7 @@ _Bool lumyr_extract_bool(Value v);
 char lumyr_extract_char(Value v);
 unsigned char lumyr_extract_byte(Value v);
 uint32_t lumyr_extract_uint32(Value v);
+long long lumyr_extract_ll(Value v);  /* 公共辅助函数：根据value的类型提取整数值，各数据类型专用 */
 
 void lumyr_print(Value v);
 void lumyr_print_inline(Value v);  /* 打印单个值不换行，用于多参数 print */
