@@ -137,30 +137,30 @@ typedef struct {
     void* methods[64];       /* 方法函数指针数组，最多 64 个方法 */
 } lumyr_vtable;
 
-static int lmvar_a = 0;
-static int lmvar_b = 0;
+static char lmvar_a = 0;
+static char lmvar_b = 0;
 static Value lmvar_arr = {0};
 
 /* class vtable 实例（虚函数表，按全局方法索引填充） */
 
 
 int main(void){
-    Value __stk[8];
+    Value __stk[5];
     int __sp = 0;
     /* int 类型专用栈（零开销优化） */
-    int __int_stack[8];
+    int __int_stack[5];
     int __int_sp = 0;
     /* int8 类型专用栈（零开销优化） */
-    int8_t __int8_stack[8];
+    int8_t __int8_stack[5];
     int __int8_sp = 0;
     /* int16 类型专用栈（零开销优化） */
-    int16_t __int16_stack[8];
+    int16_t __int16_stack[5];
     int __int16_sp = 0;
     /* int32 类型专用栈（零开销优化） */
-    int32_t __int32_stack[8];
+    int32_t __int32_stack[5];
     int __int32_sp = 0;
     /* int64 类型专用栈（零开销优化） */
-    int64_t __int64_stack[8];
+    int64_t __int64_stack[5];
     int __int64_sp = 0;
     /* 注册 class 字段信息表到运行时红黑树 */
 
@@ -171,24 +171,24 @@ int main(void){
     CFrame __frame;
     __frame.stack = __stk;
     __frame.sp = &__sp;
-    __frame.stack_size = 8;
+    __frame.stack_size = 5;
     __frame.local_ptrs = (Value**)__local_ptrs;
     __frame.nlocals = 1;
     gc_push_cframe(&__frame);
     gc_stw_check_fast();
-    __stk[__sp++] = lumyr_make_string("=== CC模式 int 类型测试 ===\\n");
+    __stk[__sp++] = lumyr_make_string("=== CC模式 int8 类型测试 ===\\n");
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
-    __stk[__sp++] = lumyr_make_int(42);
-    { Value __v = __stk[--__sp]; lmvar_a = (int)((__v).type == VAL_DOUBLE ? (long long)(__v).v.d : (__v).v.i); __stk[__sp++] = __v; }
+    __stk[__sp++] = lumyr_make_int8(42);
+    { Value __v = __stk[--__sp]; lmvar_a = (char)((__v).type == VAL_DOUBLE ? (long long)(__v).v.d : (__v).v.i); __stk[__sp++] = __v; }
     __sp--;
     __stk[__sp++] = lumyr_make_string("a = ");
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
     gc_stw_check_fast();
-    __stk[__sp++] = lumyr_make_int((long long)(int)lmvar_a);
+    __stk[__sp++] = lumyr_make_int((long long)(char)lmvar_a);
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
@@ -196,15 +196,15 @@ int main(void){
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
-    __stk[__sp++] = lumyr_make_int(100);
-    { Value __v = __stk[--__sp]; lmvar_b = (int)((__v).type == VAL_DOUBLE ? (long long)(__v).v.d : (__v).v.i); __stk[__sp++] = __v; }
+    __stk[__sp++] = lumyr_make_int8(100);
+    { Value __v = __stk[--__sp]; lmvar_b = (char)((__v).type == VAL_DOUBLE ? (long long)(__v).v.d : (__v).v.i); __stk[__sp++] = __v; }
     __sp--;
     __stk[__sp++] = lumyr_make_string("b = ");
     gc_stw_check_fast();
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
-    __stk[__sp++] = lumyr_make_int((long long)(int)lmvar_b);
+    __stk[__sp++] = lumyr_make_int((long long)(char)lmvar_b);
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
@@ -216,10 +216,8 @@ int main(void){
     __stk[__sp++] = lumyr_make_int(2);
     __stk[__sp++] = lumyr_make_int(3);
     gc_stw_check_fast();
-    __stk[__sp++] = lumyr_make_int(4);
-    __stk[__sp++] = lumyr_make_int(5);
-    { int __n = 5; Value __arr = val_int_array(__n); TypedArray* __tarr = __arr.v.typed_array; int* __iitems = (int*)__tarr->items;
-      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__sp - __n + __k]; switch(__v.type) { case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL: __iitems[__k] = (int)__v.v.i; break; case VAL_DOUBLE: __iitems[__k] = (int)__v.v.d; break; default: __iitems[__k] = (int)lumyr_cast_long(__v).v.i; break; } }
+    { int __n = 3; Value __arr = val_int8_array(__n); TypedArray* __tarr = __arr.v.typed_array; int8_t* __iitems = (int8_t*)__tarr->items;
+      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__sp - __n + __k]; __iitems[__k] = (int8_t)lumyr_extract_int(__v); }
       __sp = __sp - __n + 1; __sp--; __stk[__sp++] = __arr;
       __tarr->len = __n;
     }
@@ -230,9 +228,9 @@ int main(void){
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
     __stk[__sp++] = lmvar_arr;
-    gc_stw_check_fast();
     __stk[__sp++] = lumyr_make_int(0);
     { Value __c = __stk[__sp-2], __idx = __stk[__sp-1]; __stk[__sp-2] = lumyr_index_get(__c, __idx); __sp--; }
+    gc_stw_check_fast();
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
@@ -245,9 +243,9 @@ int main(void){
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
     __stk[__sp++] = lmvar_arr;
-    gc_stw_check_fast();
     __stk[__sp++] = lumyr_make_int(1);
     { Value __c = __stk[__sp-2], __idx = __stk[__sp-1]; __stk[__sp-2] = lumyr_index_get(__c, __idx); __sp--; }
+    gc_stw_check_fast();
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
@@ -260,9 +258,9 @@ int main(void){
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }
     __stk[__sp++] = lmvar_arr;
-    gc_stw_check_fast();
     __stk[__sp++] = lumyr_make_int(2);
     { Value __c = __stk[__sp-2], __idx = __stk[__sp-1]; __stk[__sp-2] = lumyr_index_get(__c, __idx); __sp--; }
+    gc_stw_check_fast();
     { int __pcnt = 1; if(__pcnt <= 0) __pcnt = 1; int __pbase = __sp - __pcnt;
       for(int __pi = 0; __pi < __pcnt; __pi++) { if(__pi > 0) printf(" "); lumyr_print_inline(__stk[__pbase + __pi]); }
       printf("\n"); __sp -= __pcnt; }

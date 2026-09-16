@@ -521,6 +521,11 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __int_stack[__int_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_LOAD_INT8_VAR: {
+                /* int8 类型零开销加载：直接从变量读取int8_t值，压入int8专用栈，不转换为Value */
+                fprintf(out, "    __int8_stack[__int8_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
@@ -578,6 +583,11 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_STORE_INT_VAR: {
                 /* int 类型零开销存储：直接从int专用栈弹出int值，存储到变量，不转换为Value */
                 fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = __iv; }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_INT8_VAR: {
+                /* int8 类型零开销存储：直接从int8专用栈弹出int8_t值，存储到变量，不转换为Value */
+                fprintf(out, "    { int8_t __iv = __int8_stack[--__int8_sp]; %s = __iv; }\n", cvar_rw(nm));
                 break;
             }
             case OPC_ADD: fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_add(__l, __r); __sp--; }\n"); break;
@@ -1743,6 +1753,39 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
                 fprintf(out, "      int __ival = ((int*)__tarr->items)[__iidx];\n");
                 fprintf(out, "      __int_stack[__int_sp++] = __ival;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_PRINT_INT8: {
+                /* int8 类型零开销打印：直接从int8专用栈弹出int8_t值并打印，不转换为Value */
+                fprintf(out, "    { int8_t __iv = __int8_stack[--__int8_sp]; printf(\"%d\\n\", (int)__iv); }\n");
+                break;
+            }
+            case OPC_INT8_ARRAY_LIT: {
+                /* int8 类型零开销数组字面量：从 int8 专用栈读取（零检查零转换） */
+                int n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_int8_array(__n); TypedArray* __tarr = __arr.v.typed_array; int8_t* __iitems = (int8_t*)__tarr->items;\n", n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __iitems[__k] = __int8_stack[__int8_sp - __n + __k]; }\n");
+                    fprintf(out, "      __int8_sp -= __n;\n");
+                    fprintf(out, "      __stk[__sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__sp - __n + __k]; __iitems[__k] = (int8_t)lumyr_extract_int(__v); }\n");
+                    fprintf(out, "      __sp = __sp - __n + 1; __sp--; __stk[__sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT8_ARRAY_GET: {
+                /* int8 类型零开销数组元素访问：直接从int8类型化数组读取元素，压入int8专用栈，不转换为Value */
+                fprintf(out, "    { Value __idx = __stk[--__sp]; Value __arrv = __stk[--__sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：OPC_INT8_ARRAY_GET 需要 int8 类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_INT8) { runtime_error(\"类型错误：数组元素类型不匹配，期望 int8\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      int8_t __ival = ((int8_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __int8_stack[__int8_sp++] = __ival;\n");
                 fprintf(out, "    }\n");
                 break;
             }

@@ -461,6 +461,21 @@ void emit_const(FILE* f, const Value* v)
         case VAL_CHAR:   fprintf(f, "lumyr_make_char("); emit_c_char_lit(f, v->v.c); fprintf(f, ")"); break;
         case VAL_BYTE:   fprintf(f, "lumyr_make_byte(%d)", (int)(v->v.i & 0xFF)); break;
         case VAL_STRING: fprintf(f, "lumyr_make_string("); emit_c_string_lit(f, lumyr_str_cstr(v)); fprintf(f, ")"); break;
+        /* 所有数值类型常量：各类型自己表示自己，别混用 */
+        case VAL_INT8:   fprintf(f, "lumyr_make_int8(%d)", (int)v->v.i); break;
+        case VAL_INT16:  fprintf(f, "lumyr_make_int16(%d)", (int)v->v.i); break;
+        case VAL_INT32:  fprintf(f, "lumyr_make_int32(%d)", (int)v->v.i); break;
+        case VAL_INT64:  fprintf(f, "lumyr_make_int64(%lld)", v->v.i); break;
+        case VAL_UINT8:  fprintf(f, "lumyr_make_uint8(%u)", (unsigned int)v->v.i); break;
+        case VAL_UINT16: fprintf(f, "lumyr_make_uint16(%u)", (unsigned int)v->v.i); break;
+        case VAL_UINT32: fprintf(f, "lumyr_make_uint32(%u)", (unsigned int)v->v.i); break;
+        case VAL_UINT64: fprintf(f, "lumyr_make_uint64(%llu)", (unsigned long long)v->v.i); break;
+        case VAL_LONG:   fprintf(f, "lumyr_make_long(%ld)", (long)v->v.i); break;
+        case VAL_ULONG:  fprintf(f, "lumyr_make_ulong(%lu)", (unsigned long)v->v.i); break;
+        case VAL_SIZE_T: fprintf(f, "lumyr_make_size_t(%zu)", (size_t)v->v.i); break;
+        case VAL_SSIZE_T: fprintf(f, "lumyr_make_ssize_t(%zd)", (ssize_t)v->v.i); break;
+        case VAL_FLOAT:  fprintf(f, "lumyr_make_float(%f)", (float)v->v.d); break;
+        case VAL_LONG_DOUBLE: fprintf(f, "lumyr_make_long_double(%Lf)", (long double)v->v.d); break;
         default:         fprintf(f, "val_none()"); break;
     }
 }
@@ -1466,6 +1481,18 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "    /* int 类型专用栈（零开销优化） */\n");
     fprintf(out, "    int __int_stack[%d];\n", maxd + 2);
     fprintf(out, "    int __int_sp = 0;\n");
+    fprintf(out, "    /* int8 类型专用栈（零开销优化） */\n");
+    fprintf(out, "    int8_t __int8_stack[%d];\n", maxd + 2);
+    fprintf(out, "    int __int8_sp = 0;\n");
+    fprintf(out, "    /* int16 类型专用栈（零开销优化） */\n");
+    fprintf(out, "    int16_t __int16_stack[%d];\n", maxd + 2);
+    fprintf(out, "    int __int16_sp = 0;\n");
+    fprintf(out, "    /* int32 类型专用栈（零开销优化） */\n");
+    fprintf(out, "    int32_t __int32_stack[%d];\n", maxd + 2);
+    fprintf(out, "    int __int32_sp = 0;\n");
+    fprintf(out, "    /* int64 类型专用栈（零开销优化） */\n");
+    fprintf(out, "    int64_t __int64_stack[%d];\n", maxd + 2);
+    fprintf(out, "    int __int64_sp = 0;\n");
     // 注册所有 class 的字段信息表到运行时红黑树（用于运行时属性访问）
     fprintf(out, "    /* 注册 class 字段信息表到运行时红黑树 */\n");
     type_foreach(emit_class_register_cb, out);
