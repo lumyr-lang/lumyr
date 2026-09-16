@@ -4827,6 +4827,74 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 printf("%Lf\n", (long double)ldv);
                 break;
             }
+            case OPC_PUSH_LONG_DOUBLE_CONST: {
+                /* long double常量压栈：in.a低32位 + in.b高32位，合并为64位，再转换为long double */
+                uint64_t bits = (uint64_t)(uint32_t)in.a | ((uint64_t)(uint32_t)in.b << 32);
+                long double ld = 0.0L;
+                memcpy(&ld, &bits, sizeof(long double) < sizeof(uint64_t) ? sizeof(long double) : sizeof(uint64_t));
+                LONG_DOUBLE_PUSH(ld);
+                break;
+            }
+            case OPC_LONG_DOUBLE_ADD: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                LONG_DOUBLE_PUSH(a + b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_SUB: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                LONG_DOUBLE_PUSH(a - b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_MUL: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                LONG_DOUBLE_PUSH(a * b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_DIV: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                LONG_DOUBLE_PUSH(a / b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_GT: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_LT: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_GE: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_LE: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_EQ: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_LONG_DOUBLE_NE: {
+                long double b = LONG_DOUBLE_POP();
+                long double a = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
             case OPC_TO_BOOL:
                 stack[sp - 1] = lumyr_make_bool(lumyr_to_bool(stack[sp - 1]));
                 break;

@@ -234,6 +234,17 @@ typedef enum {
     OPC_LONG_DOUBLE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 long double，创建 long double 泛型数组
     OPC_LONG_DOUBLE_ARRAY_GET, // 弹 arr,idx；直接从 long double 类型化数组读取元素，压入 long double 栈（零包装零 Value 开销）
     OPC_PRINT_LONG_DOUBLE,     // 从 long double 栈弹出并打印（零开销，用于声明为 long double 的变量）
+    OPC_PUSH_LONG_DOUBLE_CONST, // a=常量值（低32位）, b=常量值（高32位）；压入 long double 栈（零包装零Value开销）
+    OPC_LONG_DOUBLE_ADD,        // 弹2个 long double，相加，结果压入 long double 栈（零检查零转换零 Value 开销）
+    OPC_LONG_DOUBLE_SUB,        // 弹2个 long double，相减，结果压入 long double 栈
+    OPC_LONG_DOUBLE_MUL,        // 弹2个 long double，相乘，结果压入 long double 栈
+    OPC_LONG_DOUBLE_DIV,        // 弹2个 long double，相除，结果压入 long double 栈
+    OPC_LONG_DOUBLE_GT,         // 弹2个 long double，大于比较，结果 bool 压入 Value 栈
+    OPC_LONG_DOUBLE_LT,         // 弹2个 long double，小于比较
+    OPC_LONG_DOUBLE_GE,         // 弹2个 long double，大于等于比较
+    OPC_LONG_DOUBLE_LE,         // 弹2个 long double，小于等于比较
+    OPC_LONG_DOUBLE_EQ,         // 弹2个 long double，等于比较
+    OPC_LONG_DOUBLE_NE,         // 弹2个 long double，不等于比较
     OPC_TO_BOOL,      // 弹1压1 bool
     OPC_DUP,          // 复制栈顶
     OPC_POP,          // 丢弃栈顶

@@ -391,7 +391,19 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT_SIZE_T:
         case OPC_PRINT_SSIZE_T:
         case OPC_PRINT_LONG_DOUBLE:
+        case OPC_PUSH_LONG_DOUBLE_CONST:
+        case OPC_LONG_DOUBLE_ADD:
+        case OPC_LONG_DOUBLE_SUB:
+        case OPC_LONG_DOUBLE_MUL:
+        case OPC_LONG_DOUBLE_DIV:
             return 0;  /* 从专用栈弹出值，不改变 Value 栈深度 */
+        case OPC_LONG_DOUBLE_GT:
+        case OPC_LONG_DOUBLE_LT:
+        case OPC_LONG_DOUBLE_GE:
+        case OPC_LONG_DOUBLE_LE:
+        case OPC_LONG_DOUBLE_EQ:
+        case OPC_LONG_DOUBLE_NE:
+            return 1;  /* 从专用栈弹出2个，比较结果 bool 压入 Value 栈 */
         case OPC_TO_BOOL:
         case OPC_JMP:
         case OPC_RETURN_NIL:
@@ -792,6 +804,17 @@ static const char* opc_name(OpCode op)
         case OPC_PRINT_SIZE_T: return "PRINT_SIZE_T";
         case OPC_PRINT_SSIZE_T: return "PRINT_SSIZE_T";
         case OPC_PRINT_LONG_DOUBLE: return "PRINT_LONG_DOUBLE";
+        case OPC_PUSH_LONG_DOUBLE_CONST: return "PUSH_LONG_DOUBLE_CONST";
+        case OPC_LONG_DOUBLE_ADD: return "LONG_DOUBLE_ADD";
+        case OPC_LONG_DOUBLE_SUB: return "LONG_DOUBLE_SUB";
+        case OPC_LONG_DOUBLE_MUL: return "LONG_DOUBLE_MUL";
+        case OPC_LONG_DOUBLE_DIV: return "LONG_DOUBLE_DIV";
+        case OPC_LONG_DOUBLE_GT: return "LONG_DOUBLE_GT";
+        case OPC_LONG_DOUBLE_LT: return "LONG_DOUBLE_LT";
+        case OPC_LONG_DOUBLE_GE: return "LONG_DOUBLE_GE";
+        case OPC_LONG_DOUBLE_LE: return "LONG_DOUBLE_LE";
+        case OPC_LONG_DOUBLE_EQ: return "LONG_DOUBLE_EQ";
+        case OPC_LONG_DOUBLE_NE: return "LONG_DOUBLE_NE";
         /* 跳转指令 */
         case OPC_JMP_IF_NULL: return "JMP_IF_NULL";
     }
