@@ -48,313 +48,58 @@ static _Thread_local int vm_fin_n = 0;
 static _Thread_local int vm_cap = 0;          /* 错误处理器栈容量 */
 static _Thread_local Value vm_pend_val;   /* 挂起返回的值（PEND_RETURN 存，FINISH act5 恢复） */
 
-/* ========== int 栈（方案 A：多类型栈，零检查零转换） ========== */
-/* 专门用于存储 int 类型值，与 Value 栈并行，避免类型检查和转换开销 */
-static _Thread_local int* vm_int_stack = NULL;
-static _Thread_local int vm_int_sp = 0;
-static _Thread_local int vm_int_cap = 0;
+/* ========== 类型化专用栈（使用统一栈管理模块 stack_manager） ========== */
+/* 原来的静态变量和栈操作函数已删除，统一使用 stack_manager 模块管理 */
 
-#define INT_STACK_INIT_CAP 64
+#define INT_PUSH(val) do { stack_global_ensure(STACK_INT, 1); ((int*)stack_global_get_stack(STACK_INT))[(*stack_global_get_sp(STACK_INT))++] = (val); } while(0)
+#define INT_POP() (((int*)stack_global_get_stack(STACK_INT))[--(*stack_global_get_sp(STACK_INT))])
+#define INT_PEEK() (((int*)stack_global_get_stack(STACK_INT))[(*stack_global_get_sp(STACK_INT)) - 1])
+#define INT_TOP(idx) (((int*)stack_global_get_stack(STACK_INT))[(*stack_global_get_sp(STACK_INT)) - 1 - (idx)])
+#define DOUBLE_PUSH(val) do { stack_global_ensure(STACK_DOUBLE, 1); ((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE))++] = (val); } while(0)
+#define DOUBLE_POP() (((double*)stack_global_get_stack(STACK_DOUBLE))[--(*stack_global_get_sp(STACK_DOUBLE))])
+#define DOUBLE_PEEK() (((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - 1])
+#define DOUBLE_TOP(idx) (((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - 1 - (idx)])
+#define FLOAT_PUSH(val) do { stack_global_ensure(STACK_FLOAT, 1); ((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT))++] = (val); } while(0)
+#define FLOAT_POP() (((float*)stack_global_get_stack(STACK_FLOAT))[--(*stack_global_get_sp(STACK_FLOAT))])
+#define FLOAT_PEEK() (((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT)) - 1])
+#define FLOAT_TOP(idx) (((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT)) - 1 - (idx)])
+#define UINT_PUSH(val) do { stack_global_ensure(STACK_UINT, 1); ((unsigned int*)stack_global_get_stack(STACK_UINT))[(*stack_global_get_sp(STACK_UINT))++] = (val); } while(0)
+#define UINT_POP() (((unsigned int*)stack_global_get_stack(STACK_UINT))[--(*stack_global_get_sp(STACK_UINT))])
+#define UINT_PEEK() (((unsigned int*)stack_global_get_stack(STACK_UINT))[(*stack_global_get_sp(STACK_UINT)) - 1])
+#define UINT_TOP(idx) (((unsigned int*)stack_global_get_stack(STACK_UINT))[(*stack_global_get_sp(STACK_UINT)) - 1 - (idx)])
+#define BOOL_PUSH(val) do { stack_global_ensure(STACK_BOOL, 1); ((_Bool*)stack_global_get_stack(STACK_BOOL))[(*stack_global_get_sp(STACK_BOOL))++] = (val); } while(0)
+#define BOOL_POP() (((_Bool*)stack_global_get_stack(STACK_BOOL))[--(*stack_global_get_sp(STACK_BOOL))])
+#define CHAR_PUSH(val) do { stack_global_ensure(STACK_CHAR, 1); ((char*)stack_global_get_stack(STACK_CHAR))[(*stack_global_get_sp(STACK_CHAR))++] = (val); } while(0)
+#define CHAR_POP() (((char*)stack_global_get_stack(STACK_CHAR))[--(*stack_global_get_sp(STACK_CHAR))])
+#define BYTE_PUSH(val) do { stack_global_ensure(STACK_BYTE, 1); ((unsigned char*)stack_global_get_stack(STACK_BYTE))[(*stack_global_get_sp(STACK_BYTE))++] = (val); } while(0)
+#define BYTE_POP() (((unsigned char*)stack_global_get_stack(STACK_BYTE))[--(*stack_global_get_sp(STACK_BYTE))])
+#define INT8_PUSH(val) do { stack_global_ensure(STACK_INT8, 1); ((int8_t*)stack_global_get_stack(STACK_INT8))[(*stack_global_get_sp(STACK_INT8))++] = (val); } while(0)
+#define INT8_POP() (((int8_t*)stack_global_get_stack(STACK_INT8))[--(*stack_global_get_sp(STACK_INT8))])
+#define INT16_PUSH(val) do { stack_global_ensure(STACK_INT16, 1); ((int16_t*)stack_global_get_stack(STACK_INT16))[(*stack_global_get_sp(STACK_INT16))++] = (val); } while(0)
+#define INT16_POP() (((int16_t*)stack_global_get_stack(STACK_INT16))[--(*stack_global_get_sp(STACK_INT16))])
+#define INT32_PUSH(val) do { stack_global_ensure(STACK_INT32, 1); ((int32_t*)stack_global_get_stack(STACK_INT32))[(*stack_global_get_sp(STACK_INT32))++] = (val); } while(0)
+#define INT32_POP() (((int32_t*)stack_global_get_stack(STACK_INT32))[--(*stack_global_get_sp(STACK_INT32))])
+#define INT64_PUSH(val) do { stack_global_ensure(STACK_INT64, 1); ((int64_t*)stack_global_get_stack(STACK_INT64))[(*stack_global_get_sp(STACK_INT64))++] = (val); } while(0)
+#define INT64_POP() (((int64_t*)stack_global_get_stack(STACK_INT64))[--(*stack_global_get_sp(STACK_INT64))])
+#define UINT8_PUSH(val) do { stack_global_ensure(STACK_UINT8, 1); ((uint8_t*)stack_global_get_stack(STACK_UINT8))[(*stack_global_get_sp(STACK_UINT8))++] = (val); } while(0)
+#define UINT8_POP() (((uint8_t*)stack_global_get_stack(STACK_UINT8))[--(*stack_global_get_sp(STACK_UINT8))])
+#define UINT16_PUSH(val) do { stack_global_ensure(STACK_UINT16, 1); ((uint16_t*)stack_global_get_stack(STACK_UINT16))[(*stack_global_get_sp(STACK_UINT16))++] = (val); } while(0)
+#define UINT16_POP() (((uint16_t*)stack_global_get_stack(STACK_UINT16))[--(*stack_global_get_sp(STACK_UINT16))])
+#define UINT32_PUSH(val) do { stack_global_ensure(STACK_UINT32, 1); ((uint32_t*)stack_global_get_stack(STACK_UINT32))[(*stack_global_get_sp(STACK_UINT32))++] = (val); } while(0)
+#define UINT32_POP() (((uint32_t*)stack_global_get_stack(STACK_UINT32))[--(*stack_global_get_sp(STACK_UINT32))])
+#define UINT64_PUSH(val) do { stack_global_ensure(STACK_UINT64, 1); ((uint64_t*)stack_global_get_stack(STACK_UINT64))[(*stack_global_get_sp(STACK_UINT64))++] = (val); } while(0)
+#define UINT64_POP() (((uint64_t*)stack_global_get_stack(STACK_UINT64))[--(*stack_global_get_sp(STACK_UINT64))])
+#define LONG_PUSH(val) do { stack_global_ensure(STACK_LONG, 1); ((long*)stack_global_get_stack(STACK_LONG))[(*stack_global_get_sp(STACK_LONG))++] = (val); } while(0)
+#define LONG_POP() (((long*)stack_global_get_stack(STACK_LONG))[--(*stack_global_get_sp(STACK_LONG))])
+#define ULONG_PUSH(val) do { stack_global_ensure(STACK_ULONG, 1); ((unsigned long*)stack_global_get_stack(STACK_ULONG))[(*stack_global_get_sp(STACK_ULONG))++] = (val); } while(0)
+#define ULONG_POP() (((unsigned long*)stack_global_get_stack(STACK_ULONG))[--(*stack_global_get_sp(STACK_ULONG))])
+#define SIZE_T_PUSH(val) do { stack_global_ensure(STACK_SIZE_T, 1); ((size_t*)stack_global_get_stack(STACK_SIZE_T))[(*stack_global_get_sp(STACK_SIZE_T))++] = (val); } while(0)
+#define SIZE_T_POP() (((size_t*)stack_global_get_stack(STACK_SIZE_T))[--(*stack_global_get_sp(STACK_SIZE_T))])
+#define SSIZE_T_PUSH(val) do { stack_global_ensure(STACK_SSIZE_T, 1); ((ssize_t*)stack_global_get_stack(STACK_SSIZE_T))[(*stack_global_get_sp(STACK_SSIZE_T))++] = (val); } while(0)
+#define SSIZE_T_POP() (((ssize_t*)stack_global_get_stack(STACK_SSIZE_T))[--(*stack_global_get_sp(STACK_SSIZE_T))])
+#define LONG_DOUBLE_PUSH(val) do { stack_global_ensure(STACK_LONG_DOUBLE, 1); ((long double*)stack_global_get_stack(STACK_LONG_DOUBLE))[(*stack_global_get_sp(STACK_LONG_DOUBLE))++] = (val); } while(0)
+#define LONG_DOUBLE_POP() (((long double*)stack_global_get_stack(STACK_LONG_DOUBLE))[--(*stack_global_get_sp(STACK_LONG_DOUBLE))])
 
-static void int_stack_init(void) {
-    if(vm_int_stack) return;
-    vm_int_cap = INT_STACK_INIT_CAP;
-    vm_int_stack = (int*)malloc((size_t)vm_int_cap * sizeof(int));
-    if(!vm_int_stack) { LOG_ERROR("vm: int 栈内存不足\n"); exit(EXIT_FAILURE); }
-    vm_int_sp = 0;
-}
-
-static void int_stack_destroy(void) {
-    if(vm_int_stack) { free(vm_int_stack); vm_int_stack = NULL; }
-    vm_int_sp = 0;
-    vm_int_cap = 0;
-}
-
-static void int_stack_ensure(int need) {
-    if(vm_int_sp + need <= vm_int_cap) return;
-    int nc = vm_int_cap > 0 ? vm_int_cap : INT_STACK_INIT_CAP;
-    while(nc < vm_int_sp + need) nc *= 2;
-    int* ns = (int*)realloc(vm_int_stack, (size_t)nc * sizeof(int));
-    if(!ns) { LOG_ERROR("vm: int 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_int_stack = ns;
-    vm_int_cap = nc;
-}
-
-#define INT_PUSH(val) do { int_stack_ensure(1); vm_int_stack[vm_int_sp++] = (val); } while(0)
-#define INT_POP() (vm_int_stack[--vm_int_sp])
-#define INT_PEEK() (vm_int_stack[vm_int_sp - 1])
-#define INT_TOP(idx) (vm_int_stack[vm_int_sp - 1 - (idx)])
-
-/* ========== double 栈（方案 A：多类型栈，零检查零转换） ========== */
-/* 专门用于存储 double 类型值，与 Value 栈并行，避免类型检查和转换开销 */
-static _Thread_local double* vm_double_stack = NULL;
-static _Thread_local int vm_double_sp = 0;
-static _Thread_local int vm_double_cap = 0;
-
-#define DOUBLE_STACK_INIT_CAP 64
-
-static void double_stack_init(void) {
-    if(vm_double_stack) return;
-    vm_double_cap = DOUBLE_STACK_INIT_CAP;
-    vm_double_stack = (double*)malloc((size_t)vm_double_cap * sizeof(double));
-    if(!vm_double_stack) { LOG_ERROR("vm: double 栈内存不足\n"); exit(EXIT_FAILURE); }
-    vm_double_sp = 0;
-}
-
-static void double_stack_destroy(void) {
-    if(vm_double_stack) { free(vm_double_stack); vm_double_stack = NULL; }
-    vm_double_sp = 0;
-    vm_double_cap = 0;
-}
-
-static void double_stack_ensure(int need) {
-    if(vm_double_sp + need <= vm_double_cap) return;
-    int nc = vm_double_cap > 0 ? vm_double_cap : DOUBLE_STACK_INIT_CAP;
-    while(nc < vm_double_sp + need) nc *= 2;
-    double* ns = (double*)realloc(vm_double_stack, (size_t)nc * sizeof(double));
-    if(!ns) { LOG_ERROR("vm: double 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_double_stack = ns;
-    vm_double_cap = nc;
-}
-
-#define DOUBLE_PUSH(val) do { double_stack_ensure(1); vm_double_stack[vm_double_sp++] = (val); } while(0)
-#define DOUBLE_POP() (vm_double_stack[--vm_double_sp])
-#define DOUBLE_PEEK() (vm_double_stack[vm_double_sp - 1])
-#define DOUBLE_TOP(idx) (vm_double_stack[vm_double_sp - 1 - (idx)])
-
-/* ========== float 栈（方案 A：多类型栈，零检查零转换） ========== */
-/* 专门用于存储 float 类型值，与 Value 栈并行，避免类型检查和转换开销 */
-static _Thread_local float* vm_float_stack = NULL;
-static _Thread_local int vm_float_sp = 0;
-static _Thread_local int vm_float_cap = 0;
-
-#define FLOAT_STACK_INIT_CAP 64
-
-static void float_stack_init(void) {
-    if(vm_float_stack) return;
-    vm_float_cap = FLOAT_STACK_INIT_CAP;
-    vm_float_stack = (float*)malloc((size_t)vm_float_cap * sizeof(float));
-    if(!vm_float_stack) { LOG_ERROR("vm: float 栈内存不足\n"); exit(EXIT_FAILURE); }
-    vm_float_sp = 0;
-}
-
-static void float_stack_destroy(void) {
-    if(vm_float_stack) { free(vm_float_stack); vm_float_stack = NULL; }
-    vm_float_sp = 0;
-    vm_float_cap = 0;
-}
-
-static void float_stack_ensure(int need) {
-    if(vm_float_sp + need <= vm_float_cap) return;
-    int nc = vm_float_cap > 0 ? vm_float_cap : FLOAT_STACK_INIT_CAP;
-    while(nc < vm_float_sp + need) nc *= 2;
-    float* ns = (float*)realloc(vm_float_stack, (size_t)nc * sizeof(float));
-    if(!ns) { LOG_ERROR("vm: float 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_float_stack = ns;
-    vm_float_cap = nc;
-}
-
-#define FLOAT_PUSH(val) do { float_stack_ensure(1); vm_float_stack[vm_float_sp++] = (val); } while(0)
-#define FLOAT_POP() (vm_float_stack[--vm_float_sp])
-#define FLOAT_PEEK() (vm_float_stack[vm_float_sp - 1])
-#define FLOAT_TOP(idx) (vm_float_stack[vm_float_sp - 1 - (idx)])
-
-/* ========== uint 栈（方案 A：多类型栈，零检查零转换） ========== */
-/* 专门用于存储 uint（unsigned int）类型值，与 Value 栈并行，避免类型检查和转换开销 */
-static _Thread_local unsigned int* vm_uint_stack = NULL;
-static _Thread_local int vm_uint_sp = 0;
-static _Thread_local int vm_uint_cap = 0;
-
-#define UINT_STACK_INIT_CAP 64
-
-static void uint_stack_init(void) {
-    if(vm_uint_stack) return;
-    vm_uint_cap = UINT_STACK_INIT_CAP;
-    vm_uint_stack = (unsigned int*)malloc((size_t)vm_uint_cap * sizeof(unsigned int));
-    if(!vm_uint_stack) { LOG_ERROR("vm: uint 栈内存不足\n"); exit(EXIT_FAILURE); }
-    vm_uint_sp = 0;
-}
-
-static void uint_stack_destroy(void) {
-    if(vm_uint_stack) { free(vm_uint_stack); vm_uint_stack = NULL; }
-    vm_uint_sp = 0;
-    vm_uint_cap = 0;
-}
-
-static void uint_stack_ensure(int need) {
-    if(vm_uint_sp + need <= vm_uint_cap) return;
-    int nc = vm_uint_cap > 0 ? vm_uint_cap : UINT_STACK_INIT_CAP;
-    while(nc < vm_uint_sp + need) nc *= 2;
-    unsigned int* ns = (unsigned int*)realloc(vm_uint_stack, (size_t)nc * sizeof(unsigned int));
-    if(!ns) { LOG_ERROR("vm: uint 栈扩容内存不足\n"); exit(EXIT_FAILURE); }
-    vm_uint_stack = ns;
-    vm_uint_cap = nc;
-}
-
-#define UINT_PUSH(val) do { uint_stack_ensure(1); vm_uint_stack[vm_uint_sp++] = (val); } while(0)
-#define UINT_POP() (vm_uint_stack[--vm_uint_sp])
-#define UINT_PEEK() (vm_uint_stack[vm_uint_sp - 1])
-#define UINT_TOP(idx) (vm_uint_stack[vm_uint_sp - 1 - (idx)])
-
-/* ========== bool 栈 ========== */
-static _Thread_local _Bool* vm_bool_stack = NULL;
-static _Thread_local int vm_bool_sp = 0;
-static _Thread_local int vm_bool_cap = 0;
-static void bool_stack_init(void) { if(vm_bool_stack) return; vm_bool_cap = 64; vm_bool_stack = (_Bool*)malloc(64 * sizeof(_Bool)); if(!vm_bool_stack) { LOG_ERROR("vm: bool 栈内存不足\n"); exit(EXIT_FAILURE); } vm_bool_sp = 0; }
-static void bool_stack_destroy(void) { if(vm_bool_stack) { free(vm_bool_stack); vm_bool_stack = NULL; } vm_bool_sp = 0; vm_bool_cap = 0; }
-static void bool_stack_ensure(int need) { if(vm_bool_sp + need <= vm_bool_cap) return; int nc = vm_bool_cap > 0 ? vm_bool_cap : 64; while(nc < vm_bool_sp + need) nc *= 2; _Bool* ns = (_Bool*)realloc(vm_bool_stack, nc * sizeof(_Bool)); if(!ns) { LOG_ERROR("vm: bool 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_bool_stack = ns; vm_bool_cap = nc; }
-#define BOOL_PUSH(val) do { bool_stack_ensure(1); vm_bool_stack[vm_bool_sp++] = (val); } while(0)
-#define BOOL_POP() (vm_bool_stack[--vm_bool_sp])
-
-/* ========== char 栈 ========== */
-static _Thread_local char* vm_char_stack = NULL;
-static _Thread_local int vm_char_sp = 0;
-static _Thread_local int vm_char_cap = 0;
-static void char_stack_init(void) { if(vm_char_stack) return; vm_char_cap = 64; vm_char_stack = (char*)malloc(64 * sizeof(char)); if(!vm_char_stack) { LOG_ERROR("vm: char 栈内存不足\n"); exit(EXIT_FAILURE); } vm_char_sp = 0; }
-static void char_stack_destroy(void) { if(vm_char_stack) { free(vm_char_stack); vm_char_stack = NULL; } vm_char_sp = 0; vm_char_cap = 0; }
-static void char_stack_ensure(int need) { if(vm_char_sp + need <= vm_char_cap) return; int nc = vm_char_cap > 0 ? vm_char_cap : 64; while(nc < vm_char_sp + need) nc *= 2; char* ns = (char*)realloc(vm_char_stack, nc * sizeof(char)); if(!ns) { LOG_ERROR("vm: char 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_char_stack = ns; vm_char_cap = nc; }
-#define CHAR_PUSH(val) do { char_stack_ensure(1); vm_char_stack[vm_char_sp++] = (val); } while(0)
-#define CHAR_POP() (vm_char_stack[--vm_char_sp])
-
-/* ========== byte 栈 ========== */
-static _Thread_local unsigned char* vm_byte_stack = NULL;
-static _Thread_local int vm_byte_sp = 0;
-static _Thread_local int vm_byte_cap = 0;
-static void byte_stack_init(void) { if(vm_byte_stack) return; vm_byte_cap = 64; vm_byte_stack = (unsigned char*)malloc(64 * sizeof(unsigned char)); if(!vm_byte_stack) { LOG_ERROR("vm: byte 栈内存不足\n"); exit(EXIT_FAILURE); } vm_byte_sp = 0; }
-static void byte_stack_destroy(void) { if(vm_byte_stack) { free(vm_byte_stack); vm_byte_stack = NULL; } vm_byte_sp = 0; vm_byte_cap = 0; }
-static void byte_stack_ensure(int need) { if(vm_byte_sp + need <= vm_byte_cap) return; int nc = vm_byte_cap > 0 ? vm_byte_cap : 64; while(nc < vm_byte_sp + need) nc *= 2; unsigned char* ns = (unsigned char*)realloc(vm_byte_stack, nc * sizeof(unsigned char)); if(!ns) { LOG_ERROR("vm: byte 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_byte_stack = ns; vm_byte_cap = nc; }
-#define BYTE_PUSH(val) do { byte_stack_ensure(1); vm_byte_stack[vm_byte_sp++] = (val); } while(0)
-#define BYTE_POP() (vm_byte_stack[--vm_byte_sp])
-
-/* ========== int8 栈 ========== */
-static _Thread_local int8_t* vm_int8_stack = NULL;
-static _Thread_local int vm_int8_sp = 0;
-static _Thread_local int vm_int8_cap = 0;
-static void int8_stack_init(void) { if(vm_int8_stack) return; vm_int8_cap = 64; vm_int8_stack = (int8_t*)malloc(64 * sizeof(int8_t)); if(!vm_int8_stack) { LOG_ERROR("vm: int8 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int8_sp = 0; }
-static void int8_stack_destroy(void) { if(vm_int8_stack) { free(vm_int8_stack); vm_int8_stack = NULL; } vm_int8_sp = 0; vm_int8_cap = 0; }
-static void int8_stack_ensure(int need) { if(vm_int8_sp + need <= vm_int8_cap) return; int nc = vm_int8_cap > 0 ? vm_int8_cap : 64; while(nc < vm_int8_sp + need) nc *= 2; int8_t* ns = (int8_t*)realloc(vm_int8_stack, nc * sizeof(int8_t)); if(!ns) { LOG_ERROR("vm: int8 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int8_stack = ns; vm_int8_cap = nc; }
-#define INT8_PUSH(val) do { int8_stack_ensure(1); vm_int8_stack[vm_int8_sp++] = (val); } while(0)
-#define INT8_POP() (vm_int8_stack[--vm_int8_sp])
-
-/* ========== int16 栈 ========== */
-static _Thread_local int16_t* vm_int16_stack = NULL;
-static _Thread_local int vm_int16_sp = 0;
-static _Thread_local int vm_int16_cap = 0;
-static void int16_stack_init(void) { if(vm_int16_stack) return; vm_int16_cap = 64; vm_int16_stack = (int16_t*)malloc(64 * sizeof(int16_t)); if(!vm_int16_stack) { LOG_ERROR("vm: int16 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int16_sp = 0; }
-static void int16_stack_destroy(void) { if(vm_int16_stack) { free(vm_int16_stack); vm_int16_stack = NULL; } vm_int16_sp = 0; vm_int16_cap = 0; }
-static void int16_stack_ensure(int need) { if(vm_int16_sp + need <= vm_int16_cap) return; int nc = vm_int16_cap > 0 ? vm_int16_cap : 64; while(nc < vm_int16_sp + need) nc *= 2; int16_t* ns = (int16_t*)realloc(vm_int16_stack, nc * sizeof(int16_t)); if(!ns) { LOG_ERROR("vm: int16 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int16_stack = ns; vm_int16_cap = nc; }
-#define INT16_PUSH(val) do { int16_stack_ensure(1); vm_int16_stack[vm_int16_sp++] = (val); } while(0)
-#define INT16_POP() (vm_int16_stack[--vm_int16_sp])
-
-/* ========== int32 栈 ========== */
-static _Thread_local int32_t* vm_int32_stack = NULL;
-static _Thread_local int vm_int32_sp = 0;
-static _Thread_local int vm_int32_cap = 0;
-static void int32_stack_init(void) { if(vm_int32_stack) return; vm_int32_cap = 64; vm_int32_stack = (int32_t*)malloc(64 * sizeof(int32_t)); if(!vm_int32_stack) { LOG_ERROR("vm: int32 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int32_sp = 0; }
-static void int32_stack_destroy(void) { if(vm_int32_stack) { free(vm_int32_stack); vm_int32_stack = NULL; } vm_int32_sp = 0; vm_int32_cap = 0; }
-static void int32_stack_ensure(int need) { if(vm_int32_sp + need <= vm_int32_cap) return; int nc = vm_int32_cap > 0 ? vm_int32_cap : 64; while(nc < vm_int32_sp + need) nc *= 2; int32_t* ns = (int32_t*)realloc(vm_int32_stack, nc * sizeof(int32_t)); if(!ns) { LOG_ERROR("vm: int32 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int32_stack = ns; vm_int32_cap = nc; }
-#define INT32_PUSH(val) do { int32_stack_ensure(1); vm_int32_stack[vm_int32_sp++] = (val); } while(0)
-#define INT32_POP() (vm_int32_stack[--vm_int32_sp])
-
-/* ========== int64 栈 ========== */
-static _Thread_local int64_t* vm_int64_stack = NULL;
-static _Thread_local int vm_int64_sp = 0;
-static _Thread_local int vm_int64_cap = 0;
-static void int64_stack_init(void) { if(vm_int64_stack) return; vm_int64_cap = 64; vm_int64_stack = (int64_t*)malloc(64 * sizeof(int64_t)); if(!vm_int64_stack) { LOG_ERROR("vm: int64 栈内存不足\n"); exit(EXIT_FAILURE); } vm_int64_sp = 0; }
-static void int64_stack_destroy(void) { if(vm_int64_stack) { free(vm_int64_stack); vm_int64_stack = NULL; } vm_int64_sp = 0; vm_int64_cap = 0; }
-static void int64_stack_ensure(int need) { if(vm_int64_sp + need <= vm_int64_cap) return; int nc = vm_int64_cap > 0 ? vm_int64_cap : 64; while(nc < vm_int64_sp + need) nc *= 2; int64_t* ns = (int64_t*)realloc(vm_int64_stack, nc * sizeof(int64_t)); if(!ns) { LOG_ERROR("vm: int64 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_int64_stack = ns; vm_int64_cap = nc; }
-#define INT64_PUSH(val) do { int64_stack_ensure(1); vm_int64_stack[vm_int64_sp++] = (val); } while(0)
-#define INT64_POP() (vm_int64_stack[--vm_int64_sp])
-
-/* ========== uint8 栈 ========== */
-static _Thread_local uint8_t* vm_uint8_stack = NULL;
-static _Thread_local int vm_uint8_sp = 0;
-static _Thread_local int vm_uint8_cap = 0;
-static void uint8_stack_init(void) { if(vm_uint8_stack) return; vm_uint8_cap = 64; vm_uint8_stack = (uint8_t*)malloc(64 * sizeof(uint8_t)); if(!vm_uint8_stack) { LOG_ERROR("vm: uint8 栈内存不足\n"); exit(EXIT_FAILURE); } vm_uint8_sp = 0; }
-static void uint8_stack_destroy(void) { if(vm_uint8_stack) { free(vm_uint8_stack); vm_uint8_stack = NULL; } vm_uint8_sp = 0; vm_uint8_cap = 0; }
-static void uint8_stack_ensure(int need) { if(vm_uint8_sp + need <= vm_uint8_cap) return; int nc = vm_uint8_cap > 0 ? vm_uint8_cap : 64; while(nc < vm_uint8_sp + need) nc *= 2; uint8_t* ns = (uint8_t*)realloc(vm_uint8_stack, nc * sizeof(uint8_t)); if(!ns) { LOG_ERROR("vm: uint8 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_uint8_stack = ns; vm_uint8_cap = nc; }
-#define UINT8_PUSH(val) do { uint8_stack_ensure(1); vm_uint8_stack[vm_uint8_sp++] = (val); } while(0)
-#define UINT8_POP() (vm_uint8_stack[--vm_uint8_sp])
-
-/* ========== uint16 栈 ========== */
-static _Thread_local uint16_t* vm_uint16_stack = NULL;
-static _Thread_local int vm_uint16_sp = 0;
-static _Thread_local int vm_uint16_cap = 0;
-static void uint16_stack_init(void) { if(vm_uint16_stack) return; vm_uint16_cap = 64; vm_uint16_stack = (uint16_t*)malloc(64 * sizeof(uint16_t)); if(!vm_uint16_stack) { LOG_ERROR("vm: uint16 栈内存不足\n"); exit(EXIT_FAILURE); } vm_uint16_sp = 0; }
-static void uint16_stack_destroy(void) { if(vm_uint16_stack) { free(vm_uint16_stack); vm_uint16_stack = NULL; } vm_uint16_sp = 0; vm_uint16_cap = 0; }
-static void uint16_stack_ensure(int need) { if(vm_uint16_sp + need <= vm_uint16_cap) return; int nc = vm_uint16_cap > 0 ? vm_uint16_cap : 64; while(nc < vm_uint16_sp + need) nc *= 2; uint16_t* ns = (uint16_t*)realloc(vm_uint16_stack, nc * sizeof(uint16_t)); if(!ns) { LOG_ERROR("vm: uint16 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_uint16_stack = ns; vm_uint16_cap = nc; }
-#define UINT16_PUSH(val) do { uint16_stack_ensure(1); vm_uint16_stack[vm_uint16_sp++] = (val); } while(0)
-#define UINT16_POP() (vm_uint16_stack[--vm_uint16_sp])
-
-/* ========== uint32 栈 ========== */
-static _Thread_local uint32_t* vm_uint32_stack = NULL;
-static _Thread_local int vm_uint32_sp = 0;
-static _Thread_local int vm_uint32_cap = 0;
-static void uint32_stack_init(void) { if(vm_uint32_stack) return; vm_uint32_cap = 64; vm_uint32_stack = (uint32_t*)malloc(64 * sizeof(uint32_t)); if(!vm_uint32_stack) { LOG_ERROR("vm: uint32 栈内存不足\n"); exit(EXIT_FAILURE); } vm_uint32_sp = 0; }
-static void uint32_stack_destroy(void) { if(vm_uint32_stack) { free(vm_uint32_stack); vm_uint32_stack = NULL; } vm_uint32_sp = 0; vm_uint32_cap = 0; }
-static void uint32_stack_ensure(int need) { if(vm_uint32_sp + need <= vm_uint32_cap) return; int nc = vm_uint32_cap > 0 ? vm_uint32_cap : 64; while(nc < vm_uint32_sp + need) nc *= 2; uint32_t* ns = (uint32_t*)realloc(vm_uint32_stack, nc * sizeof(uint32_t)); if(!ns) { LOG_ERROR("vm: uint32 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_uint32_stack = ns; vm_uint32_cap = nc; }
-#define UINT32_PUSH(val) do { uint32_stack_ensure(1); vm_uint32_stack[vm_uint32_sp++] = (val); } while(0)
-#define UINT32_POP() (vm_uint32_stack[--vm_uint32_sp])
-
-/* ========== uint64 栈 ========== */
-static _Thread_local uint64_t* vm_uint64_stack = NULL;
-static _Thread_local int vm_uint64_sp = 0;
-static _Thread_local int vm_uint64_cap = 0;
-static void uint64_stack_init(void) { if(vm_uint64_stack) return; vm_uint64_cap = 64; vm_uint64_stack = (uint64_t*)malloc(64 * sizeof(uint64_t)); if(!vm_uint64_stack) { LOG_ERROR("vm: uint64 栈内存不足\n"); exit(EXIT_FAILURE); } vm_uint64_sp = 0; }
-static void uint64_stack_destroy(void) { if(vm_uint64_stack) { free(vm_uint64_stack); vm_uint64_stack = NULL; } vm_uint64_sp = 0; vm_uint64_cap = 0; }
-static void uint64_stack_ensure(int need) { if(vm_uint64_sp + need <= vm_uint64_cap) return; int nc = vm_uint64_cap > 0 ? vm_uint64_cap : 64; while(nc < vm_uint64_sp + need) nc *= 2; uint64_t* ns = (uint64_t*)realloc(vm_uint64_stack, nc * sizeof(uint64_t)); if(!ns) { LOG_ERROR("vm: uint64 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_uint64_stack = ns; vm_uint64_cap = nc; }
-#define UINT64_PUSH(val) do { uint64_stack_ensure(1); vm_uint64_stack[vm_uint64_sp++] = (val); } while(0)
-#define UINT64_POP() (vm_uint64_stack[--vm_uint64_sp])
-
-/* ========== long 栈 ========== */
-static _Thread_local long* vm_long_stack = NULL;
-static _Thread_local int vm_long_sp = 0;
-static _Thread_local int vm_long_cap = 0;
-static void long_stack_init(void) { if(vm_long_stack) return; vm_long_cap = 64; vm_long_stack = (long*)malloc(64 * sizeof(long)); if(!vm_long_stack) { LOG_ERROR("vm: long 栈内存不足\n"); exit(EXIT_FAILURE); } vm_long_sp = 0; }
-static void long_stack_destroy(void) { if(vm_long_stack) { free(vm_long_stack); vm_long_stack = NULL; } vm_long_sp = 0; vm_long_cap = 0; }
-static void long_stack_ensure(int need) { if(vm_long_sp + need <= vm_long_cap) return; int nc = vm_long_cap > 0 ? vm_long_cap : 64; while(nc < vm_long_sp + need) nc *= 2; long* ns = (long*)realloc(vm_long_stack, nc * sizeof(long)); if(!ns) { LOG_ERROR("vm: long 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_long_stack = ns; vm_long_cap = nc; }
-#define LONG_PUSH(val) do { long_stack_ensure(1); vm_long_stack[vm_long_sp++] = (val); } while(0)
-#define LONG_POP() (vm_long_stack[--vm_long_sp])
-
-/* ========== unsigned long 栈 ========== */
-static _Thread_local unsigned long* vm_ulong_stack = NULL;
-static _Thread_local int vm_ulong_sp = 0;
-static _Thread_local int vm_ulong_cap = 0;
-static void ulong_stack_init(void) { if(vm_ulong_stack) return; vm_ulong_cap = 64; vm_ulong_stack = (unsigned long*)malloc(64 * sizeof(unsigned long)); if(!vm_ulong_stack) { LOG_ERROR("vm: unsigned long 栈内存不足\n"); exit(EXIT_FAILURE); } vm_ulong_sp = 0; }
-static void ulong_stack_destroy(void) { if(vm_ulong_stack) { free(vm_ulong_stack); vm_ulong_stack = NULL; } vm_ulong_sp = 0; vm_ulong_cap = 0; }
-static void ulong_stack_ensure(int need) { if(vm_ulong_sp + need <= vm_ulong_cap) return; int nc = vm_ulong_cap > 0 ? vm_ulong_cap : 64; while(nc < vm_ulong_sp + need) nc *= 2; unsigned long* ns = (unsigned long*)realloc(vm_ulong_stack, nc * sizeof(unsigned long)); if(!ns) { LOG_ERROR("vm: unsigned long 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_ulong_stack = ns; vm_ulong_cap = nc; }
-#define ULONG_PUSH(val) do { ulong_stack_ensure(1); vm_ulong_stack[vm_ulong_sp++] = (val); } while(0)
-#define ULONG_POP() (vm_ulong_stack[--vm_ulong_sp])
-
-/* ========== size_t 栈 ========== */
-static _Thread_local size_t* vm_size_t_stack = NULL;
-static _Thread_local int vm_size_t_sp = 0;
-static _Thread_local int vm_size_t_cap = 0;
-static void size_t_stack_init(void) { if(vm_size_t_stack) return; vm_size_t_cap = 64; vm_size_t_stack = (size_t*)malloc(64 * sizeof(size_t)); if(!vm_size_t_stack) { LOG_ERROR("vm: size_t 栈内存不足\n"); exit(EXIT_FAILURE); } vm_size_t_sp = 0; }
-static void size_t_stack_destroy(void) { if(vm_size_t_stack) { free(vm_size_t_stack); vm_size_t_stack = NULL; } vm_size_t_sp = 0; vm_size_t_cap = 0; }
-static void size_t_stack_ensure(int need) { if(vm_size_t_sp + need <= vm_size_t_cap) return; int nc = vm_size_t_cap > 0 ? vm_size_t_cap : 64; while(nc < vm_size_t_sp + need) nc *= 2; size_t* ns = (size_t*)realloc(vm_size_t_stack, nc * sizeof(size_t)); if(!ns) { LOG_ERROR("vm: size_t 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_size_t_stack = ns; vm_size_t_cap = nc; }
-#define SIZE_T_PUSH(val) do { size_t_stack_ensure(1); vm_size_t_stack[vm_size_t_sp++] = (val); } while(0)
-#define SIZE_T_POP() (vm_size_t_stack[--vm_size_t_sp])
-
-/* ========== ssize_t 栈 ========== */
-static _Thread_local ssize_t* vm_ssize_t_stack = NULL;
-static _Thread_local int vm_ssize_t_sp = 0;
-static _Thread_local int vm_ssize_t_cap = 0;
-static void ssize_t_stack_init(void) { if(vm_ssize_t_stack) return; vm_ssize_t_cap = 64; vm_ssize_t_stack = (ssize_t*)malloc(64 * sizeof(ssize_t)); if(!vm_ssize_t_stack) { LOG_ERROR("vm: ssize_t 栈内存不足\n"); exit(EXIT_FAILURE); } vm_ssize_t_sp = 0; }
-static void ssize_t_stack_destroy(void) { if(vm_ssize_t_stack) { free(vm_ssize_t_stack); vm_ssize_t_stack = NULL; } vm_ssize_t_sp = 0; vm_ssize_t_cap = 0; }
-static void ssize_t_stack_ensure(int need) { if(vm_ssize_t_sp + need <= vm_ssize_t_cap) return; int nc = vm_ssize_t_cap > 0 ? vm_ssize_t_cap : 64; while(nc < vm_ssize_t_sp + need) nc *= 2; ssize_t* ns = (ssize_t*)realloc(vm_ssize_t_stack, nc * sizeof(ssize_t)); if(!ns) { LOG_ERROR("vm: ssize_t 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_ssize_t_stack = ns; vm_ssize_t_cap = nc; }
-#define SSIZE_T_PUSH(val) do { ssize_t_stack_ensure(1); vm_ssize_t_stack[vm_ssize_t_sp++] = (val); } while(0)
-#define SSIZE_T_POP() (vm_ssize_t_stack[--vm_ssize_t_sp])
-
-/* ========== long double 栈 ========== */
-static _Thread_local long double* vm_long_double_stack = NULL;
-static _Thread_local int vm_long_double_sp = 0;
-static _Thread_local int vm_long_double_cap = 0;
-static void long_double_stack_init(void) { if(vm_long_double_stack) return; vm_long_double_cap = 64; vm_long_double_stack = (long double*)malloc(64 * sizeof(long double)); if(!vm_long_double_stack) { LOG_ERROR("vm: long double 栈内存不足\n"); exit(EXIT_FAILURE); } vm_long_double_sp = 0; }
-static void long_double_stack_destroy(void) { if(vm_long_double_stack) { free(vm_long_double_stack); vm_long_double_stack = NULL; } vm_long_double_sp = 0; vm_long_double_cap = 0; }
-static void long_double_stack_ensure(int need) { if(vm_long_double_sp + need <= vm_long_double_cap) return; int nc = vm_long_double_cap > 0 ? vm_long_double_cap : 64; while(nc < vm_long_double_sp + need) nc *= 2; long double* ns = (long double*)realloc(vm_long_double_stack, nc * sizeof(long double)); if(!ns) { LOG_ERROR("vm: long double 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_long_double_stack = ns; vm_long_double_cap = nc; }
-#define LONG_DOUBLE_PUSH(val) do { long_double_stack_ensure(1); vm_long_double_stack[vm_long_double_sp++] = (val); } while(0)
-#define LONG_DOUBLE_POP() (vm_long_double_stack[--vm_long_double_sp])
 
 /* ========== 生成器支持 ========== */
 /* 包装生成器类型枚举 */
@@ -2778,9 +2523,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(in.a == 1) {
                         /* 从 int 栈读取：零检查零转换 */
                         for(int k = 0; k < n; k++) {
-                            iitems[k] = vm_int_stack[vm_int_sp - n + k];
+                            iitems[k] = ((int*)stack_global_get_stack(STACK_INT))[(*stack_global_get_sp(STACK_INT)) - n + k];
                         }
-                        vm_int_sp -= n;
+                        (*stack_global_get_sp(STACK_INT)) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
@@ -2824,9 +2569,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(in.a == 1) {
                         /* 从 double 栈读取：零检查零转换 */
                         for(int k = 0; k < n; k++) {
-                            ditems[k] = vm_double_stack[vm_double_sp - n + k];
+                            ditems[k] = ((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - n + k];
                         }
-                        vm_double_sp -= n;
+                        (*stack_global_get_sp(STACK_DOUBLE)) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
@@ -2870,9 +2615,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(in.a == 1) {
                         /* 从 float 栈读取：零检查零转换 */
                         for(int k = 0; k < n; k++) {
-                            fitems[k] = vm_float_stack[vm_float_sp - n + k];
+                            fitems[k] = ((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT)) - n + k];
                         }
-                        vm_float_sp -= n;
+                        (*stack_global_get_sp(STACK_FLOAT)) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
@@ -2916,9 +2661,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     if(in.a == 1) {
                         /* 从 uint 栈读取：零检查零转换 */
                         for(int k = 0; k < n; k++) {
-                            uitems[k] = vm_uint_stack[vm_uint_sp - n + k];
+                            uitems[k] = ((unsigned int*)stack_global_get_stack(STACK_UINT))[(*stack_global_get_sp(STACK_UINT)) - n + k];
                         }
-                        vm_uint_sp -= n;
+                        (*stack_global_get_sp(STACK_UINT)) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
