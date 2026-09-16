@@ -1714,6 +1714,41 @@ static int c_print_args(Ctx* c, AstNode* args)
     return c_print_args_recursive(c, args);
 }
 
+/* 混合类型算术运算的类型提升辅助函数：根据源类型和目标类型发射对应的转换指令
+   类型编号：1=int, 2=uint, 3=float, 4=double, 5=long long */
+static void emit_mixed_type_promote(Ctx* c, int src_type, int dst_type) {
+    if(src_type == dst_type) return;
+    switch(src_type) {
+        case 1: /* int */
+            if(dst_type == 2) { /* int -> uint: 都是32位，直接重新解释 */
+                /* 目前没有专用指令，int和uint栈分开，需要转换 */
+                /* 暂时用通用路径：从int栈弹出，压入uint栈 */
+                emit(c, OPC_INT_TO_UINT, 0, 0);
+            }
+            else if(dst_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
+            else if(dst_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+            else if(dst_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
+            break;
+        case 2: /* uint */
+            if(dst_type == 1) emit(c, OPC_UINT_TO_INT, 0, 0);
+            else if(dst_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
+            else if(dst_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+            else if(dst_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
+            break;
+        case 3: /* float */
+            if(dst_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+            else if(dst_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
+            break;
+        case 4: /* double */
+            if(dst_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
+            break;
+        case 5: /* long long */
+            if(dst_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
+            else if(dst_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
+            break;
+    }
+}
+
 static void c_expr(Ctx* c, AstNode* node)
 {
     if(!node) { emit(c, OPC_LOAD_CONST, bf_const(c->fn, val_none()), 0); return; }
@@ -2707,6 +2742,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 else if(right_is_long_long) { right_type = 5; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
+                    fprintf(stderr, "[DEBUG MIXED] left_type=%d, right_type=%d\n", left_type, right_type);
                     /* 类型提升规则：浮点类型(float=3/double=4)优先级高于整数类型(int=1/uint=2/long long=5)
                        参考C语言标准：常用算术转换中，浮点类型总是优先于整数类型 */
                     int left_is_float_type = (left_type == 3 || left_type == 4);
@@ -2717,29 +2753,19 @@ static void c_expr(Ctx* c, AstNode* node)
                         if(left_type == 4 || right_type == 4) result_type = 4; /* double */
                         else result_type = 3; /* float */
                     } else {
+                        fprintf(stderr, "[DEBUG MIXED] both int, left=%d, right=%d\n", left_type, right_type);
                         /* 都是整数类型：取位宽更大的类型(long long > uint > int) */
                         result_type = left_type > right_type ? left_type : right_type;
                     }
+                    fprintf(stderr, "[DEBUG MIXED] result_type=%d\n", result_type);
                     /* 加载左操作数到对应专用栈 */
                     if(left_type == 1) emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
                     else if(left_type == 2) emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
                     else if(left_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
                     else if(left_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
                     else if(left_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, left_idx, 0);
-                    /* 左操作数类型提升（从专用栈A弹出，转换后压入专用栈B） */
-                    if(left_type < result_type) {
-                        if(left_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
-                        else if(left_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
-                        else if(left_type == 1 && result_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
-                        else if(left_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
-                        else if(left_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
-                        else if(left_type == 2 && result_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
-                        else if(left_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
-                        else if(left_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
-                        else if(left_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
-                        else if(left_type == 5 && result_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
-                        else if(left_type == 5 && result_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
-                    }
+                    /* 左操作数类型提升 */
+                    emit_mixed_type_promote(c, left_type, result_type);
                     /* 加载右操作数到对应专用栈 */
                     if(right_type == 1) emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
                     else if(right_type == 2) emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
@@ -2747,21 +2773,21 @@ static void c_expr(Ctx* c, AstNode* node)
                     else if(right_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
                     else if(right_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, right_idx, 0);
                     /* 右操作数类型提升 */
-                    if(right_type < result_type) {
-                        if(right_type == 1 && result_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
-                        else if(right_type == 1 && result_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
-                        else if(right_type == 1 && result_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
-                        else if(right_type == 2 && result_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
-                        else if(right_type == 2 && result_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
-                        else if(right_type == 2 && result_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
-                        else if(right_type == 3 && result_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
-                        else if(right_type == 3 && result_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
-                        else if(right_type == 4 && result_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
-                        else if(right_type == 5 && result_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
-                        else if(right_type == 5 && result_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
-                    }
+                    emit_mixed_type_promote(c, right_type, result_type);
                     /* 执行大类型的算术运算（结果在大类型专用栈中） */
-                    if(result_type == 3) { /* float */
+                    if(result_type == 1) { /* int */
+                        static const OpCode int_arith_map[] = {
+                            [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
+                            [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
+                        };
+                        emit(c, int_arith_map[bop], 0, 0);
+                    } else if(result_type == 2) { /* uint */
+                        static const OpCode uint_arith_map[] = {
+                            [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
+                            [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
+                        };
+                        emit(c, uint_arith_map[bop], 0, 0);
+                    } else if(result_type == 3) { /* float */
                         static const OpCode float_arith_map[] = {
                             [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
                             [OP_DIV] = OPC_FLOAT_DIV,
@@ -2773,6 +2799,12 @@ static void c_expr(Ctx* c, AstNode* node)
                             [OP_DIV] = OPC_DOUBLE_DIV,
                         };
                         emit(c, double_arith_map[bop], 0, 0);
+                    } else if(result_type == 5) { /* long long */
+                        static const OpCode long_long_arith_map[] = {
+                            [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
+                            [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
+                        };
+                        emit(c, long_long_arith_map[bop], 0, 0);
                     } else if(result_type == 5) { /* long long */
                         static const OpCode long_long_arith_map[] = {
                             [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,

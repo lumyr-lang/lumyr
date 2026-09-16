@@ -3228,6 +3228,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* uint 加法：直接从 uint 栈弹出两个 uint，相加后结果压回 uint 栈，零检查零转换零 Value 开销 */
                 unsigned int b = UINT_POP();
                 unsigned int a = UINT_POP();
+                fprintf(stderr, "[DEBUG VM] UINT_ADD: a=%u, b=%u, result=%u\n", a, b, a + b);
                 UINT_PUSH(a + b);
                 break;
             }
@@ -3433,6 +3434,17 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_PRINT_LONG_LONG: {
                 long long llv = LONG_LONG_POP();
                                 printf("%lld\n", llv);
+                break;
+            }
+            case OPC_INT_TO_UINT: {
+                unsigned int uv = (unsigned int)INT_POP();
+                fprintf(stderr, "[DEBUG VM] INT_TO_UINT: int_val=%d, uint_val=%u\n", (int)uv, uv);
+                UINT_PUSH(uv);
+                break;
+            }
+            case OPC_UINT_TO_INT: {
+                int iv = (int)UINT_POP();
+                INT_PUSH(iv);
                 break;
             }
             case OPC_INT_TO_FLOAT: {

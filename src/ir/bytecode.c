@@ -205,6 +205,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_UINT_ARRAY_SET:
             return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 uint 栈弹出值(1个) */
         /* 类型转换指令：专用栈之间的转换，不改变 Value 栈深度（零包装零Value开销） */
+        case OPC_INT_TO_UINT:
+        case OPC_UINT_TO_INT:
         case OPC_INT_TO_FLOAT:
         case OPC_INT_TO_DOUBLE:
         case OPC_UINT_TO_FLOAT:
@@ -613,6 +615,8 @@ static const char* opc_name(OpCode op)
         case OPC_UINT_EQ: return "UINT_EQ";
         case OPC_UINT_NE: return "UINT_NE";
         case OPC_UINT_ARRAY_SET: return "UINT_ARRAY_SET";
+        case OPC_INT_TO_UINT: return "INT_TO_UINT";
+        case OPC_UINT_TO_INT: return "UINT_TO_INT";
         case OPC_INT_TO_FLOAT: return "INT_TO_FLOAT";
         case OPC_INT_TO_DOUBLE: return "INT_TO_DOUBLE";
         case OPC_UINT_TO_FLOAT: return "UINT_TO_FLOAT";

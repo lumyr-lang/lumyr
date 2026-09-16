@@ -94,6 +94,8 @@ typedef enum {
     OPC_UINT_NE,         // 从 uint 栈弹出两个 uint，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
     OPC_UINT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 uint 栈弹出值，写入 uint 类型化数组（零转换）
     // 类型转换指令（专用栈之间的转换，零包装零Value开销）
+    OPC_INT_TO_UINT,     // 从 int 栈弹出一个 int，重新解释为 uint，压入 uint 栈（零包装零Value开销）
+    OPC_UINT_TO_INT,     // 从 uint 栈弹出一个 uint，重新解释为 int，压入 int 栈（零包装零Value开销）
     OPC_INT_TO_FLOAT,    // 从 int 栈弹出一个 int，转换为 float，压入 float 栈（零包装零Value开销）
     OPC_INT_TO_DOUBLE,   // 从 int 栈弹出一个 int，转换为 double，压入 double 栈（零包装零Value开销）
     OPC_UINT_TO_FLOAT,   // 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈（零包装零Value开销）

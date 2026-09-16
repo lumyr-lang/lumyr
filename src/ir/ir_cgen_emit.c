@@ -2470,6 +2470,14 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             /* 类型转换指令：专用栈之间的转换，零包装零Value开销 */
+            case OPC_INT_TO_UINT: {
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __uint_stack[__uint_stack_sp++] = (unsigned int)__iv; }\n");
+                break;
+            }
+            case OPC_UINT_TO_INT: {
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __int_stack[__int_stack_sp++] = (int)__uv; }\n");
+                break;
+            }
             case OPC_INT_TO_FLOAT: {
                 /* 从 int 栈弹出一个 int，转换为 float，压入 float 栈 */
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __float_stack[__float_stack_sp++] = (float)__iv; }\n");
