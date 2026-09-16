@@ -1600,6 +1600,27 @@ static void c_expr(Ctx* c, AstNode* node)
                     /* 其他数组/map字面量的类型标注不设置变量类型标记 */
                     c->fn->var_type_tags[var_idx] = -1;
                 }
+            } else if(node->u.assign.expr && node->u.assign.expr->type == AST_ARRAY_LIT) {
+                /* <type>[...] 形式在语法分析阶段被特殊处理成 AST_ARRAY_LIT，
+                   元素类型存储在 elem_type 字段中（使用 ValueType 枚举） */
+                int elem_type = node->u.assign.expr->u.array_lit.elem_type;
+                if(elem_type == VAL_INT) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_INT_ARRAY;
+                } else if(elem_type == VAL_DOUBLE) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_DOUBLE_ARRAY;
+                } else if(elem_type == VAL_FLOAT) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_FLOAT_ARRAY;
+                } else if(elem_type == VAL_UINT32) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_UINT_ARRAY;
+                } else if(elem_type == VAL_BOOL) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_BOOL_ARRAY;
+                } else if(elem_type == VAL_CHAR) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_CHAR_ARRAY;
+                } else if(elem_type == VAL_BYTE) {
+                    c->fn->var_type_tags[var_idx] = VAR_TYPE_BYTE_ARRAY;
+                } else {
+                    c->fn->var_type_tags[var_idx] = -1;
+                }
             } else if(node->u.assign.expr && node->u.assign.expr->type == AST_INTERFACE_ANNOTATION) {
                 /* 接口类型标注：<Printable>expr → 变量是接口引用类型 */
                 const char* iface_name = node->u.assign.expr->u.interface_annotation.interface_name;
@@ -1686,6 +1707,21 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                 /* 记录变量类型标记为 int */
                 c->fn->var_type_tags[var_idx] = CAST_INT;
+            }
+            /* 优化0u：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_UINT_CONST + OPC_STORE_UINT_VAR
+               零包装零重复提取，直接把字面量值压入 uint 栈并存储到 uint 变量
+               避免创建 Value 再提取的开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT32 &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                unsigned int literal_val = (unsigned int)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                /* OPC_PUSH_UINT_CONST：直接把常量值压入 uint 栈，零检查零转换 */
+                emit(c, OPC_PUSH_UINT_CONST, (int)literal_val, 0);
+                /* OPC_STORE_UINT_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
+                emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                /* 记录变量类型标记为 uint */
+                c->fn->var_type_tags[var_idx] = CAST_UINT32;
             }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
@@ -1937,6 +1973,10 @@ static void c_expr(Ctx* c, AstNode* node)
             int right_is_int = is_int_var(c, node->u.bin.right);
             int is_int_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
             int is_int_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_uint = is_uint_var(c, node->u.bin.left);
+            int right_is_uint = is_uint_var(c, node->u.bin.right);
+            int is_uint_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
+            int is_uint_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
             if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
@@ -1960,6 +2000,32 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_LE] = OPC_INT_LE, [OP_EQ] = OPC_INT_EQ, [OP_NE] = OPC_INT_NE,
                     };
                     emit(c, int_cmp_map[bop], 0, 0);
+                }
+            } else if(left_is_uint && right_is_uint && (is_uint_arith || is_uint_cmp)) {
+                /* 优化：uint 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
+                   如果左右操作数都是声明为 uint 的变量，使用 OPC_UINT_ADD 等专用指令，
+                   直接从 uint 专用栈弹出两个 uint，运算后结果压回 uint 专用栈，完全不涉及 Value 栈 */
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
+                if(is_uint_arith) {
+                    /* 生成 uint 专用算术运算指令 */
+                    static const OpCode uint_arith_map[] = {
+                        [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
+                        [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
+                    };
+                    emit(c, uint_arith_map[bop], 0, 0);
+                    /* 把结果从 uint 专用栈弹出，包装成 Value，压入 Value 栈
+                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                    emit(c, OPC_UINT_TO_VALUE, 0, 0);
+                } else {
+                    /* 生成 uint 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
+                    static const OpCode uint_cmp_map[] = {
+                        [OP_GT] = OPC_UINT_GT, [OP_LT] = OPC_UINT_LT, [OP_GE] = OPC_UINT_GE,
+                        [OP_LE] = OPC_UINT_LE, [OP_EQ] = OPC_UINT_EQ, [OP_NE] = OPC_UINT_NE,
+                    };
+                    emit(c, uint_cmp_map[bop], 0, 0);
                 }
             } else {
                 /* 通用路径：编译左右操作数，生成通用指令 */
@@ -2446,6 +2512,50 @@ static void c_expr(Ctx* c, AstNode* node)
                         }
                         /* 生成 int 类型化数组元素赋值专用指令 */
                         emit(c, OPC_INT_ARRAY_SET, 0, 0);
+                        break;
+                    }
+                }
+            }
+            /* 优化：uint 类型化数组元素赋值（零转换开销）
+               当数组是 uint 类型化数组，且赋值的值是 uint 类型（字面量或变量）时，
+               使用 OPC_UINT_ARRAY_SET 专用指令，直接从 uint 专用栈弹出值写入数组 */
+            if(arr && arr->type == AST_VAR) {
+                const char* arr_name = arr->u.varname;
+                int arr_idx = bf_sym(c->fn, arr_name);
+                if(arr_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[arr_idx] == VAR_TYPE_UINT_ARRAY) {
+                    AstNode* val_node = node->u.index_assign.value;
+                    int is_uint_val = 0;
+                    unsigned int uint_literal_val = 0;
+                    int uint_var_idx = -1;
+                    /* 检查赋值的值是否是 uint 类型 */
+                    if(val_node && val_node->type == AST_INT) {
+                        /* uint 字面量 */
+                        is_uint_val = 1;
+                        uint_literal_val = (unsigned int)val_node->u.inum;
+                    } else if(val_node && val_node->type == AST_VAR) {
+                        /* uint 变量 */
+                        int val_idx = bf_sym(c->fn, val_node->u.varname);
+                        if(val_idx >= 0 && c->fn->var_type_tags &&
+                           c->fn->var_type_tags[val_idx] == CAST_UINT32) {
+                            is_uint_val = 1;
+                            uint_var_idx = val_idx;
+                        }
+                    }
+                    if(is_uint_val) {
+                        /* 编译数组和索引（压入 Value 栈） */
+                        c_expr(c, arr);
+                        c_expr(c, idx);
+                        /* 编译赋值的值（压入 uint 专用栈） */
+                        if(val_node->type == AST_INT) {
+                            /* uint 字面量：直接压入 uint 栈，零检查零转换 */
+                            emit(c, OPC_PUSH_UINT_CONST, (int)uint_literal_val, 0);
+                        } else {
+                            /* uint 变量：从栈帧的 uint_vals 数组读取，压入 uint 栈 */
+                            emit(c, OPC_LOAD_UINT_VAR, uint_var_idx, 0);
+                        }
+                        /* 生成 uint 类型化数组元素赋值专用指令 */
+                        emit(c, OPC_UINT_ARRAY_SET, 0, 0);
                         break;
                     }
                 }

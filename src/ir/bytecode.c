@@ -142,6 +142,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;                       /* 从 int 栈弹出 int，包装成 Value 压回（赋值表达式有返回值） */
         case OPC_PUSH_INT_CONST:
             return 0;                        /* 压入 int 栈，不改变 Value 栈深度 */
+        case OPC_PUSH_UINT_CONST:
+            return 0;                        /* 压入 uint 栈，不改变 Value 栈深度 */
         case OPC_INT_ADD: case OPC_INT_SUB: case OPC_INT_MUL: case OPC_INT_DIV: case OPC_INT_MOD:
             return 0;                        /* 从 int 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
         case OPC_INT_TO_VALUE:
@@ -150,6 +152,14 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;                       /* 从 int 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
         case OPC_INT_ARRAY_SET:
             return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 int 栈弹出值(1个) */
+        case OPC_UINT_ADD: case OPC_UINT_SUB: case OPC_UINT_MUL: case OPC_UINT_DIV: case OPC_UINT_MOD:
+            return 0;                        /* 从 uint 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
+        case OPC_UINT_TO_VALUE:
+            return +1;                       /* 从 uint 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
+        case OPC_UINT_GT: case OPC_UINT_LT: case OPC_UINT_GE: case OPC_UINT_LE: case OPC_UINT_EQ: case OPC_UINT_NE:
+            return +1;                       /* 从 uint 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
+        case OPC_UINT_ARRAY_SET:
+            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 uint 栈弹出值(1个) */
         case OPC_POP:
         case OPC_PEND_RETURN:
         case OPC_THROW:

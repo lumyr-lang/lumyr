@@ -1951,6 +1951,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT_PUSH(in.a);
                 break;
             }
+            case OPC_PUSH_UINT_CONST: {
+                /* uint 常量：直接把常量值压入 uint 栈，零检查零转换
+                   用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                UINT_PUSH((unsigned int)in.a);
+                break;
+            }
             case OPC_INT_ADD: {
                 /* int 加法：直接从 int 栈弹出两个 int，相加，结果压回 int 栈
                    零检查零转换零 Value 开销，完全不涉及 Value 栈 */
@@ -2936,6 +2942,115 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 }
                 unsigned int val = ((unsigned int*)tarr->items)[iidx];  // 直接读取 uint 值，零提取零转换！
                 UINT_PUSH(val);  // 压入 uint 栈，零包装！
+                break;
+            }
+            case OPC_UINT_ADD: {
+                /* uint 加法：直接从 uint 栈弹出两个 uint，相加后结果压回 uint 栈，零检查零转换零 Value 开销 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                UINT_PUSH(a + b);
+                break;
+            }
+            case OPC_UINT_SUB: {
+                /* uint 减法 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                UINT_PUSH(a - b);
+                break;
+            }
+            case OPC_UINT_MUL: {
+                /* uint 乘法 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                UINT_PUSH(a * b);
+                break;
+            }
+            case OPC_UINT_DIV: {
+                /* uint 除法：带除零检查 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                if(b == 0) runtime_error("除零错误");
+                UINT_PUSH(a / b);
+                break;
+            }
+            case OPC_UINT_MOD: {
+                /* uint 取模：带除零检查 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                if(b == 0) runtime_error("除零错误");
+                UINT_PUSH(a % b);
+                break;
+            }
+            case OPC_UINT_TO_VALUE: {
+                /* 把 uint 专用栈顶的 uint 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                unsigned int uv = UINT_POP();
+                stack[sp++] = lumyr_make_uint32(uv);
+                break;
+            }
+            case OPC_UINT_GT: {
+                /* uint 大于比较：直接从 uint 栈弹出两个 uint，比较后结果(bool)压入 Value 栈 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_UINT_LT: {
+                /* uint 小于比较 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_UINT_GE: {
+                /* uint 大于等于比较 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_UINT_LE: {
+                /* uint 小于等于比较 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_UINT_EQ: {
+                /* uint 等于比较 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_UINT_NE: {
+                /* uint 不等于比较 */
+                unsigned int b = UINT_POP();
+                unsigned int a = UINT_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            case OPC_UINT_ARRAY_SET: {
+                /* uint 类型化数组元素赋值：从 uint 专用栈弹出值，从 Value 栈弹出索引和数组，
+                   直接写入 uint 类型化数组，零转换开销 */
+                unsigned int val = UINT_POP();
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                if(arr.type == VAL_TYPED_ARRAY && arr.v.typed_array &&
+                   arr.v.typed_array->elem_type == VAL_UINT32) {
+                    TypedArray* tarr = arr.v.typed_array;
+                    long long i = array_index_of(idx);
+                    if(i < 0 || i >= tarr->len) {
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "uint typed array index out of bounds: %lld (len %d)", i, tarr->len);
+                        runtime_error(buf);
+                    }
+                    ((unsigned int*)tarr->items)[i] = val;
+                } else {
+                    runtime_error("OPC_UINT_ARRAY_SET: array is not uint typed array");
+                }
+                /* 把被设置的值包装成 Value，压入 Value 栈（用于表达式值） */
+                stack[sp++] = lumyr_make_uint32(val);
                 break;
             }
             case OPC_BOOL_ARRAY_LIT: {

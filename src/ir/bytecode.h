@@ -14,6 +14,7 @@ typedef enum {
     OPC_LOAD_INT_VAR,   // a=符号表下标；加载声明为 int 的变量，直接压入 int 栈（零检查零转换）
     OPC_STORE_INT_VAR,  // a=符号表下标；从 int 栈弹出 int 值，直接存储到变量的 int_vals（零包装零转换）
     OPC_PUSH_INT_CONST, // a=常量值；把 int 常量直接压入 int 栈（零检查零转换，用于 <int>42 字面量赋值）
+    OPC_PUSH_UINT_CONST, // a=常量值；把 uint 常量直接压入 uint 栈（零检查零转换，用于 <uint>42 字面量赋值）
     OPC_INT_ADD,        // 从 int 栈弹出两个 int，相加，结果压回 int 栈（零检查零转换零 Value 开销）
     OPC_INT_SUB,        // 从 int 栈弹出两个 int，相减，结果压回 int 栈（零检查零转换零 Value 开销）
     OPC_INT_MUL,        // 从 int 栈弹出两个 int，相乘，结果压回 int 栈（零检查零转换零 Value 开销）
@@ -53,6 +54,19 @@ typedef enum {
     OPC_STORE_UINT_VAR,  // a=符号表下标；从 uint 栈弹出 uint 值，直接存储到变量的 uint_vals（零包装零转换）
     OPC_UINT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint，创建 uint 泛型数组
     OPC_UINT_ARRAY_GET, // 弹 arr,idx；直接从 uint 类型化数组读取元素，压入 uint 栈（零包装零 Value 开销）
+    OPC_UINT_ADD,        // 从 uint 栈弹出两个 uint，相加，结果压回 uint 栈（零检查零转换零 Value 开销）
+    OPC_UINT_SUB,        // 从 uint 栈弹出两个 uint，相减，结果压回 uint 栈（零检查零转换零 Value 开销）
+    OPC_UINT_MUL,        // 从 uint 栈弹出两个 uint，相乘，结果压回 uint 栈（零检查零转换零 Value 开销）
+    OPC_UINT_DIV,        // 从 uint 栈弹出两个 uint，相除，结果压回 uint 栈（零检查零转换零 Value 开销）
+    OPC_UINT_MOD,        // 从 uint 栈弹出两个 uint，取模，结果压回 uint 栈（零检查零转换零 Value 开销）
+    OPC_UINT_TO_VALUE,   // 从 uint 栈弹出一个 uint，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
+    OPC_UINT_GT,         // 从 uint 栈弹出两个 uint，大于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_LT,         // 从 uint 栈弹出两个 uint，小于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_GE,         // 从 uint 栈弹出两个 uint，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_LE,         // 从 uint 栈弹出两个 uint，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_EQ,         // 从 uint 栈弹出两个 uint，等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_NE,         // 从 uint 栈弹出两个 uint，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_UINT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 uint 栈弹出值，写入 uint 类型化数组（零转换）
     OPC_LOAD_BOOL_VAR,   // a=符号表下标；加载声明为 bool 的变量，直接压入 bool 栈（零检查零转换）
     OPC_STORE_BOOL_VAR,  // a=符号表下标；从 bool 栈弹出 bool 值，直接存储到变量的 bool_vals（零包装零转换）
     OPC_BOOL_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 bool，创建 bool 泛型数组

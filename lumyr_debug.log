@@ -299,3 +299,59 @@
 [src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
 [src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
 [src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_comparison_test.c, main_fn=0000023223f6ed40
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\cc_int_full_test.c, main_fn=0000017dbd34eec0
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_arithmetic_test.c, main_fn=0000020ac24cedc0
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_comparison_test.c, main_fn=0000017c1862ed40
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\cc_int_full_test.c, main_fn=0000017f4081eec0
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_array_assign_test.c, main_fn=00000216ed6cef20
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_array_assign_test.c, main_fn=000001414e05ef20
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
+[src/ir/ir_cgen.c:1598] ir_cgen_file called: out_c_path=tests\int_array_assign_test.c, main_fn=000001cfcdb5ef20
+[src/ir/ir_cgen.c:1605] ir_cgen_file: output file opened successfully
+[src/ir/ir_cgen.c:1637] ir_cgen_file: before emit_main
+[src/ir/ir_cgen.c:1442] Before ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1444] After ir_func_table_foreach(emit_func_def_cb)
+[src/ir/ir_cgen.c:1639] ir_cgen_file: after emit_main
+[src/ir/ir_cgen.c:1641] ir_cgen_file: done
