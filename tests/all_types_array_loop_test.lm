@@ -1,0 +1,235 @@
+// 测试所有数据类型的专用数组循环取值打印场景
+print("=== 测试所有数据类型的专用数组循环取值打印 ===\n");
+
+// 1. int 类型
+print("--- int 类型 ---\n");
+arr_int = <int>[1, 2, 3, 4, 5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_int[");
+    print(i);
+    print("] = ");
+    print(arr_int[i]);
+    print("\n");
+}
+
+// 2. uint 类型
+print("--- uint 类型 ---\n");
+arr_uint = <uint>[10, 20, 30, 40, 50];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_uint[");
+    print(i);
+    print("] = ");
+    print(arr_uint[i]);
+    print("\n");
+}
+
+// 3. long 类型
+print("--- long 类型 ---\n");
+arr_long = <long>[100, 200, 300, 400, 500];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_long[");
+    print(i);
+    print("] = ");
+    print(arr_long[i]);
+    print("\n");
+}
+
+// 4. ulong 类型
+print("--- ulong 类型 ---\n");
+arr_ulong = <ulong>[1000, 2000, 3000, 4000, 5000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_ulong[");
+    print(i);
+    print("] = ");
+    print(arr_ulong[i]);
+    print("\n");
+}
+
+// 5. long long 类型
+print("--- long long 类型 ---\n");
+arr_ll = <long long>[10000, 20000, 30000, 40000, 50000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_ll[");
+    print(i);
+    print("] = ");
+    print(arr_ll[i]);
+    print("\n");
+}
+
+// 6. float 类型
+print("--- float 类型 ---\n");
+arr_float = <float>[1.1, 2.2, 3.3, 4.4, 5.5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_float[");
+    print(i);
+    print("] = ");
+    print(arr_float[i]);
+    print("\n");
+}
+
+// 7. double 类型
+print("--- double 类型 ---\n");
+arr_double = <double>[10.1, 20.2, 30.3, 40.4, 50.5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_double[");
+    print(i);
+    print("] = ");
+    print(arr_double[i]);
+    print("\n");
+}
+
+// 8. long double 类型
+print("--- long double 类型 ---\n");
+arr_ld = <long double>[100.1, 200.2, 300.3, 400.4, 500.5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_ld[");
+    print(i);
+    print("] = ");
+    print(arr_ld[i]);
+    print("\n");
+}
+
+// 9. bool 类型
+print("--- bool 类型 ---\n");
+arr_bool = <bool>[true, false, true, false, true];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_bool[");
+    print(i);
+    print("] = ");
+    print(arr_bool[i]);
+    print("\n");
+}
+
+// 10. char 类型
+print("--- char 类型 ---\n");
+arr_char = <char>['a', 'b', 'c', 'd', 'e'];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_char[");
+    print(i);
+    print("] = ");
+    print(arr_char[i]);
+    print("\n");
+}
+
+// 11. byte 类型
+print("--- byte 类型 ---\n");
+arr_byte = <byte>[10, 20, 30, 40, 50];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_byte[");
+    print(i);
+    print("] = ");
+    print(arr_byte[i]);
+    print("\n");
+}
+
+// 12. int8 类型
+print("--- int8 类型 ---\n");
+arr_int8 = <int8>[1, 2, 3, 4, 5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_int8[");
+    print(i);
+    print("] = ");
+    print(arr_int8[i]);
+    print("\n");
+}
+
+// 13. int16 类型
+print("--- int16 类型 ---\n");
+arr_int16 = <int16>[10, 20, 30, 40, 50];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_int16[");
+    print(i);
+    print("] = ");
+    print(arr_int16[i]);
+    print("\n");
+}
+
+// 14. int32 类型
+print("--- int32 类型 ---\n");
+arr_int32 = <int32>[100, 200, 300, 400, 500];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_int32[");
+    print(i);
+    print("] = ");
+    print(arr_int32[i]);
+    print("\n");
+}
+
+// 15. int64 类型
+print("--- int64 类型 ---\n");
+arr_int64 = <int64>[1000, 2000, 3000, 4000, 5000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_int64[");
+    print(i);
+    print("] = ");
+    print(arr_int64[i]);
+    print("\n");
+}
+
+// 16. uint8 类型
+print("--- uint8 类型 ---\n");
+arr_uint8 = <uint8>[1, 2, 3, 4, 5];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_uint8[");
+    print(i);
+    print("] = ");
+    print(arr_uint8[i]);
+    print("\n");
+}
+
+// 17. uint16 类型
+print("--- uint16 类型 ---\n");
+arr_uint16 = <uint16>[10, 20, 30, 40, 50];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_uint16[");
+    print(i);
+    print("] = ");
+    print(arr_uint16[i]);
+    print("\n");
+}
+
+// 18. uint32 类型
+print("--- uint32 类型 ---\n");
+arr_uint32 = <uint32>[100, 200, 300, 400, 500];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_uint32[");
+    print(i);
+    print("] = ");
+    print(arr_uint32[i]);
+    print("\n");
+}
+
+// 19. uint64 类型
+print("--- uint64 类型 ---\n");
+arr_uint64 = <uint64>[1000, 2000, 3000, 4000, 5000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_uint64[");
+    print(i);
+    print("] = ");
+    print(arr_uint64[i]);
+    print("\n");
+}
+
+// 20. size_t 类型
+print("--- size_t 类型 ---\n");
+arr_size_t = <size_t>[10000, 20000, 30000, 40000, 50000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_size_t[");
+    print(i);
+    print("] = ");
+    print(arr_size_t[i]);
+    print("\n");
+}
+
+// 21. ssize_t 类型
+print("--- ssize_t 类型 ---\n");
+arr_ssize_t = <ssize_t>[-10000, -20000, -30000, -40000, -50000];
+for(i = 0; i < 5; i = i + 1) {
+    print("arr_ssize_t[");
+    print(i);
+    print("] = ");
+    print(arr_ssize_t[i]);
+    print("\n");
+}
+
+print("=== 所有数据类型测试完成 ===\n");
