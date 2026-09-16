@@ -469,26 +469,6 @@ void stack_global_destroy(void) {
 }
 
 /*
- * 获取指定类型栈的指针（用于原来的宏定义）
- */
-void* stack_global_get_stack(StackType type) {
-    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
-        return NULL;
-    }
-    return g_stack_mgr->stacks[type];
-}
-
-/*
- * 获取指定类型栈的栈指针（用于原来的宏定义）
- */
-int* stack_global_get_sp(StackType type) {
-    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
-        return NULL;
-    }
-    return &g_stack_mgr->sp[type];
-}
-
-/*
  * 获取指定类型栈的容量（用于原来的宏定义）
  */
 int stack_global_get_cap(StackType type) {

@@ -158,14 +158,24 @@ int stack_global_init(int max_depth);
 void stack_global_destroy(void);
 
 /*
- * 获取指定类型栈的指针（用于原来的宏定义）
+ * 获取指定类型栈的指针（内联函数，减少函数调用开销）
  */
-void* stack_global_get_stack(StackType type);
+static inline void* stack_global_get_stack(StackType type) {
+    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
+        return NULL;
+    }
+    return g_stack_mgr->stacks[type];
+}
 
 /*
- * 获取指定类型栈的栈指针（用于原来的宏定义）
+ * 获取指定类型栈的栈指针（内联函数，减少函数调用开销）
  */
-int* stack_global_get_sp(StackType type);
+static inline int* stack_global_get_sp(StackType type) {
+    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
+        return NULL;
+    }
+    return &g_stack_mgr->sp[type];
+}
 
 /*
  * 获取指定类型栈的容量（用于原来的宏定义）
@@ -182,5 +192,60 @@ void stack_global_set_cap(StackType type, int cap);
  * 返回0表示成功，-1表示失败
  */
 int stack_global_ensure(StackType type, int need);
+
+/* ========== 栈缓存优化（用于高频操作，避免重复访问全局变量） ========== */
+
+/*
+ * 栈缓存结构体：缓存指定类型栈的指针和栈空间
+ * 用于函数内部高频操作，避免重复访问 g_stack_mgr 全局变量
+ */
+typedef struct {
+    void* stack;    /* 栈空间指针 */
+    int* sp;         /* 栈指针 */
+    StackType type;  /* 栈类型 */
+} StackCache;
+
+/*
+ * 初始化栈缓存：在函数开始时调用，一次性获取栈指针和栈空间
+ * 注意：如果在函数执行过程中调用了 stack_global_ensure 导致栈扩容，
+ *       需要重新初始化缓存（因为栈空间指针可能变了）
+ */
+#define STACK_CACHE_INIT(cache, stack_type) do { \
+    (cache).stack = stack_global_get_stack(stack_type); \
+    (cache).sp = stack_global_get_sp(stack_type); \
+    (cache).type = stack_type; \
+} while(0)
+
+/*
+ * 使用缓存进行压栈操作
+ */
+#define STACK_CACHE_PUSH(cache, val, c_type) do { \
+    ((c_type*)(cache).stack)[(*(cache).sp)++] = (val); \
+} while(0)
+
+/*
+ * 使用缓存进行弹栈操作
+ */
+#define STACK_CACHE_POP(cache, c_type) (((c_type*)(cache).stack)[--(*(cache).sp)])
+
+/*
+ * 使用缓存查看栈顶元素
+ */
+#define STACK_CACHE_PEEK(cache, c_type) (((c_type*)(cache).stack)[(*(cache).sp) - 1])
+
+/*
+ * 使用缓存查看栈顶第 idx 个元素
+ */
+#define STACK_CACHE_TOP(cache, idx, c_type) (((c_type*)(cache).stack)[(*(cache).sp) - 1 - (idx)])
+
+/*
+ * 确保栈有足够空间（如果扩容了，需要重新初始化缓存）
+ * 返回1表示扩容了（需要重新初始化缓存），0表示没有扩容
+ */
+#define STACK_CACHE_ENSURE(cache, need) ( \
+    (*(cache).sp) + (need) > stack_global_get_cap((cache).type) ? \
+    (stack_global_ensure((cache).type, need), STACK_CACHE_INIT(cache, (cache).type), 1) : \
+    0 \
+)
 
 #endif /* STACK_MANAGER_H */
