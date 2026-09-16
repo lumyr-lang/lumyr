@@ -157,6 +157,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PUSH_UINT8_CONST:
         case OPC_PUSH_UINT16_CONST:
         case OPC_PUSH_UINT64_CONST:
+        case OPC_PUSH_LONG_CONST:
+        case OPC_PUSH_ULONG_CONST:
             return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
         /* 新的专用指令（各类型专用栈，不改变 Value 栈深度） */
         case OPC_LOAD_INT8_VAR: case OPC_LOAD_INT16_VAR: case OPC_LOAD_INT32_VAR: case OPC_LOAD_INT64_VAR:
@@ -666,6 +668,8 @@ static const char* opc_name(OpCode op)
         case OPC_PUSH_UINT8_CONST: return "PUSH_UINT8_CONST";
         case OPC_PUSH_UINT16_CONST: return "PUSH_UINT16_CONST";
         case OPC_PUSH_UINT64_CONST: return "PUSH_UINT64_CONST";
+        case OPC_PUSH_LONG_CONST: return "PUSH_LONG_CONST";
+        case OPC_PUSH_ULONG_CONST: return "PUSH_ULONG_CONST";
         /* char专用指令 */
         case OPC_LOAD_CHAR_VAR: return "LOAD_CHAR_VAR";
         case OPC_STORE_CHAR_VAR: return "STORE_CHAR_VAR";

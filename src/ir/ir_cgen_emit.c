@@ -949,6 +949,22 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __uint64_stack[__uint64_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_LONG_CONST: {
+                fprintf(out, "    __long_stack[__long_stack_sp++] = (long)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_LONG_VAR: {
+                fprintf(out, "    __long_stack[__long_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_ULONG_CONST: {
+                fprintf(out, "    __ulong_stack[__ulong_stack_sp++] = (unsigned long)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_ULONG_VAR: {
+                fprintf(out, "    __ulong_stack[__ulong_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_UINT_CONST: {
                 /* uint 常量零开销压栈：直接把常量值压入uint专用栈，不创建Value
                    用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
@@ -1145,6 +1161,14 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_STORE_UINT64_VAR: {
                 fprintf(out, "    { uint64_t __u64v = __uint64_stack[--__uint64_stack_sp]; %s = __u64v; __stk[__stk_sp++] = lumyr_make_uint64(__u64v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_LONG_VAR: {
+                fprintf(out, "    { long __lv = __long_stack[--__long_stack_sp]; %s = __lv; __stk[__stk_sp++] = lumyr_make_long(__lv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_ULONG_VAR: {
+                fprintf(out, "    { unsigned long __ulv = __ulong_stack[--__ulong_stack_sp]; %s = __ulv; __stk[__stk_sp++] = lumyr_make_ulong(__ulv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2347,6 +2371,14 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_PRINT_UINT64: {
                 fprintf(out, "    { uint64_t __u64v = __uint64_stack[--__uint64_stack_sp]; printf(\"%%llu\\n\", __u64v); }\n");
+                break;
+            }
+            case OPC_PRINT_LONG: {
+                fprintf(out, "    { long __lv = __long_stack[--__long_stack_sp]; printf(\"%%ld\\n\", __lv); }\n");
+                break;
+            }
+            case OPC_PRINT_ULONG: {
+                fprintf(out, "    { unsigned long __ulv = __ulong_stack[--__ulong_stack_sp]; printf(\"%%lu\\n\", __ulv); }\n");
                 break;
             }
             case OPC_INT_ARRAY_LIT: {

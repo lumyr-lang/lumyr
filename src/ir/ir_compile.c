@@ -2044,6 +2044,26 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_UINT64;
             }
+            /* 优化0long：赋值为 <long>字面量 形式时，使用 OPC_PUSH_LONG_CONST + OPC_STORE_LONG_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_LONG &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                long literal_val = (long)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_LONG_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_LONG;
+            }
+            /* 优化0ulong：赋值为 <ulong>字面量 形式时，使用 OPC_PUSH_ULONG_CONST + OPC_STORE_ULONG_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_ULONG &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                unsigned long literal_val = (unsigned long)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_ULONG_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_ULONG;
+            }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2372,6 +2392,20 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_LOAD_UINT64_VAR, rhs_idx, 0);
                     emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT64;
+                }
+                /* 检查右侧变量是否标记为 long 类型（CAST_LONG） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_LONG) {
+                    emit(c, OPC_LOAD_LONG_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_LONG;
+                }
+                /* 检查右侧变量是否标记为 ulong 类型（CAST_ULONG） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_ULONG) {
+                    emit(c, OPC_LOAD_ULONG_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_ULONG;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
