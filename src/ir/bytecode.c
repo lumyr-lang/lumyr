@@ -235,6 +235,16 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
         case OPC_DOUBLE_ARRAY_GET:
             return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 double 栈（Value栈净变化-2） */
+        case OPC_PUSH_FLOAT_CONST:
+            return 0;                        /* 压入 float 栈，不改变 Value 栈深度 */
+        case OPC_FLOAT_ADD: case OPC_FLOAT_SUB: case OPC_FLOAT_MUL: case OPC_FLOAT_DIV:
+            return 0;                        /* 从 float 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
+        case OPC_FLOAT_TO_VALUE:
+            return +1;                       /* 从 float 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
+        case OPC_FLOAT_GT: case OPC_FLOAT_LT: case OPC_FLOAT_GE: case OPC_FLOAT_LE: case OPC_FLOAT_EQ: case OPC_FLOAT_NE:
+            return +1;                       /* 从 float 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
+        case OPC_FLOAT_ARRAY_SET:
+            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 float 栈弹出值(1个) */
         case OPC_INT8_ARRAY_LIT:
             if(in.a == 1) return +1;
             return -in.b + 1;
@@ -560,6 +570,19 @@ static const char* opc_name(OpCode op)
         case OPC_LOAD_FLOAT_VAR: return "LOAD_FLOAT_VAR";
         case OPC_STORE_FLOAT_VAR: return "STORE_FLOAT_VAR";
         case OPC_PRINT_FLOAT: return "PRINT_FLOAT";
+        case OPC_PUSH_FLOAT_CONST: return "PUSH_FLOAT_CONST";
+        case OPC_FLOAT_ADD: return "FLOAT_ADD";
+        case OPC_FLOAT_SUB: return "FLOAT_SUB";
+        case OPC_FLOAT_MUL: return "FLOAT_MUL";
+        case OPC_FLOAT_DIV: return "FLOAT_DIV";
+        case OPC_FLOAT_TO_VALUE: return "FLOAT_TO_VALUE";
+        case OPC_FLOAT_GT: return "FLOAT_GT";
+        case OPC_FLOAT_LT: return "FLOAT_LT";
+        case OPC_FLOAT_GE: return "FLOAT_GE";
+        case OPC_FLOAT_LE: return "FLOAT_LE";
+        case OPC_FLOAT_EQ: return "FLOAT_EQ";
+        case OPC_FLOAT_NE: return "FLOAT_NE";
+        case OPC_FLOAT_ARRAY_SET: return "FLOAT_ARRAY_SET";
         /* bool专用指令 */
         case OPC_LOAD_BOOL_VAR: return "LOAD_BOOL_VAR";
         case OPC_STORE_BOOL_VAR: return "STORE_BOOL_VAR";
