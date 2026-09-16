@@ -1256,7 +1256,7 @@ void lumyr_print_inline(Value v) {
 // ===== 固定宽度整数强转（返回 VAL_INT，C 风格截断） =====
 static long long value_to_ll(Value v) {
     switch(v.type) {
-        case VAL_INT: case VAL_BYTE: return v.v.i;
+        case VAL_INT: return v.v.i; case VAL_BYTE: return (long long)v.v.u8;  // 使用专用的u8成员
         case VAL_DOUBLE: return (long long)v.v.d;
         case VAL_BOOL: return v.v.b ? 1 : 0;
         case VAL_CHAR: return (long long)(unsigned char)v.v.c;
@@ -1267,7 +1267,7 @@ static long long value_to_ll(Value v) {
 }
 static unsigned long long value_to_ull(Value v) {
     switch(v.type) {
-        case VAL_INT: case VAL_BYTE: return (unsigned long long)v.v.i;
+        case VAL_INT: return (unsigned long long)v.v.i; case VAL_BYTE: return (unsigned long long)v.v.u8;  // 使用专用的u8成员
         case VAL_DOUBLE: return (unsigned long long)v.v.d;
         case VAL_BOOL: return v.v.b ? 1ULL : 0ULL;
         case VAL_CHAR: return (unsigned long long)(unsigned char)v.v.c;
