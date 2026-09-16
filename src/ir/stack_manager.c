@@ -390,3 +390,154 @@ int stack_vm_is_full(VMStackManager* mgr, StackType type) {
     }
     return mgr->sp[type] >= mgr->max_depth;
 }
+
+/* ========== Thread-Local 全局栈管理（用于VM模式） ========== */
+
+/* 全局Thread-Local栈管理器 */
+_Thread_local VMStackManager* g_stack_mgr = NULL;
+
+/* 每个栈的容量（用于扩容，因为VMStackManager中没有cap字段） */
+_Thread_local int g_stack_caps[STACK_TYPE_COUNT] = {0};
+
+#define STACK_GLOBAL_INIT_CAP 64
+
+/*
+ * 初始化全局Thread-Local栈管理器
+ * 返回0表示成功，-1表示失败
+ */
+int stack_global_init(int max_depth) {
+    if (g_stack_mgr) {
+        return 0;  /* 已经初始化 */
+    }
+
+    g_stack_mgr = (VMStackManager*)malloc(sizeof(VMStackManager));
+    if (!g_stack_mgr) {
+        return -1;
+    }
+
+    memset(g_stack_mgr, 0, sizeof(VMStackManager));
+    g_stack_mgr->max_depth = max_depth > 0 ? max_depth : STACK_GLOBAL_INIT_CAP;
+
+    /* 初始化所有栈 */
+    for (int i = 0; i < STACK_TYPE_COUNT; i++) {
+        const StackInfo* info = &stack_info_table[i];
+        if (info->has_dedicated_stack) {
+            g_stack_mgr->stacks[i] = malloc(info->elem_size * g_stack_mgr->max_depth);
+            if (!g_stack_mgr->stacks[i]) {
+                /* 分配失败，清理已分配的栈 */
+                for (int j = 0; j < i; j++) {
+                    if (g_stack_mgr->stacks[j]) {
+                        free(g_stack_mgr->stacks[j]);
+                        g_stack_mgr->stacks[j] = NULL;
+                    }
+                }
+                free(g_stack_mgr);
+                g_stack_mgr = NULL;
+                return -1;
+            }
+            g_stack_mgr->sp[i] = 0;
+            g_stack_caps[i] = g_stack_mgr->max_depth;
+        } else {
+            g_stack_mgr->stacks[i] = NULL;
+            g_stack_mgr->sp[i] = 0;
+            g_stack_caps[i] = 0;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * 销毁全局Thread-Local栈管理器
+ */
+void stack_global_destroy(void) {
+    if (!g_stack_mgr) {
+        return;
+    }
+
+    for (int i = 0; i < STACK_TYPE_COUNT; i++) {
+        if (g_stack_mgr->stacks[i]) {
+            free(g_stack_mgr->stacks[i]);
+            g_stack_mgr->stacks[i] = NULL;
+        }
+        g_stack_mgr->sp[i] = 0;
+        g_stack_caps[i] = 0;
+    }
+
+    free(g_stack_mgr);
+    g_stack_mgr = NULL;
+}
+
+/*
+ * 获取指定类型栈的指针（用于原来的宏定义）
+ */
+void* stack_global_get_stack(StackType type) {
+    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
+        return NULL;
+    }
+    return g_stack_mgr->stacks[type];
+}
+
+/*
+ * 获取指定类型栈的栈指针（用于原来的宏定义）
+ */
+int* stack_global_get_sp(StackType type) {
+    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
+        return NULL;
+    }
+    return &g_stack_mgr->sp[type];
+}
+
+/*
+ * 获取指定类型栈的容量（用于原来的宏定义）
+ */
+int stack_global_get_cap(StackType type) {
+    if (type < 0 || type >= STACK_TYPE_COUNT) {
+        return 0;
+    }
+    return g_stack_caps[type];
+}
+
+/*
+ * 设置指定类型栈的容量（用于扩容）
+ */
+void stack_global_set_cap(StackType type, int cap) {
+    if (type < 0 || type >= STACK_TYPE_COUNT) {
+        return;
+    }
+    g_stack_caps[type] = cap;
+}
+
+/*
+ * 扩容指定类型栈
+ * 返回0表示成功，-1表示失败
+ */
+int stack_global_ensure(StackType type, int need) {
+    if (!g_stack_mgr || type < 0 || type >= STACK_TYPE_COUNT) {
+        return -1;
+    }
+
+    const StackInfo* info = &stack_info_table[type];
+    if (!info->has_dedicated_stack) {
+        return -1;
+    }
+
+    if (g_stack_mgr->sp[type] + need <= g_stack_caps[type]) {
+        return 0;  /* 容量足够，不需要扩容 */
+    }
+
+    int nc = g_stack_caps[type] > 0 ? g_stack_caps[type] : STACK_GLOBAL_INIT_CAP;
+    while (nc < g_stack_mgr->sp[type] + need) {
+        nc *= 2;
+    }
+
+    void* ns = realloc(g_stack_mgr->stacks[type], (size_t)nc * info->elem_size);
+    if (!ns) {
+        return -1;  /* 扩容失败 */
+    }
+
+    g_stack_mgr->stacks[type] = ns;
+    g_stack_caps[type] = nc;
+
+    return 0;
+}

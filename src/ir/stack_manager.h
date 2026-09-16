@@ -138,4 +138,49 @@ int stack_vm_is_empty(VMStackManager* mgr, StackType type);
  */
 int stack_vm_is_full(VMStackManager* mgr, StackType type);
 
+/* ========== Thread-Local 全局栈管理（用于VM模式） ========== */
+
+/*
+ * 全局Thread-Local栈管理器
+ * 每个线程都有自己的栈管理器，避免多线程竞争
+ */
+extern _Thread_local VMStackManager* g_stack_mgr;
+
+/*
+ * 初始化全局Thread-Local栈管理器
+ * 返回0表示成功，-1表示失败
+ */
+int stack_global_init(int max_depth);
+
+/*
+ * 销毁全局Thread-Local栈管理器
+ */
+void stack_global_destroy(void);
+
+/*
+ * 获取指定类型栈的指针（用于原来的宏定义）
+ */
+void* stack_global_get_stack(StackType type);
+
+/*
+ * 获取指定类型栈的栈指针（用于原来的宏定义）
+ */
+int* stack_global_get_sp(StackType type);
+
+/*
+ * 获取指定类型栈的容量（用于原来的宏定义）
+ */
+int stack_global_get_cap(StackType type);
+
+/*
+ * 设置指定类型栈的容量（用于扩容）
+ */
+void stack_global_set_cap(StackType type, int cap);
+
+/*
+ * 扩容指定类型栈
+ * 返回0表示成功，-1表示失败
+ */
+int stack_global_ensure(StackType type, int need);
+
 #endif /* STACK_MANAGER_H */

@@ -13,6 +13,7 @@
 #include "lm_thread.h"
 #include "ast/ast_types.h"
 #include "lm_class.h"
+#include "stack_manager.h"
 
 /* 线程模式：最外层 vm_run 不自行 unregister，由 vm_thread_body 在 set_result 后统一注销。
  * 深度计数器确保嵌套 vm_run 正常 register/unregister，skip 标志只影响最外层。 */
@@ -944,57 +945,11 @@ Value vm_run_main(BytecodeFunc* main_fn)
     stackframe_set(top, "log", val_map());   // 预定义 log 对象（方法链 log.xxx）
     StackFrame* saved_global = s_global_frame;
     s_global_frame = top;
-    /* 初始化 int 栈（方案 A：多类型栈，零检查零转换） */
-    int_stack_init();
-    /* 初始化 double 栈（方案 A：多类型栈，零检查零转换） */
-    double_stack_init();
-    /* 初始化 float 栈（方案 A：多类型栈，零检查零转换） */
-    float_stack_init();
-    /* 初始化 uint 栈（方案 A：多类型栈，零检查零转换） */
-    uint_stack_init();
-    /* 初始化 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint32、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
-    bool_stack_init();
-    char_stack_init();
-    byte_stack_init();
-    int8_stack_init();
-    int16_stack_init();
-    int32_stack_init();
-    int64_stack_init();
-    uint8_stack_init();
-    uint16_stack_init();
-    uint32_stack_init();
-    uint64_stack_init();
-    long_stack_init();
-    ulong_stack_init();
-    size_t_stack_init();
-    ssize_t_stack_init();
-    long_double_stack_init();
+    /* 使用统一栈管理模块初始化所有类型的专用栈（避免代码中到处都是自己管理栈） */
+    stack_global_init(1024);  /* 初始容量1024，需要时自动扩容 */
     Value ret = vm_run(main_fn, top, &local_ctx);
-    /* 销毁 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint32、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
-    long_double_stack_destroy();
-    ssize_t_stack_destroy();
-    size_t_stack_destroy();
-    ulong_stack_destroy();
-    long_stack_destroy();
-    uint64_stack_destroy();
-    uint32_stack_destroy();
-    uint16_stack_destroy();
-    uint8_stack_destroy();
-    int64_stack_destroy();
-    int32_stack_destroy();
-    int16_stack_destroy();
-    int8_stack_destroy();
-    byte_stack_destroy();
-    char_stack_destroy();
-    bool_stack_destroy();
-    /* 销毁 uint 栈 */
-    uint_stack_destroy();
-    /* 销毁 float 栈 */
-    float_stack_destroy();
-    /* 销毁 double 栈 */
-    double_stack_destroy();
-    /* 销毁 int 栈 */
-    int_stack_destroy();
+    /* 使用统一栈管理模块销毁所有类型的专用栈 */
+    stack_global_destroy();
     s_global_frame = saved_global;
     stackframe_destroy(top);
     return ret;
