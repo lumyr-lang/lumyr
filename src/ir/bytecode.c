@@ -299,6 +299,11 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;                       /* 从 float 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
         case OPC_FLOAT_ARRAY_SET:
             return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 float 栈弹出值(1个) */
+        case OPC_FLOAT_ARRAY_LIT:
+            if(in.a == 1) return +1;          /* 从 float 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
+            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
+        case OPC_FLOAT_ARRAY_GET:
+            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 float 栈（Value栈净变化-2） */
         case OPC_INT8_ARRAY_LIT:
             if(in.a == 1) return +1;
             return -in.b + 1;
