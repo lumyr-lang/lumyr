@@ -664,6 +664,46 @@ static const char* opc_name(OpCode op)
         case OPC_BYTE_ARRAY_GET: return "BYTE_ARRAY_GET";
         case OPC_LOAD_FIELD: return "LOAD_FIELD";
         case OPC_STORE_FIELD: return "STORE_FIELD";
+        case OPC_STORE_NESTED_FIELD: return "STORE_NESTED_FIELD";
+        case OPC_LOAD_STRUCT_PTR: return "LOAD_STRUCT_PTR";
+        /* int8/16/32/64数组指令 */
+        case OPC_INT8_ARRAY_LIT: return "INT8_ARRAY_LIT";
+        case OPC_INT8_ARRAY_GET: return "INT8_ARRAY_GET";
+        case OPC_INT16_ARRAY_LIT: return "INT16_ARRAY_LIT";
+        case OPC_INT16_ARRAY_GET: return "INT16_ARRAY_GET";
+        case OPC_INT32_ARRAY_LIT: return "INT32_ARRAY_LIT";
+        case OPC_INT32_ARRAY_GET: return "INT32_ARRAY_GET";
+        case OPC_INT64_ARRAY_LIT: return "INT64_ARRAY_LIT";
+        case OPC_INT64_ARRAY_GET: return "INT64_ARRAY_GET";
+        /* uint8/16/32/64数组指令 */
+        case OPC_UINT8_ARRAY_LIT: return "UINT8_ARRAY_LIT";
+        case OPC_UINT8_ARRAY_GET: return "UINT8_ARRAY_GET";
+        case OPC_UINT16_ARRAY_LIT: return "UINT16_ARRAY_LIT";
+        case OPC_UINT16_ARRAY_GET: return "UINT16_ARRAY_GET";
+        case OPC_UINT32_ARRAY_LIT: return "UINT32_ARRAY_LIT";
+        case OPC_UINT32_ARRAY_GET: return "UINT32_ARRAY_GET";
+        case OPC_UINT64_ARRAY_LIT: return "UINT64_ARRAY_LIT";
+        case OPC_UINT64_ARRAY_GET: return "UINT64_ARRAY_GET";
+        /* long/ulong数组指令 */
+        case OPC_LONG_ARRAY_LIT: return "LONG_ARRAY_LIT";
+        case OPC_LONG_ARRAY_GET: return "LONG_ARRAY_GET";
+        case OPC_ULONG_ARRAY_LIT: return "ULONG_ARRAY_LIT";
+        case OPC_ULONG_ARRAY_GET: return "ULONG_ARRAY_GET";
+        /* size_t/ssize_t数组指令 */
+        case OPC_SIZE_T_ARRAY_LIT: return "SIZE_T_ARRAY_LIT";
+        case OPC_SIZE_T_ARRAY_GET: return "SIZE_T_ARRAY_GET";
+        case OPC_SSIZE_T_ARRAY_LIT: return "SSIZE_T_ARRAY_LIT";
+        case OPC_SSIZE_T_ARRAY_GET: return "SSIZE_T_ARRAY_GET";
+        /* long double数组指令 */
+        case OPC_LONG_DOUBLE_ARRAY_LIT: return "LONG_DOUBLE_ARRAY_LIT";
+        case OPC_LONG_DOUBLE_ARRAY_GET: return "LONG_DOUBLE_ARRAY_GET";
+        /* 剩余PRINT指令 */
+        case OPC_PRINT_ULONG: return "PRINT_ULONG";
+        case OPC_PRINT_SIZE_T: return "PRINT_SIZE_T";
+        case OPC_PRINT_SSIZE_T: return "PRINT_SSIZE_T";
+        case OPC_PRINT_LONG_DOUBLE: return "PRINT_LONG_DOUBLE";
+        /* 跳转指令 */
+        case OPC_JMP_IF_NULL: return "JMP_IF_NULL";
     }
     return "?";
 }
