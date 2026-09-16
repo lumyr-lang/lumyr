@@ -80,8 +80,9 @@ lumyr_debug.log
 !third_party/**/*.a
 !third_party/**/*.exe
 
-# 规则文件（不入库）
-开发规则.md
+# 规则文件和实现步骤记录（不入库）
+development_rules.md
+zero_overhead_implementation_steps.md
 
 # tests 下面的 .c 文件（生成的代码，不入库）
 tests/*.c
