@@ -2521,11 +2521,15 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 if(tarr && tarr->items) {
                     int* iitems = (int*)tarr->items;
                     if(in.a == 1) {
-                        /* 从 int 栈读取：零检查零转换 */
+                        /* 从 int 栈读取：零检查零转换，使用栈缓存优化减少重复访问全局变量 */
+                        StackCache int_cache;
+                        STACK_CACHE_INIT(int_cache, STACK_INT);
+                        int* int_stack_ptr = (int*)int_cache.stack;
+                        int* int_sp_ptr = int_cache.sp;
                         for(int k = 0; k < n; k++) {
-                            iitems[k] = ((int*)stack_global_get_stack(STACK_INT))[(*stack_global_get_sp(STACK_INT)) - n + k];
+                            iitems[k] = int_stack_ptr[(*int_sp_ptr) - n + k];
                         }
-                        (*stack_global_get_sp(STACK_INT)) -= n;
+                        (*int_sp_ptr) -= n;
                         /* Value 栈没有元素需要弹出，直接压入数组 */
                         stack[sp++] = arr;
                     } else {
