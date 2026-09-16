@@ -542,6 +542,108 @@ static const char* opc_name(OpCode op)
         case OPC_RETURN: return "RETURN";
         case OPC_RETURN_NIL: return "RETURN_NIL";
         case OPC_HALT: return "HALT";
+        /* int专用指令 */
+        case OPC_LOAD_INT_VAR: return "LOAD_INT_VAR";
+        case OPC_STORE_INT_VAR: return "STORE_INT_VAR";
+        case OPC_PUSH_INT_CONST: return "PUSH_INT_CONST";
+        case OPC_INT_ADD: return "INT_ADD";
+        case OPC_INT_SUB: return "INT_SUB";
+        case OPC_INT_MUL: return "INT_MUL";
+        case OPC_INT_DIV: return "INT_DIV";
+        case OPC_INT_MOD: return "INT_MOD";
+        case OPC_INT_TO_VALUE: return "INT_TO_VALUE";
+        case OPC_INT_GT: return "INT_GT";
+        case OPC_INT_LT: return "INT_LT";
+        case OPC_INT_GE: return "INT_GE";
+        case OPC_INT_LE: return "INT_LE";
+        case OPC_INT_EQ: return "INT_EQ";
+        case OPC_INT_NE: return "INT_NE";
+        case OPC_INT_ARRAY_SET: return "INT_ARRAY_SET";
+        case OPC_INT_ARRAY_LIT: return "INT_ARRAY_LIT";
+        case OPC_INT_ARRAY_GET: return "INT_ARRAY_GET";
+        case OPC_PRINT_INT: return "PRINT_INT";
+        /* uint专用指令 */
+        case OPC_LOAD_UINT_VAR: return "LOAD_UINT_VAR";
+        case OPC_STORE_UINT_VAR: return "STORE_UINT_VAR";
+        case OPC_PUSH_UINT_CONST: return "PUSH_UINT_CONST";
+        case OPC_UINT_ADD: return "UINT_ADD";
+        case OPC_UINT_SUB: return "UINT_SUB";
+        case OPC_UINT_MUL: return "UINT_MUL";
+        case OPC_UINT_DIV: return "UINT_DIV";
+        case OPC_UINT_MOD: return "UINT_MOD";
+        case OPC_UINT_TO_VALUE: return "UINT_TO_VALUE";
+        case OPC_UINT_GT: return "UINT_GT";
+        case OPC_UINT_LT: return "UINT_LT";
+        case OPC_UINT_GE: return "UINT_GE";
+        case OPC_UINT_LE: return "UINT_LE";
+        case OPC_UINT_EQ: return "UINT_EQ";
+        case OPC_UINT_NE: return "UINT_NE";
+        case OPC_UINT_ARRAY_SET: return "UINT_ARRAY_SET";
+        case OPC_PRINT_UINT: return "PRINT_UINT";
+        /* double专用指令 */
+        case OPC_LOAD_DOUBLE_VAR: return "LOAD_DOUBLE_VAR";
+        case OPC_STORE_DOUBLE_VAR: return "STORE_DOUBLE_VAR";
+        case OPC_DOUBLE_ARRAY_LIT: return "DOUBLE_ARRAY_LIT";
+        case OPC_DOUBLE_ARRAY_GET: return "DOUBLE_ARRAY_GET";
+        case OPC_PRINT_DOUBLE: return "PRINT_DOUBLE";
+        /* float专用指令 */
+        case OPC_LOAD_FLOAT_VAR: return "LOAD_FLOAT_VAR";
+        case OPC_STORE_FLOAT_VAR: return "STORE_FLOAT_VAR";
+        case OPC_PRINT_FLOAT: return "PRINT_FLOAT";
+        /* bool专用指令 */
+        case OPC_LOAD_BOOL_VAR: return "LOAD_BOOL_VAR";
+        case OPC_STORE_BOOL_VAR: return "STORE_BOOL_VAR";
+        case OPC_PRINT_BOOL: return "PRINT_BOOL";
+        /* char专用指令 */
+        case OPC_LOAD_CHAR_VAR: return "LOAD_CHAR_VAR";
+        case OPC_STORE_CHAR_VAR: return "STORE_CHAR_VAR";
+        case OPC_PRINT_CHAR: return "PRINT_CHAR";
+        /* byte专用指令 */
+        case OPC_LOAD_BYTE_VAR: return "LOAD_BYTE_VAR";
+        case OPC_STORE_BYTE_VAR: return "STORE_BYTE_VAR";
+        case OPC_PRINT_BYTE: return "PRINT_BYTE";
+        /* int8/16/32/64专用指令 */
+        case OPC_LOAD_INT8_VAR: return "LOAD_INT8_VAR";
+        case OPC_STORE_INT8_VAR: return "STORE_INT8_VAR";
+        case OPC_PRINT_INT8: return "PRINT_INT8";
+        case OPC_LOAD_INT16_VAR: return "LOAD_INT16_VAR";
+        case OPC_STORE_INT16_VAR: return "STORE_INT16_VAR";
+        case OPC_PRINT_INT16: return "PRINT_INT16";
+        case OPC_LOAD_INT32_VAR: return "LOAD_INT32_VAR";
+        case OPC_STORE_INT32_VAR: return "STORE_INT32_VAR";
+        case OPC_PRINT_INT32: return "PRINT_INT32";
+        case OPC_LOAD_INT64_VAR: return "LOAD_INT64_VAR";
+        case OPC_STORE_INT64_VAR: return "STORE_INT64_VAR";
+        case OPC_PRINT_INT64: return "PRINT_INT64";
+        /* uint8/16/32/64专用指令 */
+        case OPC_LOAD_UINT8_VAR: return "LOAD_UINT8_VAR";
+        case OPC_STORE_UINT8_VAR: return "STORE_UINT8_VAR";
+        case OPC_PRINT_UINT8: return "PRINT_UINT8";
+        case OPC_LOAD_UINT16_VAR: return "LOAD_UINT16_VAR";
+        case OPC_STORE_UINT16_VAR: return "STORE_UINT16_VAR";
+        case OPC_PRINT_UINT16: return "PRINT_UINT16";
+        case OPC_LOAD_UINT32_VAR: return "LOAD_UINT32_VAR";
+        case OPC_STORE_UINT32_VAR: return "STORE_UINT32_VAR";
+        case OPC_PRINT_UINT32: return "PRINT_UINT32";
+        case OPC_LOAD_UINT64_VAR: return "LOAD_UINT64_VAR";
+        case OPC_STORE_UINT64_VAR: return "STORE_UINT64_VAR";
+        case OPC_PRINT_UINT64: return "PRINT_UINT64";
+        /* long/ulong专用指令 */
+        case OPC_LOAD_LONG_VAR: return "LOAD_LONG_VAR";
+        case OPC_STORE_LONG_VAR: return "STORE_LONG_VAR";
+        case OPC_PRINT_LONG: return "PRINT_LONG";
+        case OPC_LOAD_ULONG_VAR: return "LOAD_ULONG_VAR";
+        case OPC_STORE_ULONG_VAR: return "STORE_ULONG_VAR";
+        /* size_t/ssize_t专用指令 */
+        case OPC_LOAD_SIZE_T_VAR: return "LOAD_SIZE_T_VAR";
+        case OPC_STORE_SIZE_T_VAR: return "STORE_SIZE_T_VAR";
+        case OPC_LOAD_SSIZE_T_VAR: return "LOAD_SSIZE_T_VAR";
+        case OPC_STORE_SSIZE_T_VAR: return "STORE_SSIZE_T_VAR";
+        /* long double专用指令 */
+        case OPC_LOAD_LONG_DOUBLE_VAR: return "LOAD_LONG_DOUBLE_VAR";
+        case OPC_STORE_LONG_DOUBLE_VAR: return "STORE_LONG_DOUBLE_VAR";
+        /* 生成器指令 */
+        case OPC_YIELD: return "YIELD";
     }
     return "?";
 }
