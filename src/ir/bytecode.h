@@ -133,6 +133,7 @@ typedef enum {
     OPC_STORE_BYTE_VAR,  // a=符号表下标；从 byte 栈弹出 byte 值，直接存储到变量的 byte_vals（零包装零转换）
     OPC_BYTE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 byte，创建 byte 泛型数组
     OPC_BYTE_ARRAY_GET, // 弹 arr,idx；直接从 byte 类型化数组读取元素，压入 byte 栈（零包装零 Value 开销）
+    OPC_PUSH_BYTE_CONST, // a=byte值（0-255）；直接压入 byte 栈（零检查零转换）
     OPC_MAP_LIT,      // b=键值对个数；弹 2b 个值（键、值交替）压字典
     OPC_INDEX_GET,    // 弹 arr,idx 压元素（数组元素 / 字符串字符）
     OPC_INDEX_SET,    // 弹 arr,idx,val 写回；压回 val（表达式值）

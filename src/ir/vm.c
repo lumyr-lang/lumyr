@@ -2321,6 +2321,11 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 CHAR_PUSH((char)in.a);
                 break;
             }
+            case OPC_PUSH_BYTE_CONST: {
+                /* byte常量零开销压栈：直接把常量值压入byte专用栈，不创建Value */
+                BYTE_PUSH((unsigned char)in.a);
+                break;
+            }
             case OPC_LOAD_BOOL_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;

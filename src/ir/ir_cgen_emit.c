@@ -546,6 +546,16 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __char_stack[__char_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_BYTE_CONST: {
+                /* byte常量零开销压栈：直接把常量值压入byte专用栈，不创建Value */
+                fprintf(out, "    __byte_stack[__byte_stack_sp++] = (unsigned char)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_BYTE_VAR: {
+                /* byte 类型零开销加载：直接从变量读取byte值，压入byte专用栈，不转换为Value */
+                fprintf(out, "    __byte_stack[__byte_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_LONG_LONG_CONST: {
                 /* long long 常量零开销压栈：直接把常量值压入long long专用栈，不创建Value
                    用于 <long long>42 字面量赋值等场景，避免创建 Value 再提取的开销
@@ -1045,6 +1055,12 @@ void emit_insns(BytecodeFunc* fn)
                 /* char 类型零开销存储：从char专用栈弹出char值，直接赋给变量，零转换
                    然后把char值包装成Value压回Value栈（赋值表达式有返回值） */
                 fprintf(out, "    { char __cv = __char_stack[--__char_stack_sp]; %s = __cv; __stk[__stk_sp++] = lumyr_make_char(__cv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_BYTE_VAR: {
+                /* byte 类型零开销存储：从byte专用栈弹出byte值，直接赋给变量，零转换
+                   然后把byte值包装成Value压回Value栈（赋值表达式有返回值） */
+                fprintf(out, "    { unsigned char __bv = __byte_stack[--__byte_stack_sp]; %s = __bv; __stk[__stk_sp++] = lumyr_make_byte(__bv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2209,6 +2225,11 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_CHAR: {
                 /* char 类型零开销打印：直接从char专用栈弹出char值并打印，不转换为Value */
                 fprintf(out, "    { char __cv = __char_stack[--__char_stack_sp]; printf(\"%%c\\n\", __cv); }\n");
+                break;
+            }
+            case OPC_PRINT_BYTE: {
+                /* byte 类型零开销打印：直接从byte专用栈弹出byte值并打印，不转换为Value */
+                fprintf(out, "    { unsigned char __bv = __byte_stack[--__byte_stack_sp]; printf(\"%%u\\n\", __bv); }\n");
                 break;
             }
             case OPC_PRINT_UINT: {
