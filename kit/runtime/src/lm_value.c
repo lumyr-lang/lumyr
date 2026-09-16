@@ -26,6 +26,13 @@ Value lumyr_make_double(double d) {
     return v;
 }
 
+Value lumyr_make_float(float f) {
+    Value v;
+    v.type = VAL_FLOAT;
+    v.v.f = f;  // 使用专用的f成员，避免与double混用
+    return v;
+}
+
 Value lumyr_make_bool(_Bool b) {
     Value v;
     v.type = VAL_BOOL;
@@ -436,7 +443,7 @@ Value lumyr_index_get(Value c, Value idx) {
             case VAL_DOUBLE:
                 return lumyr_make_double(((double*)tarr->items)[i]);
             case VAL_FLOAT:
-                return lumyr_make_double((double)((float*)tarr->items)[i]);
+                return lumyr_make_float(((float*)tarr->items)[i]);  // 返回VAL_FLOAT类型，使用专用的f成员
             case VAL_UINT32:
                 return lumyr_make_int((long long)((unsigned int*)tarr->items)[i]);
             case VAL_INT8:
@@ -1087,8 +1094,8 @@ double lumyr_extract_double(Value v) {
 
 float lumyr_extract_float(Value v) {
     Value fv = lumyr_cast_float(v);
-    if (fv.type == VAL_DOUBLE) {
-        return (float)fv.v.d;
+    if (fv.type == VAL_FLOAT) {
+        return fv.v.f;  // 使用专用的f成员，避免与double混用
     }
     return 0.0f;
 }
@@ -1366,6 +1373,6 @@ static Value cast_float_rec(Value v) {
         case VAL_NONE: d = 0.0; break;
         default: runtime_error("(float) 强转: 不支持的类型"); return val_none();
     }
-    return lumyr_make_double((double)(float)d);
+    return lumyr_make_float((float)d);  // 返回VAL_FLOAT类型，使用专用的f成员
 }
 Value lumyr_cast_float(Value v) { return cast_float_rec(v); }

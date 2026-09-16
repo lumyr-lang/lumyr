@@ -10,6 +10,7 @@
 // 构造
 Value lumyr_make_int(long long i);
 Value lumyr_make_double(double d);
+Value lumyr_make_float(float f);  // float：单精度浮点数
 Value lumyr_make_bool(_Bool b);
 Value lumyr_make_string(const char* s);
 Value lumyr_make_char(char ch);
