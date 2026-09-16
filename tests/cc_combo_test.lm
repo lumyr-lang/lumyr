@@ -1,0 +1,15 @@
+// 组合测试：包含变量声明 a 和 b，以及数组声明（5个元素），只打印 arr[0]
+print("=== 组合测试 ===\n");
+a = <int>42;
+print("a = ");
+print(a);
+print("\n");
+b = <int>100;
+print("b = ");
+print(b);
+print("\n");
+arr = <int>[1, 2, 3, 4, 5];
+print("arr[0] = ");
+print(arr[0]);
+print("\n");
+print("=== 测试完成 ===\n");

@@ -1,0 +1,11 @@
+// 测试：<int>字面量赋值零开销优化
+print("=== <int>字面量赋值测试 ===\n");
+a = <int>42;
+print("a = ");
+print(a);
+print("\n");
+b = <int>100;
+print("b = ");
+print(b);
+print("\n");
+print("=== 测试完成 ===\n");

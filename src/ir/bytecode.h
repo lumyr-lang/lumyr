@@ -13,6 +13,7 @@ typedef enum {
     OPC_LOAD_VAR,       // a=符号表下标
     OPC_LOAD_INT_VAR,   // a=符号表下标；加载声明为 int 的变量，直接压入 int 栈（零检查零转换）
     OPC_STORE_INT_VAR,  // a=符号表下标；从 int 栈弹出 int 值，直接存储到变量的 int_vals（零包装零转换）
+    OPC_PUSH_INT_CONST, // a=常量值；把 int 常量直接压入 int 栈（零检查零转换，用于 <int>42 字面量赋值）
     OPC_LOAD_VAR_REF,   // a=符号表下标；加载 ref 参数（struct 不转 Map，直接传递 VAL_STRUCT_PTR）
     OPC_STORE_VAR,      // a=符号表下标；弹值写变量（深拷贝入帧），原值压回（表达式值）
     OPC_ADD, OPC_SUB, OPC_MUL, OPC_DIV, OPC_MOD,

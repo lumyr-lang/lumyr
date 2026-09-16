@@ -2245,6 +2245,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT_PUSH(iv);
                 break;
             }
+            case OPC_PUSH_INT_CONST: {
+                /* int 常量：直接把常量值压入 int 栈，零检查零转换
+                   用于 <int>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                INT_PUSH(in.a);
+                break;
+            }
             case OPC_LOAD_DOUBLE_VAR: {
                 /* 声明为 double 类型的变量：直接从栈帧的 double_vals 数组读取，零提取、零类型检查
                    stackframe_get_double 直接返回原始 double 值，不需要从 Value 联合体提取 */
@@ -2412,7 +2418,8 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             }
             case OPC_STORE_INT_VAR: {
                 /* 从 int 栈弹出 int 值，直接存储到 int 变量，零重复提取
-                   stackframe_bind_int 同时更新 vals 和 int_vals，避免从 Value 重复提取 */
+                   stackframe_bind_int 同时更新 vals 和 int_vals，避免从 Value 重复提取
+                   然后把int值包装成Value压回Value栈（赋值表达式有返回值，如 a = b = 5） */
                 const char* name = bf->syms[in.a];
                 int iv = INT_POP();  // 从 int 栈弹出 int 值
                 /* 直接绑定 int 变量（同时更新 vals 和 int_vals，零重复提取） */

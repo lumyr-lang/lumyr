@@ -340,7 +340,7 @@ void emit_gen_wrapper_support(void) {
     fprintf(out, "}\n\n");
 
     fprintf(out, "static Value lumyr_wrap_create(int wtype, Value g1, Value g2, Value fn, int arg) {\n");
-    fprintf(out, "    if(g1.type != VAL_GENERATOR) runtime_error(\"组合操作第一个参数必须是生成器\");\n");
+    fprintf(out, "    if(g1.type != VAL_GENERATOR) runtime_error(\"First argument of combine operation must be generator\");\n");
     fprintf(out, "    lumyr_gen_wrap* wg = (lumyr_gen_wrap*)calloc(1, sizeof(lumyr_gen_wrap));\n");
     fprintf(out, "    wg->next = lumyr_gen_wrap_next;\n");
     fprintf(out, "    wg->is_wrapped = 1;\n");

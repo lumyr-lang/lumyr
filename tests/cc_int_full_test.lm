@@ -1,0 +1,55 @@
+// 全面测试：int类型无转换开销检查
+print("=== int类型无转换开销全面测试 ===\n");
+
+// 1. 变量声明
+a = <int>42;
+print("1. 变量声明 a = ");
+print(a);
+print("\n");
+
+// 2. 变量赋值
+b = a;
+print("2. 变量赋值 b = ");
+print(b);
+print("\n");
+
+// 3. 算术运算
+c = a + b;
+print("3. 算术运算 c = a + b = ");
+print(c);
+print("\n");
+
+d = a - b;
+print("4. 算术运算 d = a - b = ");
+print(d);
+print("\n");
+
+e = a * b;
+print("5. 算术运算 e = a * b = ");
+print(e);
+print("\n");
+
+// 6. 数组声明
+arr = <int>[1, 2, 3, 4, 5];
+print("6. 数组声明 arr[0] = ");
+print(arr[0]);
+print("\n");
+print("   arr[1] = ");
+print(arr[1]);
+print("\n");
+print("   arr[2] = ");
+print(arr[2]);
+print("\n");
+
+// 7. 数组元素赋值
+arr[0] = 100;
+print("7. 数组元素赋值 arr[0] = ");
+print(arr[0]);
+print("\n");
+
+// 8. 字面量打印
+print("8. 字面量打印: ");
+print(42);
+print("\n");
+
+print("=== 测试完成 ===\n");

@@ -521,6 +521,12 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __int_stack[__int_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_INT_CONST: {
+                /* int 常量零开销压栈：直接把常量值压入int专用栈，不创建Value
+                   用于 <int>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                fprintf(out, "    __int_stack[__int_sp++] = %d;\n", in.a);
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
@@ -576,8 +582,9 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             case OPC_STORE_INT_VAR: {
-                /* int 类型零开销存储：直接从int专用栈弹出int值，存储到变量，不转换为Value */
-                fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = __iv; }\n", cvar_rw(nm));
+                /* int 类型零开销存储：直接从int专用栈弹出int值，存储到变量
+                   然后把int值包装成Value压回Value栈（赋值表达式有返回值，后续逻辑会执行__sp--） */
+                fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = __iv; __stk[__sp++] = lumyr_make_int((long long)__iv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_ADD: fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_add(__l, __r); __sp--; }\n"); break;
