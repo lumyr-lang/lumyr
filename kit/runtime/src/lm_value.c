@@ -74,28 +74,28 @@ Value lumyr_make_char(char ch) {
 Value lumyr_make_byte(unsigned char b) {
     Value v;
     v.type = VAL_BYTE;
-    v.v.i = (long long)(b & 0xFF);
+    v.v.u8 = b;  // 使用专用的u8成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_int8(int8_t i8) {
     Value v;
     v.type = VAL_INT8;
-    v.v.i = (long long)i8;
+    v.v.i8 = i8;  // 使用专用的i8成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_int16(int16_t i16) {
     Value v;
     v.type = VAL_INT16;
-    v.v.i = (long long)i16;
+    v.v.i16 = i16;  // 使用专用的i16成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_int32(int32_t i32) {
     Value v;
     v.type = VAL_INT32;
-    v.v.i = (long long)i32;
+    v.v.i32 = i32;  // 使用专用的i32成员，避免与long long混用
     return v;
 }
 
@@ -109,63 +109,63 @@ Value lumyr_make_int64(int64_t i64) {
 Value lumyr_make_uint8(uint8_t u8) {
     Value v;
     v.type = VAL_UINT8;
-    v.v.i = (long long)u8;
+    v.v.u8 = u8;  // 使用专用的u8成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_uint16(uint16_t u16) {
     Value v;
     v.type = VAL_UINT16;
-    v.v.i = (long long)u16;
+    v.v.u16 = u16;  // 使用专用的u16成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_uint32(uint32_t u32) {
     Value v;
     v.type = VAL_UINT32;
-    v.v.i = (long long)u32;
+    v.v.u32 = u32;  // 使用专用的u32成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_uint64(uint64_t u64) {
     Value v;
     v.type = VAL_UINT64;
-    v.v.i = (long long)u64;
+    v.v.u64 = u64;  // 使用专用的u64成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_long(long lv) {
     Value v;
     v.type = VAL_LONG;
-    v.v.i = (long long)lv;
+    v.v.l = lv;  // 使用专用的l成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_ulong(unsigned long ulv) {
     Value v;
     v.type = VAL_ULONG;
-    v.v.i = (long long)ulv;
+    v.v.ul = ulv;  // 使用专用的ul成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_size_t(size_t stv) {
     Value v;
     v.type = VAL_SIZE_T;
-    v.v.i = (long long)stv;
+    v.v.st = stv;  // 使用专用的st成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_ssize_t(ssize_t sstv) {
     Value v;
     v.type = VAL_SSIZE_T;
-    v.v.i = (long long)sstv;
+    v.v.sst = sstv;  // 使用专用的sst成员，避免与long long混用
     return v;
 }
 
 Value lumyr_make_long_double(long double ldv) {
     Value v;
     v.type = VAL_LONG_DOUBLE;
-    v.v.d = (double)ldv;
+    v.v.ld = ldv;  // 使用专用的ld成员，避免与double混用
     return v;
 }
 
@@ -1109,6 +1109,14 @@ unsigned char lumyr_extract_byte(Value v) {
     Value bv = lumyr_cast_byte(v);
     if (bv.type == VAL_BYTE) {
         return (unsigned char)bv.v.i;
+    }
+    return 0;
+}
+
+uint32_t lumyr_extract_uint32(Value v) {
+    Value uv = lumyr_cast_uint32(v);
+    if (uv.type == VAL_UINT32) {
+        return uv.v.u32;  // 使用专用的u32成员，避免与long long混用
     }
     return 0;
 }

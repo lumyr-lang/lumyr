@@ -149,10 +149,27 @@ struct Value {
     uint8_t str_inline;      // 1字节，偏移4：仅VAL_STRING时有效，1=内联，0=堆
     // 偏移5-7：3字节填充（编译器自动对齐）
     union {                  // 24字节，偏移8
-        long long i;
-        double d;
-        _Bool b;
-        char c;
+        // ===== 有符号整数类型 =====
+        long long i;          // VAL_INT / VAL_INT64：64位有符号整数
+        int8_t i8;            // VAL_INT8：8位有符号整数
+        int16_t i16;          // VAL_INT16 / VAL_SHORT：16位有符号整数
+        int32_t i32;          // VAL_INT32：32位有符号整数
+        long l;               // VAL_LONG：long类型
+        // ===== 无符号整数类型 =====
+        uint8_t u8;           // VAL_UINT8 / VAL_BYTE / VAL_UCHAR：8位无符号整数
+        uint16_t u16;         // VAL_UINT16 / VAL_USHORT：16位无符号整数
+        uint32_t u32;         // VAL_UINT32：32位无符号整数
+        uint64_t u64;         // VAL_UINT64：64位无符号整数
+        unsigned long ul;     // VAL_ULONG：unsigned long类型
+        // ===== 浮点类型 =====
+        double d;             // VAL_DOUBLE：双精度浮点数
+        float f;              // VAL_FLOAT：单精度浮点数
+        long double ld;       // VAL_LONG_DOUBLE：扩展精度浮点数
+        // ===== 其他基础类型 =====
+        _Bool b;              // VAL_BOOL：布尔类型
+        char c;               // VAL_CHAR：字符类型
+        size_t st;            // VAL_SIZE_T：size_t类型
+        ssize_t sst;          // VAL_SSIZE_T：ssize_t类型
         char* s;             // VAL_STRING：堆上字符串（str_inline=0时有效）
         struct {             // SSO内联字符串（str_inline=1时有效）
             uint8_t len;     // 字符串长度（不含\0），最大22

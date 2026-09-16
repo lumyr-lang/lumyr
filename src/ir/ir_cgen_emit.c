@@ -612,6 +612,80 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    }\n");
                 break;
             }
+            /* ===== uint 类型零开销专用指令（CC模式） ===== */
+            case OPC_LOAD_UINT_VAR: {
+                /* uint 类型零开销加载：直接从变量读取uint值，压入uint专用栈，不转换为Value */
+                fprintf(out, "    __uint_stack[__uint_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_UINT_CONST: {
+                /* uint 常量零开销压栈：直接把常量值压入uint专用栈，不创建Value
+                   用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                fprintf(out, "    __uint_stack[__uint_stack_sp++] = %uu;\n", (unsigned int)in.a);
+                break;
+            }
+            case OPC_UINT_ADD: {
+                /* uint 加法零开销：直接从uint专用栈弹出两个uint，相加，结果压回uint专用栈
+                   完全不涉及Value栈，零检查零转换零Value开销 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __uint_stack[__uint_stack_sp++] = __ua + __ub; }\n");
+                break;
+            }
+            case OPC_UINT_SUB: {
+                /* uint 减法零开销 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __uint_stack[__uint_stack_sp++] = __ua - __ub; }\n");
+                break;
+            }
+            case OPC_UINT_MUL: {
+                /* uint 乘法零开销 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __uint_stack[__uint_stack_sp++] = __ua * __ub; }\n");
+                break;
+            }
+            case OPC_UINT_DIV: {
+                /* uint 除法零开销，需要检查除零 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; if(__ub == 0) runtime_error(\"division by zero: uint division\"); __uint_stack[__uint_stack_sp++] = __ua / __ub; }\n");
+                break;
+            }
+            case OPC_UINT_MOD: {
+                /* uint 取模零开销，需要检查除零 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; if(__ub == 0) runtime_error(\"division by zero: uint modulo\"); __uint_stack[__uint_stack_sp++] = __ua %% __ub; }\n");
+                break;
+            }
+            case OPC_UINT_TO_VALUE: {
+                /* 把 uint 专用栈顶的 uint 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑 */
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_uint32(__uv); }\n");
+                break;
+            }
+            case OPC_UINT_GT: {
+                /* uint 大于比较：直接从 uint 专用栈弹出两个 uint，比较后结果(bool)压入 Value 栈 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua > __ub); }\n");
+                break;
+            }
+            case OPC_UINT_LT: {
+                /* uint 小于比较 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua < __ub); }\n");
+                break;
+            }
+            case OPC_UINT_GE: {
+                /* uint 大于等于比较 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua >= __ub); }\n");
+                break;
+            }
+            case OPC_UINT_LE: {
+                /* uint 小于等于比较 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua <= __ub); }\n");
+                break;
+            }
+            case OPC_UINT_EQ: {
+                /* uint 等于比较 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua == __ub); }\n");
+                break;
+            }
+            case OPC_UINT_NE: {
+                /* uint 不等于比较 */
+                fprintf(out, "    { unsigned int __ub = __uint_stack[--__uint_stack_sp]; unsigned int __ua = __uint_stack[--__uint_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__ua != __ub); }\n");
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__stk_sp++] = %s;\n", cvar_rw(nm));
@@ -678,6 +752,21 @@ void emit_insns(BytecodeFunc* fn)
                 } else {
                     /* Value类型或其他类型：包装成Value后赋值 */
                     fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; %s = lumyr_make_int((long long)__iv); __stk[__stk_sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
+                }
+                break;
+            }
+            case OPC_STORE_UINT_VAR: {
+                /* uint 类型零开销存储：从uint专用栈弹出uint值，根据变量类型标记生成精确存储代码
+                   如果变量是uint类型（CAST_UINT32），直接把uint值赋给变量，零转换
+                   如果变量是Value类型，把uint值包装成Value后赋给变量
+                   然后把uint值包装成Value压回Value栈（赋值表达式有返回值，后续逻辑会执行__stk_sp--） */
+                int _utag = emit_get_var_tag(fn, nm);
+                if(_utag == CAST_UINT32) {
+                    /* uint类型变量：直接赋值，零转换 */
+                    fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; %s = __uv; __stk[__stk_sp++] = lumyr_make_uint32(__uv); }\n", cvar_rw(nm));
+                } else {
+                    /* Value类型或其他类型：包装成Value后赋值 */
+                    fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; %s = lumyr_make_uint32(__uv); __stk[__stk_sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
                 }
                 break;
             }
@@ -1844,6 +1933,62 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
                 fprintf(out, "      int __ival = ((int*)__tarr->items)[__iidx];\n");
                 fprintf(out, "      __int_stack[__int_stack_sp++] = __ival;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            /* ===== uint 类型数组零开销专用指令（CC模式） ===== */
+            case OPC_UINT_ARRAY_SET: {
+                /* uint 类型化数组元素赋值：从 uint 专用栈弹出值，从 Value 栈弹出索引和数组，
+                   直接写入 uint 类型化数组，零转换开销 */
+                fprintf(out, "    {\n");
+                fprintf(out, "        unsigned int __uval = __uint_stack[--__uint_stack_sp];\n");
+                fprintf(out, "        Value __idx = __stk[--__stk_sp];\n");
+                fprintf(out, "        Value __arr = __stk[--__stk_sp];\n");
+                fprintf(out, "        if(__arr.type == VAL_TYPED_ARRAY && __arr.v.typed_array && __arr.v.typed_array->elem_type == VAL_UINT32) {\n");
+                fprintf(out, "            TypedArray* __tarr = __arr.v.typed_array;\n");
+                fprintf(out, "            long long __i = array_index_of(__idx);\n");
+                fprintf(out, "            if(__i < 0 || __i >= __tarr->len) {\n");
+                fprintf(out, "                char __buf[128];\n");
+                fprintf(out, "                snprintf(__buf, sizeof(__buf), \"uint typed array index out of bounds: %%lld (len %%d)\", __i, __tarr->len);\n");
+                fprintf(out, "                runtime_error(__buf);\n");
+                fprintf(out, "            }\n");
+                fprintf(out, "            ((unsigned int*)__tarr->items)[__i] = __uval;\n");
+                fprintf(out, "        } else {\n");
+                fprintf(out, "            runtime_error(\"OPC_UINT_ARRAY_SET: array is not uint typed array\");\n");
+                fprintf(out, "        }\n");
+                fprintf(out, "        __stk[__stk_sp++] = lumyr_make_uint32(__uval);\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT_ARRAY_LIT: {
+                /* uint 类型零开销数组字面量：
+                   a=1: 从 uint 专用栈读取（零检查零转换）
+                   a=0: 从 Value 栈读取（内联类型转换） */
+                int __un = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_uint_array(__n); TypedArray* __tarr = __arr.v.typed_array; unsigned int* __uitems = (unsigned int*)__tarr->items;\n", __un);
+                if(in.a == 1) {
+                    /* 从 uint 专用栈读取：零检查零转换 */
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __uitems[__k] = __uint_stack[__uint_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __uint_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    /* 从 Value 栈读取：内联类型转换 */
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; switch(__v.type) { case VAL_INT: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL: __uitems[__k] = (unsigned int)__v.v.i; break; case VAL_UINT32: __uitems[__k] = __v.v.u32; break; case VAL_DOUBLE: __uitems[__k] = (unsigned int)__v.v.d; break; default: __uitems[__k] = (unsigned int)lumyr_cast_uint32(__v).v.u32; break; } }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT_ARRAY_GET: {
+                /* uint 类型零开销数组元素访问：直接从uint类型化数组读取元素，压入uint专用栈，不转换为Value */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：OPC_UINT_ARRAY_GET 需要 uint 类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_UINT32) { runtime_error(\"类型错误：数组元素类型不匹配，期望 uint\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      unsigned int __uval = ((unsigned int*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __uint_stack[__uint_stack_sp++] = __uval;\n");
                 fprintf(out, "    }\n");
                 break;
             }
