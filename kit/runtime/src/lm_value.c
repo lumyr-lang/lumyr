@@ -1334,7 +1334,7 @@ static Value cast_float_rec(Value v) {
     double d;
     switch(v.type) {
         case VAL_DOUBLE: d = v.v.d; break;
-        case VAL_INT: case VAL_BYTE: d = (double)v.v.i; break;
+        case VAL_INT: d = (double)v.v.i; break; case VAL_BYTE: d = (double)v.v.u8; break;  // 使用专用的u8成员
         case VAL_BOOL: d = v.v.b ? 1.0 : 0.0; break;
         case VAL_CHAR: d = (double)(unsigned char)v.v.c; break;
         case VAL_STRING: d = atof(lumyr_str_cstr(&v) ? lumyr_str_cstr(&v) : "0"); break;
