@@ -150,12 +150,16 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LOAD_LONG_VAR: case OPC_LOAD_ULONG_VAR:
         case OPC_LOAD_BOOL_VAR: case OPC_LOAD_CHAR_VAR: case OPC_LOAD_BYTE_VAR:
         case OPC_LOAD_FLOAT_VAR:
+        case OPC_LOAD_SIZE_T_VAR: case OPC_LOAD_SSIZE_T_VAR:
+        case OPC_LOAD_LONG_DOUBLE_VAR:
             return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
         case OPC_STORE_INT8_VAR: case OPC_STORE_INT16_VAR: case OPC_STORE_INT32_VAR: case OPC_STORE_INT64_VAR:
         case OPC_STORE_UINT8_VAR: case OPC_STORE_UINT16_VAR: case OPC_STORE_UINT32_VAR: case OPC_STORE_UINT64_VAR:
         case OPC_STORE_LONG_VAR: case OPC_STORE_ULONG_VAR:
         case OPC_STORE_BOOL_VAR: case OPC_STORE_CHAR_VAR: case OPC_STORE_BYTE_VAR:
         case OPC_STORE_FLOAT_VAR:
+        case OPC_STORE_SIZE_T_VAR: case OPC_STORE_SSIZE_T_VAR:
+        case OPC_STORE_LONG_DOUBLE_VAR:
             return +1;                       /* 从专用栈弹出，包装成 Value 压回（赋值表达式有返回值） */
         case OPC_PRINT_INT8: case OPC_PRINT_INT16: case OPC_PRINT_INT32: case OPC_PRINT_INT64:
         case OPC_PRINT_UINT8: case OPC_PRINT_UINT16: case OPC_PRINT_UINT32: case OPC_PRINT_UINT64:
@@ -163,6 +167,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT_BOOL: case OPC_PRINT_CHAR: case OPC_PRINT_BYTE:
         case OPC_PRINT_FLOAT:
             return -1;                       /* 从专用栈弹出并打印，Value栈变化-1 */
+        case OPC_YIELD:
+            return 0;                        /* 生成器yield，栈不变 */
         case OPC_INT_ADD: case OPC_INT_SUB: case OPC_INT_MUL: case OPC_INT_DIV: case OPC_INT_MOD:
             return 0;                        /* 从 int 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
         case OPC_INT_TO_VALUE:
@@ -644,6 +650,20 @@ static const char* opc_name(OpCode op)
         case OPC_STORE_LONG_DOUBLE_VAR: return "STORE_LONG_DOUBLE_VAR";
         /* 生成器指令 */
         case OPC_YIELD: return "YIELD";
+        /* 其他指令 */
+        case OPC_LOAD_VAR_REF: return "LOAD_VAR_REF";
+        case OPC_FLOAT_ARRAY_LIT: return "FLOAT_ARRAY_LIT";
+        case OPC_FLOAT_ARRAY_GET: return "FLOAT_ARRAY_GET";
+        case OPC_UINT_ARRAY_LIT: return "UINT_ARRAY_LIT";
+        case OPC_UINT_ARRAY_GET: return "UINT_ARRAY_GET";
+        case OPC_BOOL_ARRAY_LIT: return "BOOL_ARRAY_LIT";
+        case OPC_BOOL_ARRAY_GET: return "BOOL_ARRAY_GET";
+        case OPC_CHAR_ARRAY_LIT: return "CHAR_ARRAY_LIT";
+        case OPC_CHAR_ARRAY_GET: return "CHAR_ARRAY_GET";
+        case OPC_BYTE_ARRAY_LIT: return "BYTE_ARRAY_LIT";
+        case OPC_BYTE_ARRAY_GET: return "BYTE_ARRAY_GET";
+        case OPC_LOAD_FIELD: return "LOAD_FIELD";
+        case OPC_STORE_FIELD: return "STORE_FIELD";
     }
     return "?";
 }
