@@ -18,12 +18,38 @@
 #define MAP_RED 0
 #define MAP_BLACK 1
 
+/* 辅助函数：根据value的类型提取整数值（各数据类型专用，避免混用long long） */
+static long long map_extract_ll(Value v) {
+    switch(v.type) {
+        case VAL_INT:     return v.v.i;
+        case VAL_INT8:    return (long long)v.v.i8;
+        case VAL_INT16:   return (long long)v.v.i16;
+        case VAL_INT32:   return (long long)v.v.i32;
+        case VAL_INT64:   return v.v.i;
+        case VAL_BYTE:    return (long long)v.v.u8;
+        case VAL_UINT8:   return (long long)v.v.u8;
+        case VAL_UINT16:  return (long long)v.v.u16;
+        case VAL_UINT32:  return (long long)v.v.u32;
+        case VAL_UINT64:  return (long long)v.v.u64;
+        case VAL_LONG:    return (long long)v.v.l;
+        case VAL_ULONG:   return (long long)v.v.ul;
+        case VAL_SIZE_T:  return (long long)v.v.st;
+        case VAL_SSIZE_T: return (long long)v.v.sst;
+        case VAL_BOOL:    return v.v.b ? 1 : 0;
+        case VAL_CHAR:    return (long long)(unsigned char)v.v.c;
+        case VAL_DOUBLE:  return (long long)v.v.d;
+        default:          return 0;
+    }
+}
+
 // ============ 哈希函数 ============
 static uint32_t value_hash(Value v) {
     uint32_t h = (uint32_t)v.type * 2654435761u;
     switch(v.type) {
-        case VAL_INT: case VAL_BYTE:
-            h ^= (uint32_t)(v.v.i * 2654435761u);
+        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
+        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
+        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
+            h ^= (uint32_t)(map_extract_ll(v) * 2654435761u);
             break;
         case VAL_DOUBLE: {
             uint64_t bits;
@@ -68,14 +94,16 @@ static uint32_t value_hash(Value v) {
 static int key_compare(Value a, Value b) {
     if(a.type != b.type) {
         // int/byte 互通
-        if((a.type == VAL_INT || a.type == VAL_BYTE) &&
-           (b.type == VAL_INT || b.type == VAL_BYTE))
-            return (a.v.i > b.v.i) - (a.v.i < b.v.i);
+        if((a.type == VAL_INT || a.type == VAL_INT8 || a.type == VAL_INT16 || a.type == VAL_INT32 || a.type == VAL_INT64 || a.type == VAL_BYTE || a.type == VAL_UINT8 || a.type == VAL_UINT16 || a.type == VAL_UINT32 || a.type == VAL_UINT64 || a.type == VAL_LONG || a.type == VAL_ULONG || a.type == VAL_SIZE_T || a.type == VAL_SSIZE_T) &&
+           (b.type == VAL_INT || b.type == VAL_INT8 || b.type == VAL_INT16 || b.type == VAL_INT32 || b.type == VAL_INT64 || b.type == VAL_BYTE || b.type == VAL_UINT8 || b.type == VAL_UINT16 || b.type == VAL_UINT32 || b.type == VAL_UINT64 || b.type == VAL_LONG || b.type == VAL_ULONG || b.type == VAL_SIZE_T || b.type == VAL_SSIZE_T))
+            return (map_extract_ll(a) > map_extract_ll(b)) - (map_extract_ll(a) < map_extract_ll(b));
         return (a.type < b.type) ? -1 : 1;
     }
     switch(a.type) {
-        case VAL_INT: case VAL_BYTE:
-            return (a.v.i > b.v.i) - (a.v.i < b.v.i);
+        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
+        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
+        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
+            return (map_extract_ll(a) > map_extract_ll(b)) - (map_extract_ll(a) < map_extract_ll(b));
         case VAL_DOUBLE:
             return (a.v.d > b.v.d) - (a.v.d < b.v.d);
         case VAL_BOOL:
@@ -102,13 +130,16 @@ static int key_compare(Value a, Value b) {
 // 键相等（先比 hash 再比值）
 static int key_eq(Value a, Value b) {
     if(a.type != b.type) {
-        if((a.type == VAL_INT || a.type == VAL_BYTE) &&
-           (b.type == VAL_INT || b.type == VAL_BYTE))
-            return a.v.i == b.v.i;
+        if((a.type == VAL_INT || a.type == VAL_INT8 || a.type == VAL_INT16 || a.type == VAL_INT32 || a.type == VAL_INT64 || a.type == VAL_BYTE || a.type == VAL_UINT8 || a.type == VAL_UINT16 || a.type == VAL_UINT32 || a.type == VAL_UINT64 || a.type == VAL_LONG || a.type == VAL_ULONG || a.type == VAL_SIZE_T || a.type == VAL_SSIZE_T) &&
+           (b.type == VAL_INT || b.type == VAL_INT8 || b.type == VAL_INT16 || b.type == VAL_INT32 || b.type == VAL_INT64 || b.type == VAL_BYTE || b.type == VAL_UINT8 || b.type == VAL_UINT16 || b.type == VAL_UINT32 || b.type == VAL_UINT64 || b.type == VAL_LONG || b.type == VAL_ULONG || b.type == VAL_SIZE_T || b.type == VAL_SSIZE_T))
+            return map_extract_ll(a) == map_extract_ll(b);
         return 0;
     }
     switch(a.type) {
-        case VAL_INT: case VAL_BYTE: return a.v.i == b.v.i;
+        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
+        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
+        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
+            return map_extract_ll(a) == map_extract_ll(b);
         case VAL_DOUBLE: return a.v.d == b.v.d;
         case VAL_BOOL: return a.v.b == b.v.b;
         case VAL_CHAR: return a.v.c == b.v.c;
