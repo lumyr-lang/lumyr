@@ -178,7 +178,7 @@ double value_as_number(Value x) {
     else if(x.type == VAL_CHAR)
         return (double)x.v.c;
     else if(x.type == VAL_BYTE)
-        return (double)(x.v.i & 0xFF);
+        return (double)x.v.u8;  // 使用专用的u8成员，避免与long long混用
     return 0.0;
 }
 
@@ -212,7 +212,7 @@ char* value_to_str(Value v) {
         case VAL_ERROR:
             return strdup(v.v.err.message ? v.v.err.message : "");
         case VAL_BYTE:
-            snprintf(buf, sizeof(buf), "%lld", v.v.i & 0xFF);
+            snprintf(buf, sizeof(buf), "%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
             break;
         case VAL_CHAR:
         {
@@ -774,7 +774,7 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_DOUBLE: return v.v.d != 0.0;
         case VAL_BOOL:   return v.v.b;
         case VAL_CHAR:   return (unsigned char)v.v.c != 0;
-        case VAL_BYTE:   return (v.v.i & 0xFF) != 0;
+        case VAL_BYTE:   return v.v.u8 != 0;  // 使用专用的u8成员
         case VAL_STRING: return v.v.s && v.v.s[0] != '\0';
         case VAL_ARRAY:  return v.v.array && v.v.array->len > 0;
         case VAL_MAP:    return v.v.map && v.v.map->len > 0;
@@ -1108,7 +1108,7 @@ char lumyr_extract_char(Value v) {
 unsigned char lumyr_extract_byte(Value v) {
     Value bv = lumyr_cast_byte(v);
     if (bv.type == VAL_BYTE) {
-        return (unsigned char)bv.v.i;
+        return bv.v.u8;  // 使用专用的u8成员，避免与long long混用
     }
     return 0;
 }
@@ -1140,7 +1140,7 @@ void lumyr_print(Value v) {
             printf("%c\n", v.v.c);
             break;
         case VAL_BYTE:
-            printf("%lld\n", v.v.i & 0xFF);
+            printf("%u\n", (unsigned int)v.v.u8);  // 使用专用的u8成员
             break;
         case VAL_NONE:
             printf("null\n");
@@ -1183,7 +1183,7 @@ void lumyr_print_inline(Value v) {
             printf("%c", v.v.c);
             break;
         case VAL_BYTE:
-            printf("%lld", v.v.i & 0xFF);
+            printf("%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
             break;
         case VAL_INT8:
             printf("%lld", v.v.i);
