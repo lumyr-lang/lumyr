@@ -2040,6 +2040,29 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_bool(a != b);
                 break;
             }
+            case OPC_INT_ARRAY_SET: {
+                /* int 类型化数组元素赋值：从 int 专用栈弹出值，从 Value 栈弹出索引和数组，
+                   直接写入 int 类型化数组，零转换开销 */
+                int val = INT_POP();
+                Value idx = stack[--sp];
+                Value arr = stack[--sp];
+                if(arr.type == VAL_TYPED_ARRAY && arr.v.typed_array &&
+                   arr.v.typed_array->elem_type == VAL_INT) {
+                    TypedArray* tarr = arr.v.typed_array;
+                    long long i = array_index_of(idx);
+                    if(i < 0 || i >= tarr->len) {
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "int类型化数组下标越界: %lld (长度 %d)", i, tarr->len);
+                        runtime_error(buf);
+                    }
+                    ((int*)tarr->items)[i] = val;
+                } else {
+                    runtime_error("OPC_INT_ARRAY_SET: 数组不是int类型化数组");
+                }
+                /* 把被设置的值包装成 Value，压入 Value 栈（用于表达式值） */
+                stack[sp++] = lumyr_make_int((long long)val);
+                break;
+            }
             case OPC_LOAD_DOUBLE_VAR: {
                 /* 声明为 double 类型的变量：直接从栈帧的 double_vals 数组读取，零提取、零类型检查
                    stackframe_get_double 直接返回原始 double 值，不需要从 Value 联合体提取 */

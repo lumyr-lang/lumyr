@@ -1,0 +1,86 @@
+// 测试：int类型化数组元素赋值上下文感知（零转换开销）
+print("=== int类型化数组元素赋值上下文感知测试 ===\n");
+
+// 1. int类型化数组声明
+arr = <int>[1, 2, 3, 4, 5];
+print("1. 初始数组: ");
+for(i = 0; i < 5; i = i + 1) {
+    print(arr[i]);
+    print(" ");
+}
+print("\n");
+
+// 2. 数组元素赋值（字面量）- 上下文感知，直接压入int栈
+arr[0] = 100;
+arr[1] = 200;
+print("2. 字面量赋值后: ");
+for(i = 0; i < 5; i = i + 1) {
+    print(arr[i]);
+    print(" ");
+}
+print("\n");
+
+// 3. 数组元素赋值（int变量）- 上下文感知，直接从int变量读取
+a = <int>300;
+b = <int>400;
+arr[2] = a;
+arr[3] = b;
+print("3. int变量赋值后: ");
+for(i = 0; i < 5; i = i + 1) {
+    print(arr[i]);
+    print(" ");
+}
+print("\n");
+
+// 4. 验证赋值是否正确
+print("4. 验证结果:\n");
+if(arr[0] == 100) {
+    print("   arr[0] = 100 正确\n");
+} else {
+    print("   arr[0] = ");
+    print(arr[0]);
+    print(" 错误，期望 100\n");
+}
+
+if(arr[1] == 200) {
+    print("   arr[1] = 200 正确\n");
+} else {
+    print("   arr[1] = ");
+    print(arr[1]);
+    print(" 错误，期望 200\n");
+}
+
+if(arr[2] == 300) {
+    print("   arr[2] = 300 正确\n");
+} else {
+    print("   arr[2] = ");
+    print(arr[2]);
+    print(" 错误，期望 300\n");
+}
+
+if(arr[3] == 400) {
+    print("   arr[3] = 400 正确\n");
+} else {
+    print("   arr[3] = ");
+    print(arr[3]);
+    print(" 错误，期望 400\n");
+}
+
+if(arr[4] == 5) {
+    print("   arr[4] = 5 正确（未修改）\n");
+} else {
+    print("   arr[4] = ");
+    print(arr[4]);
+    print(" 错误，期望 5\n");
+}
+
+// 5. 数组元素赋值作为表达式值
+c = <int>0;
+c = arr[0] = 500;
+print("5. 赋值表达式值 c = ");
+print(c);
+print("，arr[0] = ");
+print(arr[0]);
+print("\n");
+
+print("=== 测试完成 ===\n");

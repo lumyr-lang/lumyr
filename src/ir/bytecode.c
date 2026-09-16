@@ -148,6 +148,8 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return +1;                       /* 从 int 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
         case OPC_INT_GT: case OPC_INT_LT: case OPC_INT_GE: case OPC_INT_LE: case OPC_INT_EQ: case OPC_INT_NE:
             return +1;                       /* 从 int 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
+        case OPC_INT_ARRAY_SET:
+            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 int 栈弹出值(1个) */
         case OPC_POP:
         case OPC_PEND_RETURN:
         case OPC_THROW:

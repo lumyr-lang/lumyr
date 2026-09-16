@@ -2406,6 +2406,50 @@ static void c_expr(Ctx* c, AstNode* node)
                     break;
                 }
             }
+            /* 优化：int 类型化数组元素赋值（零转换开销）
+               当数组是 int 类型化数组，且赋值的值是 int 类型（字面量或变量）时，
+               使用 OPC_INT_ARRAY_SET 专用指令，直接从 int 专用栈弹出值写入数组 */
+            if(arr && arr->type == AST_VAR) {
+                const char* arr_name = arr->u.varname;
+                int arr_idx = bf_sym(c->fn, arr_name);
+                if(arr_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[arr_idx] == VAR_TYPE_INT_ARRAY) {
+                    AstNode* val_node = node->u.index_assign.value;
+                    int is_int_val = 0;
+                    int int_literal_val = 0;
+                    int int_var_idx = -1;
+                    /* 检查赋值的值是否是 int 类型 */
+                    if(val_node && val_node->type == AST_INT) {
+                        /* int 字面量 */
+                        is_int_val = 1;
+                        int_literal_val = (int)val_node->u.inum;
+                    } else if(val_node && val_node->type == AST_VAR) {
+                        /* int 变量 */
+                        int val_idx = bf_sym(c->fn, val_node->u.varname);
+                        if(val_idx >= 0 && c->fn->var_type_tags &&
+                           c->fn->var_type_tags[val_idx] == CAST_INT) {
+                            is_int_val = 1;
+                            int_var_idx = val_idx;
+                        }
+                    }
+                    if(is_int_val) {
+                        /* 编译数组和索引（压入 Value 栈） */
+                        c_expr(c, arr);
+                        c_expr(c, idx);
+                        /* 编译赋值的值（压入 int 专用栈） */
+                        if(val_node->type == AST_INT) {
+                            /* int 字面量：直接压入 int 栈，零检查零转换 */
+                            emit(c, OPC_PUSH_INT_CONST, int_literal_val, 0);
+                        } else {
+                            /* int 变量：从栈帧的 int_vals 数组读取，压入 int 栈 */
+                            emit(c, OPC_LOAD_INT_VAR, int_var_idx, 0);
+                        }
+                        /* 生成 int 类型化数组元素赋值专用指令 */
+                        emit(c, OPC_INT_ARRAY_SET, 0, 0);
+                        break;
+                    }
+                }
+            }
             c_expr(c, arr);
             c_expr(c, idx);
             c_expr(c, node->u.index_assign.value);

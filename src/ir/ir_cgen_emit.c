@@ -589,6 +589,29 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int __ib = __int_stack[--__int_sp]; int __ia = __int_stack[--__int_sp]; __stk[__sp++] = lumyr_make_bool(__ia != __ib); }\n");
                 break;
             }
+            case OPC_INT_ARRAY_SET: {
+                /* int 类型化数组元素赋值：从 int 专用栈弹出值，从 Value 栈弹出索引和数组，
+                   直接写入 int 类型化数组，零转换开销 */
+                fprintf(out, "    {\n");
+                fprintf(out, "        int __val = __int_stack[--__int_sp];\n");
+                fprintf(out, "        Value __idx = __stk[--__sp];\n");
+                fprintf(out, "        Value __arr = __stk[--__sp];\n");
+                fprintf(out, "        if(__arr.type == VAL_TYPED_ARRAY && __arr.v.typed_array && __arr.v.typed_array->elem_type == VAL_INT) {\n");
+                fprintf(out, "            TypedArray* __tarr = __arr.v.typed_array;\n");
+                fprintf(out, "            long long __i = array_index_of(__idx);\n");
+                fprintf(out, "            if(__i < 0 || __i >= __tarr->len) {\n");
+                fprintf(out, "                char __buf[128];\n");
+                fprintf(out, "                snprintf(__buf, sizeof(__buf), \"int typed array index out of bounds: %%lld (len %%d)\", __i, __tarr->len);\n");
+                fprintf(out, "                runtime_error(__buf);\n");
+                fprintf(out, "            }\n");
+                fprintf(out, "            ((int*)__tarr->items)[__i] = __val;\n");
+                fprintf(out, "        } else {\n");
+                fprintf(out, "            runtime_error(\"OPC_INT_ARRAY_SET: array is not int typed array\");\n");
+                fprintf(out, "        }\n");
+                fprintf(out, "        __stk[__sp++] = lumyr_make_int((long long)__val);\n");
+                fprintf(out, "    }\n");
+                break;
+            }
             case OPC_LOAD_VAR_REF: {
                 /* ref 参数：直接传递 Value（struct 不转 Map，保持 VAL_STRUCT_PTR） */
                 fprintf(out, "    __stk[__sp++] = %s;\n", cvar_rw(nm));
@@ -644,9 +667,18 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             case OPC_STORE_INT_VAR: {
-                /* int 类型零开销存储：直接从int专用栈弹出int值，存储到变量
+                /* int 类型零开销存储：从int专用栈弹出int值，根据变量类型标记生成精确存储代码
+                   如果变量是int类型（CAST_INT），直接把int值赋给变量，零转换
+                   如果变量是Value类型，把int值包装成Value后赋给变量
                    然后把int值包装成Value压回Value栈（赋值表达式有返回值，后续逻辑会执行__sp--） */
-                fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = __iv; __stk[__sp++] = lumyr_make_int((long long)__iv); }\n", cvar_rw(nm));
+                int _tag = emit_get_var_tag(fn, nm);
+                if(_tag == CAST_INT || _tag == CAST_INT32) {
+                    /* int类型变量：直接赋值，零转换 */
+                    fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = __iv; __stk[__sp++] = lumyr_make_int((long long)__iv); }\n", cvar_rw(nm));
+                } else {
+                    /* Value类型或其他类型：包装成Value后赋值 */
+                    fprintf(out, "    { int __iv = __int_stack[--__int_sp]; %s = lumyr_make_int((long long)__iv); __stk[__sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
+                }
                 break;
             }
             case OPC_ADD: fprintf(out, "    { Value __l = __stk[__sp-2], __r = __stk[__sp-1]; __stk[__sp-2] = lumyr_add(__l, __r); __sp--; }\n"); break;

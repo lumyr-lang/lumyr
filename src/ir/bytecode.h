@@ -26,6 +26,7 @@ typedef enum {
     OPC_INT_LE,         // 从 int 栈弹出两个 int，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
     OPC_INT_EQ,         // 从 int 栈弹出两个 int，等于比较，结果(bool)压入 Value 栈（零检查零转换）
     OPC_INT_NE,         // 从 int 栈弹出两个 int，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
+    OPC_INT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 int 栈弹出值，写入 int 类型化数组（零转换）
     OPC_LOAD_VAR_REF,   // a=符号表下标；加载 ref 参数（struct 不转 Map，直接传递 VAL_STRUCT_PTR）
     OPC_STORE_VAR,      // a=符号表下标；弹值写变量（深拷贝入帧），原值压回（表达式值）
     OPC_ADD, OPC_SUB, OPC_MUL, OPC_DIV, OPC_MOD,
