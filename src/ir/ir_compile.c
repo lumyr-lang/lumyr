@@ -2098,6 +2098,7 @@ static void c_expr(Ctx* c, AstNode* node)
                 c_expr(c, node->u.assign.expr);
                 emit(c, OPC_STORE_VAR, var_idx, 0);
             }
+            fprintf(stderr, "[DEBUG ASSIGN] end of AST_ASSIGN in c_expr: code_len=%d, op[0]=%d, op[1]=%d\n", c->fn->code_len, c->fn->code_len > 0 ? c->fn->code[0].op : -1, c->fn->code_len > 1 ? c->fn->code[1].op : -1);
             break;
         }
         case AST_BINOP: {
@@ -3285,8 +3286,11 @@ static void c_stmt(Ctx* c, AstNode* node)
         case AST_STRING:
         case AST_NONE:
         case AST_YIELD:
+            fprintf(stderr, "[DEBUG CSTMT] before c_expr: code_len=%d, op[0]=%d\n", c->fn->code_len, c->fn->code_len > 0 ? c->fn->code[0].op : -1);
             c_expr(c, node);
+            fprintf(stderr, "[DEBUG CSTMT] after c_expr: code_len=%d, op[0]=%d\n", c->fn->code_len, c->fn->code_len > 0 ? c->fn->code[0].op : -1);
             emit(c, OPC_POP, 0, 0);
+            fprintf(stderr, "[DEBUG CSTMT] after OPC_POP: code_len=%d, op[0]=%d, op[last]=%d\n", c->fn->code_len, c->fn->code_len > 0 ? c->fn->code[0].op : -1, c->fn->code_len > 0 ? c->fn->code[c->fn->code_len-1].op : -1);
             break;
         case AST_INDEX:
         case AST_INDEX_ASSIGN:
@@ -4011,14 +4015,19 @@ BytecodeFunc* ir_compile_main(AstNode* root)
     BytecodeFunc* fn = bytecode_func_new(NULL, 1);
     Ctx c = { .fn = fn, .layer_depth = 0 };
     c_stmt(&c, root);
+    fprintf(stderr, "[DEBUG MAIN] after c_stmt: main code_len=%d, op[0]=%d, op[1]=%d, op[2]=%d\n", fn->code_len, fn->code_len > 0 ? fn->code[0].op : -1, fn->code_len > 1 ? fn->code[1].op : -1, fn->code_len > 2 ? fn->code[2].op : -1);
     emit(&c, OPC_HALT, 0, 0);
+    fprintf(stderr, "[DEBUG MAIN] after OPC_HALT: main code_len=%d, op[0]=%d, op[1]=%d, op[2]=%d, op[3]=%d\n", fn->code_len, fn->code_len > 0 ? fn->code[0].op : -1, fn->code_len > 1 ? fn->code[1].op : -1, fn->code_len > 2 ? fn->code[2].op : -1, fn->code_len > 3 ? fn->code[3].op : -1);
 
     /* 优化 pass：常量折叠。在所有 BytecodeFunc 生成完毕后、返回前，
        对 main 与函数表中每个函数统一做一遍 IR peephole 优化。
        VM 执行 / -S 反汇编 / -c 代码生成三条通道共用此 IR，故双通道一致。 */
     /* 用红黑树遍历优化所有函数 */
+    fprintf(stderr, "[DEBUG OPT] before optimize: main code_len=%d, op[0]=%d, op[1]=%d\n", fn->code_len, fn->code_len > 0 ? fn->code[0].op : -1, fn->code_len > 1 ? fn->code[1].op : -1);
     ir_func_table_foreach(optimize_cb, NULL);
+    fprintf(stderr, "[DEBUG OPT] after func_table_foreach: main code_len=%d, op[0]=%d, op[1]=%d\n", fn->code_len, fn->code_len > 0 ? fn->code[0].op : -1, fn->code_len > 1 ? fn->code[1].op : -1);
     ir_optimize(fn);
+    fprintf(stderr, "[DEBUG OPT] after ir_optimize: main code_len=%d, op[0]=%d, op[1]=%d\n", fn->code_len, fn->code_len > 0 ? fn->code[0].op : -1, fn->code_len > 1 ? fn->code[1].op : -1);
 
     /* 编译完成：清理字符串常量缓存（长字符串已 gc_pin，由 GC 回收） */
     string_cache_reset();
