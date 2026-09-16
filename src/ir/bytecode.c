@@ -256,6 +256,11 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return -in.b + 1;
         case OPC_UINT16_ARRAY_GET:
             return -2;
+        case OPC_UINT32_ARRAY_LIT:
+            if(in.a == 1) return +1;
+            return -in.b + 1;
+        case OPC_UINT32_ARRAY_GET:
+            return -2;
         case OPC_UINT64_ARRAY_LIT:
             if(in.a == 1) return +1;
             return -in.b + 1;

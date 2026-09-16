@@ -120,6 +120,13 @@ Value lumyr_make_uint16(uint16_t u16) {
     return v;
 }
 
+Value lumyr_make_uint32(uint32_t u32) {
+    Value v;
+    v.type = VAL_UINT32;
+    v.v.i = (long long)u32;
+    return v;
+}
+
 Value lumyr_make_uint64(uint64_t u64) {
     Value v;
     v.type = VAL_UINT64;
@@ -1113,6 +1120,9 @@ void lumyr_print_inline(Value v) {
             printf("%u", (unsigned int)v.v.i);
             break;
         case VAL_UINT16:
+            printf("%u", (unsigned int)v.v.i);
+            break;
+        case VAL_UINT32:
             printf("%u", (unsigned int)v.v.i);
             break;
         case VAL_UINT64:

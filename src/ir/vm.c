@@ -285,6 +285,16 @@ static void uint16_stack_ensure(int need) { if(vm_uint16_sp + need <= vm_uint16_
 #define UINT16_PUSH(val) do { uint16_stack_ensure(1); vm_uint16_stack[vm_uint16_sp++] = (val); } while(0)
 #define UINT16_POP() (vm_uint16_stack[--vm_uint16_sp])
 
+/* ========== uint32 栈 ========== */
+static _Thread_local uint32_t* vm_uint32_stack = NULL;
+static _Thread_local int vm_uint32_sp = 0;
+static _Thread_local int vm_uint32_cap = 0;
+static void uint32_stack_init(void) { if(vm_uint32_stack) return; vm_uint32_cap = 64; vm_uint32_stack = (uint32_t*)malloc(64 * sizeof(uint32_t)); if(!vm_uint32_stack) { LOG_ERROR("vm: uint32 栈内存不足\n"); exit(EXIT_FAILURE); } vm_uint32_sp = 0; }
+static void uint32_stack_destroy(void) { if(vm_uint32_stack) { free(vm_uint32_stack); vm_uint32_stack = NULL; } vm_uint32_sp = 0; vm_uint32_cap = 0; }
+static void uint32_stack_ensure(int need) { if(vm_uint32_sp + need <= vm_uint32_cap) return; int nc = vm_uint32_cap > 0 ? vm_uint32_cap : 64; while(nc < vm_uint32_sp + need) nc *= 2; uint32_t* ns = (uint32_t*)realloc(vm_uint32_stack, nc * sizeof(uint32_t)); if(!ns) { LOG_ERROR("vm: uint32 栈扩容内存不足\n"); exit(EXIT_FAILURE); } vm_uint32_stack = ns; vm_uint32_cap = nc; }
+#define UINT32_PUSH(val) do { uint32_stack_ensure(1); vm_uint32_stack[vm_uint32_sp++] = (val); } while(0)
+#define UINT32_POP() (vm_uint32_stack[--vm_uint32_sp])
+
 /* ========== uint64 栈 ========== */
 static _Thread_local uint64_t* vm_uint64_stack = NULL;
 static _Thread_local int vm_uint64_sp = 0;
@@ -942,7 +952,7 @@ Value vm_run_main(BytecodeFunc* main_fn)
     float_stack_init();
     /* 初始化 uint 栈（方案 A：多类型栈，零检查零转换） */
     uint_stack_init();
-    /* 初始化 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
+    /* 初始化 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint32、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
     bool_stack_init();
     char_stack_init();
     byte_stack_init();
@@ -952,6 +962,7 @@ Value vm_run_main(BytecodeFunc* main_fn)
     int64_stack_init();
     uint8_stack_init();
     uint16_stack_init();
+    uint32_stack_init();
     uint64_stack_init();
     long_stack_init();
     ulong_stack_init();
@@ -959,13 +970,14 @@ Value vm_run_main(BytecodeFunc* main_fn)
     ssize_t_stack_init();
     long_double_stack_init();
     Value ret = vm_run(main_fn, top, &local_ctx);
-    /* 销毁 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
+    /* 销毁 bool、char、byte、int8、int16、int32、int64、uint8、uint16、uint32、uint64、long、unsigned long、size_t、ssize_t、long double 栈 */
     long_double_stack_destroy();
     ssize_t_stack_destroy();
     size_t_stack_destroy();
     ulong_stack_destroy();
     long_stack_destroy();
     uint64_stack_destroy();
+    uint32_stack_destroy();
     uint16_stack_destroy();
     uint8_stack_destroy();
     int64_stack_destroy();
@@ -2333,6 +2345,14 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 UINT16_PUSH(u16v);
                 break;
             }
+            case OPC_LOAD_UINT32_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                uint32_t u32v = stackframe_get_uint32(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                UINT32_PUSH(u32v);
+                break;
+            }
             case OPC_LOAD_UINT64_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;
@@ -2533,6 +2553,16 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = VAL_UINT16;
                 ret.v.i = (long long)u16v;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_UINT32_VAR: {
+                const char* name = bf->syms[in.a];
+                uint32_t u32v = UINT32_POP();
+                stackframe_bind_uint32(frame, name, u32v);
+                Value ret;
+                ret.type = VAL_UINT32;
+                ret.v.i = (long long)u32v;
                 stack[sp++] = ret;
                 break;
             }
@@ -3595,6 +3625,64 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 UINT16_PUSH(val);
                 break;
             }
+            case OPC_UINT32_ARRAY_LIT: {
+                int n = in.b;
+                if(in.a == 1) {
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_UINT32;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(uint32_t), VAL_TYPED_ARRAY);
+                    uint32_t* u32items = (uint32_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        u32items[k] = UINT32_POP();
+                    }
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                } else {
+                    Value* elems = &stack[sp - n];
+                    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+                    ta->len = n;
+                    ta->cap = n > 0 ? n : 1;
+                    ta->elem_type = VAL_UINT32;
+                    ta->items = gc_alloc((size_t)ta->cap * sizeof(uint32_t), VAL_TYPED_ARRAY);
+                    uint32_t* u32items = (uint32_t*)ta->items;
+                    for(int k = 0; k < n; k++) {
+                        Value v = elems[k];
+                        u32items[k] = (v.type == VAL_UINT32) ? (uint32_t)v.v.i : (uint32_t)lumyr_cast_int(v).v.i;
+                    }
+                    sp -= n;
+                    Value ret;
+                    ret.type = VAL_TYPED_ARRAY;
+                    ret.v.typed_array = ta;
+                    stack[sp++] = ret;
+                }
+                break;
+            }
+            case OPC_UINT32_ARRAY_GET: {
+                Value idx = stack[--sp];
+                Value arrv = stack[--sp];
+                int u32idx = (int)lumyr_extract_int(idx);
+                char errbuf[256];
+                if(arrv.type != VAL_TYPED_ARRAY || !arrv.v.typed_array) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：OPC_UINT32_ARRAY_GET 需要 uint32 类型化数组，实际类型为 %s", val_typename(arrv.type));
+                    runtime_error(errbuf);
+                }
+                TypedArray* tarr = arrv.v.typed_array;
+                if(tarr->elem_type != VAL_UINT32) {
+                    snprintf(errbuf, sizeof(errbuf), "类型错误：数组元素类型不匹配，期望 uint32，实际为 %s", val_typename(tarr->elem_type));
+                    runtime_error(errbuf);
+                }
+                if(u32idx < 0 || u32idx >= tarr->len) {
+                    snprintf(errbuf, sizeof(errbuf), "数组越界：索引 %d 超出范围 [0, %d)", u32idx, tarr->len);
+                    runtime_error(errbuf);
+                }
+                uint32_t val = ((uint32_t*)tarr->items)[u32idx];
+                UINT32_PUSH(val);
+                break;
+            }
             case OPC_UINT64_ARRAY_LIT: {
                 int n = in.b;
                 if(in.a == 1) {
@@ -4288,6 +4376,12 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 从 uint16 栈弹出并打印（零开销，用于声明为 uint16 的变量） */
                 uint16_t u16v = UINT16_POP();
                 printf("%u\n", (unsigned int)u16v);
+                break;
+            }
+            case OPC_PRINT_UINT32: {
+                /* 从 uint32 栈弹出并打印（零开销，用于声明为 uint32 的变量） */
+                uint32_t u32v = UINT32_POP();
+                printf("%u\n", (unsigned int)u32v);
                 break;
             }
             case OPC_PRINT_UINT64: {

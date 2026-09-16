@@ -110,6 +110,12 @@ uint16_t stackframe_get_uint16(StackFrame* f, const char* name, _Bool* found);
 // 绑定 uint16 变量：同时更新 vals 和 uint16_vals，零重复提取
 void stackframe_bind_uint16(StackFrame* f, const char* name, uint16_t u16v);
 
+// 获取 uint32 类型变量的原始 uint32 值，零提取、零类型检查
+uint32_t stackframe_get_uint32(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 uint32 变量：同时更新 vals 和 uint32_vals，零重复提取
+void stackframe_bind_uint32(StackFrame* f, const char* name, uint32_t u32v);
+
 // 获取 uint64 类型变量的原始 uint64 值，零提取、零类型检查
 uint64_t stackframe_get_uint64(StackFrame* f, const char* name, _Bool* found);
 

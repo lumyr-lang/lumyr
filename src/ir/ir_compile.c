@@ -1040,6 +1040,49 @@ static void compile_uint16_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 uint32 类型
+static int is_uint32_var(Ctx* c, AstNode* node) {
+    if(node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_UINT32);
+}
+
+// 检测是否全部是 uint32 类型变量或数组元素访问
+static int all_uint32_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_uint32_vars(c, e->u.seq.first) && all_uint32_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 uint32 候选，运行时 OPC_UINT32_ARRAY_GET 会检查是否是 uint32 类型化数组 */
+        return 1;
+    }
+    return is_uint32_var(c, e);
+}
+
+// 编译 uint32 泛型数组元素：全部压入 uint32 栈
+static void compile_uint32_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_uint32_array_elems(c, e->u.seq.first, n);
+        compile_uint32_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_UINT32_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_UINT32_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 检查变量是否声明为 uint64 类型
 static int is_uint64_var(Ctx* c, AstNode* node) {
     if(node->type != AST_VAR) return 0;
@@ -2016,7 +2059,7 @@ static void c_expr(Ctx* c, AstNode* node)
                         case CAST_LONG: fv = lumyr_make_long((long)llv); break;
                         case CAST_UINT8: case CAST_UCHAR: fv = lumyr_make_uint8((uint8_t)ullv); break;
                         case CAST_UINT16: case CAST_USHORT: fv = lumyr_make_uint16((uint16_t)ullv); break;
-                        case CAST_UINT32: fv = lumyr_make_uint64((uint64_t)(uint32_t)ullv); break;  /* uint32 用 uint64 表示 */
+                        case CAST_UINT32: fv = lumyr_make_uint32((uint32_t)ullv); break;  /* uint32 用自己的类型表示 */
                         case CAST_UINT64: case CAST_ULONG: fv = lumyr_make_uint64(ullv); break;
                         case CAST_SIZE_T: fv = lumyr_make_size_t((size_t)ullv); break;
                         case CAST_SSIZE_T: fv = lumyr_make_ssize_t((ssize_t)llv); break;
@@ -2389,6 +2432,11 @@ static void c_expr(Ctx* c, AstNode* node)
                        OPC_UINT16_ARRAY_LIT(a=1) 从 uint16 栈读取，实现零检查零转换 */
                     compile_uint16_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_UINT16_ARRAY_LIT, 1, n);  /* a=1: 从 uint16 栈读取 */
+                } else if(elem_type == VAL_UINT32 && all_uint32_vars(c, node->u.array_lit.elems)) {
+                    /* 所有元素都是声明为 uint32 类型的变量：使用 OPC_LOAD_UINT32_VAR 压入 uint32 栈，
+                       OPC_UINT32_ARRAY_LIT(a=1) 从 uint32 栈读取，实现零检查零转换 */
+                    compile_uint32_array_elems(c, node->u.array_lit.elems, &n);
+                    emit(c, OPC_UINT32_ARRAY_LIT, 1, n);  /* a=1: 从 uint32 栈读取 */
                 } else if(elem_type == VAL_UINT64 && all_uint64_vars(c, node->u.array_lit.elems)) {
                     /* 所有元素都是声明为 uint64 类型的变量：使用 OPC_LOAD_UINT64_VAR 压入 uint64 栈，
                        OPC_UINT64_ARRAY_LIT(a=1) 从 uint64 栈读取，实现零检查零转换 */
@@ -2449,6 +2497,8 @@ static void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_UINT8_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT16) {
                         emit(c, OPC_UINT16_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                    } else if(elem_type == VAL_UINT32) {
+                        emit(c, OPC_UINT32_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT64) {
                         emit(c, OPC_UINT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_LONG) {
@@ -2492,6 +2542,8 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_UINT8_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT16) {
                     emit(c, OPC_UINT16_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                } else if(elem_type == VAL_UINT32) {
+                    emit(c, OPC_UINT32_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT64) {
                     emit(c, OPC_UINT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_LONG) {
@@ -2592,6 +2644,10 @@ static void c_expr(Ctx* c, AstNode* node)
                     } else if(tag == CAST_UINT16) {
                         emit(c, OPC_LOAD_UINT16_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_UINT16, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT32) {
+                        emit(c, OPC_LOAD_UINT32_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT32, 0, 0);
                         break;
                     } else if(tag == CAST_UINT64) {
                         emit(c, OPC_LOAD_UINT64_VAR, var_idx, 0);
