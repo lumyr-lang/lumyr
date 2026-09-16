@@ -1977,6 +1977,10 @@ static void c_expr(Ctx* c, AstNode* node)
             int right_is_uint = is_uint_var(c, node->u.bin.right);
             int is_uint_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV || bop == OP_MOD);
             int is_uint_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
+            int left_is_double = is_double_var(c, node->u.bin.left);
+            int right_is_double = is_double_var(c, node->u.bin.right);
+            int is_double_arith = (bop == OP_ADD || bop == OP_SUB || bop == OP_MUL || bop == OP_DIV);
+            int is_double_cmp = (bop == OP_GT || bop == OP_LT || bop == OP_GE || bop == OP_LE || bop == OP_EQ || bop == OP_NE);
             if(left_is_int && right_is_int && (is_int_arith || is_int_cmp)) {
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
@@ -2026,6 +2030,32 @@ static void c_expr(Ctx* c, AstNode* node)
                         [OP_LE] = OPC_UINT_LE, [OP_EQ] = OPC_UINT_EQ, [OP_NE] = OPC_UINT_NE,
                     };
                     emit(c, uint_cmp_map[bop], 0, 0);
+                }
+            } else if(left_is_double && right_is_double && (is_double_arith || is_double_cmp)) {
+                /* 优化：double 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
+                   如果左右操作数都是声明为 double 的变量，使用 OPC_DOUBLE_ADD 等专用指令，
+                   直接从 double 专用栈弹出两个 double，运算后结果压回 double 专用栈，完全不涉及 Value 栈 */
+                int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
+                if(is_double_arith) {
+                    /* 生成 double 专用算术运算指令（注意：double 没有取模运算） */
+                    static const OpCode double_arith_map[] = {
+                        [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                        [OP_DIV] = OPC_DOUBLE_DIV,
+                    };
+                    emit(c, double_arith_map[bop], 0, 0);
+                    /* 把结果从 double 专用栈弹出，包装成 Value，压入 Value 栈
+                       以兼容后续的赋值逻辑（赋值给普通变量时需要从 Value 栈弹出值） */
+                    emit(c, OPC_DOUBLE_TO_VALUE, 0, 0);
+                } else {
+                    /* 生成 double 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
+                    static const OpCode double_cmp_map[] = {
+                        [OP_GT] = OPC_DOUBLE_GT, [OP_LT] = OPC_DOUBLE_LT, [OP_GE] = OPC_DOUBLE_GE,
+                        [OP_LE] = OPC_DOUBLE_LE, [OP_EQ] = OPC_DOUBLE_EQ, [OP_NE] = OPC_DOUBLE_NE,
+                    };
+                    emit(c, double_cmp_map[bop], 0, 0);
                 }
             } else {
                 /* 通用路径：编译左右操作数，生成通用指令 */
