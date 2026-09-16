@@ -1463,9 +1463,6 @@ void emit_main(BytecodeFunc* main_fn)
     fprintf(out, "int main(void){\n");
     fprintf(out, "    Value __stk[%d];\n", maxd + 2);
     fprintf(out, "    int __sp = 0;\n");
-    fprintf(out, "    /* int 类型专用栈（零开销优化） */\n");
-    fprintf(out, "    int __int_stack[%d];\n", maxd + 2);
-    fprintf(out, "    int __int_sp = 0;\n");
     // 注册所有 class 的字段信息表到运行时红黑树（用于运行时属性访问）
     fprintf(out, "    /* 注册 class 字段信息表到运行时红黑树 */\n");
     type_foreach(emit_class_register_cb, out);
