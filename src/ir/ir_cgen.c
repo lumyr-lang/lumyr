@@ -479,9 +479,63 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             case OPC_POST_INC:
             case OPC_PRE_DEC:
             case OPC_POST_DEC:
+            /* ===== 各数据类型专用STORE_VAR指令：零开销优化，需要收集变量声明 ===== */
+            /* 基础数值类型 */
+            case OPC_STORE_INT_VAR:
+            case OPC_STORE_UINT_VAR:
+            case OPC_STORE_DOUBLE_VAR:
+            case OPC_STORE_FLOAT_VAR:
+            case OPC_STORE_LONG_LONG_VAR:
+            case OPC_STORE_BOOL_VAR:
+            case OPC_STORE_CHAR_VAR:
+            case OPC_STORE_BYTE_VAR:
+            /* 固定宽度整数类型 */
+            case OPC_STORE_INT8_VAR:
+            case OPC_STORE_INT16_VAR:
+            case OPC_STORE_INT32_VAR:
+            case OPC_STORE_INT64_VAR:
+            case OPC_STORE_UINT8_VAR:
+            case OPC_STORE_UINT16_VAR:
+            case OPC_STORE_UINT32_VAR:
+            case OPC_STORE_UINT64_VAR:
+            /* long/ulong 类型 */
+            case OPC_STORE_LONG_VAR:
+            case OPC_STORE_ULONG_VAR:
+            /* size_t/ssize_t 类型 */
+            case OPC_STORE_SIZE_T_VAR:
+            case OPC_STORE_SSIZE_T_VAR:
+            /* long double 类型 */
+            case OPC_STORE_LONG_DOUBLE_VAR:
                 if(in.a >= 0 && in.a < fn->sym_cnt) ns_add(set, fn->syms[in.a]);
                 break;
             case OPC_LOAD_VAR:
+            /* ===== 各数据类型专用LOAD_VAR指令：零开销优化，需要收集变量声明 ===== */
+            /* 基础数值类型 */
+            case OPC_LOAD_INT_VAR:
+            case OPC_LOAD_UINT_VAR:
+            case OPC_LOAD_DOUBLE_VAR:
+            case OPC_LOAD_FLOAT_VAR:
+            case OPC_LOAD_LONG_LONG_VAR:
+            case OPC_LOAD_BOOL_VAR:
+            case OPC_LOAD_CHAR_VAR:
+            case OPC_LOAD_BYTE_VAR:
+            /* 固定宽度整数类型 */
+            case OPC_LOAD_INT8_VAR:
+            case OPC_LOAD_INT16_VAR:
+            case OPC_LOAD_INT32_VAR:
+            case OPC_LOAD_INT64_VAR:
+            case OPC_LOAD_UINT8_VAR:
+            case OPC_LOAD_UINT16_VAR:
+            case OPC_LOAD_UINT32_VAR:
+            case OPC_LOAD_UINT64_VAR:
+            /* long/ulong 类型 */
+            case OPC_LOAD_LONG_VAR:
+            case OPC_LOAD_ULONG_VAR:
+            /* size_t/ssize_t 类型 */
+            case OPC_LOAD_SIZE_T_VAR:
+            case OPC_LOAD_SSIZE_T_VAR:
+            /* long double 类型 */
+            case OPC_LOAD_LONG_DOUBLE_VAR:
                 if(include_load && in.a >= 0 && in.a < fn->sym_cnt) ns_add(set, fn->syms[in.a]);
                 break;
             default:

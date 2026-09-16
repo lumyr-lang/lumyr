@@ -516,15 +516,53 @@ void emit_insns(BytecodeFunc* fn)
                 }
                 break;
             }
+            case OPC_LOAD_LONG_LONG_VAR: {
+                /* long long 类型零开销加载：直接从变量读取long long值，压入long long专用栈，不转换为Value */
+                fprintf(out, "    __long_long_stack[__long_long_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_LOAD_INT_VAR: {
                 /* int 类型零开销加载：直接从变量读取int值，压入int专用栈，不转换为Value */
                 fprintf(out, "    __int_stack[__int_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_LONG_LONG_CONST: {
+                /* long long 常量零开销压栈：直接把常量值压入long long专用栈，不创建Value
+                   用于 <long long>42 字面量赋值等场景，避免创建 Value 再提取的开销
+                   注意：64位值由in.a(低32位)和in.b(高32位)合并而成 */
+                fprintf(out, "    __long_long_stack[__long_long_stack_sp++] = (long long)((unsigned int)%u) | ((long long)(unsigned int)%u << 32);\n", in.a, in.b);
                 break;
             }
             case OPC_PUSH_INT_CONST: {
                 /* int 常量零开销压栈：直接把常量值压入int专用栈，不创建Value
                    用于 <int>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
                 fprintf(out, "    __int_stack[__int_stack_sp++] = %d;\n", in.a);
+                break;
+            }
+            case OPC_LONG_LONG_ADD: {
+                /* long long 加法零开销：直接从long long专用栈弹出两个long long，相加，结果压回long long专用栈
+                   完全不涉及Value栈，零检查零转换零Value开销 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla + __llb; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_SUB: {
+                /* long long 减法零开销 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla - __llb; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_MUL: {
+                /* long long 乘法零开销 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla * __llb; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_DIV: {
+                /* long long 除法零开销 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla / __llb; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_MOD: {
+                /* long long 取模零开销 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __long_long_stack[__long_long_stack_sp++] = __lla %% __llb; }\n");
                 break;
             }
             case OPC_INT_ADD: {
@@ -553,10 +591,46 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int __ib = __int_stack[--__int_stack_sp]; int __ia = __int_stack[--__int_stack_sp]; if(__ib == 0) runtime_error(\"division by zero: int modulo\"); __int_stack[__int_stack_sp++] = __ia %% __ib; }\n");
                 break;
             }
+            case OPC_LONG_LONG_TO_VALUE: {
+                /* 把 long long 专用栈顶的 long long 值包装成 Value，压入 Value 栈
+                   用于兼容赋值等通用逻辑 */
+                fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_long_long(__llv); }\n");
+                break;
+            }
             case OPC_INT_TO_VALUE: {
                 /* 把 int 专用栈顶的 int 值包装成 Value，压入 Value 栈
                    用于兼容赋值等通用逻辑 */
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __stk[__stk_sp++] = lumyr_make_int((long long)__iv); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_GT: {
+                /* long long 大于比较：直接从 long long 专用栈弹出两个 long long，比较后结果(bool)压入 Value 栈 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla > __llb); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_LT: {
+                /* long long 小于比较 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla < __llb); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_GE: {
+                /* long long 大于等于比较 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla >= __llb); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_LE: {
+                /* long long 小于等于比较 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla <= __llb); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_EQ: {
+                /* long long 等于比较 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla == __llb); }\n");
+                break;
+            }
+            case OPC_LONG_LONG_NE: {
+                /* long long 不等于比较 */
+                fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla != __llb); }\n");
                 break;
             }
             case OPC_INT_GT: {
@@ -908,6 +982,21 @@ void emit_insns(BytecodeFunc* fn)
                     } else {
                         fprintf(out, "    { Value __v = __stk[--__stk_sp]; %s = __v; __stk[__stk_sp++] = __v; }\n", cvar_rw(nm));
                     }
+                }
+                break;
+            }
+            case OPC_STORE_LONG_LONG_VAR: {
+                /* long long 类型零开销存储：从long long专用栈弹出long long值，根据变量类型标记生成精确存储代码
+                   如果变量是long long类型（CAST_LONGLONG），直接把long long值赋给变量，零转换
+                   如果变量是Value类型，把long long值包装成Value后赋给变量
+                   然后把long long值包装成Value压回Value栈（赋值表达式有返回值，后续逻辑会执行__stk_sp--） */
+                int _lltag = emit_get_var_tag(fn, nm);
+                if(_lltag == CAST_LONGLONG || _lltag == CAST_INT64) {
+                    /* long long类型变量：直接赋值，零转换 */
+                    fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; %s = __llv; __stk[__stk_sp++] = lumyr_make_long_long(__llv); }\n", cvar_rw(nm));
+                } else {
+                    /* Value类型或其他类型：包装成Value后赋值 */
+                    fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; %s = lumyr_make_long_long(__llv); __stk[__stk_sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
                 }
                 break;
             }
@@ -2070,14 +2159,19 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "      printf(\"\\n\"); __stk_sp -= __pcnt; }\n");
                 break;
             }
+            case OPC_PRINT_LONG_LONG: {
+                /* long long 类型零开销打印：直接从long long专用栈弹出long long值并打印，不转换为Value */
+                fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; printf(\"%%lld\\n\", __llv); }\n");
+                break;
+            }
             case OPC_PRINT_INT: {
                 /* int 类型零开销打印：直接从int专用栈弹出int值并打印，不转换为Value */
-                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; printf(\"%d\\n\", __iv); }\n");
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; printf(\"%%d\\n\", __iv); }\n");
                 break;
             }
             case OPC_PRINT_UINT: {
                 /* uint 类型零开销打印：直接从uint专用栈弹出uint值并打印，不转换为Value */
-                fprintf(out, "    { unsigned int __uiv = __uint_stack[--__uint_stack_sp]; printf(\"%u\\n\", __uiv); }\n");
+                fprintf(out, "    { unsigned int __uiv = __uint_stack[--__uint_stack_sp]; printf(\"%%u\\n\", __uiv); }\n");
                 break;
             }
             case OPC_INT_ARRAY_LIT: {
