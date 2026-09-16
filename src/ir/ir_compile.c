@@ -523,6 +523,12 @@ static int is_double_typed_array_var(Ctx* c, const char* vname) {
     return 0;  /* 待完善：需要检查变量的类型标记是否是 double 类型化数组 */
 }
 
+// 检查变量是否是 float 类型化数组（待完善，暂返回0）
+static int is_float_typed_array_var(Ctx* c, const char* vname) {
+    (void)c; (void)vname;
+    return 0;  /* 待完善：需要检查变量的类型标记是否是 float 类型化数组 */
+}
+
 static int is_double_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
     int var_idx = bf_sym(c->fn, node->u.varname);
@@ -2452,6 +2458,13 @@ static void c_expr(Ctx* c, AstNode* node)
                 c_expr(c, arr);
                 c_expr(c, idx);
                 emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+            } else if(arr && arr->type == AST_VAR && is_float_typed_array_var(c, arr->u.varname)) {
+                /* 优化：float 类型化数组元素访问
+                   如果数组是声明为 float 的类型化数组，使用 OPC_FLOAT_ARRAY_GET 指令，
+                   直接读取 float 值，压入 float 栈，零包装零转换 */
+                c_expr(c, arr);
+                c_expr(c, idx);
+                emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
             } else {
                 c_expr(c, arr);
                 c_expr(c, idx);
