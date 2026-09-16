@@ -1,0 +1,6 @@
+a = <char>'A';
+b = <char>'B';
+c = a;
+print(a);
+print(b);
+print(c);

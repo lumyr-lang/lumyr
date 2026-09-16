@@ -1,0 +1,12 @@
+a = <bool>true;
+b = <bool>false;
+c = a && b;
+d = a || b;
+e = !a;
+f = a == b;
+g = a != b;
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);

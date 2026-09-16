@@ -1942,6 +1942,21 @@ static void c_expr(Ctx* c, AstNode* node)
                                 /* 记录变量类型标记为 long long */
                 c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
             }
+            /* 优化0c：赋值为 <char>字面量 形式时，使用 OPC_PUSH_CHAR_CONST + OPC_STORE_CHAR_VAR
+               零包装零重复提取，直接把字面量值压入 char 栈并存储到 char 变量
+               避免创建 Value 再提取的开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_CHAR &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_CHAR) {
+                char literal_val = (char)node->u.assign.expr->u.type_annotation.expr->u.ch;
+                /* OPC_PUSH_CHAR_CONST：直接把常量值压入 char 栈，零检查零转换 */
+                emit(c, OPC_PUSH_CHAR_CONST, (int)literal_val, 0);
+                /* OPC_STORE_CHAR_VAR：从 char 栈弹出，存储到 char_vals，零重复提取 */
+                emit(c, OPC_STORE_CHAR_VAR, var_idx, 0);
+                /* 记录变量类型标记为 char */
+                c->fn->var_type_tags[var_idx] = CAST_CHAR;
+            }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&

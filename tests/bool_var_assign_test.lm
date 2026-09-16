@@ -1,0 +1,4 @@
+a = <bool>true;
+b = <bool>false;
+c = a;
+print(c);
