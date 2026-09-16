@@ -4,6 +4,8 @@
 #include "lumyr_value_type.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 
 // 前一个 token：用于区分 `[` 是下标（表达式后）还是数组字面量（表达式开始）
 static int prev_token = 0;
@@ -155,7 +157,17 @@ f\"([^"\\]|\\.)*\"   {
 }
 
 [0-9]+                  {
-    yylval.ll = atoll(yytext);
+    /* 使用 strtoull 解析整数字面量，支持 uint64 最大值（18446744073709551615）
+       优先级：先尝试用无符号解析，后续根据上下文（类型注解）决定如何解释
+       如果超过 uint64 最大值，strtoull 会设置 errno = ERANGE */
+    errno = 0;
+    unsigned long long ullval = strtoull(yytext, NULL, 10);
+    if(errno == ERANGE) {
+        /* 超过 uint64 最大值，报错 */
+        fprintf(stderr, "词法错误：整数字面量溢出，超出 uint64 最大值范围：%s\n", yytext);
+        exit(EXIT_FAILURE);
+    }
+    yylval.ll = (long long)ullval;
     LEX_RET(INTEGER);
 }
 

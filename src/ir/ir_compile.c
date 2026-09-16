@@ -1994,18 +1994,34 @@ static void c_expr(Ctx* c, AstNode* node)
                     bv.v.i = (long long)(uint8_t)(unsigned long long)iv;
                     fv = bv;
                 } else {
-                    long long iv = (fv.type == VAL_INT) ? fv.v.i : (long long)fv.v.d;
+                    /* 使用 unsigned long long 来正确表示 uint64 最大值 */
+                    unsigned long long ullv = (fv.type == VAL_INT) ? (unsigned long long)fv.v.i : (unsigned long long)fv.v.d;
+                    long long llv = (long long)ullv;
                     switch(ct) {
-                        case CAST_INT8: iv = (long long)(int8_t)iv; break;
-                        case CAST_INT16: case CAST_SHORT: iv = (long long)(int16_t)iv; break;
-                        case CAST_INT32: case CAST_INT: iv = (long long)(int32_t)iv; break;
-                        case CAST_UINT8: case CAST_UCHAR: iv = (long long)(uint8_t)(unsigned long long)iv; break;
-                        case CAST_UINT16: case CAST_USHORT: iv = (long long)(uint16_t)(unsigned long long)iv; break;
-                        case CAST_UINT32: iv = (long long)(uint32_t)(unsigned long long)iv; break;
+                        case CAST_INT8: llv = (long long)(int8_t)llv; break;
+                        case CAST_INT16: case CAST_SHORT: llv = (long long)(int16_t)llv; break;
+                        case CAST_INT32: case CAST_INT: llv = (long long)(int32_t)llv; break;
+                        case CAST_UINT8: case CAST_UCHAR: ullv = (unsigned long long)(uint8_t)ullv; break;
+                        case CAST_UINT16: case CAST_USHORT: ullv = (unsigned long long)(uint16_t)ullv; break;
+                        case CAST_UINT32: ullv = (unsigned long long)(uint32_t)ullv; break;
                         /* int64/long/long long/uint64/ulong/size_t/ssize_t/ptr：不截断 */
                         default: break;
                     }
-                    fv = lumyr_make_int(iv);
+                    /* 根据类型创建正确类型的值，实现字面量完全隔离 */
+                    switch(ct) {
+                        case CAST_INT8: fv = lumyr_make_int8((int8_t)llv); break;
+                        case CAST_INT16: case CAST_SHORT: fv = lumyr_make_int16((int16_t)llv); break;
+                        case CAST_INT32: case CAST_INT: fv = lumyr_make_int((int)llv); break;
+                        case CAST_INT64: case CAST_LONGLONG: fv = lumyr_make_int64(llv); break;
+                        case CAST_LONG: fv = lumyr_make_long((long)llv); break;
+                        case CAST_UINT8: case CAST_UCHAR: fv = lumyr_make_uint8((uint8_t)ullv); break;
+                        case CAST_UINT16: case CAST_USHORT: fv = lumyr_make_uint16((uint16_t)ullv); break;
+                        case CAST_UINT32: fv = lumyr_make_uint64((uint64_t)(uint32_t)ullv); break;  /* uint32 用 uint64 表示 */
+                        case CAST_UINT64: case CAST_ULONG: fv = lumyr_make_uint64(ullv); break;
+                        case CAST_SIZE_T: fv = lumyr_make_size_t((size_t)ullv); break;
+                        case CAST_SSIZE_T: fv = lumyr_make_ssize_t((ssize_t)llv); break;
+                        default: fv = lumyr_make_int(llv); break;
+                    }
                 }
                 emit(c, OPC_LOAD_CONST, bf_const(c->fn, fv), 0);
                 break;
