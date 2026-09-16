@@ -2203,6 +2203,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                    零检查零转换零 Value 开销，完全不涉及 Value 栈 */
                 float b = FLOAT_POP();
                 float a = FLOAT_POP();
+                fprintf(stderr, "[DEBUG VM] FLOAT_ADD: a=%f, b=%f, result=%f\n", (double)a, (double)b, (double)(a + b));
                 FLOAT_PUSH(a + b);
                 break;
             }
@@ -3498,7 +3499,9 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_LONG_LONG_TO_FLOAT: {
-                float fv = (float)LONG_LONG_POP();
+                long long llv = LONG_LONG_POP();
+                float fv = (float)llv;
+                fprintf(stderr, "[DEBUG VM] LONG_LONG_TO_FLOAT: ll_val=%lld, float_val=%f\n", llv, (double)fv);
                 FLOAT_PUSH(fv);
                 break;
             }
