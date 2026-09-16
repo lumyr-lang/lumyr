@@ -75,4 +75,13 @@ int wrapped_gen_next(GeneratorObject* gen, Value* result, StackFrame* frame, Eva
 /* 未定义变量/函数：统一报错退出（与 ast_interp.c 输出一致） */
 void runtime_undefined(const char* what, const char* name);
 
+
+/* ========== 生成器状态变量（线程局部） ========== */
+
+/* 当前正在执行的生成器（NULL = 普通执行） */
+extern _Thread_local GeneratorObject* s_current_gen;
+/* 生成器 yield 时的返回值传递 */
+extern _Thread_local Value s_gen_yield_result;
+extern _Thread_local int s_gen_yielded;
+
 #endif /* LUMYR_VM_GENERATOR_H */

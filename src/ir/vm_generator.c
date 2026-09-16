@@ -18,10 +18,10 @@
 /* ========== 生成器状态管理（线程局部变量） ========== */
 
 /* 当前正在执行的生成器（NULL = 普通执行） */
-static _Thread_local GeneratorObject* s_current_gen = NULL;
+_Thread_local GeneratorObject* s_current_gen = NULL;
 /* 生成器 yield 时的返回值传递 */
-static _Thread_local Value s_gen_yield_result;
-static _Thread_local int s_gen_yielded = 0;
+_Thread_local Value s_gen_yield_result;
+_Thread_local int s_gen_yielded = 0;
 
 /* 获取当前正在执行的生成器（NULL = 普通执行） */
 GeneratorObject* vm_get_current_generator(void) {
@@ -62,7 +62,7 @@ static GeneratorObject** s_paused_gens = NULL;
 static int s_paused_gen_cnt = 0;
 static int s_paused_gen_cap = 0;
 
-static void paused_gen_add(GeneratorObject* gen) {
+void paused_gen_add(GeneratorObject* gen) {
     if(s_paused_gen_cnt >= s_paused_gen_cap) {
         int nc = s_paused_gen_cap > 0 ? s_paused_gen_cap * 2 : 16;
         GeneratorObject** ns = (GeneratorObject**)realloc(s_paused_gens, (size_t)nc * sizeof(GeneratorObject*));
@@ -73,7 +73,7 @@ static void paused_gen_add(GeneratorObject* gen) {
     s_paused_gens[s_paused_gen_cnt++] = gen;
 }
 
-static void paused_gen_remove(GeneratorObject* gen) {
+void paused_gen_remove(GeneratorObject* gen) {
     for(int i = 0; i < s_paused_gen_cnt; i++) {
         if(s_paused_gens[i] == gen) {
             s_paused_gens[i] = s_paused_gens[--s_paused_gen_cnt];
