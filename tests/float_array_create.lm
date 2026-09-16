@@ -1,0 +1,7 @@
+// 简单测试：float类型化数组创建
+print("=== float array create test ===\n");
+
+arr = <float>[1.1, 2.2, 3.3];
+print("array created\n");
+
+print("=== done ===\n");

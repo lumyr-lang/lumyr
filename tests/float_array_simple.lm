@@ -1,7 +1,7 @@
-// 简单测试：double类型化数组元素访问
-print("=== double array test ===\n");
+// 简单测试：float类型化数组元素访问
+print("=== float array test ===\n");
 
-arr = <double>[1.1, 2.2, 3.3];
+arr = <float>[1.1, 2.2, 3.3];
 print("arr[0] = ");
 print(arr[0]);
 print("\n");

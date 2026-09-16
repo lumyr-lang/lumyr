@@ -517,16 +517,20 @@ static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
 }
 
 // 检查变量是否声明为 double 类型
-// 检查变量是否是 double 类型化数组（待完善，暂返回0）
+// 检查变量是否是 double 类型化数组
 static int is_double_typed_array_var(Ctx* c, const char* vname) {
-    (void)c; (void)vname;
-    return 0;  /* 待完善：需要检查变量的类型标记是否是 double 类型化数组 */
+    if(!c || !c->fn || !vname) return 0;
+    int var_idx = bf_sym(c->fn, vname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == VAR_TYPE_DOUBLE_ARRAY);
 }
 
-// 检查变量是否是 float 类型化数组（待完善，暂返回0）
+// 检查变量是否是 float 类型化数组
 static int is_float_typed_array_var(Ctx* c, const char* vname) {
-    (void)c; (void)vname;
-    return 0;  /* 待完善：需要检查变量的类型标记是否是 float 类型化数组 */
+    if(!c || !c->fn || !vname) return 0;
+    int var_idx = bf_sym(c->fn, vname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == VAR_TYPE_FLOAT_ARRAY);
 }
 
 static int is_double_var(Ctx* c, AstNode* node) {
@@ -3030,6 +3034,55 @@ static void c_stmt(Ctx* c, AstNode* node)
             emit(c, OPC_POP, 0, 0);
             break;
         case AST_PRINT: {
+            /* 优化：如果 print 只有一个参数，而且是一个数组访问表达式，
+               并且数组是 float/double 类型化数组，使用专用打印指令（零开销） */
+            AstNode* single_arg = NULL;
+            if(node->u.print.args && node->u.print.args->type != AST_SEQ) {
+                single_arg = node->u.print.args;  /* 单个参数 */
+            }
+            if(single_arg && single_arg->type == AST_INDEX) {
+                AstNode* arr = single_arg->u.index.arr;
+                AstNode* idx = single_arg->u.index.idx;
+                if(arr && arr->type == AST_VAR) {
+                    if(is_double_typed_array_var(c, arr->u.varname)) {
+                        c_expr(c, arr);
+                        c_expr(c, idx);
+                        emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
+                        break;
+                    } else if(is_float_typed_array_var(c, arr->u.varname)) {
+                        c_expr(c, arr);
+                        c_expr(c, idx);
+                        emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
+                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        break;
+                    }
+                }
+            }
+            /* 优化：如果 print 只有一个参数，而且是一个有类型标记的变量，使用专用打印指令（零开销） */
+            if(single_arg && single_arg->type == AST_VAR) {
+                int var_idx = bf_sym(c->fn, single_arg->u.varname);
+                if(c->fn->var_type_tags && var_idx >= 0 && var_idx < c->fn->sym_cnt) {
+                    int tag = c->fn->var_type_tags[var_idx];
+                    if(tag == CAST_INT) {
+                        emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT, 0, 0);
+                        break;
+                    } else if(tag == CAST_DOUBLE) {
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
+                        break;
+                    } else if(tag == CAST_FLOAT) {
+                        emit(c, OPC_LOAD_FLOAT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT32) {
+                        emit(c, OPC_LOAD_UINT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        break;
+                    }
+                }
+            }
             int cnt = c_print_args(c, node->u.print.args);
             emit(c, OPC_PRINT, cnt, 0);
             /* OPC_PRINT 会弹出所有参数，不需要额外的 OPC_POP */
