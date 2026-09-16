@@ -6,6 +6,7 @@
 #include "ir_cgen_internal.h"
 #include "rbtree.h"
 #include "lumyr_debug.h"
+#include "stack_manager.h"
 
 
 
@@ -667,8 +668,7 @@ void emit_func_def(BytecodeFunc* fn)
     }
     int maxd = bc_analyze_stack(fn, NULL, 0);
     fprintf(out, ")\n{\n");
-    fprintf(out, "    Value __stk[%d];\n", maxd + 16);
-    fprintf(out, "    int __stk_sp = 0;\n");
+    stack_emit_declarations(out, maxd);
     if(fin_lab_cnt > 0) {
         fprintf(out, "    static void* __g_fin_labs[%d] = { ", fin_lab_cnt);
         for(int k = 0; k < fin_lab_cnt; k++)
@@ -1461,11 +1461,7 @@ void emit_main(BytecodeFunc* main_fn)
         analyze_scalar_replacement(main_fn);
     }
     fprintf(out, "int main(void){\n");
-    fprintf(out, "    Value __stk[%d];\n", maxd + 16);
-    fprintf(out, "    int __stk_sp = 0;\n");
-    fprintf(out, "    /* int 类型专用栈（零开销优化） */\n");
-    fprintf(out, "    int __int_stack[%d];\n", maxd + 16);
-    fprintf(out, "    int __int_stack_sp = 0;\n");
+    stack_emit_declarations(out, maxd);
     // 注册所有 class 的字段信息表到运行时红黑树（用于运行时属性访问）
     fprintf(out, "    /* 注册 class 字段信息表到运行时红黑树 */\n");
     type_foreach(emit_class_register_cb, out);
