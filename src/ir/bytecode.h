@@ -99,6 +99,26 @@ typedef enum {
     OPC_UINT_TO_FLOAT,   // 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈（零包装零Value开销）
     OPC_UINT_TO_DOUBLE,  // 从 uint 栈弹出一个 uint，转换为 double，压入 double 栈（零包装零Value开销）
     OPC_FLOAT_TO_DOUBLE, // 从 float 栈弹出一个 float，转换为 double，压入 double 栈（零包装零Value开销）
+    // long long 类型专用指令（零检查零转换零 Value 开销）
+    OPC_PUSH_LONG_LONG_CONST, // a=常量值；压入 long long 栈（零包装零Value开销）
+    OPC_LOAD_LONG_LONG_VAR,   // a=符号表下标；加载声明为 long long 的变量，直接压入 long long 栈（零检查零转换）
+    OPC_STORE_LONG_LONG_VAR,  // a=符号表下标；从 long long 栈弹出 long long 值，直接存储到变量（零包装零转换）
+    OPC_LONG_LONG_ADD,        // 从 long long 栈弹出两个 long long，加法，结果压入 long long 栈（零检查零转换）
+    OPC_LONG_LONG_SUB,        // 从 long long 栈弹出两个 long long，减法，结果压入 long long 栈
+    OPC_LONG_LONG_MUL,        // 从 long long 栈弹出两个 long long，乘法，结果压入 long long 栈
+    OPC_LONG_LONG_DIV,        // 从 long long 栈弹出两个 long long，除法，结果压入 long long 栈
+    OPC_LONG_LONG_MOD,        // 从 long long 栈弹出两个 long long，取模，结果压入 long long 栈
+    OPC_LONG_LONG_TO_VALUE,   // 从 long long 栈弹出一个 long long，包装成 Value，压入 Value 栈（用于兼容）
+    OPC_LONG_LONG_GT,         // 从 long long 栈弹出两个 long long，大于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_LT,         // 从 long long 栈弹出两个 long long，小于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_GE,         // 从 long long 栈弹出两个 long long，大于等于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_LE,         // 从 long long 栈弹出两个 long long，小于等于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_EQ,         // 从 long long 栈弹出两个 long long，等于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_NE,         // 从 long long 栈弹出两个 long long，不等于比较，结果(bool)压入 Value 栈
+    OPC_LONG_LONG_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 long long 栈弹出值，写入 long long 类型化数组
+    OPC_LONG_LONG_ARRAY_LIT,  // b=元素个数；弹 b 个元素，创建 long long 类型化数组
+    OPC_LONG_LONG_ARRAY_GET,  // 弹 arr,idx；直接从 long long 类型化数组读取元素，压入 long long 栈
+    OPC_PRINT_LONG_LONG,      // 从 long long 栈弹出 long long 值并打印（零包装零Value开销）
     OPC_LOAD_BOOL_VAR,   // a=符号表下标；加载声明为 bool 的变量，直接压入 bool 栈（零检查零转换）
     OPC_STORE_BOOL_VAR,  // a=符号表下标；从 bool 栈弹出 bool 值，直接存储到变量的 bool_vals（零包装零转换）
     OPC_BOOL_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 bool，创建 bool 泛型数组

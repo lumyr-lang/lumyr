@@ -157,6 +157,13 @@ static const StackInfo stack_info_table[STACK_TYPE_COUNT] = {
         .elem_size = sizeof(long double),
         .has_dedicated_stack = 1,
     },
+    [STACK_LONG_LONG] = {
+        .type = STACK_LONG_LONG,
+        .name = "__long_long_stack",
+        .c_type = "long long",
+        .elem_size = sizeof(long long),
+        .has_dedicated_stack = 1,
+    },
 };
 
 /* 获取栈信息 */

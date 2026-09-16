@@ -698,6 +698,52 @@ static void compile_uint_array_elems(Ctx* c, AstNode* e, int* n) {
     (*n)++;
 }
 
+// 检查变量是否声明为 long long 类型
+static int is_long_long_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    int var_idx = bf_sym(c->fn, node->u.varname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return 0;
+    return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == CAST_LONGLONG);
+}
+
+// 检查数组所有元素是否都是 long long 类型（声明为 long long 的变量或 long long 类型化数组的元素访问）
+static int all_long_long_vars(Ctx* c, AstNode* e) {
+    if(!e) return 1;
+    if(e->type == AST_SEQ) {
+        return all_long_long_vars(c, e->u.seq.first) && all_long_long_vars(c, e->u.seq.second);
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：视为 long long 候选，运行时 OPC_LONG_LONG_ARRAY_GET 会检查是否是 long long 类型化数组 */
+        return 1;
+    }
+    return is_long_long_var(c, e);
+}
+
+// 编译 long long 泛型数组元素：全部压入 long long 栈（零检查零转换）
+// 支持：声明为 long long 的变量（OPC_LOAD_LONG_LONG_VAR）、long long 类型化数组元素访问（OPC_LONG_LONG_ARRAY_GET）
+static void compile_long_long_array_elems(Ctx* c, AstNode* e, int* n) {
+    if(!e) return;
+    if(e->type == AST_SEQ) {
+        compile_long_long_array_elems(c, e->u.seq.first, n);
+        compile_long_long_array_elems(c, e->u.seq.second, n);
+        return;
+    }
+    if(e->type == AST_INDEX) {
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_LONG_LONG_ARRAY_GET */
+        AstNode* arr = e->u.index.arr;
+        AstNode* idx = e->u.index.idx;
+        c_expr(c, arr);
+        c_expr(c, idx);
+        emit(c, OPC_LONG_LONG_ARRAY_GET, 0, 0);
+        (*n)++;
+        return;
+    }
+    /* 声明为 long long 类型的变量：使用 OPC_LOAD_LONG_LONG_VAR，直接压入 long long 栈 */
+    int var_idx = bf_sym(c->fn, e->u.varname);
+    emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
+    (*n)++;
+}
+
 // 检查变量是否声明为 bool 类型
 static int is_bool_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
@@ -1764,6 +1810,21 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
+            }
+            /* 优化0ll：赋值为 <long long>字面量 形式时，使用 OPC_PUSH_LONG_LONG_CONST + OPC_STORE_LONG_LONG_VAR
+               零包装零重复提取，直接把字面量值压入 long long 栈并存储到 long long 变量
+               避免创建 Value 再提取的开销 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_LONGLONG &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                long long literal_val = (long long)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                /* OPC_PUSH_LONG_LONG_CONST：直接把常量值压入 long long 栈，零检查零转换 */
+                emit(c, OPC_PUSH_LONG_LONG_CONST, (int)literal_val, (int)(literal_val >> 32));
+                /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
+                emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                /* 记录变量类型标记为 long long */
+                c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
             }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */

@@ -1,0 +1,11 @@
+// long long 字面量赋值测试
+func main() {
+    a = <long long>9223372036854775807;  // long long 最大值
+    print(a);
+
+    b = <long long>100;
+    print(b);
+
+    c = <long long>-100;
+    print(c);
+}

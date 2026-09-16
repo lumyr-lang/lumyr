@@ -193,6 +193,26 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_UINT_TO_DOUBLE:
         case OPC_FLOAT_TO_DOUBLE:
             return 0;                        /* 从一个专用栈弹出1个，转换后压入另一个专用栈，不改变 Value 栈深度 */
+        /* long long 类型专用指令栈深度计算 */
+        case OPC_PUSH_LONG_LONG_CONST:
+        case OPC_LOAD_LONG_LONG_VAR:
+            return 0;                        /* 压入 long long 栈，不改变 Value 栈深度 */
+        case OPC_STORE_LONG_LONG_VAR:
+            return +1;                       /* 从 long long 栈弹出，包装成 Value 压回（赋值表达式有返回值） */
+        case OPC_LONG_LONG_ADD: case OPC_LONG_LONG_SUB: case OPC_LONG_LONG_MUL: case OPC_LONG_LONG_DIV: case OPC_LONG_LONG_MOD:
+            return 0;                        /* 从 long long 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
+        case OPC_LONG_LONG_TO_VALUE:
+            return +1;                       /* 从 long long 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
+        case OPC_LONG_LONG_GT: case OPC_LONG_LONG_LT: case OPC_LONG_LONG_GE: case OPC_LONG_LONG_LE: case OPC_LONG_LONG_EQ: case OPC_LONG_LONG_NE:
+            return +1;                       /* 从 long long 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
+        case OPC_LONG_LONG_ARRAY_SET:
+            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1 */
+        case OPC_LONG_LONG_ARRAY_LIT:
+            return +1;                       /* 弹 b 个元素，压入1个数组 Value，Value栈变化+1-b */
+        case OPC_LONG_LONG_ARRAY_GET:
+            return 0;                        /* 从 Value 栈弹出数组和索引(2个)，压入 long long 栈(1个)，Value栈变化-2+1=-1？不对，应该是0因为结果在专用栈 */
+        case OPC_PRINT_LONG_LONG:
+            return 0;                        /* 从 long long 栈弹出并打印，Value 栈不变 */
         case OPC_POP:
         case OPC_PEND_RETURN:
         case OPC_THROW:
@@ -574,6 +594,26 @@ static const char* opc_name(OpCode op)
         case OPC_UINT_TO_FLOAT: return "UINT_TO_FLOAT";
         case OPC_UINT_TO_DOUBLE: return "UINT_TO_DOUBLE";
         case OPC_FLOAT_TO_DOUBLE: return "FLOAT_TO_DOUBLE";
+        /* long long 类型专用指令名称 */
+        case OPC_PUSH_LONG_LONG_CONST: return "PUSH_LONG_LONG_CONST";
+        case OPC_LOAD_LONG_LONG_VAR: return "LOAD_LONG_LONG_VAR";
+        case OPC_STORE_LONG_LONG_VAR: return "STORE_LONG_LONG_VAR";
+        case OPC_LONG_LONG_ADD: return "LONG_LONG_ADD";
+        case OPC_LONG_LONG_SUB: return "LONG_LONG_SUB";
+        case OPC_LONG_LONG_MUL: return "LONG_LONG_MUL";
+        case OPC_LONG_LONG_DIV: return "LONG_LONG_DIV";
+        case OPC_LONG_LONG_MOD: return "LONG_LONG_MOD";
+        case OPC_LONG_LONG_TO_VALUE: return "LONG_LONG_TO_VALUE";
+        case OPC_LONG_LONG_GT: return "LONG_LONG_GT";
+        case OPC_LONG_LONG_LT: return "LONG_LONG_LT";
+        case OPC_LONG_LONG_GE: return "LONG_LONG_GE";
+        case OPC_LONG_LONG_LE: return "LONG_LONG_LE";
+        case OPC_LONG_LONG_EQ: return "LONG_LONG_EQ";
+        case OPC_LONG_LONG_NE: return "LONG_LONG_NE";
+        case OPC_LONG_LONG_ARRAY_SET: return "LONG_LONG_ARRAY_SET";
+        case OPC_LONG_LONG_ARRAY_LIT: return "LONG_LONG_ARRAY_LIT";
+        case OPC_LONG_LONG_ARRAY_GET: return "LONG_LONG_ARRAY_GET";
+        case OPC_PRINT_LONG_LONG: return "PRINT_LONG_LONG";
         case OPC_PRINT_UINT: return "PRINT_UINT";
         /* double专用指令 */
         case OPC_LOAD_DOUBLE_VAR: return "LOAD_DOUBLE_VAR";

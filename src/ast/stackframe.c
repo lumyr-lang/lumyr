@@ -1201,6 +1201,47 @@ void stackframe_bind_int64(StackFrame* f, const char* name, int64_t i64v)
     if(hl) pthread_rwlock_unlock(&f->rw);
 }
 
+long long stackframe_get_long_long(StackFrame* f, const char* name, _Bool* found)
+{
+    if(!f || !name) { if(found) *found = 0; return 0; }
+    int hl = f->shared ? (pthread_rwlock_rdlock(&f->rw), 1) : 0;
+    for(StackFrame* fr = f; fr; fr = fr->parent) {
+        int idx = find_in_frame(fr, name);
+        if(idx >= 0) {
+            if(found) *found = 1;
+            long long llv = fr->longlong_vals ? fr->longlong_vals[idx] : fr->vals[idx].v.ll;
+            if(hl) pthread_rwlock_unlock(&f->rw);
+            return llv;
+        }
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+    if(found) *found = 0;
+    return 0;
+}
+
+void stackframe_bind_long_long(StackFrame* f, const char* name, long long llv)
+{
+    if(!f || !name) return;
+    int hl = f->shared ? (pthread_rwlock_wrlock(&f->rw), 1) : 0;
+    int idx = find_in_frame(f, name);
+    if(idx >= 0) {
+        slot_release(&f->vals[idx]);
+        f->vals[idx].type = VAL_LONG_LONG;
+        f->vals[idx].v.ll = llv;
+        if(f->longlong_vals) f->longlong_vals[idx] = llv;
+        if(f->type_tags) f->type_tags[idx] = CAST_LONGLONG;
+    } else {
+        frame_ensure(f, f->cnt + 1);
+        f->names[f->cnt] = strdup(name);
+        f->vals[f->cnt].type = VAL_LONG_LONG;
+        f->vals[f->cnt].v.ll = llv;
+        if(f->longlong_vals) f->longlong_vals[f->cnt] = llv;
+        if(f->type_tags) f->type_tags[f->cnt] = CAST_LONGLONG;
+        f->cnt++;
+    }
+    if(hl) pthread_rwlock_unlock(&f->rw);
+}
+
 uint8_t stackframe_get_uint8(StackFrame* f, const char* name, _Bool* found)
 {
     if(!f || !name) { if(found) *found = 0; return 0; }

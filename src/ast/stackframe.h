@@ -98,6 +98,12 @@ int64_t stackframe_get_int64(StackFrame* f, const char* name, _Bool* found);
 // 绑定 int64 变量：同时更新 vals 和 int64_vals，零重复提取
 void stackframe_bind_int64(StackFrame* f, const char* name, int64_t i64v);
 
+// 获取 long long 类型变量的原始 long long 值，零提取、零类型检查
+long long stackframe_get_long_long(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 long long 变量：同时更新 vals 和 long_long_vals，零重复提取
+void stackframe_bind_long_long(StackFrame* f, const char* name, long long llv);
+
 // 获取 uint8 类型变量的原始 uint8 值，零提取、零类型检查
 uint8_t stackframe_get_uint8(StackFrame* f, const char* name, _Bool* found);
 

@@ -99,6 +99,8 @@ static _Thread_local Value vm_pend_val;   /* 挂起返回的值（PEND_RETURN �
 #define SSIZE_T_POP() (((ssize_t*)stack_global_get_stack(STACK_SSIZE_T))[--(*stack_global_get_sp(STACK_SSIZE_T))])
 #define LONG_DOUBLE_PUSH(val) do { stack_global_ensure(STACK_LONG_DOUBLE, 1); ((long double*)stack_global_get_stack(STACK_LONG_DOUBLE))[(*stack_global_get_sp(STACK_LONG_DOUBLE))++] = (val); } while(0)
 #define LONG_DOUBLE_POP() (((long double*)stack_global_get_stack(STACK_LONG_DOUBLE))[--(*stack_global_get_sp(STACK_LONG_DOUBLE))])
+#define LONG_LONG_PUSH(val) do { stack_global_ensure(STACK_LONG_LONG, 1); ((long long*)stack_global_get_stack(STACK_LONG_LONG))[(*stack_global_get_sp(STACK_LONG_LONG))++] = (val); } while(0)
+#define LONG_LONG_POP() (((long long*)stack_global_get_stack(STACK_LONG_LONG))[--(*stack_global_get_sp(STACK_LONG_LONG))])
 
 
 /* ========== 生成器支持 ========== */
@@ -3260,6 +3262,106 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             /* 类型转换指令：专用栈之间的转换，零包装零Value开销 */
+            /* ========== long long 类型专用指令 VM 处理 ========== */
+            case OPC_PUSH_LONG_LONG_CONST: {
+                /* 合并低32位(in.a)和高32位(in.b)为64位long long值 */
+                long long llval = ((long long)(unsigned int)in.a) | (((long long)in.b) << 32);
+                LONG_LONG_PUSH(llval);
+                break;
+            }
+            case OPC_LOAD_LONG_LONG_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                long long llv = stackframe_get_long_long(frame, name, &fnd);
+                if(!fnd) runtime_undefined("variable", name);
+                LONG_LONG_PUSH(llv);
+                break;
+            }
+            case OPC_STORE_LONG_LONG_VAR: {
+                const char* name = bf->syms[in.a];
+                long long val = LONG_LONG_POP();
+                stackframe_bind_long_long(frame, name, val);
+                stack[sp++] = lumyr_make_long_long(val);
+                break;
+            }
+            case OPC_LONG_LONG_ADD: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                LONG_LONG_PUSH(a + b);
+                break;
+            }
+            case OPC_LONG_LONG_SUB: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                LONG_LONG_PUSH(a - b);
+                break;
+            }
+            case OPC_LONG_LONG_MUL: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                LONG_LONG_PUSH(a * b);
+                break;
+            }
+            case OPC_LONG_LONG_DIV: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                if(b == 0) runtime_error("除零错误");
+                LONG_LONG_PUSH(a / b);
+                break;
+            }
+            case OPC_LONG_LONG_MOD: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                if(b == 0) runtime_error("除零错误");
+                LONG_LONG_PUSH(a % b);
+                break;
+            }
+            case OPC_LONG_LONG_TO_VALUE: {
+                long long llv = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_long_long(llv);
+                break;
+            }
+            case OPC_LONG_LONG_GT: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_LONG_LONG_LT: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_LONG_LONG_GE: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_LONG_LONG_LE: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_LONG_LONG_EQ: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_LONG_LONG_NE: {
+                long long b = LONG_LONG_POP();
+                long long a = LONG_LONG_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
+            case OPC_PRINT_LONG_LONG: {
+                long long llv = LONG_LONG_POP();
+                printf("%lld\n", llv);
+                break;
+            }
             case OPC_INT_TO_FLOAT: {
                 /* 从 int 栈弹出一个 int，转换为 float，压入 float 栈 */
                 int iv = INT_POP();

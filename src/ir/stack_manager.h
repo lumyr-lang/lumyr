@@ -42,6 +42,7 @@ typedef enum {
     STACK_SIZE_T,          /* size_t栈 */
     STACK_SSIZE_T,         /* ssize_t栈 */
     STACK_LONG_DOUBLE,     /* long double栈 */
+    STACK_LONG_LONG,        /* long long栈 */
     STACK_TYPE_COUNT       /* 栈类型数量 */
 } StackType;
 

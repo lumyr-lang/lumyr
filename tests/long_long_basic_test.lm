@@ -1,0 +1,26 @@
+// long long 类型基本测试
+func main() {
+    // 测试 long long 变量声明和赋值
+    a = <long long>9223372036854775807;  // long long 最大值
+    print(a);
+
+    b = <long long>-9223372036854775808;  // long long 最小值
+    print(b);
+
+    // 测试 long long 算术运算
+    c = <long long>100;
+    d = <long long>200;
+    print(c + d);  // 300
+    print(d - c);  // 100
+    print(c * d);  // 20000
+    print(d / c);  // 2
+    print(d % c);  // 0
+
+    // 测试 long long 比较运算
+    print(c < d);   // true
+    print(c > d);   // false
+    print(c <= d);  // true
+    print(c >= d);  // false
+    print(c == d);  // false
+    print(c != d);  // true
+}
