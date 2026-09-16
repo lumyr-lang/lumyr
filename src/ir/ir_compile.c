@@ -2064,6 +2064,26 @@ static void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_ULONG;
             }
+            /* 优化0size_t：赋值为 <size_t>字面量 形式时，使用 OPC_PUSH_SIZE_T_CONST + OPC_STORE_SIZE_T_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_SIZE_T &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                size_t literal_val = (size_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_SIZE_T_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
+            }
+            /* 优化0ssize_t：赋值为 <ssize_t>字面量 形式时，使用 OPC_PUSH_SSIZE_T_CONST + OPC_STORE_SSIZE_T_VAR */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_SSIZE_T &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
+                ssize_t literal_val = (ssize_t)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                emit(c, OPC_PUSH_SSIZE_T_CONST, (int)literal_val, 0);
+                emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
+            }
             /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2406,6 +2426,20 @@ static void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_LOAD_ULONG_VAR, rhs_idx, 0);
                     emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_ULONG;
+                }
+                /* 检查右侧变量是否标记为 size_t 类型（CAST_SIZE_T） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_SIZE_T) {
+                    emit(c, OPC_LOAD_SIZE_T_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
+                }
+                /* 检查右侧变量是否标记为 ssize_t 类型（CAST_SSIZE_T） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_SSIZE_T) {
+                    emit(c, OPC_LOAD_SSIZE_T_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&

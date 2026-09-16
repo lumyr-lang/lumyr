@@ -965,6 +965,22 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __ulong_stack[__ulong_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_SIZE_T_CONST: {
+                fprintf(out, "    __size_t_stack[__size_t_stack_sp++] = (size_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_SIZE_T_VAR: {
+                fprintf(out, "    __size_t_stack[__size_t_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_PUSH_SSIZE_T_CONST: {
+                fprintf(out, "    __ssize_t_stack[__ssize_t_stack_sp++] = (ssize_t)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_SSIZE_T_VAR: {
+                fprintf(out, "    __ssize_t_stack[__ssize_t_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_UINT_CONST: {
                 /* uint 常量零开销压栈：直接把常量值压入uint专用栈，不创建Value
                    用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
@@ -1169,6 +1185,14 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_STORE_ULONG_VAR: {
                 fprintf(out, "    { unsigned long __ulv = __ulong_stack[--__ulong_stack_sp]; %s = __ulv; __stk[__stk_sp++] = lumyr_make_ulong(__ulv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_SIZE_T_VAR: {
+                fprintf(out, "    { size_t __stv = __size_t_stack[--__size_t_stack_sp]; %s = __stv; __stk[__stk_sp++] = lumyr_make_size_t(__stv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_SSIZE_T_VAR: {
+                fprintf(out, "    { ssize_t __sstv = __ssize_t_stack[--__ssize_t_stack_sp]; %s = __sstv; __stk[__stk_sp++] = lumyr_make_ssize_t(__sstv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_STORE_UINT_VAR: {
@@ -2379,6 +2403,14 @@ void emit_insns(BytecodeFunc* fn)
             }
             case OPC_PRINT_ULONG: {
                 fprintf(out, "    { unsigned long __ulv = __ulong_stack[--__ulong_stack_sp]; printf(\"%%lu\\n\", __ulv); }\n");
+                break;
+            }
+            case OPC_PRINT_SIZE_T: {
+                fprintf(out, "    { size_t __stv = __size_t_stack[--__size_t_stack_sp]; printf(\"%%zu\\n\", __stv); }\n");
+                break;
+            }
+            case OPC_PRINT_SSIZE_T: {
+                fprintf(out, "    { ssize_t __sstv = __ssize_t_stack[--__ssize_t_stack_sp]; printf(\"%%zd\\n\", __sstv); }\n");
                 break;
             }
             case OPC_INT_ARRAY_LIT: {
