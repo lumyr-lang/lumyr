@@ -1820,10 +1820,13 @@ static void c_expr(Ctx* c, AstNode* node)
                node->u.assign.expr->u.type_annotation.expr &&
                node->u.assign.expr->u.type_annotation.expr->type == AST_INT) {
                 long long literal_val = (long long)node->u.assign.expr->u.type_annotation.expr->u.inum;
+                fprintf(stderr, "[DEBUG LL] 命中long long字面量赋值优化: var_idx=%d, literal_val=%lld, code_len_before=%d\n", var_idx, literal_val, c->fn->code_len);
                 /* OPC_PUSH_LONG_LONG_CONST：直接把常量值压入 long long 栈，零检查零转换 */
                 emit(c, OPC_PUSH_LONG_LONG_CONST, (int)literal_val, (int)(literal_val >> 32));
+                fprintf(stderr, "[DEBUG LL] after PUSH_LONG_LONG_CONST: code_len=%d, op=%d\n", c->fn->code_len, c->fn->code[c->fn->code_len-1].op);
                 /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
                 emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                fprintf(stderr, "[DEBUG LL] after STORE_LONG_LONG_VAR: code_len=%d, op=%d\n", c->fn->code_len, c->fn->code[c->fn->code_len-1].op);
                 /* 记录变量类型标记为 long long */
                 c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
             }
