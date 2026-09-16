@@ -3544,6 +3544,62 @@ static void c_stmt(Ctx* c, AstNode* node)
                         emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_BOOL, 0, 0);
                         break;
+                    } else if(tag == CAST_CHAR) {
+                        emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_CHAR, 0, 0);
+                        break;
+                    } else if(tag == CAST_BYTE) {
+                        emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_BYTE, 0, 0);
+                        break;
+                    } else if(tag == CAST_INT8) {
+                        emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT8, 0, 0);
+                        break;
+                    } else if(tag == CAST_INT16) {
+                        emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT16, 0, 0);
+                        break;
+                    } else if(tag == CAST_INT32) {
+                        emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT32, 0, 0);
+                        break;
+                    } else if(tag == CAST_INT64) {
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT8) {
+                        emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT8, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT16) {
+                        emit(c, OPC_LOAD_UINT16_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT16, 0, 0);
+                        break;
+                    } else if(tag == CAST_UINT64) {
+                        emit(c, OPC_LOAD_UINT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_UINT64, 0, 0);
+                        break;
+                    } else if(tag == CAST_LONG) {
+                        emit(c, OPC_LOAD_LONG_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_LONG, 0, 0);
+                        break;
+                    } else if(tag == CAST_ULONG) {
+                        emit(c, OPC_LOAD_ULONG_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_ULONG, 0, 0);
+                        break;
+                    } else if(tag == CAST_SIZE_T) {
+                        emit(c, OPC_LOAD_SIZE_T_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_SIZE_T, 0, 0);
+                        break;
+                    } else if(tag == CAST_SSIZE_T) {
+                        emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_SSIZE_T, 0, 0);
+                        break;
+                    } else if(tag == CAST_LONG_DOUBLE) {
+                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        break;
                     }
                 }
             }
