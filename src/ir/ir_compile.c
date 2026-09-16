@@ -517,6 +517,12 @@ static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
 }
 
 // 检查变量是否声明为 double 类型
+// 检查变量是否是 double 类型化数组（待完善，暂返回0）
+static int is_double_typed_array_var(Ctx* c, const char* vname) {
+    (void)c; (void)vname;
+    return 0;  /* 待完善：需要检查变量的类型标记是否是 double 类型化数组 */
+}
+
 static int is_double_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
     int var_idx = bf_sym(c->fn, node->u.varname);
@@ -2439,9 +2445,18 @@ static void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
-            c_expr(c, arr);
-            c_expr(c, idx);
-            emit(c, OPC_INDEX_GET, 0, 0);
+            /* 优化：double 类型化数组元素访问
+               如果数组是声明为 double 的类型化数组，使用 OPC_DOUBLE_ARRAY_GET 指令，
+               直接读取 double 值，压入 double 栈，零包装零转换 */
+            if(arr && arr->type == AST_VAR && is_double_typed_array_var(c, arr->u.varname)) {
+                c_expr(c, arr);
+                c_expr(c, idx);
+                emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+            } else {
+                c_expr(c, arr);
+                c_expr(c, idx);
+                emit(c, OPC_INDEX_GET, 0, 0);
+            }
             break;
         }
         case AST_INDEX_ASSIGN: {
