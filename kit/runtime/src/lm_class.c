@@ -8,6 +8,30 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* 辅助函数：根据value的类型提取整数值（各数据类型专用，避免混用long long） */
+static long long class_extract_ll(Value v) {
+    switch(v.type) {
+        case VAL_INT:     return v.v.i;
+        case VAL_INT8:    return (long long)v.v.i8;
+        case VAL_INT16:   return (long long)v.v.i16;
+        case VAL_INT32:   return (long long)v.v.i32;
+        case VAL_INT64:   return v.v.i;
+        case VAL_BYTE:    return (long long)v.v.u8;
+        case VAL_UINT8:   return (long long)v.v.u8;
+        case VAL_UINT16:  return (long long)v.v.u16;
+        case VAL_UINT32:  return (long long)v.v.u32;
+        case VAL_UINT64:  return (long long)v.v.u64;
+        case VAL_LONG:    return (long long)v.v.l;
+        case VAL_ULONG:   return (long long)v.v.ul;
+        case VAL_SIZE_T:  return (long long)v.v.st;
+        case VAL_SSIZE_T: return (long long)v.v.sst;
+        case VAL_BOOL:    return v.v.b ? 1 : 0;
+        case VAL_CHAR:    return (long long)(unsigned char)v.v.c;
+        case VAL_DOUBLE:  return (long long)v.v.d;
+        default:          return 0;
+    }
+}
+
 /* ==================== VM 特定函数的弱符号存根（CC 模式下使用） ==================== */
 /* 这些函数在 vm.c 中定义，CC 模式下没有链接 vm.c，所以提供弱符号存根 */
 /* 前向声明 */
@@ -383,10 +407,10 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value)
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
         case CLASS_FIELD_INT:
-            *(long long*)field_ptr = value.v.i;
+            *(long long*)field_ptr = class_extract_ll(value);
             break;
         case CLASS_FIELD_DOUBLE:
-            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)value.v.i;
+            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)class_extract_ll(value);
             break;
         case CLASS_FIELD_STRING:
             /* 字符串字段需要深拷贝 */
@@ -394,7 +418,7 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value)
             *(char**)field_ptr = strdup(lumyr_str_cstr(&value));
             break;
         case CLASS_FIELD_BOOL:
-            *(int*)field_ptr = value.type == VAL_BOOL ? value.v.b : (value.v.i ? 1 : 0);
+            *(int*)field_ptr = value.type == VAL_BOOL ? value.v.b : (class_extract_ll(value) ? 1 : 0);
             break;
         case CLASS_FIELD_PTR:
             *(void**)field_ptr = value.v.struct_ptr;
@@ -757,7 +781,7 @@ void lumyr_class_instance_set_field(Value obj, const char* field_name, Value val
             char* field_ptr = (char*)obj.v.struct_ptr + sizeof(ClassVTable*) + vt->field_offsets[i];
             switch(vt->field_types[i]) {
                 case CLASS_FIELD_INT:
-                    *(long long*)field_ptr = value.v.i;
+                    *(long long*)field_ptr = class_extract_ll(value);
                     break;
                 case CLASS_FIELD_DOUBLE:
                     *(double*)field_ptr = value.v.d;
