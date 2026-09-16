@@ -700,6 +700,89 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    }\n");
                 break;
             }
+            /* ===== float 类型零开销专用指令（CC模式） ===== */
+            case OPC_PUSH_FLOAT_CONST: {
+                /* float 常量零开销压栈：直接从常量池读取float值，压入float专用栈，不创建Value */
+                fprintf(out, "    __float_stack[__float_stack_sp++] = (float)bf->consts[%d].v.f;\n", in.a);
+                break;
+            }
+            case OPC_FLOAT_ADD: {
+                /* float 加法零开销 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __float_stack[__float_stack_sp++] = __fa + __fb; }\n");
+                break;
+            }
+            case OPC_FLOAT_SUB: {
+                /* float 减法零开销 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __float_stack[__float_stack_sp++] = __fa - __fb; }\n");
+                break;
+            }
+            case OPC_FLOAT_MUL: {
+                /* float 乘法零开销 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __float_stack[__float_stack_sp++] = __fa * __fb; }\n");
+                break;
+            }
+            case OPC_FLOAT_DIV: {
+                /* float 除法零开销，需要检查除零 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; if(__fb == 0.0f) runtime_error(\"division by zero: float division\"); __float_stack[__float_stack_sp++] = __fa / __fb; }\n");
+                break;
+            }
+            case OPC_FLOAT_TO_VALUE: {
+                /* 把 float 专用栈顶的 float 值包装成 Value，压入 Value 栈 */
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_float(__fv); }\n");
+                break;
+            }
+            case OPC_FLOAT_GT: {
+                /* float 大于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa > __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_LT: {
+                /* float 小于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa < __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_GE: {
+                /* float 大于等于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa >= __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_LE: {
+                /* float 小于等于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa <= __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_EQ: {
+                /* float 等于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa == __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_NE: {
+                /* float 不等于比较 */
+                fprintf(out, "    { float __fb = __float_stack[--__float_stack_sp]; float __fa = __float_stack[--__float_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__fa != __fb); }\n");
+                break;
+            }
+            case OPC_FLOAT_ARRAY_SET: {
+                /* float 类型化数组元素赋值 */
+                fprintf(out, "    {\n");
+                fprintf(out, "        float __val = __float_stack[--__float_stack_sp];\n");
+                fprintf(out, "        Value __idx = __stk[--__stk_sp];\n");
+                fprintf(out, "        Value __arr = __stk[--__stk_sp];\n");
+                fprintf(out, "        if(__arr.type == VAL_TYPED_ARRAY && __arr.v.typed_array && __arr.v.typed_array->elem_type == VAL_FLOAT) {\n");
+                fprintf(out, "            TypedArray* __tarr = __arr.v.typed_array;\n");
+                fprintf(out, "            long long __i = array_index_of(__idx);\n");
+                fprintf(out, "            if(__i < 0 || __i >= __tarr->len) {\n");
+                fprintf(out, "                char __buf[128];\n");
+                fprintf(out, "                snprintf(__buf, sizeof(__buf), \"float typed array index out of bounds: %%lld (len %%d)\", __i, __tarr->len);\n");
+                fprintf(out, "                runtime_error(__buf);\n");
+                fprintf(out, "            }\n");
+                fprintf(out, "            ((float*)__tarr->items)[__i] = __val;\n");
+                fprintf(out, "        } else {\n");
+                fprintf(out, "            runtime_error(\"OPC_FLOAT_ARRAY_SET: array is not float typed array\");\n");
+                fprintf(out, "        }\n");
+                fprintf(out, "        __stk[__stk_sp++] = lumyr_make_float(__val);\n");
+                fprintf(out, "    }\n");
+                break;
+            }
             /* ===== uint 类型零开销专用指令（CC模式） ===== */
             case OPC_LOAD_UINT_VAR: {
                 /* uint 类型零开销加载：直接从变量读取uint值，压入uint专用栈，不转换为Value */
