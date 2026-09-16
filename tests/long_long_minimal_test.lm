@@ -1,4 +1,5 @@
-// long long 最简单测试 - 只赋值不print
-func main() {
-    a = <long long>100;
-}
+// long long 最简单测试 - 使用顶层语句（不使用func main）
+a = <long long>100;
+print(a);
+b = <long long>200;
+print(b);

@@ -1777,8 +1777,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
     int is_generator = (gen_ctx != NULL);
     // 静态栈深度分析：精确分配执行栈（动态，无硬上限），并校验 IR 栈平衡
     int maxd = bc_analyze_stack(bf, NULL, 0);
-    fprintf(stderr, "[DEBUG VM] vm_run called: func=%s, maxd=%d, code_len=%d\n", bf->name ? bf->name : "<main>", maxd, bf->code_len);
-    if(maxd < 0) {
+        if(maxd < 0) {
         fprintf(stderr, "[DEBUG VM] bc_analyze_stack returned negative, exiting\n");
         exit(EXIT_FAILURE);   // 已打印下溢位置
     }
@@ -1909,12 +1908,10 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
     for(;;) {
         gc_stw_check_fast();  /* 协作式 STW 安全点：内联快速路径，非 GC 时无函数调用开销 */
         if(pc >= bf->code_len) {
-            fprintf(stderr, "[DEBUG VM] PC=%d超出code_len=%d，退出循环\n", pc, bf->code_len);
-            break;
+                        break;
         }
         Instruction in = bf->code[pc++];
-        fprintf(stderr, "[DEBUG VM] exec pc=%d op=%d a=%d b=%d sp=%d\n", pc-1, in.op, in.a, in.b, sp);
-        switch(in.op) {
+                switch(in.op) {
             case OPC_NOP:
                 break;
             case OPC_LOAD_CONST:
@@ -3276,24 +3273,21 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* 合并低32位(in.a)和高32位(in.b)为64位long long值
                    注意：in.b也要强制转换为unsigned int，避免符号扩展 */
                 long long llval = ((long long)(unsigned int)in.a) | (((long long)(unsigned int)in.b) << 32);
-                fprintf(stderr, "[DEBUG LL VM] PUSH_LONG_LONG_CONST: llval=%lld, sp=%d\n", llval, *stack_global_get_sp(STACK_LONG_LONG));
-                LONG_LONG_PUSH(llval);
+                                LONG_LONG_PUSH(llval);
                 break;
             }
             case OPC_LOAD_LONG_LONG_VAR: {
                 const char* name = bf->syms[in.a];
                 _Bool fnd = 0;
                 long long llv = stackframe_get_long_long(frame, name, &fnd);
-                fprintf(stderr, "[DEBUG LL VM] LOAD_LONG_LONG_VAR: name=%s, llv=%lld, fnd=%d\n", name, llv, fnd);
-                if(!fnd) runtime_undefined("variable", name);
+                                if(!fnd) runtime_undefined("variable", name);
                 LONG_LONG_PUSH(llv);
                 break;
             }
             case OPC_STORE_LONG_LONG_VAR: {
                 const char* name = bf->syms[in.a];
                 long long val = LONG_LONG_POP();
-                fprintf(stderr, "[DEBUG LL VM] STORE_LONG_LONG_VAR: name=%s, val=%lld\n", name, val);
-                stackframe_bind_long_long(frame, name, val);
+                                stackframe_bind_long_long(frame, name, val);
                 stack[sp++] = lumyr_make_long_long(val);
                 break;
             }
@@ -3372,8 +3366,7 @@ static Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             }
             case OPC_PRINT_LONG_LONG: {
                 long long llv = LONG_LONG_POP();
-                fprintf(stderr, "[DEBUG LL VM] PRINT_LONG_LONG: llv=%lld\n", llv);
-                printf("%lld\n", llv);
+                                printf("%lld\n", llv);
                 break;
             }
             case OPC_INT_TO_FLOAT: {
