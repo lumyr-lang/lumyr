@@ -169,7 +169,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PRINT_UINT8: case OPC_PRINT_UINT16: case OPC_PRINT_UINT32: case OPC_PRINT_UINT64:
         case OPC_PRINT_LONG: case OPC_PRINT_ULONG:
         case OPC_PRINT_BOOL: case OPC_PRINT_CHAR: case OPC_PRINT_BYTE:
-            return -1;                       /* 从专用栈弹出并打印，Value栈变化-1 */
+            return 0;                        /* 从专用栈弹出并打印，不改变Value栈深度 */
         case OPC_YIELD:
             return 0;                        /* 生成器yield，栈不变 */
         case OPC_INT_ADD: case OPC_INT_SUB: case OPC_INT_MUL: case OPC_INT_DIV: case OPC_INT_MOD:

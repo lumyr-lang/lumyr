@@ -3540,6 +3540,10 @@ static void c_stmt(Ctx* c, AstNode* node)
                         emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_LONG_LONG, 0, 0);
                         break;
+                    } else if(tag == CAST_BOOL) {
+                        emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_BOOL, 0, 0);
+                        break;
                     }
                 }
             }
