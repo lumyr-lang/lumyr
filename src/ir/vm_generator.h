@@ -47,4 +47,32 @@ int vm_get_gen_yielded(void);
 /* 设置是否已经 yield */
 void vm_set_gen_yielded(int yielded);
 
+
+/* ========== 生成器对象管理 ========== */
+
+/* 创建生成器对象（不开始执行） */
+GeneratorObject* generator_new(BytecodeFunc* bf, StackFrame* parent_frame, int arg_cnt, const Value* args);
+
+/* 销毁生成器对象 */
+void generator_free(GeneratorObject* gen);
+
+/* 生成器执行函数：恢复状态，执行到下一个 yield 或 return
+ * 返回 1 = 正常 yield，结果在 *result；返回 0 = 生成器结束 */
+int generator_resume(GeneratorObject* gen, Value* result, Value* send_val, StackFrame* frame, EvalCtx* ctx);
+
+/* 保存当前 try-catch 上下文到生成器对象（yield 时调用） */
+void generator_save_try_context(GeneratorObject* gen);
+
+/* 从生成器对象恢复 try-catch 上下文（恢复执行时调用） */
+void generator_restore_try_context(GeneratorObject* gen);
+
+/* 释放生成器保存的 try-catch 上下文 */
+void generator_free_try_context(GeneratorObject* gen);
+
+/* 包装生成器的 next() 处理 */
+int wrapped_gen_next(GeneratorObject* gen, Value* result, StackFrame* frame, EvalCtx* ctx);
+
+/* 未定义变量/函数：统一报错退出（与 ast_interp.c 输出一致） */
+void runtime_undefined(const char* what, const char* name);
+
 #endif /* LUMYR_VM_GENERATOR_H */
