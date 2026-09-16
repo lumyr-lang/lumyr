@@ -1902,16 +1902,26 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
             }
-            /* 优化0b：赋值为 <bool>字面量 形式时，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
-               零包装零重复提取，直接把字面量值压入 bool 栈并存储到 bool 变量
-               避免创建 Value 再提取的开销 */
+            /* 优化0b：赋值为 <bool>表达式 形式时，使用专用路径
+               如果是bool字面量，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
+               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_BOOL_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_BOOL) {
-                int literal_val = node->u.assign.expr->u.type_annotation.expr->u.bval ? 1 : 0;
-                /* OPC_PUSH_BOOL_CONST：直接把常量值压入 bool 栈，零检查零转换 */
-                emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+               node->u.assign.expr->u.type_annotation.expr) {
+                AstNode* inner_expr = node->u.assign.expr->u.type_annotation.expr;
+                if(inner_expr->type == AST_BOOL) {
+                    /* bool字面量：直接压入bool栈，零检查零转换 */
+                    int literal_val = inner_expr->u.bval ? 1 : 0;
+                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                } else if(inner_expr->type == AST_INT) {
+                    /* 整数字面量：非零为true，零为false */
+                    int literal_val = inner_expr->u.inum ? 1 : 0;
+                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                } else {
+                    /* 其他表达式：编译表达式压入Value栈，然后转换为bool压入bool栈 */
+                    c_expr(c, inner_expr);
+                    emit(c, OPC_TO_BOOL, 0, 0);
+                }
                 /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
                 emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
                 /* 记录变量类型标记为 bool */
@@ -2008,16 +2018,26 @@ static void c_expr(Ctx* c, AstNode* node)
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
             }
-            /* 优化0b：赋值为 <bool>字面量 形式时，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
-               零包装零重复提取，直接把字面量值压入 bool 栈并存储到 bool 变量
-               避免创建 Value 再提取的开销 */
+            /* 优化0b：赋值为 <bool>表达式 形式时，使用专用路径
+               如果是bool字面量，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
+               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_BOOL_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
-               node->u.assign.expr->u.type_annotation.expr &&
-               node->u.assign.expr->u.type_annotation.expr->type == AST_BOOL) {
-                int literal_val = node->u.assign.expr->u.type_annotation.expr->u.bval ? 1 : 0;
-                /* OPC_PUSH_BOOL_CONST：直接把常量值压入 bool 栈，零检查零转换 */
-                emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+               node->u.assign.expr->u.type_annotation.expr) {
+                AstNode* inner_expr = node->u.assign.expr->u.type_annotation.expr;
+                if(inner_expr->type == AST_BOOL) {
+                    /* bool字面量：直接压入bool栈，零检查零转换 */
+                    int literal_val = inner_expr->u.bval ? 1 : 0;
+                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                } else if(inner_expr->type == AST_INT) {
+                    /* 整数字面量：非零为true，零为false */
+                    int literal_val = inner_expr->u.inum ? 1 : 0;
+                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                } else {
+                    /* 其他表达式：编译表达式压入Value栈，然后转换为bool压入bool栈 */
+                    c_expr(c, inner_expr);
+                    emit(c, OPC_TO_BOOL, 0, 0);
+                }
                 /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
                 emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
                 /* 记录变量类型标记为 bool */
