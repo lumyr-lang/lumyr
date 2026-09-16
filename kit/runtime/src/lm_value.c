@@ -525,6 +525,28 @@ Value lumyr_type(Value v) {
         case VAL_STRUCT_PTR: return lumyr_make_string("struct");
         case VAL_CLASS_PTR: return lumyr_make_string("class");
         case VAL_TYPED_ARRAY: return lumyr_make_string("typed_array");
+        // C类型（各类型专用，不混用）
+        case VAL_VOID:     return lumyr_make_string("void");
+        case VAL_INT8:     return lumyr_make_string("int8");
+        case VAL_INT16:    return lumyr_make_string("int16");
+        case VAL_INT32:    return lumyr_make_string("int32");
+        case VAL_INT64:    return lumyr_make_string("int64");
+        case VAL_LONG_LONG: return lumyr_make_string("long long");
+        case VAL_LONG:     return lumyr_make_string("long");
+        case VAL_UINT8:    return lumyr_make_string("uint8");
+        case VAL_UINT16:   return lumyr_make_string("uint16");
+        case VAL_UINT32:   return lumyr_make_string("uint32");
+        case VAL_UINT64:   return lumyr_make_string("uint64");
+        case VAL_ULONG:    return lumyr_make_string("unsigned long");
+        case VAL_UCHAR:    return lumyr_make_string("unsigned char");
+        case VAL_SHORT:    return lumyr_make_string("short");
+        case VAL_USHORT:   return lumyr_make_string("unsigned short");
+        case VAL_SIZE_T:   return lumyr_make_string("size_t");
+        case VAL_SSIZE_T:  return lumyr_make_string("ssize_t");
+        case VAL_FLOAT:    return lumyr_make_string("float");
+        case VAL_LONG_DOUBLE: return lumyr_make_string("long double");
+        case VAL_PTR:      return lumyr_make_string("pointer");
+        case VAL_CALLBACK: return lumyr_make_string("callback");
     }
     return lumyr_make_string("unknown");
 }
