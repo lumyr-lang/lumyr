@@ -156,6 +156,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PUSH_INT64_CONST:
         case OPC_PUSH_UINT8_CONST:
         case OPC_PUSH_UINT16_CONST:
+        case OPC_PUSH_UINT32_CONST:
         case OPC_PUSH_UINT64_CONST:
         case OPC_PUSH_LONG_CONST:
         case OPC_PUSH_ULONG_CONST:
@@ -219,6 +220,13 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LONG_LONG_TO_FLOAT:
         case OPC_LONG_LONG_TO_DOUBLE:
             return 0;                        /* 从一个专用栈弹出1个，转换后压入另一个专用栈，不改变 Value 栈深度 */
+        /* 转换到 long double 的专用指令栈深度计算 */
+        case OPC_INT_TO_LONG_DOUBLE:
+        case OPC_UINT_TO_LONG_DOUBLE:
+        case OPC_FLOAT_TO_LONG_DOUBLE:
+        case OPC_DOUBLE_TO_LONG_DOUBLE:
+        case OPC_LONG_LONG_TO_LONG_DOUBLE:
+            return 0;                        /* 从一个专用栈弹出1个，转换后压入 long double 专用栈，不改变 Value 栈深度 */
         /* long long 类型专用指令栈深度计算 */
         case OPC_PUSH_LONG_LONG_CONST:
         case OPC_LOAD_LONG_LONG_VAR:
@@ -673,6 +681,12 @@ static const char* opc_name(OpCode op)
         case OPC_DOUBLE_TO_LONG_LONG: return "DOUBLE_TO_LONG_LONG";
         case OPC_LONG_LONG_TO_FLOAT: return "LONG_LONG_TO_FLOAT";
         case OPC_LONG_LONG_TO_DOUBLE: return "LONG_LONG_TO_DOUBLE";
+        /* 转换到 long double 的专用指令名称 */
+        case OPC_INT_TO_LONG_DOUBLE: return "INT_TO_LONG_DOUBLE";
+        case OPC_UINT_TO_LONG_DOUBLE: return "UINT_TO_LONG_DOUBLE";
+        case OPC_FLOAT_TO_LONG_DOUBLE: return "FLOAT_TO_LONG_DOUBLE";
+        case OPC_DOUBLE_TO_LONG_DOUBLE: return "DOUBLE_TO_LONG_DOUBLE";
+        case OPC_LONG_LONG_TO_LONG_DOUBLE: return "LONG_LONG_TO_LONG_DOUBLE";
         /* long long 类型专用指令名称 */
         case OPC_PUSH_LONG_LONG_CONST: return "PUSH_LONG_LONG_CONST";
         case OPC_LOAD_LONG_LONG_VAR: return "LOAD_LONG_LONG_VAR";
@@ -730,6 +744,7 @@ static const char* opc_name(OpCode op)
         case OPC_PUSH_INT64_CONST: return "PUSH_INT64_CONST";
         case OPC_PUSH_UINT8_CONST: return "PUSH_UINT8_CONST";
         case OPC_PUSH_UINT16_CONST: return "PUSH_UINT16_CONST";
+        case OPC_PUSH_UINT32_CONST: return "PUSH_UINT32_CONST";
         case OPC_PUSH_UINT64_CONST: return "PUSH_UINT64_CONST";
         case OPC_PUSH_LONG_CONST: return "PUSH_LONG_CONST";
         case OPC_PUSH_ULONG_CONST: return "PUSH_ULONG_CONST";

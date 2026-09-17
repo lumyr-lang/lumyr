@@ -70,7 +70,14 @@
 #define FLOAT_TOP(idx) (((float*)stack_global_get_stack(STACK_FLOAT))[(*stack_global_get_sp(STACK_FLOAT)) - 1 - (idx)])
 
 #define DOUBLE_PUSH(val) do { stack_global_ensure(STACK_DOUBLE, 1); ((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE))++] = (val); } while(0)
-#define DOUBLE_POP() (((double*)stack_global_get_stack(STACK_DOUBLE))[--(*stack_global_get_sp(STACK_DOUBLE))])
+static inline double double_pop_debug(const char* file, int line, const char* func) {
+    int* sp = stack_global_get_sp(STACK_DOUBLE);
+    if(*sp <= 0) {
+        fprintf(stderr, "[DOUBLE_POP] STACK UNDERFLOW! sp=%d, called from %s:%d in %s\n", *sp, file, line, func);
+    }
+    return ((double*)stack_global_get_stack(STACK_DOUBLE))[--(*sp)];
+}
+#define DOUBLE_POP() double_pop_debug(__FILE__, __LINE__, __func__)
 #define DOUBLE_PEEK() (((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - 1])
 #define DOUBLE_TOP(idx) (((double*)stack_global_get_stack(STACK_DOUBLE))[(*stack_global_get_sp(STACK_DOUBLE)) - 1 - (idx)])
 

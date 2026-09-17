@@ -207,7 +207,29 @@ int arith_get_expr_type(Ctx* c, AstNode* node) {
     /* 类型转换：根据转换类型判断 */
     if(node->type == AST_CAST || node->type == AST_TYPE_ANNOTATION) {
         /* 类型转换节点的类型标记存储在 cast_type 字段中 */
-        /* 具体实现需要根据 AST 结构调整 */
+        int ct = node->u.type_annotation.cast_type;
+        switch(ct) {
+            case CAST_BOOL: return EXPR_TYPE_BOOL;
+            case CAST_CHAR: return EXPR_TYPE_CHAR;
+            case CAST_INT8: return EXPR_TYPE_INT8;
+            case CAST_INT16: return EXPR_TYPE_INT16;
+            case CAST_INT: return EXPR_TYPE_INT;
+            case CAST_INT64: return EXPR_TYPE_INT64;
+            case CAST_LONGLONG: return EXPR_TYPE_LONG_LONG;
+            case CAST_LONG: return EXPR_TYPE_LONG;
+            case CAST_BYTE: return EXPR_TYPE_BYTE;
+            case CAST_UINT8: return EXPR_TYPE_UINT8;
+            case CAST_UINT16: return EXPR_TYPE_UINT16;
+            case CAST_UINT32: return EXPR_TYPE_UINT;
+            case CAST_UINT64: return EXPR_TYPE_UINT64;
+            case CAST_ULONG: return EXPR_TYPE_ULONG;
+            case CAST_SIZE_T: return EXPR_TYPE_SIZE_T;
+            case CAST_SSIZE_T: return EXPR_TYPE_SSIZE_T;
+            case CAST_FLOAT: return EXPR_TYPE_FLOAT;
+            case CAST_DOUBLE: return EXPR_TYPE_DOUBLE;
+            case CAST_LONG_DOUBLE: return EXPR_TYPE_LONG_DOUBLE;
+            default: return EXPR_TYPE_NONE;
+        }
     }
 
     return EXPR_TYPE_NONE;

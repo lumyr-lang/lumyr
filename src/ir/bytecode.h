@@ -107,6 +107,12 @@ typedef enum {
     OPC_DOUBLE_TO_LONG_LONG, // 从 double 栈弹出一个 double，转换为 long long，压入 long long 栈（零包装零Value开销）
     OPC_LONG_LONG_TO_FLOAT, // 从 long long 栈弹出一个 long long，转换为 float，压入 float 栈（零包装零Value开销）
     OPC_LONG_LONG_TO_DOUBLE, // 从 long long 栈弹出一个 long long，转换为 double，压入 double 栈（零包装零Value开销）
+    // 转换到 long double 的专用指令（零包装零Value开销）
+    OPC_INT_TO_LONG_DOUBLE,   // 从 int 栈弹出一个 int，转换为 long double，压入 long double 栈
+    OPC_UINT_TO_LONG_DOUBLE,  // 从 uint 栈弹出一个 uint，转换为 long double，压入 long double 栈
+    OPC_FLOAT_TO_LONG_DOUBLE, // 从 float 栈弹出一个 float，转换为 long double，压入 long double 栈
+    OPC_DOUBLE_TO_LONG_DOUBLE, // 从 double 栈弹出一个 double，转换为 long double，压入 long double 栈
+    OPC_LONG_LONG_TO_LONG_DOUBLE, // 从 long long 栈弹出一个 long long，转换为 long double，压入 long double 栈
     // long long 类型专用指令（零检查零转换零 Value 开销）
     OPC_PUSH_LONG_LONG_CONST, // a=常量值；压入 long long 栈（零包装零Value开销）
     OPC_LOAD_LONG_LONG_VAR,   // a=符号表下标；加载声明为 long long 的变量，直接压入 long long 栈（零检查零转换）
@@ -204,6 +210,7 @@ typedef enum {
     OPC_PRINT_UINT64,     // 从 uint64 栈弹出并打印（零开销，用于声明为 uint64 的变量）
     OPC_PUSH_UINT8_CONST, // a=uint8值；直接压入 uint8 栈（零检查零转换）
     OPC_PUSH_UINT16_CONST, // a=uint16值；直接压入 uint16 栈（零检查零转换）
+    OPC_PUSH_UINT32_CONST, // a=uint32值；直接压入 uint32 栈（零检查零转换）
     OPC_PUSH_UINT64_CONST, // a=低32位, b=高32位；直接压入 uint64 栈（零检查零转换）
     OPC_LOAD_LONG_VAR,   // a=符号表下标；加载声明为 long 的变量，直接压入 long 栈（零检查零转换）
     OPC_STORE_LONG_VAR,  // a=符号表下标；从 long 栈弹出 long 值，直接存储到变量的 long_vals（零包装零转换）

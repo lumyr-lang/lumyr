@@ -183,6 +183,12 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         break;
         }
         Instruction in = bf->code[pc++];
+        fprintf(stderr, "[VM] pc=%d, op=%d, a=%d, b=%d, sp=%d, value_sp=%d, int_sp=%d, double_sp=%d, ld_sp=%d\n", 
+                pc-1, (int)in.op, in.a, in.b, sp,
+                (g_stack_mgr ? *stack_global_get_sp(STACK_VALUE) : -1),
+                (g_stack_mgr ? *stack_global_get_sp(STACK_INT) : -1),
+                (g_stack_mgr ? *stack_global_get_sp(STACK_DOUBLE) : -1),
+                (g_stack_mgr ? *stack_global_get_sp(STACK_LONG_DOUBLE) : -1));
                 switch(in.op) {
             case OPC_NOP:
                 break;
@@ -235,6 +241,12 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 /* uint 常量：直接把常量值压入 uint 栈，零检查零转换
                    用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
                 UINT_PUSH((unsigned int)in.a);
+                break;
+            }
+            case OPC_PUSH_UINT32_CONST: {
+                /* uint32 常量：直接把常量值压入 uint32 栈，零检查零转换
+                   用于 <uint32>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                UINT32_PUSH((uint32_t)in.a);
                 break;
             }
             case OPC_INT_ADD: {
@@ -1780,6 +1792,47 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_LONG_LONG_TO_DOUBLE: {
                 double dv = (double)LONG_LONG_POP();
                 DOUBLE_PUSH(dv);
+                break;
+            }
+            /* 转换到 long double 的专用指令 */
+            case OPC_INT_TO_LONG_DOUBLE: {
+                int iv = INT_POP();
+                long double ldv = (long double)iv;
+                fprintf(stderr, "[DEBUG LD] INT_TO_LONG_DOUBLE: int_val=%d, ld_val=%Lf\n", iv, (long double)ldv);
+                LONG_DOUBLE_PUSH(ldv);
+                fprintf(stderr, "[DEBUG LD] after push, sp=%d\n", *stack_global_get_sp(STACK_LONG_DOUBLE));
+                break;
+            }
+            case OPC_UINT_TO_LONG_DOUBLE: {
+                unsigned int uv = UINT_POP();
+                long double ldv = (long double)uv;
+                fprintf(stderr, "[DEBUG LD] UINT_TO_LONG_DOUBLE: uint_val=%u, ld_val=%Lf\n", uv, (long double)ldv);
+                LONG_DOUBLE_PUSH(ldv);
+                fprintf(stderr, "[DEBUG LD] after push, sp=%d\n", *stack_global_get_sp(STACK_LONG_DOUBLE));
+                break;
+            }
+            case OPC_FLOAT_TO_LONG_DOUBLE: {
+                float fv = FLOAT_POP();
+                long double ldv = (long double)fv;
+                fprintf(stderr, "[DEBUG LD] FLOAT_TO_LONG_DOUBLE: float_val=%f, ld_val=%Lf\n", (double)fv, (long double)ldv);
+                LONG_DOUBLE_PUSH(ldv);
+                fprintf(stderr, "[DEBUG LD] after push, sp=%d\n", *stack_global_get_sp(STACK_LONG_DOUBLE));
+                break;
+            }
+            case OPC_DOUBLE_TO_LONG_DOUBLE: {
+                double dv = DOUBLE_POP();
+                long double ldv = (long double)dv;
+                fprintf(stderr, "[DEBUG LD] DOUBLE_TO_LONG_DOUBLE: double_val=%f, ld_val=%Lf, sizeof(ld)=%d\n", dv, (long double)ldv, (int)sizeof(long double));
+                LONG_DOUBLE_PUSH(ldv);
+                fprintf(stderr, "[DEBUG LD] after push, sp=%d\n", *stack_global_get_sp(STACK_LONG_DOUBLE));
+                break;
+            }
+            case OPC_LONG_LONG_TO_LONG_DOUBLE: {
+                long long llv = LONG_LONG_POP();
+                long double ldv = (long double)llv;
+                fprintf(stderr, "[DEBUG LD] LONG_LONG_TO_LONG_DOUBLE: ll_val=%lld, ld_val=%Lf\n", llv, (long double)ldv);
+                LONG_DOUBLE_PUSH(ldv);
+                fprintf(stderr, "[DEBUG LD] after push, sp=%d\n", *stack_global_get_sp(STACK_LONG_DOUBLE));
                 break;
             }
             case OPC_BOOL_ARRAY_LIT: {

@@ -5,6 +5,7 @@
 #include "ir_compile.h"
 #include "lumyr_log.h"
 #include "ir_cgen.h"
+#include "ir_arith.h"
 #include "lumyr_ffi.h"
 #include "ast/ast_runtime_sym.h"
 #include "ir_opt.h"
@@ -1667,37 +1668,173 @@ static int c_print_args(Ctx* c, AstNode* args)
 
 /* 混合类型算术运算的类型提升辅助函数：根据源类型和目标类型发射对应的转换指令
    类型编号：1=int, 2=uint, 3=float, 4=double, 5=long long */
-static void emit_mixed_type_promote(Ctx* c, int src_type, int dst_type) {
-    if(src_type == dst_type) return;
-    switch(src_type) {
-        case 1: /* int */
-            if(dst_type == 2) { /* int -> uint: 都是32位，直接重新解释 */
-                /* 目前没有专用指令，int和uint栈分开，需要转换 */
-                /* 暂时用通用路径：从int栈弹出，压入uint栈 */
-                emit(c, OPC_INT_TO_UINT, 0, 0);
-            }
-            else if(dst_type == 3) emit(c, OPC_INT_TO_FLOAT, 0, 0);
-            else if(dst_type == 4) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
-            else if(dst_type == 5) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
+/* 根据目标类型和 Value，发射对应的专用常量加载指令
+   所有数据类型都直接压入对应的专用栈，不经过 Value 栈，实现零开销 */
+static void emit_typed_const(Ctx* c, int cast_type, Value v) {
+    switch(cast_type) {
+        /* 整数类型：a=常量值 */
+        case CAST_INT: case CAST_INT32:
+            emit(c, OPC_PUSH_INT_CONST, (int)v.v.i, 0);
             break;
-        case 2: /* uint */
-            if(dst_type == 1) emit(c, OPC_UINT_TO_INT, 0, 0);
-            else if(dst_type == 3) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
-            else if(dst_type == 4) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
-            else if(dst_type == 5) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
+        case CAST_UINT32:
+            emit(c, OPC_PUSH_UINT_CONST, (unsigned int)v.v.i, 0);
             break;
-        case 3: /* float */
-            if(dst_type == 4) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
-            else if(dst_type == 5) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
+        case CAST_INT8:
+            emit(c, OPC_PUSH_INT8_CONST, (int8_t)v.v.i, 0);
             break;
-        case 4: /* double */
-            if(dst_type == 5) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
+        case CAST_INT16: case CAST_SHORT:
+            emit(c, OPC_PUSH_INT16_CONST, (int16_t)v.v.i, 0);
             break;
-        case 5: /* long long */
-            if(dst_type == 3) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
-            else if(dst_type == 4) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
+        case CAST_UINT8: case CAST_UCHAR:
+            emit(c, OPC_PUSH_UINT8_CONST, (uint8_t)v.v.i, 0);
+            break;
+        case CAST_UINT16: case CAST_USHORT:
+            emit(c, OPC_PUSH_UINT16_CONST, (uint16_t)v.v.i, 0);
+            break;
+        case CAST_BYTE:
+            emit(c, OPC_PUSH_BYTE_CONST, (uint8_t)v.v.i, 0);
+            break;
+        case CAST_CHAR:
+            emit(c, OPC_PUSH_CHAR_CONST, (char)v.v.c, 0);
+            break;
+        case CAST_BOOL:
+            emit(c, OPC_PUSH_BOOL_CONST, v.v.b ? 1 : 0, 0);
+            break;
+        /* 64位整数类型：a=低32位, b=高32位 */
+        case CAST_INT64: case CAST_LONGLONG: {
+            long long llv = v.v.i;
+            emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(llv & 0xFFFFFFFF), (int)((llv >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        case CAST_LONG: {
+            long lv = (long)v.v.i;
+            emit(c, OPC_PUSH_LONG_CONST, (int)(lv & 0xFFFFFFFF), (int)((lv >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        case CAST_UINT64: case CAST_ULONG: {
+            unsigned long long ullv = (unsigned long long)v.v.i;
+            emit(c, OPC_PUSH_UINT64_CONST, (int)(ullv & 0xFFFFFFFF), (int)((ullv >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        case CAST_SIZE_T: {
+            size_t stv = (size_t)v.v.i;
+            emit(c, OPC_PUSH_SIZE_T_CONST, (int)(stv & 0xFFFFFFFF), (int)((stv >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        case CAST_SSIZE_T: {
+            ssize_t sstv = (ssize_t)v.v.i;
+            emit(c, OPC_PUSH_SSIZE_T_CONST, (int)(sstv & 0xFFFFFFFF), (int)((sstv >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        /* 浮点类型：a=常量池下标 */
+        case CAST_FLOAT: {
+            int const_idx = bf_const(c->fn, v);
+            emit(c, OPC_PUSH_FLOAT_CONST, const_idx, 0);
+            break;
+        }
+        case CAST_DOUBLE: {
+            int const_idx = bf_const(c->fn, v);
+            emit(c, OPC_PUSH_DOUBLE_CONST, const_idx, 0);
+            break;
+        }
+        /* long double：a=低32位, b=高32位（简化处理，后续优化） */
+        case CAST_LONG_DOUBLE: {
+            long double ldv = (long double)v.v.d;
+            /* long double 占16字节，简化为低32位和高32位传递 */
+            unsigned long long bits = 0;
+            memcpy(&bits, &ldv, sizeof(unsigned long long));
+            emit(c, OPC_PUSH_LONG_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
+            break;
+        }
+        /* 其他类型：默认使用 OPC_LOAD_CONST（后续逐步扩展） */
+        default:
+            emit(c, OPC_LOAD_CONST, bf_const(c->fn, v), 0);
             break;
     }
+}
+
+/* 根据 ExprType 类型返回对应的变量加载指令 */
+static OpCode get_load_var_opcode(int expr_type) {
+    switch(expr_type) {
+        case EXPR_TYPE_BOOL: return OPC_LOAD_BOOL_VAR;
+        case EXPR_TYPE_CHAR: return OPC_LOAD_CHAR_VAR;
+        case EXPR_TYPE_INT8: return OPC_LOAD_INT8_VAR;
+        case EXPR_TYPE_INT16: return OPC_LOAD_INT16_VAR;
+        case EXPR_TYPE_INT: return OPC_LOAD_INT_VAR;
+        case EXPR_TYPE_INT64: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_LONG_LONG: return OPC_LOAD_LONG_LONG_VAR;
+        case EXPR_TYPE_LONG: return OPC_LOAD_LONG_VAR;
+        case EXPR_TYPE_BYTE: return OPC_LOAD_BYTE_VAR;
+        case EXPR_TYPE_UINT8: return OPC_LOAD_UINT8_VAR;
+        case EXPR_TYPE_UINT16: return OPC_LOAD_UINT16_VAR;
+        case EXPR_TYPE_UINT: return OPC_LOAD_UINT_VAR;
+        case EXPR_TYPE_UINT64: return OPC_LOAD_UINT64_VAR;
+        case EXPR_TYPE_ULONG: return OPC_LOAD_ULONG_VAR;
+        case EXPR_TYPE_SIZE_T: return OPC_LOAD_SIZE_T_VAR;
+        case EXPR_TYPE_SSIZE_T: return OPC_LOAD_SSIZE_T_VAR;
+        case EXPR_TYPE_FLOAT: return OPC_LOAD_FLOAT_VAR;
+        case EXPR_TYPE_DOUBLE: return OPC_LOAD_DOUBLE_VAR;
+        case EXPR_TYPE_LONG_DOUBLE: return OPC_LOAD_LONG_DOUBLE_VAR;
+        default: return OPC_LOAD_VAR;
+    }
+}
+
+/* 根据 ExprType 类型返回对应的 TO_VALUE 指令 */
+static OpCode get_to_value_opcode(int expr_type) {
+    switch(expr_type) {
+        case EXPR_TYPE_INT: return OPC_INT_TO_VALUE;
+        case EXPR_TYPE_UINT: return OPC_UINT_TO_VALUE;
+        case EXPR_TYPE_FLOAT: return OPC_FLOAT_TO_VALUE;
+        case EXPR_TYPE_DOUBLE: return OPC_DOUBLE_TO_VALUE;
+        case EXPR_TYPE_LONG_LONG: return OPC_LONG_LONG_TO_VALUE;
+        default: return OPC_NOP; /* 其他类型暂时不支持专用 TO_VALUE 指令 */
+    }
+}
+
+static void emit_mixed_type_promote(Ctx* c, int src_type, int dst_type) {
+    if(src_type == dst_type) return;
+    
+    /* 先处理有专用转换指令的类型 */
+    if(src_type == EXPR_TYPE_INT) {
+        if(dst_type == EXPR_TYPE_UINT) { emit(c, OPC_INT_TO_UINT, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_INT_TO_FLOAT, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_INT_TO_LONG_LONG, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT_TO_LONG_DOUBLE, 0, 0); return; }
+    }
+    if(src_type == EXPR_TYPE_UINT) {
+        if(dst_type == EXPR_TYPE_INT) { emit(c, OPC_UINT_TO_INT, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_UINT_TO_FLOAT, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_UINT_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_UINT_TO_LONG_LONG, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_UINT_TO_LONG_DOUBLE, 0, 0); return; }
+    }
+    if(src_type == EXPR_TYPE_FLOAT) {
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_FLOAT_TO_LONG_DOUBLE, 0, 0); return; }
+    }
+    if(src_type == EXPR_TYPE_DOUBLE) {
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_DOUBLE_TO_LONG_DOUBLE, 0, 0); return; }
+    }
+    if(src_type == EXPR_TYPE_LONG_LONG) {
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_LONG_LONG_TO_LONG_DOUBLE, 0, 0); return; }
+    }
+    
+    /* 对于没有专用转换指令的类型，使用通用路径：
+       先从源类型专用栈转换到 Value 栈，然后再从 Value 栈转换到目标类型专用栈
+       注意：这需要目标类型也有专用栈和 TO_VALUE 指令，否则走完全通用路径 */
+    OpCode src_to_value = get_to_value_opcode(src_type);
+    if(src_to_value != OPC_NOP) {
+        emit(c, src_to_value, 0, 0);
+        /* 从 Value 栈转换到目标类型专用栈需要专用指令，暂时不支持
+           后续可以添加 VALUE_TO_* 系列指令 */
+    }
+    /* 如果没有专用转换指令，暂时不做转换，保持在源类型专用栈中
+       后续可以通过 Value 栈中转，或者添加更多专用转换指令 */
 }
 
 void c_expr(Ctx* c, AstNode* node)
@@ -2551,12 +2688,34 @@ void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_BYTE_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_BYTE;
                 } else {
+                    /* 通用赋值路径：根据右操作数类型选择对应的存储指令
+                       如果右操作数是已知类型的运算结果（在专用栈中），使用专用存储指令
+                       否则使用通用的 OPC_STORE_VAR（从 Value 栈读取） */
+                    int rhs_expr_type = arith_get_expr_type(c, node->u.assign.expr);
                     c_expr(c, node->u.assign.expr);
-                    emit(c, OPC_STORE_VAR, var_idx, 0);
+                    switch(rhs_expr_type) {
+                        case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
+                        case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = 1 /* CAST_DOUBLE */; break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
+                        case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
+                        default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
+                    }
                 }
             } else {
+                /* 通用赋值路径：根据右操作数类型选择对应的存储指令 */
+                int rhs_expr_type2 = arith_get_expr_type(c, node->u.assign.expr);
                 c_expr(c, node->u.assign.expr);
-                emit(c, OPC_STORE_VAR, var_idx, 0);
+                switch(rhs_expr_type2) {
+                    case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
+                    case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
+                    case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
+                    case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = 1 /* CAST_DOUBLE */; break;
+                    case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
+                    case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
+                    default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
+                }
             }
                         break;
         }
@@ -2845,91 +3004,97 @@ void c_expr(Ctx* c, AstNode* node)
             }
             /* 混合类型算术运算（类型提升，零包装零Value开销）
                类型提升规则：int/uint -> float -> double
-               先把小类型转换为大类型，然后执行大类型的算术运算 */
+               先把小类型转换为大类型，然后执行大类型的算术运算
+               只要有一个操作数是Value类型才走通用，其他的都走专用 */
             else if(is_int_arith || is_uint_arith || is_float_arith || is_double_arith || is_long_long_arith) {
                 int left_idx = -1, right_idx = -1;
-                int left_type = 0, right_type = 0; /* 0=none, 1=int, 2=uint, 3=float, 4=double, 5=long long */
-                if(left_is_int) { left_type = 1; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
-                else if(left_is_uint) { left_type = 2; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
-                else if(left_is_float) { left_type = 3; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
-                else if(left_is_double) { left_type = 4; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
-                else if(left_is_long_long) { left_type = 5; left_idx = bf_sym(c->fn, node->u.bin.left->u.varname); }
-                if(right_is_int) { right_type = 1; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
-                else if(right_is_uint) { right_type = 2; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
-                else if(right_is_float) { right_type = 3; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
-                else if(right_is_double) { right_type = 4; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
-                else if(right_is_long_long) { right_type = 5; right_idx = bf_sym(c->fn, node->u.bin.right->u.varname); }
+                /* 使用 arith_get_expr_type 获取左右操作数的类型（支持嵌套表达式）
+                   直接使用 ExprType 枚举，支持所有数据类型
+                   只要有一个操作数是Value类型才走通用，其他的都走专用 */
+                int left_type = arith_get_expr_type(c, node->u.bin.left);
+                int right_type = arith_get_expr_type(c, node->u.bin.right);
+                /* 如果是变量引用，获取变量索引 */
+                if(node->u.bin.left->type == AST_VAR && left_type > 0) {
+                    left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
+                }
+                if(node->u.bin.right->type == AST_VAR && right_type > 0) {
+                    right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
+                }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
                     fprintf(stderr, "[DEBUG MIXED] left_type=%d, right_type=%d\n", left_type, right_type);
-                    /* 类型提升规则：浮点类型(float=3/double=4)优先级高于整数类型(int=1/uint=2/long long=5)
-                       参考C语言标准：常用算术转换中，浮点类型总是优先于整数类型 */
-                    int left_is_float_type = (left_type == 3 || left_type == 4);
-                    int right_is_float_type = (right_type == 3 || right_type == 4);
-                    int result_type;
-                    if(left_is_float_type || right_is_float_type) {
-                        /* 有浮点类型：取优先级更高的浮点类型(double > float) */
-                        if(left_type == 4 || right_type == 4) result_type = 4; /* double */
-                        else result_type = 3; /* float */
-                    } else {
-                        fprintf(stderr, "[DEBUG MIXED] both int, left=%d, right=%d\n", left_type, right_type);
-                        /* 都是整数类型：取位宽更大的类型(long long > uint > int) */
-                        result_type = left_type > right_type ? left_type : right_type;
+                    /* 类型提升规则：参考C语言标准的常用算术转换
+                       1. long double 优先级最高
+                       2. double 次之
+                       3. float 再次之
+                       4. 整数类型按位宽和符号性提升
+                       ExprType 枚举的数值大小对应类型优先级，直接取较大值即可 */
+                    int result_type = (left_type > right_type) ? left_type : right_type;
+                    /* 特殊处理：如果有一个是浮点类型，结果取浮点类型中优先级较高的 */
+                    int left_is_float = (left_type >= EXPR_TYPE_FLOAT && left_type <= EXPR_TYPE_LONG_DOUBLE);
+                    int right_is_float = (right_type >= EXPR_TYPE_FLOAT && right_type <= EXPR_TYPE_LONG_DOUBLE);
+                    if(left_is_float || right_is_float) {
+                        result_type = (left_type > right_type) ? left_type : right_type;
                     }
                     fprintf(stderr, "[DEBUG MIXED] result_type=%d\n", result_type);
-                    /* 加载左操作数到对应专用栈 */
-                    if(left_type == 1) emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
-                    else if(left_type == 2) emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
-                    else if(left_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
-                    else if(left_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
-                    else if(left_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, left_idx, 0);
+                    /* 加载左操作数到对应专用栈
+                       对于变量引用使用 OPC_LOAD_*_VAR，对于嵌套表达式直接递归编译（结果已在专用栈） */
+                    if(node->u.bin.left->type == AST_VAR) {
+                        emit(c, get_load_var_opcode(left_type), left_idx, 0);
+                    } else {
+                        /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
+                        c_expr(c, node->u.bin.left);
+                    }
                     /* 左操作数类型提升 */
                     emit_mixed_type_promote(c, left_type, result_type);
-                    /* 加载右操作数到对应专用栈 */
-                    if(right_type == 1) emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
-                    else if(right_type == 2) emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
-                    else if(right_type == 3) emit(c, OPC_LOAD_FLOAT_VAR, right_idx, 0);
-                    else if(right_type == 4) emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
-                    else if(right_type == 5) emit(c, OPC_LOAD_LONG_LONG_VAR, right_idx, 0);
+                    /* 加载右操作数到对应专用栈
+                       对于变量引用使用 OPC_LOAD_*_VAR，对于嵌套表达式直接递归编译（结果已在专用栈） */
+                    if(node->u.bin.right->type == AST_VAR) {
+                        emit(c, get_load_var_opcode(right_type), right_idx, 0);
+                    } else {
+                        /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
+                        c_expr(c, node->u.bin.right);
+                    }
                     /* 右操作数类型提升 */
                     emit_mixed_type_promote(c, right_type, result_type);
-                    /* 执行大类型的算术运算（结果在大类型专用栈中） */
-                    if(result_type == 1) { /* int */
+                    /* 执行大类型的算术运算（结果在大类型专用栈中）
+                       使用 ExprType 枚举判断类型，支持所有数据类型 */
+                    if(result_type == EXPR_TYPE_INT) {
                         static const OpCode int_arith_map[] = {
                             [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
                             [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
                         };
                         emit(c, int_arith_map[bop], 0, 0);
-                    } else if(result_type == 2) { /* uint */
+                    } else if(result_type == EXPR_TYPE_UINT) {
                         static const OpCode uint_arith_map[] = {
                             [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
                             [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
                         };
                         emit(c, uint_arith_map[bop], 0, 0);
-                    } else if(result_type == 3) { /* float */
+                    } else if(result_type == EXPR_TYPE_FLOAT) {
                         static const OpCode float_arith_map[] = {
                             [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
                             [OP_DIV] = OPC_FLOAT_DIV,
                         };
                         emit(c, float_arith_map[bop], 0, 0);
-                    } else if(result_type == 4) { /* double */
+                    } else if(result_type == EXPR_TYPE_DOUBLE) {
                         static const OpCode double_arith_map[] = {
                             [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
                             [OP_DIV] = OPC_DOUBLE_DIV,
                         };
                         emit(c, double_arith_map[bop], 0, 0);
-                    } else if(result_type == 5) { /* long long */
+                    } else if(result_type == EXPR_TYPE_LONG_LONG) {
                         static const OpCode long_long_arith_map[] = {
                             [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
                             [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
                         };
                         emit(c, long_long_arith_map[bop], 0, 0);
-                    } else if(result_type == 5) { /* long long */
-                        static const OpCode long_long_arith_map[] = {
-                            [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
-                            [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
+                    } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
+                        static const OpCode long_double_arith_map[] = {
+                            [OP_ADD] = OPC_LONG_DOUBLE_ADD, [OP_SUB] = OPC_LONG_DOUBLE_SUB, [OP_MUL] = OPC_LONG_DOUBLE_MUL,
+                            [OP_DIV] = OPC_LONG_DOUBLE_DIV,
                         };
-                        emit(c, long_long_arith_map[bop], 0, 0);
+                        emit(c, long_double_arith_map[bop], 0, 0);
                     }
                     /* 结果保持在大类型专用栈中，后续操作通过上下文感知处理
                        （赋值时用 OPC_STORE_FLOAT_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_FLOAT/OPC_PRINT_DOUBLE） */
@@ -3098,10 +3263,93 @@ void c_expr(Ctx* c, AstNode* node)
                         default: fv = lumyr_make_int(llv); break;
                     }
                 }
-                emit(c, OPC_LOAD_CONST, bf_const(c->fn, fv), 0);
+                /* 使用专用常量加载指令，直接压入对应的专用栈，不经过 Value 栈，实现零开销 */
+                emit_typed_const(c, ct, fv);
                 break;
             }
+            /* Direct conversion between dedicated stacks */
+            int inner_expr_type = arith_get_expr_type(c, node->u.type_annotation.expr);
+            int target_cast_type = node->u.type_annotation.cast_type;
+            fprintf(stderr, "[DEBUG TYPE_ANNOT] inner_expr_type=%d, target_cast_type=%d\n", inner_expr_type, target_cast_type);
             c_expr(c, node->u.type_annotation.expr);
+            /* 如果内部表达式是已知类型，直接从专用栈转换到目标类型专用栈 */
+            if(inner_expr_type != EXPR_TYPE_NONE && inner_expr_type != EXPR_TYPE_BOOL && inner_expr_type != EXPR_TYPE_CHAR) {
+                /* 目标类型映射到 ExprType */
+                int target_expr_type = EXPR_TYPE_NONE;
+                switch(target_cast_type) {
+                    case CAST_INT: case CAST_INT32: target_expr_type = EXPR_TYPE_INT; break;
+                    case CAST_UINT32: target_expr_type = EXPR_TYPE_UINT; break;
+                    case CAST_FLOAT: target_expr_type = EXPR_TYPE_FLOAT; break;
+                    case CAST_DOUBLE: target_expr_type = EXPR_TYPE_DOUBLE; break;
+                    case CAST_LONGLONG: case CAST_INT64: case CAST_LONG: target_expr_type = EXPR_TYPE_LONG_LONG; break;
+                    case CAST_LONG_DOUBLE: target_expr_type = EXPR_TYPE_LONG_DOUBLE; break;
+                    default: target_expr_type = EXPR_TYPE_NONE; break;
+                }
+                /* 如果目标类型也是已知类型，直接在专用栈之间转换
+                   按照用户设计思路：计算结果用什么栈，取决于接收方声明的什么类型
+                   直接在专用栈之间转换，不需要中间转换到 Value 栈 */
+                if(target_expr_type != EXPR_TYPE_NONE) {
+                    if(inner_expr_type != target_expr_type) {
+                        /* 使用专用栈之间的直接转换指令 */
+                        if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_INT_TO_FLOAT, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_UINT) emit(c, OPC_INT_TO_UINT, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_INT) emit(c, OPC_UINT_TO_INT, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
+                        /* 转换到 long double 的专用指令 */
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT_TO_LONG_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_UINT_TO_LONG_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_FLOAT_TO_LONG_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_DOUBLE_TO_LONG_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_LONG_LONG_TO_LONG_DOUBLE, 0, 0);
+                        else {
+                            /* 没有直接转换指令，先转换到 Value 栈，然后再转换 */
+                            switch(inner_expr_type) {
+                                case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                                default: break;
+                            }
+                        }
+                    }
+                    /* 转换完成后，结果在目标类型专用栈中，需要转换到 Value 栈供后续使用
+                       注意：long double 没有 TO_VALUE 指令，因为 long double 比较特殊，
+                       需要先转换为 double，然后再转换为 Value */
+                    switch(target_expr_type) {
+                        case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_LONG_DOUBLE:
+                            /* long double 比较特殊，保持在 long double 专用栈中
+                               后续赋值给 long double 变量时直接从 long double 专用栈存储
+                               print long double 时直接从 long double 专用栈打印 */
+                            break;
+                        default: break;
+                    }
+                } else {
+                    /* 目标类型不是已知类型，先转换到 Value 栈，然后再转换 */
+                    switch(inner_expr_type) {
+                        case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                        default: break;
+                    }
+                }
+            }
             static const OpCode cmap[] = {
                 [CAST_INT] = OPC_CAST_INT, [CAST_DOUBLE] = OPC_CAST_DOUBLE,
                 [CAST_CHAR] = OPC_CAST_CHAR, [CAST_BOOL] = OPC_CAST_BOOL,
