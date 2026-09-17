@@ -117,7 +117,7 @@ C_SRCS += $(LEX_GEN) $(YACC_GEN_C)
 OBJS := $(C_SRCS:.c=.o)
 
 # ========== Windows 兼容层 ==========
-WIN_DEPS := third_party/windows
+WIN_DEPS := prebuilt/windows
 ifeq ($(OS_NAME),windows)
     export PATH := $(CURDIR)/$(WIN_DEPS)/tools/winflexbison;$(PATH)
     CFLAGS += -I$(WIN_DEPS)/include -DCURL_STATICLIB
