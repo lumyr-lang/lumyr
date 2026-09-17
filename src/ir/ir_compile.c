@@ -2078,6 +2078,32 @@ void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
             }
+            /* 优化0d：赋值为 <double>字面量 形式时，使用 OPC_PUSH_DOUBLE_CONST + OPC_STORE_DOUBLE_VAR
+               零包装零重复提取，直接把字面量值压入 double 栈并存储到 double 变量 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_DOUBLE &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_NUM) {
+                double d_val = node->u.assign.expr->u.type_annotation.expr->u.num;
+                uint64_t bits = 0;
+                memcpy(&bits, &d_val, sizeof(double));
+                emit(c, OPC_PUSH_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
+                emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
+            }
+            /* 优化0f：赋值为 <float>字面量 形式时，使用 OPC_PUSH_FLOAT_CONST + OPC_STORE_FLOAT_VAR
+               零包装零重复提取，直接把字面量值压入 float 栈并存储到 float 变量 */
+            else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
+               node->u.assign.expr->u.type_annotation.cast_type == CAST_FLOAT &&
+               node->u.assign.expr->u.type_annotation.expr &&
+               node->u.assign.expr->u.type_annotation.expr->type == AST_NUM) {
+                float f_val = (float)node->u.assign.expr->u.type_annotation.expr->u.num;
+                uint32_t bits = 0;
+                memcpy(&bits, &f_val, sizeof(float));
+                emit(c, OPC_PUSH_FLOAT_CONST, (int)bits, 0);
+                emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                c->fn->var_type_tags[var_idx] = CAST_FLOAT;
+            }
             /* 优化0：赋值为 <int>字面量 形式时，使用 OPC_PUSH_INT_CONST + OPC_STORE_INT_VAR
                零包装零重复提取，直接把字面量值压入 int 栈并存储到 int 变量
                避免创建 Value 再提取的开销

@@ -378,10 +378,11 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_PUSH_DOUBLE_CONST: {
-                /* double 常量：从常量池获取 double 值，直接压入 double 栈
-                   用于 <double>3.14 字面量赋值等场景，避免创建 Value 再提取的开销
-                   直接从 bf->consts[in.a].v.d 获取原始 double 值 */
-                double dv = bf->consts[in.a].v.d;
+                /* double 常量：从 a=低32位, b=高32位 重组 double 值，直接压入 double 栈
+                   用于 <double>3.14 字面量赋值等场景，避免创建 Value 再提取的开销 */
+                uint64_t bits = ((uint64_t)(uint32_t)in.b << 32) | (uint32_t)in.a;
+                double dv;
+                memcpy(&dv, &bits, sizeof(double));
                 DOUBLE_PUSH(dv);
                 break;
             }
@@ -482,9 +483,11 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 break;
             }
             case OPC_PUSH_FLOAT_CONST: {
-                /* float 常量：从常量池获取 float 值，直接压入 float 栈
+                /* float 常量：从 a=位模式 重组 float 值，直接压入 float 栈
                    用于 <float>3.14 字面量赋值等场景，避免创建 Value 再提取的开销 */
-                float fv = (float)bf->consts[in.a].v.f;
+                uint32_t bits = (uint32_t)in.a;
+                float fv;
+                memcpy(&fv, &bits, sizeof(float));
                 FLOAT_PUSH(fv);
                 break;
             }
