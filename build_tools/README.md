@@ -7,13 +7,13 @@
 ### Windows
 ```bash
 # 下载所有依赖源码
-download_deps.bat
+scripts\download_deps.bat
 ```
 
 ### macOS / Linux
 ```bash
 # 下载所有依赖源码
-./download_deps.sh
+./scripts/download_deps.sh
 ```
 
 ## 目录结构
