@@ -208,12 +208,33 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         }
     }
 
-    /* 二元运算：递归判断左右操作数类型，取较高优先级的类型 */
+    /* 二元运算：递归判断左右操作数类型
+       规则：
+       - 两个都是已知类型 → 类型提升
+       - 一个已知一个字面量 → 字面量提升为已知类型
+       - 一个已知一个 Value 变量 → 整体走通用路径（NONE），因为 Value 变量不能直接转专用栈 */
     if(node->type == AST_BINOP) {
         ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
         ExprType right_type = arith_get_expr_type(c, node->u.bin.right);
-        if(left_type == EXPR_TYPE_NONE) return right_type;
-        if(right_type == EXPR_TYPE_NONE) return left_type;
+        /* 左操作数未知：检查是不是字面量（可以提升）还是 Value 变量（不能提升） */
+        if(left_type == EXPR_TYPE_NONE) {
+            /* 左操作数是字面量（AST_INT/AST_NUM 等），可以提升为右操作数类型 */
+            if(node->u.bin.left->type == AST_INT || node->u.bin.left->type == AST_NUM) {
+                return right_type;
+            }
+            /* 左操作数是 Value 变量或其他复杂表达式，不能直接转专用栈 */
+            return EXPR_TYPE_NONE;
+        }
+        /* 右操作数未知：检查是不是字面量（可以提升）还是 Value 变量（不能提升） */
+        if(right_type == EXPR_TYPE_NONE) {
+            /* 右操作数是字面量，可以提升为左操作数类型 */
+            if(node->u.bin.right->type == AST_INT || node->u.bin.right->type == AST_NUM) {
+                return left_type;
+            }
+            /* 右操作数是 Value 变量或其他复杂表达式，不能直接转专用栈 */
+            return EXPR_TYPE_NONE;
+        }
+        /* 两个都是已知类型，取较高优先级 */
         return (left_type > right_type) ? left_type : right_type;
     }
 

@@ -2594,7 +2594,7 @@ void c_expr(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, binop->u.bin.right);
                     int left_is_float = is_float_var(c, binop->u.bin.left);
                     int right_is_float = is_float_var(c, binop->u.bin.right);
-                    ExprType result_type = get_expr_type(c, binop);
+                    ExprType result_type = arith_get_expr_type(c, binop);
                     if(result_type == EXPR_TYPE_INT) {
                         /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT_VAR */
                         c_expr(c, binop);
@@ -3153,9 +3153,29 @@ void c_expr(Ctx* c, AstNode* node)
                 if(node->u.bin.right->type == AST_VAR && right_type > 0) {
                     right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
                 }
-                /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
-                if(left_type > 0 && right_type > 0) {
-                    fprintf(stderr, "[DEBUG MIXED] left_type=%d, right_type=%d\n", left_type, right_type);
+                /* 只有当左右操作数至少一个是已知类型时，才使用混合类型优化
+                   支持：两个都是已知类型 / 一个已知一个字面量（字面量提升为已知类型） */
+                if(left_type > 0 || right_type > 0) {
+                    /* 如果右操作数是字面量（未知类型），提升为左操作数的类型 */
+                    if(right_type == 0 && node->u.bin.right->type == AST_INT && left_type > 0) {
+                        right_type = left_type;
+                    }
+                    /* 如果左操作数是字面量（未知类型），提升为右操作数的类型 */
+                    if(left_type == 0 && node->u.bin.left->type == AST_INT && right_type > 0) {
+                        left_type = right_type;
+                    }
+                    /* 如果提升后还是没有类型，走通用路径 */
+                    if(left_type == 0 || right_type == 0) {
+                        /* 左右操作数不都是已知类型，走通用路径 */
+                        c_expr(c, node->u.bin.left);
+                        c_expr(c, node->u.bin.right);
+                        static const OpCode map[] = {
+                            [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
+                            [OP_MOD] = OPC_MOD,
+                        };
+                        emit(c, map[bop], 0, 0);
+                        break;
+                    }
                     /* 类型提升规则：参考C语言标准的常用算术转换
                        1. long double 优先级最高
                        2. double 次之
@@ -3169,11 +3189,24 @@ void c_expr(Ctx* c, AstNode* node)
                     if(left_is_float || right_is_float) {
                         result_type = (left_type > right_type) ? left_type : right_type;
                     }
-                    fprintf(stderr, "[DEBUG MIXED] result_type=%d\n", result_type);
                     /* 加载左操作数到对应专用栈
-                       对于变量引用使用 OPC_LOAD_*_VAR，对于嵌套表达式直接递归编译（结果已在专用栈） */
+                       对于变量引用使用 OPC_LOAD_*_VAR，对于字面量使用 OPC_PUSH_*_CONST，
+                       对于嵌套表达式直接递归编译（结果已在专用栈） */
                     if(node->u.bin.left->type == AST_VAR) {
                         emit(c, get_load_var_opcode(left_type), left_idx, 0);
+                    } else if(node->u.bin.left->type == AST_INT && left_type == EXPR_TYPE_INT) {
+                        /* 字面量 int：直接压入 int 专用栈（零开销） */
+                        emit(c, OPC_PUSH_INT_CONST, node->u.bin.left->u.inum, 0);
+                    } else if(node->u.bin.left->type == AST_INT && left_type == EXPR_TYPE_INT64) {
+                        /* 字面量 int 提升为 int64：压入 int64 专用栈 */
+                        long long llv = (long long)node->u.bin.left->u.inum;
+                        emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(llv & 0xFFFFFFFF), (int)((llv >> 32) & 0xFFFFFFFF));
+                    } else if(node->u.bin.left->type == AST_NUM && left_type == EXPR_TYPE_DOUBLE) {
+                        /* 字面量 double：直接压入 double 专用栈 */
+                        double dv = node->u.bin.left->u.num;
+                        union { double d; int i[2]; } u;
+                        u.d = dv;
+                        emit(c, OPC_PUSH_DOUBLE_CONST, u.i[0], u.i[1]);
                     } else {
                         /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
                         c_expr(c, node->u.bin.left);
@@ -3181,9 +3214,24 @@ void c_expr(Ctx* c, AstNode* node)
                     /* 左操作数类型提升 */
                     emit_mixed_type_promote(c, left_type, result_type);
                     /* 加载右操作数到对应专用栈
-                       对于变量引用使用 OPC_LOAD_*_VAR，对于嵌套表达式直接递归编译（结果已在专用栈） */
+                       对于变量引用使用 OPC_LOAD_*_VAR，对于字面量使用 OPC_PUSH_*_CONST，
+                       对于嵌套表达式直接递归编译（结果已在专用栈） */
                     if(node->u.bin.right->type == AST_VAR) {
                         emit(c, get_load_var_opcode(right_type), right_idx, 0);
+                    } else if(node->u.bin.right->type == AST_INT && right_type == EXPR_TYPE_INT) {
+                        /* 字面量 int：直接压入 int 专用栈（零开销） */
+                        emit(c, OPC_PUSH_INT_CONST, node->u.bin.right->u.inum, 0);
+                    } else if(node->u.bin.right->type == AST_INT && right_type == EXPR_TYPE_INT64) {
+                        /* 字面量 int 提升为 int64：压入 int64 专用栈 */
+                        long long llv = (long long)node->u.bin.right->u.inum;
+                        emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(llv & 0xFFFFFFFF), (int)((llv >> 32) & 0xFFFFFFFF));
+                    } else if(node->u.bin.right->type == AST_NUM && right_type == EXPR_TYPE_DOUBLE) {
+                        /* 字面量 double：直接压入 double 专用栈 */
+                        double dv = node->u.bin.right->u.num;
+                        /* double 需要拆成两个 int 传入（和 PUSH_DOUBLE_CONST 的 VM 实现一致） */
+                        union { double d; int i[2]; } u;
+                        u.d = dv;
+                        emit(c, OPC_PUSH_DOUBLE_CONST, u.i[0], u.i[1]);
                     } else {
                         /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
                         c_expr(c, node->u.bin.right);
