@@ -97,6 +97,12 @@ int arith_is_int16_var(Ctx* c, AstNode* node) {
     return ct == CAST_INT16;
 }
 
+int arith_is_short_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    CastKind ct = get_var_cast_type(c, node->u.varname);
+    return ct == CAST_SHORT;
+}
+
 int arith_is_int32_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
     CastKind ct = get_var_cast_type(c, node->u.varname);
@@ -119,6 +125,18 @@ int arith_is_uint16_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
     CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT16;
+}
+
+int arith_is_uchar_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    CastKind ct = get_var_cast_type(c, node->u.varname);
+    return ct == CAST_UCHAR;
+}
+
+int arith_is_ushort_var(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_VAR) return 0;
+    CastKind ct = get_var_cast_type(c, node->u.varname);
+    return ct == CAST_USHORT;
 }
 
 int arith_is_uint32_var(Ctx* c, AstNode* node) {
