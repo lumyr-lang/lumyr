@@ -521,6 +521,26 @@ static int is_float_typed_array_var(Ctx* c, const char* vname) {
     return (c->fn->var_type_tags && c->fn->var_type_tags[var_idx] == VAR_TYPE_FLOAT_ARRAY);
 }
 
+// 返回变量 vname 作为类型化数组时对应的 OPC_*_ARRAY_GET（元素直接压专用栈）；
+// 非类型化数组或元素类型无专用栈时返回 -1（调用方回退 OPC_INDEX_GET 压 Value 栈）。
+static int typed_array_get_op(Ctx* c, const char* vname) {
+    if(!c || !c->fn || !vname) return -1;
+    int var_idx = bf_sym(c->fn, vname);
+    if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return -1;
+    int tag = (c->fn->var_type_tags ? c->fn->var_type_tags[var_idx] : -1);
+    switch(tag) {
+        case VAR_TYPE_INT_ARRAY:    return OPC_INT_ARRAY_GET;
+        case VAR_TYPE_DOUBLE_ARRAY: return OPC_DOUBLE_ARRAY_GET;
+        case VAR_TYPE_FLOAT_ARRAY:  return OPC_FLOAT_ARRAY_GET;
+        case VAR_TYPE_UINT_ARRAY:   return OPC_UINT_ARRAY_GET;
+        case VAR_TYPE_BOOL_ARRAY:   return OPC_BOOL_ARRAY_GET;
+        case VAR_TYPE_CHAR_ARRAY:   return OPC_CHAR_ARRAY_GET;
+        case VAR_TYPE_BYTE_ARRAY:   return OPC_BYTE_ARRAY_GET;
+        case VAR_TYPE_INT8_ARRAY:   return OPC_INT8_ARRAY_GET;
+        default:                    return -1;
+    }
+}
+
 static int is_double_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
     int var_idx = bf_sym(c->fn, node->u.varname);
@@ -1650,6 +1670,7 @@ static int expr_type_to_value_op(ExprType et)
         case EXPR_TYPE_INT16:       return OPC_INT16_TO_VALUE;
         case EXPR_TYPE_SHORT:       return OPC_SHORT_TO_VALUE;
         case EXPR_TYPE_INT:         return OPC_INT_TO_VALUE;
+        case EXPR_TYPE_INT32:       return OPC_INT32_TO_VALUE;
         case EXPR_TYPE_INT64:       return OPC_INT64_TO_VALUE;
         case EXPR_TYPE_LONG_LONG:   return OPC_LONG_LONG_TO_VALUE;
         case EXPR_TYPE_LONG:        return OPC_LONG_TO_VALUE;
@@ -3387,6 +3408,17 @@ void c_expr(Ctx* c, AstNode* node)
                             [OP_DIV] = OPC_LONG_DOUBLE_DIV,
                         };
                         emit(c, long_double_arith_map[bop], 0, 0);
+                    } else {
+                        /* 没有专用算术指令的类型（long/ulong/size_t/ssize_t/bool/char/byte 等）：
+                           操作数已经按 result_type 提升并压在该类型专用栈上，
+                           搬回 Value 栈走通用算术（两值都已是 result_type）。 */
+                        emit(c, expr_type_to_value_op(result_type), 0, 0);
+                        emit(c, expr_type_to_value_op(result_type), 0, 0);
+                        static const OpCode gen_map[] = {
+                            [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL,
+                            [OP_DIV] = OPC_DIV, [OP_MOD] = OPC_MOD,
+                        };
+                        emit(c, gen_map[bop], 0, 0);
                     }
                     /* 结果保持在大类型专用栈中，后续操作通过上下文感知处理
                        （赋值时用 OPC_STORE_FLOAT_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_FLOAT/OPC_PRINT_DOUBLE） */
@@ -3834,20 +3866,20 @@ void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
-            /* 优化：double 类型化数组元素访问
-               如果数组是声明为 double 的类型化数组，使用 OPC_DOUBLE_ARRAY_GET 指令，
-               直接读取 double 值，压入 double 栈，零包装零转换 */
-            if(arr && arr->type == AST_VAR && is_double_typed_array_var(c, arr->u.varname)) {
-                c_expr(c, arr);
-                c_expr(c, idx);
-                emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
-            } else if(arr && arr->type == AST_VAR && is_float_typed_array_var(c, arr->u.varname)) {
-                /* 优化：float 类型化数组元素访问
-                   如果数组是声明为 float 的类型化数组，使用 OPC_FLOAT_ARRAY_GET 指令，
-                   直接读取 float 值，压入 float 栈，零包装零转换 */
-                c_expr(c, arr);
-                c_expr(c, idx);
-                emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
+            /* 优化：类型化数组元素访问
+               根据数组变量的 VAR_TYPE_*_ARRAY tag 选择对应的 OPC_*_ARRAY_GET，
+               直接读取元素压入对应专用栈，零包装零转换；无专用栈则回退通用 OPC_INDEX_GET */
+            if(arr && arr->type == AST_VAR) {
+                int get_op = typed_array_get_op(c, arr->u.varname);
+                if(get_op >= 0) {
+                    c_expr(c, arr);
+                    c_expr(c, idx);
+                    emit(c, get_op, 0, 0);
+                } else {
+                    c_expr(c, arr);
+                    c_expr(c, idx);
+                    emit(c, OPC_INDEX_GET, 0, 0);
+                }
             } else {
                 c_expr(c, arr);
                 c_expr(c, idx);
@@ -4499,13 +4531,20 @@ static void c_stmt(Ctx* c, AstNode* node)
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT16, 0, 0);
                         break;
-                    } else if(result_type == EXPR_TYPE_INT) {
+                    } else if(result_type == EXPR_TYPE_INT32) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT32, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT64) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT64, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_LONG || result_type == EXPR_TYPE_ULONG ||
+                              result_type == EXPR_TYPE_SIZE_T || result_type == EXPR_TYPE_SSIZE_T) {
+                        /* long/ulong/size_t/ssize_t 无专用算术指令：binop 经通用 ADD 结果已在 Value 栈，
+                           用通用 PRINT 弹出（不再插 *_TO_VALUE，否则从空专用栈下溢） */
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT, 0, 0);
                         break;
                     }
                 }

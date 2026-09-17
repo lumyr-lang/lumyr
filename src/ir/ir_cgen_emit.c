@@ -1080,6 +1080,66 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_double(__dv); }\n");
                 break;
             }
+            case OPC_BOOL_TO_VALUE: {
+                fprintf(out, "    { _Bool __xv = __bool_stack[--__bool_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__xv); }\n");
+                break;
+            }
+            case OPC_BYTE_TO_VALUE: {
+                fprintf(out, "    { unsigned char __xv = __byte_stack[--__byte_stack_sp]; __stk[__stk_sp++] = lumyr_make_byte(__xv); }\n");
+                break;
+            }
+            case OPC_CHAR_TO_VALUE: {
+                fprintf(out, "    { char __xv = __char_stack[--__char_stack_sp]; __stk[__stk_sp++] = lumyr_make_char(__xv); }\n");
+                break;
+            }
+            case OPC_INT8_TO_VALUE: {
+                fprintf(out, "    { int8_t __xv = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_int8(__xv); }\n");
+                break;
+            }
+            case OPC_INT16_TO_VALUE: {
+                fprintf(out, "    { int16_t __xv = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_int16(__xv); }\n");
+                break;
+            }
+            case OPC_INT32_TO_VALUE: {
+                fprintf(out, "    { int32_t __xv = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_int32(__xv); }\n");
+                break;
+            }
+            case OPC_INT64_TO_VALUE: {
+                fprintf(out, "    { int64_t __xv = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_int64(__xv); }\n");
+                break;
+            }
+            case OPC_LONG_TO_VALUE: {
+                fprintf(out, "    { long __xv = __long_stack[--__long_stack_sp]; __stk[__stk_sp++] = lumyr_make_long(__xv); }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_TO_VALUE: {
+                fprintf(out, "    { long double __xv = __long_double_stack[--__long_double_stack_sp]; __stk[__stk_sp++] = lumyr_make_long_double(__xv); }\n");
+                break;
+            }
+            case OPC_SIZE_T_TO_VALUE: {
+                fprintf(out, "    { size_t __xv = __size_t_stack[--__size_t_stack_sp]; __stk[__stk_sp++] = lumyr_make_size_t(__xv); }\n");
+                break;
+            }
+            case OPC_SSIZE_T_TO_VALUE: {
+                fprintf(out, "    { ssize_t __xv = __ssize_t_stack[--__ssize_t_stack_sp]; __stk[__stk_sp++] = lumyr_make_ssize_t(__xv); }\n");
+                break;
+            }
+            case OPC_UINT8_TO_VALUE: {
+                fprintf(out, "    { uint8_t __xv = __uint8_stack[--__uint8_stack_sp]; __stk[__stk_sp++] = lumyr_make_uint8(__xv); }\n");
+                break;
+            }
+            case OPC_UINT16_TO_VALUE: {
+                fprintf(out, "    { uint16_t __xv = __uint16_stack[--__uint16_stack_sp]; __stk[__stk_sp++] = lumyr_make_uint16(__xv); }\n");
+                break;
+            }
+            case OPC_UINT64_TO_VALUE: {
+                fprintf(out, "    { uint64_t __xv = __uint64_stack[--__uint64_stack_sp]; __stk[__stk_sp++] = lumyr_make_uint64(__xv); }\n");
+                break;
+            }
+            case OPC_ULONG_TO_VALUE: {
+                fprintf(out, "    { unsigned long __xv = __ulong_stack[--__ulong_stack_sp]; __stk[__stk_sp++] = lumyr_make_ulong(__xv); }\n");
+                break;
+            }
             case OPC_DOUBLE_GT: {
                 /* double 大于比较 */
                 fprintf(out, "    { double __db = __double_stack[--__double_stack_sp]; double __da = __double_stack[--__double_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__da > __db); }\n");

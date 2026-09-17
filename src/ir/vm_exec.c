@@ -424,6 +424,81 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_double(dv);
                 break;
             }
+            case OPC_BOOL_TO_VALUE: {
+                _Bool bv = BOOL_POP();
+                stack[sp++] = lumyr_make_bool(bv);
+                break;
+            }
+            case OPC_BYTE_TO_VALUE: {
+                unsigned char byv = BYTE_POP();
+                stack[sp++] = lumyr_make_byte(byv);
+                break;
+            }
+            case OPC_CHAR_TO_VALUE: {
+                char cv = CHAR_POP();
+                stack[sp++] = lumyr_make_char(cv);
+                break;
+            }
+            case OPC_INT8_TO_VALUE: {
+                int8_t i8v = INT8_POP();
+                stack[sp++] = lumyr_make_int8(i8v);
+                break;
+            }
+            case OPC_INT16_TO_VALUE: {
+                int16_t i16v = INT16_POP();
+                stack[sp++] = lumyr_make_int16(i16v);
+                break;
+            }
+            case OPC_INT32_TO_VALUE: {
+                int32_t i33v = INT32_POP();
+                stack[sp++] = lumyr_make_int32(i33v);
+                break;
+            }
+            case OPC_INT64_TO_VALUE: {
+                int64_t i64v = INT64_POP();
+                stack[sp++] = lumyr_make_int64(i64v);
+                break;
+            }
+            case OPC_LONG_TO_VALUE: {
+                long lv = LONG_POP();
+                stack[sp++] = lumyr_make_long(lv);
+                break;
+            }
+            case OPC_LONG_DOUBLE_TO_VALUE: {
+                long double ldv = LONG_DOUBLE_POP();
+                stack[sp++] = lumyr_make_long_double(ldv);
+                break;
+            }
+            case OPC_SIZE_T_TO_VALUE: {
+                size_t stv = SIZE_T_POP();
+                stack[sp++] = lumyr_make_size_t(stv);
+                break;
+            }
+            case OPC_SSIZE_T_TO_VALUE: {
+                ssize_t ssv = SSIZE_T_POP();
+                stack[sp++] = lumyr_make_ssize_t(ssv);
+                break;
+            }
+            case OPC_UINT8_TO_VALUE: {
+                uint8_t u8v = UINT8_POP();
+                stack[sp++] = lumyr_make_uint8(u8v);
+                break;
+            }
+            case OPC_UINT16_TO_VALUE: {
+                uint16_t u16v = UINT16_POP();
+                stack[sp++] = lumyr_make_uint16(u16v);
+                break;
+            }
+            case OPC_UINT64_TO_VALUE: {
+                uint64_t u64v = UINT64_POP();
+                stack[sp++] = lumyr_make_uint64(u64v);
+                break;
+            }
+            case OPC_ULONG_TO_VALUE: {
+                unsigned long ulv = ULONG_POP();
+                stack[sp++] = lumyr_make_ulong(ulv);
+                break;
+            }
             case OPC_DOUBLE_GT: {
                 /* double 大于比较：直接从 double 栈弹出两个 double，比较后结果(bool)压入 Value 栈 */
                 double b = DOUBLE_POP();

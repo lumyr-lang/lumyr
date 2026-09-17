@@ -190,6 +190,7 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             case CAST_INT16: return EXPR_TYPE_INT16;
             case CAST_SHORT: return EXPR_TYPE_SHORT;
             case CAST_INT: return EXPR_TYPE_INT;
+            case CAST_INT32: return EXPR_TYPE_INT32;
             case CAST_INT64: return EXPR_TYPE_INT64;
             case CAST_LONGLONG: return EXPR_TYPE_LONG_LONG;
             case CAST_LONG: return EXPR_TYPE_LONG;

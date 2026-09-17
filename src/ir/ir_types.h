@@ -42,6 +42,7 @@ typedef enum {
     EXPR_TYPE_FLOAT = 18,
     EXPR_TYPE_DOUBLE = 19,
     EXPR_TYPE_LONG_DOUBLE = 20,
+    EXPR_TYPE_INT32 = 21,   // 32位有符号定宽整数（独立 int32 专用栈）
     EXPR_TYPE_COUNT
 } ExprType;
 
