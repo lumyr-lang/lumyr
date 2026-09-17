@@ -950,12 +950,36 @@ static const char* opc_name(OpCode op)
 static void const_to_text(Value v, char* buf, int cap)
 {
     switch(v.type) {
-        case VAL_INT:    snprintf(buf, cap, "%lld", v.v.i); break;
-        case VAL_DOUBLE: snprintf(buf, cap, "%.17g", v.v.d); break;
-        case VAL_BOOL:   snprintf(buf, cap, "%s", v.v.b ? "true" : "false"); break;
-        case VAL_CHAR:   snprintf(buf, cap, "'%c'", v.v.c); break;
-        case VAL_STRING: snprintf(buf, cap, "\"%s\"", lumyr_str_cstr(&v)); break;
-        default:         snprintf(buf, cap, "nil"); break;
+        /* 有符号整数 */
+        case VAL_INT:        snprintf(buf, cap, "%lld", v.v.i); break;
+        case VAL_INT8:       snprintf(buf, cap, "%d", (int)v.v.i8); break;
+        case VAL_INT16:      snprintf(buf, cap, "%d", (int)v.v.i16); break;
+        case VAL_SHORT:      snprintf(buf, cap, "%d", (int)v.v.sh); break;
+        case VAL_INT32:      snprintf(buf, cap, "%d", (int)v.v.i32); break;
+        case VAL_INT64:      snprintf(buf, cap, "%lld", v.v.i64); break;
+        case VAL_LONG:       snprintf(buf, cap, "%ld", v.v.l); break;
+        case VAL_LONG_LONG:  snprintf(buf, cap, "%lld", v.v.ll); break;
+        /* 无符号整数 */
+        case VAL_UINT:       snprintf(buf, cap, "%u", (unsigned int)v.v.ui); break;
+        case VAL_UINT8:      snprintf(buf, cap, "%u", (unsigned int)v.v.u8); break;
+        case VAL_UINT16:     snprintf(buf, cap, "%u", (unsigned int)v.v.u16); break;
+        case VAL_UINT32:     snprintf(buf, cap, "%u", v.v.u32); break;
+        case VAL_UINT64:     snprintf(buf, cap, "%llu", v.v.u64); break;
+        case VAL_ULONG:      snprintf(buf, cap, "%lu", v.v.ul); break;
+        case VAL_BYTE:       snprintf(buf, cap, "%u", (unsigned int)v.v.by); break;
+        case VAL_UCHAR:      snprintf(buf, cap, "%u", (unsigned int)v.v.uc); break;
+        case VAL_USHORT:     snprintf(buf, cap, "%u", (unsigned int)v.v.us); break;
+        case VAL_SIZE_T:     snprintf(buf, cap, "%zu", v.v.st); break;
+        case VAL_SSIZE_T:    snprintf(buf, cap, "%zd", v.v.sst); break;
+        /* 浮点 */
+        case VAL_FLOAT:      snprintf(buf, cap, "%g", (double)v.v.f); break;
+        case VAL_DOUBLE:     snprintf(buf, cap, "%.17g", v.v.d); break;
+        case VAL_LONG_DOUBLE: snprintf(buf, cap, "%Lg", v.v.ld); break;
+        /* 其他 */
+        case VAL_BOOL:       snprintf(buf, cap, "%s", v.v.b ? "true" : "false"); break;
+        case VAL_CHAR:       snprintf(buf, cap, "'%c'", v.v.c); break;
+        case VAL_STRING:     snprintf(buf, cap, "\"%s\"", lumyr_str_cstr(&v)); break;
+        default:             snprintf(buf, cap, "nil"); break;
     }
 }
 
