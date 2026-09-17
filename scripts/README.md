@@ -25,6 +25,28 @@ chmod +x scripts/download_deps.sh
 ./scripts/download_deps.sh
 ```
 
+### build.bat (Windows)
+一键编译 Lumyr 编译器：
+- 自动检查工具链是否可用
+- 自动设置 PATH 环境变量
+- 执行完整的编译流程
+
+**使用方法：**
+```bash
+scripts\build.bat
+```
+
+### build.sh (macOS/Linux)
+一键编译 Lumyr 编译器：
+- 自动检查工具链是否可用
+- 执行完整的编译流程
+
+**使用方法：**
+```bash
+chmod +x scripts/build.sh
+./scripts/build.sh
+```
+
 ## 下载的工具版本
 
 | 工具 | 版本 | 目录 |
