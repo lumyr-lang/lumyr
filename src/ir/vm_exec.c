@@ -3733,6 +3733,73 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_bool(a != b);
                 break;
             }
+            /* ===== short 类型专用算术/比较运算指令 ===== */
+            case OPC_SHORT_ADD: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                SHORT_PUSH(a + b);
+                break;
+            }
+            case OPC_SHORT_SUB: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                SHORT_PUSH(a - b);
+                break;
+            }
+            case OPC_SHORT_MUL: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                SHORT_PUSH(a * b);
+                break;
+            }
+            case OPC_SHORT_DIV: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                SHORT_PUSH(a / b);
+                break;
+            }
+            case OPC_SHORT_MOD: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                SHORT_PUSH(a % b);
+                break;
+            }
+            case OPC_SHORT_GT: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a > b);
+                break;
+            }
+            case OPC_SHORT_LT: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a < b);
+                break;
+            }
+            case OPC_SHORT_GE: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a >= b);
+                break;
+            }
+            case OPC_SHORT_LE: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a <= b);
+                break;
+            }
+            case OPC_SHORT_EQ: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a == b);
+                break;
+            }
+            case OPC_SHORT_NE: {
+                short b = SHORT_POP();
+                short a = SHORT_POP();
+                stack[sp++] = lumyr_make_bool(a != b);
+                break;
+            }
             /* ===== int32 类型专用算术/比较运算指令 ===== */
             case OPC_INT32_ADD: {
                 int32_t b = INT32_POP();

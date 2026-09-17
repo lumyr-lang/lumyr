@@ -280,6 +280,18 @@ typedef enum {
     OPC_INT16_LE,       // 弹2个 int16，小于等于比较
     OPC_INT16_EQ,       // 弹2个 int16，等于比较
     OPC_INT16_NE,       // 弹2个 int16，不等于比较
+    /* ===== short 类型专用算术/比较运算指令（零开销优化） ===== */
+    OPC_SHORT_ADD,      // 弹2个 short，相加
+    OPC_SHORT_SUB,      // 弹2个 short，相减
+    OPC_SHORT_MUL,      // 弹2个 short，相乘
+    OPC_SHORT_DIV,      // 弹2个 short，相除
+    OPC_SHORT_MOD,      // 弹2个 short，取模
+    OPC_SHORT_GT,       // 弹2个 short，大于比较
+    OPC_SHORT_LT,       // 弹2个 short，小于比较
+    OPC_SHORT_GE,       // 弹2个 short，大于等于比较
+    OPC_SHORT_LE,       // 弹2个 short，小于等于比较
+    OPC_SHORT_EQ,       // 弹2个 short，等于比较
+    OPC_SHORT_NE,       // 弹2个 short，不等于比较
     /* ===== int32 类型专用算术/比较运算指令（零开销优化） ===== */
     OPC_INT32_ADD,      // 弹2个 int32，相加
     OPC_INT32_SUB,      // 弹2个 int32，相减

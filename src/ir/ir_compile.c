@@ -3124,6 +3124,17 @@ void c_expr(Ctx* c, AstNode* node)
                 }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
+                    /* short 类型走通用路径：没有专用算术运算指令，强行优化会导致栈不匹配 */
+                    if(left_type == EXPR_TYPE_SHORT || right_type == EXPR_TYPE_SHORT) {
+                        c_expr(c, node->u.bin.left);
+                        c_expr(c, node->u.bin.right);
+                        static const OpCode map[] = {
+                            [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
+                            [OP_MOD] = OPC_MOD,
+                        };
+                        emit(c, map[bop], 0, 0);
+                        break;
+                    }
                     fprintf(stderr, "[DEBUG MIXED] left_type=%d, right_type=%d\n", left_type, right_type);
                     /* 类型提升规则：参考C语言标准的常用算术转换
                        1. long double 优先级最高

@@ -421,6 +421,28 @@ int arith_try_optimize_binop(Ctx* c, AstNode* node, int bop) {
         return 1;
     }
 
+    /* short 类型不优化：short 栈与 int16 栈分离，专用算术指令从 int16 栈弹出，
+       强行复用会导致栈类型不匹配。short 走通用路径（Value 栈），性能损失可忽略。 */
+
+    /* ========== short 类型专用优化 ========== */
+    if(arith_is_short_var(c, left) && arith_is_short_var(c, right)) {
+        static const OpCode short_arith_map[] = {
+            [OP_ADD] = OPC_SHORT_ADD, [OP_SUB] = OPC_SHORT_SUB, [OP_MUL] = OPC_SHORT_MUL,
+            [OP_DIV] = OPC_SHORT_DIV, [OP_MOD] = OPC_SHORT_MOD,
+        };
+        static const OpCode short_cmp_map[] = {
+            [OP_GT] = OPC_SHORT_GT, [OP_LT] = OPC_SHORT_LT, [OP_GE] = OPC_SHORT_GE,
+            [OP_LE] = OPC_SHORT_LE, [OP_EQ] = OPC_SHORT_EQ, [OP_NE] = OPC_SHORT_NE,
+        };
+        emit_typed_arith(c, left->u.varname, right->u.varname, OPC_LOAD_SHORT_VAR,
+                         short_arith_map, short_cmp_map, bop, is_arith, is_cmp);
+        /* 算术运算结果在 short 栈，需要转换回 Value 栈 */
+        if(is_arith) {
+            emit(c, OPC_SHORT_TO_VALUE, 0, 0);
+        }
+        return 1;
+    }
+
     /* ========== int32 类型 ========== */
     if(arith_is_int32_var(c, left) && arith_is_int32_var(c, right)) {
         static const OpCode i32_arith_map[] = {

@@ -457,6 +457,13 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT16_GT: case OPC_INT16_LT: case OPC_INT16_GE:
         case OPC_INT16_LE: case OPC_INT16_EQ: case OPC_INT16_NE:
             return 1;
+        /* ===== short 类型专用算术/比较运算指令 ===== */
+        case OPC_SHORT_ADD: case OPC_SHORT_SUB: case OPC_SHORT_MUL:
+        case OPC_SHORT_DIV: case OPC_SHORT_MOD:
+            return 0;
+        case OPC_SHORT_GT: case OPC_SHORT_LT: case OPC_SHORT_GE:
+        case OPC_SHORT_LE: case OPC_SHORT_EQ: case OPC_SHORT_NE:
+            return 1;
         /* ===== int32 类型专用算术/比较运算指令 ===== */
         case OPC_INT32_ADD: case OPC_INT32_SUB: case OPC_INT32_MUL:
         case OPC_INT32_DIV: case OPC_INT32_MOD:
@@ -918,6 +925,17 @@ static const char* opc_name(OpCode op)
         case OPC_INT16_LE: return "INT16_LE";
         case OPC_INT16_EQ: return "INT16_EQ";
         case OPC_INT16_NE: return "INT16_NE";
+        case OPC_SHORT_ADD: return "SHORT_ADD";
+        case OPC_SHORT_SUB: return "SHORT_SUB";
+        case OPC_SHORT_MUL: return "SHORT_MUL";
+        case OPC_SHORT_DIV: return "SHORT_DIV";
+        case OPC_SHORT_MOD: return "SHORT_MOD";
+        case OPC_SHORT_GT: return "SHORT_GT";
+        case OPC_SHORT_LT: return "SHORT_LT";
+        case OPC_SHORT_GE: return "SHORT_GE";
+        case OPC_SHORT_LE: return "SHORT_LE";
+        case OPC_SHORT_EQ: return "SHORT_EQ";
+        case OPC_SHORT_NE: return "SHORT_NE";
         /* ===== int32 类型专用算术/比较运算指令 ===== */
         case OPC_INT32_ADD: return "INT32_ADD";
         case OPC_INT32_SUB: return "INT32_SUB";
