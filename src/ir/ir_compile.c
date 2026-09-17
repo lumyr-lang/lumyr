@@ -4091,6 +4091,10 @@ void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT16, 0, 0);
                         break;
+                    } else if(tag == CAST_SHORT) {
+                        emit(c, OPC_LOAD_SHORT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_SHORT, 0, 0);
+                        break;
                     } else if(tag == CAST_INT32) {
                         emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT32, 0, 0);

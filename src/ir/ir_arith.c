@@ -568,6 +568,10 @@ int arith_handle_print_result(Ctx* c, AstNode* single_arg, ExprType result_type)
             c_expr(c, single_arg);
             emit(c, OPC_PRINT_INT16, 0, 0);
             return 1;
+        case EXPR_TYPE_SHORT:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_SHORT, 0, 0);
+            return 1;
         case EXPR_TYPE_INT:
             c_expr(c, single_arg);
             emit(c, OPC_PRINT_INT, 0, 0);

@@ -207,7 +207,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_STORE_SIZE_T_VAR: case OPC_STORE_SSIZE_T_VAR:
         case OPC_STORE_LONG_DOUBLE_VAR:
             return +1;                       /* 从专用栈弹出，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_PRINT_INT8: case OPC_PRINT_INT16: case OPC_PRINT_INT32: case OPC_PRINT_INT64:
+        case OPC_PRINT_INT8: case OPC_PRINT_INT16: case OPC_PRINT_SHORT: case OPC_PRINT_INT32: case OPC_PRINT_INT64:
         case OPC_PRINT_UINT8: case OPC_PRINT_UINT16: case OPC_PRINT_UINT32: case OPC_PRINT_UINT64:
         case OPC_PRINT_LONG: case OPC_PRINT_ULONG:
         case OPC_PRINT_BOOL: case OPC_PRINT_CHAR: case OPC_PRINT_BYTE:
@@ -795,6 +795,7 @@ static const char* opc_name(OpCode op)
         case OPC_LOAD_SHORT_VAR: return "LOAD_SHORT_VAR";
         case OPC_STORE_SHORT_VAR: return "STORE_SHORT_VAR";
         case OPC_PRINT_INT16: return "PRINT_INT16";
+        case OPC_PRINT_SHORT: return "PRINT_SHORT";
         case OPC_LOAD_INT32_VAR: return "LOAD_INT32_VAR";
         case OPC_STORE_INT32_VAR: return "STORE_INT32_VAR";
         case OPC_PRINT_INT32: return "PRINT_INT32";

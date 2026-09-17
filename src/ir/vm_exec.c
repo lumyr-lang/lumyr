@@ -3452,6 +3452,12 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 printf("%d\n", (int)i16v);
                 break;
             }
+            case OPC_PRINT_SHORT: {
+                /* 从 short 栈弹出并打印（零开销，用于声明为 short 的变量） */
+                short sv = SHORT_POP();
+                printf("%d\n", (int)sv);
+                break;
+            }
             case OPC_PRINT_INT32: {
                 /* 从 int32 栈弹出并打印（零开销，用于声明为 int32 的变量） */
                 int32_t i32v = INT32_POP();
