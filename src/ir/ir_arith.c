@@ -217,11 +217,12 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         return (left_type > right_type) ? left_type : right_type;
     }
 
-    /* 字面量：根据字面量类型判断 */
-    if(node->type == AST_INT) return EXPR_TYPE_INT;
-    if(node->type == AST_NUM) return EXPR_TYPE_DOUBLE;
-    if(node->type == AST_BOOL) return EXPR_TYPE_BOOL;
-    if(node->type == AST_CHAR) return EXPR_TYPE_CHAR;
+    /* 字面量：不自动推导类型，保持动态 Value 类型
+       只有显式声明 <int>10 或变量有类型标记时才是专用类型 */
+    if(node->type == AST_INT) return EXPR_TYPE_NONE;
+    if(node->type == AST_NUM) return EXPR_TYPE_NONE;
+    if(node->type == AST_BOOL) return EXPR_TYPE_NONE;
+    if(node->type == AST_CHAR) return EXPR_TYPE_NONE;
 
     /* 类型转换：根据转换类型判断 */
     if(node->type == AST_CAST || node->type == AST_TYPE_ANNOTATION) {
