@@ -80,8 +80,13 @@ lumyr_debug.log
 *.log
 
 # Windows 预编译依赖库和工具（入库，免去其他开发者编译）
-!third_party/**/*.a
-!third_party/**/*.exe
+!prebuilt/**/*.a
+!prebuilt/**/*.exe
+!prebuilt/**/*.dll
+
+# vendor 和 build_tools 目录（源码不入库，通过下载脚本获取）
+vendor/
+build_tools/
 
 # 规则文件和实现步骤记录（不入库）
 development_rules.md
