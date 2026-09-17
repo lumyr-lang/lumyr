@@ -1,4 +1,5 @@
 #include "bytecode.h"
+#include "bytecode_stack.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,429 +147,115 @@ void bf_patch_b(BytecodeFunc* fn, int pos, int target)
     fn->code[pos].b = target;
 }
 
-// ---------------- 静态栈深度分析 ----------------
-
-// 指令对栈的净变化（执行一条指令前后 sp 差）
-static int op_stack_delta(BytecodeFunc* fn, Instruction in)
-{
-    switch(in.op) {
-        case OPC_LOAD_CONST:
-        case OPC_LOAD_VAR:
-        case OPC_LOAD_VAR_REF:
-        case OPC_GETFUNC:
-        case OPC_MKCLOSURE:
-        case OPC_PRE_INC: case OPC_POST_INC: case OPC_PRE_DEC: case OPC_POST_DEC:
-        case OPC_DUP:
-            return +1;
-        case OPC_LOAD_INT_VAR:
-            return 0;                        /* 压入 int 栈，不改变 Value 栈深度 */
-        case OPC_STORE_INT_VAR:
-            return +1;                       /* 从 int 栈弹出 int，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_PUSH_INT_CONST:
-            return 0;                        /* 压入 int 栈，不改变 Value 栈深度 */
-        case OPC_PUSH_UINT_CONST:
-            return 0;                        /* 压入 uint 栈，不改变 Value 栈深度 */
-        case OPC_PUSH_BOOL_CONST:
-            return 0;                        /* 压入 bool 栈，不改变 Value 栈深度 */
-        case OPC_PUSH_CHAR_CONST:
-            return 0;                        /* 压入 char 栈，不改变 Value 栈深度 */
-        case OPC_PUSH_BYTE_CONST:
-            return 0;                        /* 压入 byte 栈，不改变 Value 栈深度 */
-        case OPC_PUSH_INT8_CONST:
-        case OPC_PUSH_INT16_CONST:
-        case OPC_PUSH_SHORT_CONST:
-        case OPC_PUSH_INT32_CONST:
-        case OPC_PUSH_INT64_CONST:
-        case OPC_PUSH_UINT8_CONST:
-        case OPC_PUSH_UINT16_CONST:
-        case OPC_PUSH_UINT32_CONST:
-        case OPC_PUSH_UINT64_CONST:
-        case OPC_PUSH_LONG_CONST:
-        case OPC_PUSH_ULONG_CONST:
-        case OPC_PUSH_SIZE_T_CONST:
-        case OPC_PUSH_SSIZE_T_CONST:
-            return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
-        /* 新的专用指令（各类型专用栈，不改变 Value 栈深度） */
-        case OPC_LOAD_INT8_VAR: case OPC_LOAD_INT16_VAR: case OPC_LOAD_SHORT_VAR: case OPC_LOAD_INT32_VAR: case OPC_LOAD_INT64_VAR:
-        case OPC_LOAD_UINT8_VAR: case OPC_LOAD_UINT16_VAR: case OPC_LOAD_UINT32_VAR: case OPC_LOAD_UINT64_VAR:
-        case OPC_LOAD_LONG_VAR: case OPC_LOAD_ULONG_VAR:
-        case OPC_LOAD_BOOL_VAR: case OPC_LOAD_CHAR_VAR: case OPC_LOAD_BYTE_VAR:
-        case OPC_LOAD_FLOAT_VAR:
-        case OPC_LOAD_UINT_VAR:
-        case OPC_LOAD_SIZE_T_VAR: case OPC_LOAD_SSIZE_T_VAR:
-        case OPC_LOAD_LONG_DOUBLE_VAR:
-            return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
-        case OPC_STORE_INT8_VAR: case OPC_STORE_INT16_VAR: case OPC_STORE_SHORT_VAR: case OPC_STORE_INT32_VAR: case OPC_STORE_INT64_VAR:
-        case OPC_STORE_UINT8_VAR: case OPC_STORE_UINT16_VAR: case OPC_STORE_UINT32_VAR: case OPC_STORE_UINT64_VAR:
-        case OPC_STORE_LONG_VAR: case OPC_STORE_ULONG_VAR:
-        case OPC_STORE_BOOL_VAR: case OPC_STORE_CHAR_VAR: case OPC_STORE_BYTE_VAR:
-        case OPC_STORE_FLOAT_VAR:
-        case OPC_STORE_UINT_VAR:
-        case OPC_STORE_SIZE_T_VAR: case OPC_STORE_SSIZE_T_VAR:
-        case OPC_STORE_LONG_DOUBLE_VAR:
-            return +1;                       /* 从专用栈弹出，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_PRINT_INT8: case OPC_PRINT_INT16: case OPC_PRINT_SHORT: case OPC_PRINT_INT32: case OPC_PRINT_INT64:
-        case OPC_PRINT_UINT8: case OPC_PRINT_UINT16: case OPC_PRINT_UINT32: case OPC_PRINT_UINT64:
-        case OPC_PRINT_LONG: case OPC_PRINT_ULONG:
-        case OPC_PRINT_BOOL: case OPC_PRINT_CHAR: case OPC_PRINT_BYTE:
-            return 0;                        /* 从专用栈弹出并打印，不改变Value栈深度 */
-        case OPC_YIELD:
-            return 0;                        /* 生成器yield，栈不变 */
-        case OPC_INT_ADD: case OPC_INT_SUB: case OPC_INT_MUL: case OPC_INT_DIV: case OPC_INT_MOD:
-            return 0;                        /* 从 int 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
-        case OPC_INT_TO_VALUE:
-        case OPC_SHORT_TO_VALUE:
-            return +1;                       /* 从 int 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
-        case OPC_INT_GT: case OPC_INT_LT: case OPC_INT_GE: case OPC_INT_LE: case OPC_INT_EQ: case OPC_INT_NE:
-            return +1;                       /* 从 int 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
-        case OPC_INT_ARRAY_SET:
-            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 int 栈弹出值(1个) */
-        case OPC_UINT_ADD: case OPC_UINT_SUB: case OPC_UINT_MUL: case OPC_UINT_DIV: case OPC_UINT_MOD:
-            return 0;                        /* 从 uint 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
-        case OPC_UINT_TO_VALUE:
-            return +1;                       /* 从 uint 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
-        case OPC_UINT_GT: case OPC_UINT_LT: case OPC_UINT_GE: case OPC_UINT_LE: case OPC_UINT_EQ: case OPC_UINT_NE:
-            return +1;                       /* 从 uint 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
-        case OPC_UINT_ARRAY_SET:
-            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 uint 栈弹出值(1个) */
-        /* 类型转换指令：专用栈之间的转换，不改变 Value 栈深度（零包装零Value开销） */
-        case OPC_INT_TO_UINT:
-        case OPC_UINT_TO_INT:
-        case OPC_INT_TO_FLOAT:
-        case OPC_INT_TO_DOUBLE:
-        case OPC_UINT_TO_FLOAT:
-        case OPC_UINT_TO_DOUBLE:
-        case OPC_FLOAT_TO_DOUBLE:
-        case OPC_INT_TO_LONG_LONG:
-        case OPC_UINT_TO_LONG_LONG:
-        case OPC_FLOAT_TO_LONG_LONG:
-        case OPC_DOUBLE_TO_LONG_LONG:
-        case OPC_LONG_LONG_TO_FLOAT:
-        case OPC_LONG_LONG_TO_DOUBLE:
-            return 0;                        /* 从一个专用栈弹出1个，转换后压入另一个专用栈，不改变 Value 栈深度 */
-        /* 转换到 long double 的专用指令栈深度计算 */
-        case OPC_INT_TO_LONG_DOUBLE:
-        case OPC_UINT_TO_LONG_DOUBLE:
-        case OPC_FLOAT_TO_LONG_DOUBLE:
-        case OPC_DOUBLE_TO_LONG_DOUBLE:
-        case OPC_LONG_LONG_TO_LONG_DOUBLE:
-            return 0;                        /* 从一个专用栈弹出1个，转换后压入 long double 专用栈，不改变 Value 栈深度 */
-        /* long long 类型专用指令栈深度计算 */
-        case OPC_PUSH_LONG_LONG_CONST:
-        case OPC_LOAD_LONG_LONG_VAR:
-            return 0;                        /* 压入 long long 栈，不改变 Value 栈深度 */
-        case OPC_STORE_LONG_LONG_VAR:
-            return +1;                       /* 从 long long 栈弹出，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_LONG_LONG_ADD: case OPC_LONG_LONG_SUB: case OPC_LONG_LONG_MUL: case OPC_LONG_LONG_DIV: case OPC_LONG_LONG_MOD:
-            return 0;                        /* 从 long long 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
-        case OPC_LONG_LONG_TO_VALUE:
-            return +1;                       /* 从 long long 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
-        case OPC_LONG_LONG_GT: case OPC_LONG_LONG_LT: case OPC_LONG_LONG_GE: case OPC_LONG_LONG_LE: case OPC_LONG_LONG_EQ: case OPC_LONG_LONG_NE:
-            return +1;                       /* 从 long long 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
-        case OPC_LONG_LONG_ARRAY_SET:
-            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1 */
-        case OPC_LONG_LONG_ARRAY_LIT:
-            return +1;                       /* 弹 b 个元素，压入1个数组 Value，Value栈变化+1-b */
-        case OPC_LONG_LONG_ARRAY_GET:
-            return 0;                        /* 从 Value 栈弹出数组和索引(2个)，压入 long long 栈(1个)，Value栈变化-2+1=-1？不对，应该是0因为结果在专用栈 */
-        case OPC_PRINT_LONG_LONG:
-            return 0;                        /* 从 long long 栈弹出并打印，Value 栈不变 */
-        case OPC_POP:
-        case OPC_PEND_RETURN:
-        case OPC_THROW:
-            return -1;
-        case OPC_ADD: case OPC_SUB: case OPC_MUL: case OPC_DIV: case OPC_MOD:
-        case OPC_GT: case OPC_LT: case OPC_GE: case OPC_LE: case OPC_EQ: case OPC_NE: case OPC_IMPLEMENTS:
-            return -1;                       // 弹2压1
-        case OPC_NEG: case OPC_POS:
-        case OPC_LOGIC_NOT:
-        case OPC_CAST_INT: case OPC_CAST_DOUBLE: case OPC_CAST_CHAR:
-        case OPC_CAST_BOOL: case OPC_CAST_STRING: case OPC_CAST_ASCII:
-        case OPC_CAST_BYTE:
-        case OPC_CAST_INT8: case OPC_CAST_INT16: case OPC_CAST_INT32: case OPC_CAST_INT64:
-        case OPC_CAST_UINT8: case OPC_CAST_UINT16: case OPC_CAST_UINT32: case OPC_CAST_UINT64:
-        case OPC_CAST_LONG: case OPC_CAST_LONGLONG: case OPC_CAST_FLOAT:
-            return 0;                        // 弹1压1
-        case OPC_TRY:
-        case OPC_ENDTRY:
-        case OPC_FIN_PUSH:
-        case OPC_FINISH:
-            return 0;                        // 栈不变
-        case OPC_GET_ERR:
-            return 1;                        // 压 1 错误消息
-        case OPC_BUILTIN:
-            return -in.b + 1;                // 弹 b 实参，压 1 结果
-        case OPC_ARRAY_LIT:
-            return -in.b + 1;                // 弹 b 元素，压 1 数组
-        case OPC_INT_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 int 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_INT_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 int 栈（Value栈净变化-2） */
-        case OPC_LOAD_DOUBLE_VAR:
-        case OPC_PUSH_DOUBLE_CONST:
-            return 0;                        /* 压入 double 栈，不改变 Value 栈深度 */
-        case OPC_STORE_DOUBLE_VAR:
-            return +1;                       /* 从 double 栈弹出 double，包装成 Value 压回（赋值表达式有返回值） */
-        case OPC_DOUBLE_ADD: case OPC_DOUBLE_SUB: case OPC_DOUBLE_MUL: case OPC_DOUBLE_DIV:
-            return 0;                        /* 从 double 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
-        case OPC_DOUBLE_TO_VALUE:
-            return +1;                       /* 从 double 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
-        case OPC_DOUBLE_GT: case OPC_DOUBLE_LT: case OPC_DOUBLE_GE: case OPC_DOUBLE_LE: case OPC_DOUBLE_EQ: case OPC_DOUBLE_NE:
-            return +1;                       /* 从 double 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
-        case OPC_DOUBLE_ARRAY_SET:
-            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 double 栈弹出值(1个) */
-        case OPC_DOUBLE_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 double 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_DOUBLE_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 double 栈（Value栈净变化-2） */
-        case OPC_PUSH_FLOAT_CONST:
-            return 0;                        /* 压入 float 栈，不改变 Value 栈深度 */
-        case OPC_FLOAT_ADD: case OPC_FLOAT_SUB: case OPC_FLOAT_MUL: case OPC_FLOAT_DIV:
-            return 0;                        /* 从 float 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
-        case OPC_FLOAT_TO_VALUE:
-            return +1;                       /* 从 float 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
-        case OPC_FLOAT_GT: case OPC_FLOAT_LT: case OPC_FLOAT_GE: case OPC_FLOAT_LE: case OPC_FLOAT_EQ: case OPC_FLOAT_NE:
-            return +1;                       /* 从 float 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */
-        case OPC_FLOAT_ARRAY_SET:
-            return -1;                       /* 从 Value 栈弹出数组和索引(2个)，压入被设置的值(1个)，Value栈变化-1；从 float 栈弹出值(1个) */
-        case OPC_FLOAT_ARRAY_LIT:
-            if(in.a == 1) return +1;          /* 从 float 栈读取 b 元素，压 1 数组（Value 栈净变化 +1） */
-            return -in.b + 1;                  /* 从 Value 栈读取 b 元素，压 1 数组 */
-        case OPC_FLOAT_ARRAY_GET:
-            return -2;                          /* 弹 arr,idx（2个Value栈元素），压入 float 栈（Value栈净变化-2） */
-        case OPC_INT8_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_INT8_ARRAY_GET:
-            return -2;
-        case OPC_INT16_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_INT16_ARRAY_GET:
-            return -2;
-        case OPC_INT32_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_INT32_ARRAY_GET:
-            return -2;
-        case OPC_INT64_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_INT64_ARRAY_GET:
-            return -2;
-        case OPC_UINT8_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_UINT8_ARRAY_GET:
-            return -2;
-        case OPC_UINT16_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_UINT16_ARRAY_GET:
-            return -2;
-        case OPC_UINT32_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_UINT32_ARRAY_GET:
-            return -2;
-        case OPC_UINT64_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_UINT64_ARRAY_GET:
-            return -2;
-        case OPC_LONG_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_LONG_ARRAY_GET:
-            return -2;
-        case OPC_ULONG_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_ULONG_ARRAY_GET:
-            return -2;
-        case OPC_SIZE_T_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_SIZE_T_ARRAY_GET:
-            return -2;
-        case OPC_SSIZE_T_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_SSIZE_T_ARRAY_GET:
-            return -2;
-        case OPC_LONG_DOUBLE_ARRAY_LIT:
-            if(in.a == 1) return +1;
-            return -in.b + 1;
-        case OPC_LONG_DOUBLE_ARRAY_GET:
-            return -2;
-        case OPC_MAP_LIT:
-            return -2 * in.b + 1;            // 弹 2b 键值，压 1 字典
-        case OPC_CLASS_NEW:
-            return 1;                        // 压 1 class 实例
-        case OPC_INDEX_GET:
-            return -1;                       // 弹2压1
-        case OPC_INDEX_SET:
-            return -2;                       // 弹3压1
-        case OPC_LOAD_FIELD:
-            return 1;                        // 压1（字段值）
-        case OPC_STORE_FIELD:
-            return 0;                        // 弹1压1（表达式值）
-        case OPC_LOAD_STRUCT_PTR:
-            return 1;                        // 压1（struct 指针）
-        case OPC_STORE_NESTED_FIELD:
-            return 0;                        // 弹1压1（表达式值）
-        case OPC_STORE_VAR:
-            return 0;                        // 弹1压1
-        case OPC_PRINT:
-            return -(in.a > 0 ? in.a : 1);  /* 多参数打印：弹出所有参数（向后兼容：a<=0 时弹1） */
-        case OPC_PRINT_INT:
-        case OPC_PRINT_UINT:
-        case OPC_PRINT_FLOAT:
-        case OPC_PRINT_DOUBLE:
-        case OPC_PRINT_SIZE_T:
-        case OPC_PRINT_SSIZE_T:
-        case OPC_PRINT_LONG_DOUBLE:
-        case OPC_PUSH_LONG_DOUBLE_CONST:
-        case OPC_LONG_DOUBLE_ADD:
-        case OPC_LONG_DOUBLE_SUB:
-        case OPC_LONG_DOUBLE_MUL:
-        case OPC_LONG_DOUBLE_DIV:
-            return 0;  /* 从专用栈弹出值，不改变 Value 栈深度 */
-        case OPC_LONG_DOUBLE_GT:
-        case OPC_LONG_DOUBLE_LT:
-        case OPC_LONG_DOUBLE_GE:
-        case OPC_LONG_DOUBLE_LE:
-        case OPC_LONG_DOUBLE_EQ:
-        case OPC_LONG_DOUBLE_NE:
-            return 1;  /* 从专用栈弹出2个，比较结果 bool 压入 Value 栈 */
-        /* ===== int8 类型专用算术/比较运算指令 ===== */
-        case OPC_INT8_ADD: case OPC_INT8_SUB: case OPC_INT8_MUL:
-        case OPC_INT8_DIV: case OPC_INT8_MOD:
-            return 0;  /* 弹2个 int8，压1个 int8（专用栈），Value栈深度不变 */
-        case OPC_INT8_GT: case OPC_INT8_LT: case OPC_INT8_GE:
-        case OPC_INT8_LE: case OPC_INT8_EQ: case OPC_INT8_NE:
-            return 1;  /* 弹2个 int8，压1个 bool 到 Value 栈 */
-        /* ===== int16 类型专用算术/比较运算指令 ===== */
-        case OPC_INT16_ADD: case OPC_INT16_SUB: case OPC_INT16_MUL:
-        case OPC_INT16_DIV: case OPC_INT16_MOD:
-            return 0;
-        case OPC_INT16_GT: case OPC_INT16_LT: case OPC_INT16_GE:
-        case OPC_INT16_LE: case OPC_INT16_EQ: case OPC_INT16_NE:
-            return 1;
-        /* ===== short 类型专用算术/比较运算指令 ===== */
-        case OPC_SHORT_ADD: case OPC_SHORT_SUB: case OPC_SHORT_MUL:
-        case OPC_SHORT_DIV: case OPC_SHORT_MOD:
-            return 0;
-        case OPC_SHORT_GT: case OPC_SHORT_LT: case OPC_SHORT_GE:
-        case OPC_SHORT_LE: case OPC_SHORT_EQ: case OPC_SHORT_NE:
-            return 1;
-        /* ===== int32 类型专用算术/比较运算指令 ===== */
-        case OPC_INT32_ADD: case OPC_INT32_SUB: case OPC_INT32_MUL:
-        case OPC_INT32_DIV: case OPC_INT32_MOD:
-            return 0;
-        case OPC_INT32_GT: case OPC_INT32_LT: case OPC_INT32_GE:
-        case OPC_INT32_LE: case OPC_INT32_EQ: case OPC_INT32_NE:
-            return 1;
-        /* ===== int64 类型专用算术/比较运算指令 ===== */
-        case OPC_INT64_ADD: case OPC_INT64_SUB: case OPC_INT64_MUL:
-        case OPC_INT64_DIV: case OPC_INT64_MOD:
-            return 0;
-        case OPC_INT64_GT: case OPC_INT64_LT: case OPC_INT64_GE:
-        case OPC_INT64_LE: case OPC_INT64_EQ: case OPC_INT64_NE:
-            return 1;
-        case OPC_TO_BOOL:
-        case OPC_JMP:
-        case OPC_RETURN_NIL:
-        case OPC_HALT:
-        case OPC_NOP:
-            return 0;
-        case OPC_JMP_IF_FALSE:
-        case OPC_JMP_IF_TRUE:
-        case OPC_JMP_IF_NULL:
-            return -1;                       // 弹条件
-        case OPC_CALL:
-            return -in.b + 1;                // 弹 argc 实参，压 1 返回值
-        case OPC_CALLV:
-            return -in.b;                    // 弹 argc 实参 + 函数值，压 1 返回值
-        case OPC_RETURN:
-            return -1;                       // 弹返回值
-    }
-    return 0;
-}
-
-// 指令执行瞬间的额外栈高（压栈动作造成的峰值超出进入深度部分）
-static int op_stack_push(OpCode op)
-{
-    switch(op) {
-        case OPC_LOAD_CONST:
-        case OPC_LOAD_VAR:
-        case OPC_LOAD_VAR_REF:
-        case OPC_GETFUNC:
-        case OPC_MKCLOSURE:
-        case OPC_PRE_INC: case OPC_POST_INC: case OPC_PRE_DEC: case OPC_POST_DEC:
-        case OPC_DUP:
-        case OPC_LOAD_FIELD:
-        case OPC_INT_ARRAY_LIT:
-        case OPC_DOUBLE_ARRAY_LIT:
-        case OPC_FLOAT_ARRAY_LIT:
-        case OPC_UINT_ARRAY_LIT:
-        case OPC_BOOL_ARRAY_LIT:
-        case OPC_CHAR_ARRAY_LIT:
-        case OPC_BYTE_ARRAY_LIT:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
 int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
 {
     if(!fn || fn->code_len == 0) return 0;
     int n = fn->code_len;
-    int* d = (int*)malloc(sizeof(int) * n);
+    StackDelta* d = (StackDelta*)malloc(sizeof(StackDelta) * n);
     if(!d) { perror("bc_analyze_stack"); exit(EXIT_FAILURE); }
-    for(int i = 0; i < n; i++) d[i] = -1;
-    d[0] = 0;
+    /* value=-1 表示不可达；其他栈深度初始化为 0 */
+    for(int i = 0; i < n; i++) {
+        memset(&d[i], 0, sizeof(StackDelta));
+        d[i].value = -1;
+    }
+    d[0].value = 0;
+
+    /* 深度合并：如果目标点任一栈深度比当前记录大，则更新 */
+    #define STACK_MERGE(target_idx, src) do { \
+        StackDelta* _t = &d[target_idx]; \
+        const StackDelta* _s = &(src); \
+        if(_t->value < _s->value || _t->int_stack < _s->int_stack || \
+           _t->double_stack < _s->double_stack || _t->float_stack < _s->float_stack || \
+           _t->uint_stack < _s->uint_stack || _t->bool_stack < _s->bool_stack || \
+           _t->char_stack < _s->char_stack || _t->byte_stack < _s->byte_stack || \
+           _t->short_stack < _s->short_stack || _t->int8_stack < _s->int8_stack || \
+           _t->int16_stack < _s->int16_stack || _t->int32_stack < _s->int32_stack || \
+           _t->int64_stack < _s->int64_stack || _t->uint8_stack < _s->uint8_stack || \
+           _t->uint16_stack < _s->uint16_stack || _t->uint32_stack < _s->uint32_stack || \
+           _t->uint64_stack < _s->uint64_stack || _t->long_stack < _s->long_stack || \
+           _t->ulong_stack < _s->ulong_stack || _t->size_t_stack < _s->size_t_stack || \
+           _t->ssize_t_stack < _s->ssize_t_stack || \
+           _t->long_double_stack < _s->long_double_stack || \
+           _t->long_long_stack < _s->long_long_stack) { \
+            *_t = *_s; changed = 1; \
+        } \
+    } while(0)
+
+    /* 检查所有栈是否下溢 */
+    #define STACK_CHECK_UNDERFLOW(nd, pc) do { \
+        if((nd).value < 0 || (nd).int_stack < 0 || (nd).double_stack < 0 || \
+           (nd).float_stack < 0 || (nd).uint_stack < 0 || (nd).bool_stack < 0 || \
+           (nd).char_stack < 0 || (nd).byte_stack < 0 || (nd).short_stack < 0 || \
+           (nd).int8_stack < 0 || (nd).int16_stack < 0 || (nd).int32_stack < 0 || \
+           (nd).int64_stack < 0 || (nd).uint8_stack < 0 || (nd).uint16_stack < 0 || \
+           (nd).uint32_stack < 0 || (nd).uint64_stack < 0 || (nd).long_stack < 0 || \
+           (nd).ulong_stack < 0 || (nd).size_t_stack < 0 || (nd).ssize_t_stack < 0 || \
+           (nd).long_double_stack < 0 || (nd).long_long_stack < 0) { \
+            fprintf(stderr, "IR 栈深分析: 指令 %d 栈下溢（Value=%d int=%d double=%d float=%d uint=%d）——IR 生成错误\n", \
+                    (pc), (nd).value, (nd).int_stack, (nd).double_stack, (nd).float_stack, (nd).uint_stack); \
+            free(d); return -1; \
+        } \
+    } while(0)
 
     // 数据流迭代：顺序后继 + 跳转后继，直到收敛
     int changed = 1;
     while(changed) {
         changed = 0;
         for(int i = 0; i < n; i++) {
-            if(d[i] < 0) continue;
+            if(d[i].value < 0) continue;
             Instruction in = fn->code[i];
-            int nd = d[i] + op_stack_delta(fn, in);
-            if(nd < 0) {
-                fprintf(stderr, "IR 栈深分析: 指令 %d 栈下溢（深度 %d）——IR 生成错误\n", i, nd);
-                free(d);
-                return -1;
-            }
+            StackDelta delta = op_stack_delta(fn, in);
+            StackDelta nd;
+            nd.value          = d[i].value + delta.value;
+            nd.int_stack      = d[i].int_stack + delta.int_stack;
+            nd.double_stack   = d[i].double_stack + delta.double_stack;
+            nd.float_stack    = d[i].float_stack + delta.float_stack;
+            nd.uint_stack     = d[i].uint_stack + delta.uint_stack;
+            nd.bool_stack     = d[i].bool_stack + delta.bool_stack;
+            nd.char_stack     = d[i].char_stack + delta.char_stack;
+            nd.byte_stack     = d[i].byte_stack + delta.byte_stack;
+            nd.short_stack    = d[i].short_stack + delta.short_stack;
+            nd.int8_stack     = d[i].int8_stack + delta.int8_stack;
+            nd.int16_stack    = d[i].int16_stack + delta.int16_stack;
+            nd.int32_stack    = d[i].int32_stack + delta.int32_stack;
+            nd.int64_stack    = d[i].int64_stack + delta.int64_stack;
+            nd.uint8_stack    = d[i].uint8_stack + delta.uint8_stack;
+            nd.uint16_stack   = d[i].uint16_stack + delta.uint16_stack;
+            nd.uint32_stack   = d[i].uint32_stack + delta.uint32_stack;
+            nd.uint64_stack   = d[i].uint64_stack + delta.uint64_stack;
+            nd.long_stack     = d[i].long_stack + delta.long_stack;
+            nd.ulong_stack    = d[i].ulong_stack + delta.ulong_stack;
+            nd.size_t_stack   = d[i].size_t_stack + delta.size_t_stack;
+            nd.ssize_t_stack  = d[i].ssize_t_stack + delta.ssize_t_stack;
+            nd.long_double_stack = d[i].long_double_stack + delta.long_double_stack;
+            nd.long_long_stack   = d[i].long_long_stack + delta.long_long_stack;
+
+            STACK_CHECK_UNDERFLOW(nd, i);
+
             if(in.op == OPC_JMP || in.op == OPC_JMP_IF_FALSE || in.op == OPC_JMP_IF_TRUE || in.op == OPC_JMP_IF_NULL) {
-                if(in.a >= 0 && in.a < n && d[in.a] < nd) { d[in.a] = nd; changed = 1; }
+                if(in.a >= 0 && in.a < n) STACK_MERGE(in.a, nd);
             }
-            /* try/catch/finally 的非跳转式目标：TRY.a=catch 入口（异常路径 sp 恢复后）、
-               TRY.b/FIN_PUSH.b/PEND_RETURN.b=finally 或完成动作目标。
-               a/b 用 0 作"无目标"哨兵，必须 >0 才算后继，否则会把 pc=0 当成目标
-               形成 d[0]→...→TRY→d[0] 的正反馈环导致分析不收敛 */
+            /* try/catch/finally 的非跳转式目标 */
             if(in.op == OPC_TRY) {
-                if(in.a > 0 && in.a < n && d[in.a] < nd) { d[in.a] = nd; changed = 1; }
-                if(in.b > 0 && in.b < n && d[in.b] < nd) { d[in.b] = nd; changed = 1; }
+                if(in.a > 0 && in.a < n) STACK_MERGE(in.a, nd);
+                if(in.b > 0 && in.b < n) STACK_MERGE(in.b, nd);
             }
             if(in.op == OPC_FIN_PUSH || in.op == OPC_PEND_RETURN) {
-                if(in.b > 0 && in.b < n && d[in.b] < nd) { d[in.b] = nd; changed = 1; }
+                if(in.b > 0 && in.b < n) STACK_MERGE(in.b, nd);
             }
             if(in.op != OPC_RETURN && in.op != OPC_RETURN_NIL && in.op != OPC_HALT &&
                in.op != OPC_JMP) {
-                if(i + 1 < n && d[i + 1] < nd) { d[i + 1] = nd; changed = 1; }
+                if(i + 1 < n) STACK_MERGE(i + 1, nd);
             }
         }
     }
 
+    #undef STACK_MERGE
+    #undef STACK_CHECK_UNDERFLOW
+
     int maxd = 0;
     for(int i = 0; i < n; i++) {
-        int depth = (d[i] < 0) ? 0 : d[i];   // 不可达指令深度记 0
+        int depth = (d[i].value < 0) ? 0 : d[i].value;   // 不可达指令深度记 0
         if(depth_out && i < depth_cap) depth_out[i] = depth;
         int peak = depth + op_stack_push(fn->code[i].op);
         if(peak > maxd) maxd = peak;
