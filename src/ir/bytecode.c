@@ -59,12 +59,36 @@ static int const_equal(Value a, Value b)
 {
     if(a.type != b.type) return 0;
     switch(a.type) {
-        case VAL_INT:    return a.v.i == b.v.i;
-        case VAL_DOUBLE: return a.v.d == b.v.d;
-        case VAL_BOOL:   return a.v.b == b.v.b;
-        case VAL_CHAR:   return a.v.c == b.v.c;
-        case VAL_STRING: return strcmp(lumyr_str_cstr(&a), lumyr_str_cstr(&b)) == 0;
-        default:         return 0;
+        /* 有符号整数 */
+        case VAL_INT:        return a.v.i == b.v.i;
+        case VAL_INT8:       return a.v.i8 == b.v.i8;
+        case VAL_INT16:      return a.v.i16 == b.v.i16;
+        case VAL_SHORT:      return a.v.sh == b.v.sh;
+        case VAL_INT32:      return a.v.i32 == b.v.i32;
+        case VAL_INT64:      return a.v.i64 == b.v.i64;
+        case VAL_LONG:       return a.v.l == b.v.l;
+        case VAL_LONG_LONG:  return a.v.ll == b.v.ll;
+        /* 无符号整数 */
+        case VAL_UINT:       return a.v.ui == b.v.ui;
+        case VAL_UINT8:      return a.v.u8 == b.v.u8;
+        case VAL_UINT16:     return a.v.u16 == b.v.u16;
+        case VAL_UINT32:     return a.v.u32 == b.v.u32;
+        case VAL_UINT64:     return a.v.u64 == b.v.u64;
+        case VAL_ULONG:      return a.v.ul == b.v.ul;
+        case VAL_BYTE:       return a.v.by == b.v.by;
+        case VAL_UCHAR:      return a.v.uc == b.v.uc;
+        case VAL_USHORT:     return a.v.us == b.v.us;
+        case VAL_SIZE_T:     return a.v.st == b.v.st;
+        case VAL_SSIZE_T:    return a.v.sst == b.v.sst;
+        /* 浮点 */
+        case VAL_FLOAT:      return a.v.f == b.v.f;
+        case VAL_DOUBLE:     return a.v.d == b.v.d;
+        case VAL_LONG_DOUBLE: return a.v.ld == b.v.ld;
+        /* 其他 */
+        case VAL_BOOL:       return a.v.b == b.v.b;
+        case VAL_CHAR:       return a.v.c == b.v.c;
+        case VAL_STRING:     return strcmp(lumyr_str_cstr(&a), lumyr_str_cstr(&b)) == 0;
+        default:             return 0;
     }
 }
 
