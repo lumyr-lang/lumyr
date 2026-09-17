@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <sys/types.h>   /* ssize_t（POSIX，macOS/Linux 需要） */
 
 /* ==================== 类型化数组结构体 ==================== */
 /* 每个类型化数组都有独立的结构体，避免大 union 的内存浪费和类型转换开销 */

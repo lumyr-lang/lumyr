@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <stdint.h>
+#include <sys/types.h>   /* ssize_t（POSIX，macOS/Linux 需要） */
 
 typedef struct Value Value;
 typedef struct EvalCtx EvalCtx;

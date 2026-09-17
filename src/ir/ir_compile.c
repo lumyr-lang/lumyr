@@ -592,6 +592,28 @@ static int is_float_var(Ctx* c, AstNode* node) {
    类型提升规则参考C语言标准：浮点 > 整数，64位 > 32位 > 16位 > 8位 */
 
 
+/* 位宽等级：8位=1, 16位=2, 32位=3, 64位=4, long=5 */
+static int width_rank(ExprType t) {
+    switch(t) {
+        case EXPR_TYPE_BOOL: case EXPR_TYPE_CHAR: case EXPR_TYPE_INT8:
+        case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: return 1;
+        case EXPR_TYPE_INT16: case EXPR_TYPE_UINT16: return 2;
+        case EXPR_TYPE_INT: case EXPR_TYPE_UINT: case EXPR_TYPE_SIZE_T:
+        case EXPR_TYPE_SSIZE_T: return 3;
+        case EXPR_TYPE_INT64: case EXPR_TYPE_UINT64: case EXPR_TYPE_LONG_LONG: return 4;
+        case EXPR_TYPE_LONG: case EXPR_TYPE_ULONG: return 5;
+        default: return 0;
+    }
+}
+static int is_unsigned_type(ExprType t) {
+    switch(t) {
+        case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: case EXPR_TYPE_UINT16:
+        case EXPR_TYPE_UINT: case EXPR_TYPE_UINT64: case EXPR_TYPE_ULONG:
+        case EXPR_TYPE_SIZE_T: return 1;
+        default: return 0;
+    }
+}
+
 /* 类型提升辅助函数：根据C语言标准的常用算术转换规则，返回两个类型提升后的结果类型
    简化规则：浮点 > 整数，64位 > 32位 > 16位 > 8位，无符号 > 有符号（相同位宽时） */
 static ExprType expr_type_promote(ExprType a, ExprType b) {
@@ -605,31 +627,10 @@ static ExprType expr_type_promote(ExprType a, ExprType b) {
         return EXPR_TYPE_FLOAT;
     }
     /* 整数类型：按位宽和符号判断 */
-    /* 定义位宽等级：8位=1, 16位=2, 32位=3, 64位=4, long=5 */
-    int width_rank(ExprType t) {
-        switch(t) {
-            case EXPR_TYPE_BOOL: case EXPR_TYPE_CHAR: case EXPR_TYPE_INT8:
-            case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: return 1;
-            case EXPR_TYPE_INT16: case EXPR_TYPE_UINT16: return 2;
-            case EXPR_TYPE_INT: case EXPR_TYPE_UINT: case EXPR_TYPE_SIZE_T:
-            case EXPR_TYPE_SSIZE_T: return 3;
-            case EXPR_TYPE_INT64: case EXPR_TYPE_UINT64: case EXPR_TYPE_LONG_LONG: return 4;
-            case EXPR_TYPE_LONG: case EXPR_TYPE_ULONG: return 5;
-            default: return 0;
-        }
-    }
-    int is_unsigned(ExprType t) {
-        switch(t) {
-            case EXPR_TYPE_BYTE: case EXPR_TYPE_UINT8: case EXPR_TYPE_UINT16:
-            case EXPR_TYPE_UINT: case EXPR_TYPE_UINT64: case EXPR_TYPE_ULONG:
-            case EXPR_TYPE_SIZE_T: return 1;
-            default: return 0;
-        }
-    }
     int wa = width_rank(a), wb = width_rank(b);
     if(wa != wb) return wa > wb ? a : b;
     /* 相同位宽：无符号优先 */
-    if(is_unsigned(a) != is_unsigned(b)) return is_unsigned(a) ? a : b;
+    if(is_unsigned_type(a) != is_unsigned_type(b)) return is_unsigned_type(a) ? a : b;
     return a; /* 相同位宽相同符号，返回任意一个 */
 }
 
