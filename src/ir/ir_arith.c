@@ -170,6 +170,7 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             case CAST_CHAR: return EXPR_TYPE_CHAR;
             case CAST_INT8: return EXPR_TYPE_INT8;
             case CAST_INT16: return EXPR_TYPE_INT16;
+            case CAST_SHORT: return EXPR_TYPE_SHORT;
             case CAST_INT: return EXPR_TYPE_INT;
             case CAST_INT64: return EXPR_TYPE_INT64;
             case CAST_LONGLONG: return EXPR_TYPE_LONG_LONG;
@@ -213,6 +214,7 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             case CAST_CHAR: return EXPR_TYPE_CHAR;
             case CAST_INT8: return EXPR_TYPE_INT8;
             case CAST_INT16: return EXPR_TYPE_INT16;
+            case CAST_SHORT: return EXPR_TYPE_SHORT;
             case CAST_INT: return EXPR_TYPE_INT;
             case CAST_INT64: return EXPR_TYPE_INT64;
             case CAST_LONGLONG: return EXPR_TYPE_LONG_LONG;
@@ -462,6 +464,11 @@ void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, ExprType re
             c_expr(c, binop);
             emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
             c->fn->var_type_tags[var_idx] = CAST_INT16;
+            break;
+        case EXPR_TYPE_SHORT:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_SHORT;
             break;
         case EXPR_TYPE_INT:
             c_expr(c, binop);
