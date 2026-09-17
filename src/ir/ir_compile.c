@@ -2574,6 +2574,11 @@ void c_expr(Ctx* c, AstNode* node)
                         c_expr(c, binop);
                         emit(c, OPC_STORE_INT_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT;
+                    } else if(result_type == EXPR_TYPE_SHORT) {
+                        /* short类型算术运算：结果在short专用栈中，直接使用OPC_STORE_SHORT_VAR */
+                        c_expr(c, binop);
+                        emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+                        c->fn->var_type_tags[var_idx] = CAST_SHORT;
                     } else if(result_type == EXPR_TYPE_UINT) {
                         /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_UINT_VAR */
                         c_expr(c, binop);
@@ -3124,17 +3129,6 @@ void c_expr(Ctx* c, AstNode* node)
                 }
                 /* 只有当左右操作数都是已知类型时，才使用混合类型优化 */
                 if(left_type > 0 && right_type > 0) {
-                    /* short 类型走通用路径：没有专用算术运算指令，强行优化会导致栈不匹配 */
-                    if(left_type == EXPR_TYPE_SHORT || right_type == EXPR_TYPE_SHORT) {
-                        c_expr(c, node->u.bin.left);
-                        c_expr(c, node->u.bin.right);
-                        static const OpCode map[] = {
-                            [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
-                            [OP_MOD] = OPC_MOD,
-                        };
-                        emit(c, map[bop], 0, 0);
-                        break;
-                    }
                     fprintf(stderr, "[DEBUG MIXED] left_type=%d, right_type=%d\n", left_type, right_type);
                     /* 类型提升规则：参考C语言标准的常用算术转换
                        1. long double 优先级最高
@@ -3178,6 +3172,12 @@ void c_expr(Ctx* c, AstNode* node)
                             [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
                         };
                         emit(c, int_arith_map[bop], 0, 0);
+                    } else if(result_type == EXPR_TYPE_SHORT) {
+                        static const OpCode short_arith_map[] = {
+                            [OP_ADD] = OPC_SHORT_ADD, [OP_SUB] = OPC_SHORT_SUB, [OP_MUL] = OPC_SHORT_MUL,
+                            [OP_DIV] = OPC_SHORT_DIV, [OP_MOD] = OPC_SHORT_MOD,
+                        };
+                        emit(c, short_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_UINT) {
                         static const OpCode uint_arith_map[] = {
                             [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
