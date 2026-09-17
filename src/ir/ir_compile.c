@@ -1677,7 +1677,7 @@ static void emit_typed_const(Ctx* c, int cast_type, Value v) {
             emit(c, OPC_PUSH_INT_CONST, (int)v.v.i, 0);
             break;
         case CAST_UINT32:
-            emit(c, OPC_PUSH_UINT_CONST, (unsigned int)v.v.i, 0);
+            emit(c, OPC_PUSH_UINT32_CONST, (uint32_t)v.v.i, 0);
             break;
         case CAST_INT8:
             emit(c, OPC_PUSH_INT8_CONST, (int8_t)v.v.i, 0);

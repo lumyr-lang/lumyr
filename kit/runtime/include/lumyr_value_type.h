@@ -42,6 +42,7 @@ typedef enum {
     CAST_UINT8,
     CAST_UINT16,
     CAST_UINT32,
+    CAST_UINT,       // unsigned int（平台相关，通常 32 位）
     CAST_UINT64,
     CAST_LONG,       // long：平台相关，lm 统一 64 位
     CAST_LONGLONG,   // long long：64 位（= int 默认）
