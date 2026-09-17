@@ -68,6 +68,9 @@ tests/stackframe_test
 bin/
 lib/
 build/
+src/embed/
+src/runtime-full/
+src/yacc/
 
 # 调试脚本
 debug_*.sh
