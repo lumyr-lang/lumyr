@@ -171,6 +171,8 @@ typedef enum {
     OPC_PRINT_INT8,     // 从 int8 栈弹出并打印（零开销，用于声明为 int8 的变量）
     OPC_LOAD_INT16_VAR,   // a=符号表下标；加载声明为 int16 的变量，直接压入 int16 栈（零检查零转换）
     OPC_STORE_INT16_VAR,  // a=符号表下标；从 int16 栈弹出 int16 值，直接存储到变量的 int16_vals（零包装零转换）
+    OPC_LOAD_SHORT_VAR,   // a=符号表下标；加载声明为 short 的变量，直接压入 short 栈（零检查零转换）
+    OPC_STORE_SHORT_VAR,  // a=符号表下标；从 short 栈弹出 short 值，直接存储到变量的 short_vals（零包装零转换）
     OPC_INT16_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int16，创建 int16 泛型数组
     OPC_INT16_ARRAY_GET, // 弹 arr,idx；直接从 int16 类型化数组读取元素，压入 int16 栈（零包装零 Value 开销）
     OPC_PRINT_INT16,     // 从 int16 栈弹出并打印（零开销，用于声明为 int16 的变量）
@@ -186,6 +188,7 @@ typedef enum {
     OPC_PRINT_INT64,     // 从 int64 栈弹出并打印（零开销，用于声明为 int64 的变量）
     OPC_PUSH_INT8_CONST, // a=int8值；直接压入 int8 栈（零检查零转换）
     OPC_PUSH_INT16_CONST, // a=int16值；直接压入 int16 栈（零检查零转换）
+    OPC_PUSH_SHORT_CONST, // a=short值；直接压入 short 栈（零检查零转换）
     OPC_PUSH_INT32_CONST, // a=int32值；直接压入 int32 栈（零检查零转换）
     OPC_PUSH_INT64_CONST, // a=低32位, b=高32位；直接压入 int64 栈（零检查零转换）
     OPC_LOAD_UINT8_VAR,   // a=符号表下标；加载声明为 uint8 的变量，直接压入 uint8 栈（零检查零转换）
@@ -321,9 +324,30 @@ typedef enum {
     OPC_RETURN,       // 弹值返回（深拷贝）
     OPC_RETURN_NIL,   // 无返回值返回
     OPC_YIELD,        // 生成器 yield：弹值，保存执行状态，返回给调用者
+    /* 补充 TO_VALUE 指令：各专用栈 → Value 栈（用于兼容赋值等通用逻辑） */
+    OPC_BOOL_TO_VALUE,
+    OPC_CHAR_TO_VALUE,
+    OPC_INT8_TO_VALUE,
+    OPC_INT16_TO_VALUE,
+    OPC_SHORT_TO_VALUE,
+    OPC_INT64_TO_VALUE,
+    OPC_LONG_TO_VALUE,
+    OPC_BYTE_TO_VALUE,
+    OPC_UINT8_TO_VALUE,
+    OPC_UINT16_TO_VALUE,
+    OPC_UINT64_TO_VALUE,
+    OPC_ULONG_TO_VALUE,
+    OPC_SIZE_T_TO_VALUE,
+    OPC_SSIZE_T_TO_VALUE,
+    OPC_LONG_DOUBLE_TO_VALUE,
     OPC_HALT
 } OpCode;
 
+// 字节码指令：三地址格式（op + 两个操作数）
+// a / b 的具体含义由 op 决定，常见用法：
+//   a: 符号表下标 / 常量池下标 / 直接常量值 / 内置函数ID / 跳转目标PC / 64位常量低32位
+//   b: 元素个数 / 参数个数 / 64位常量高32位 / 辅助参数
+// 无操作数的指令 a、b 均为 0
 typedef struct {
     OpCode op;
     int a;

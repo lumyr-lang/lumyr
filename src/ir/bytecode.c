@@ -152,6 +152,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
             return 0;                        /* 压入 byte 栈，不改变 Value 栈深度 */
         case OPC_PUSH_INT8_CONST:
         case OPC_PUSH_INT16_CONST:
+        case OPC_PUSH_SHORT_CONST:
         case OPC_PUSH_INT32_CONST:
         case OPC_PUSH_INT64_CONST:
         case OPC_PUSH_UINT8_CONST:
@@ -164,7 +165,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_PUSH_SSIZE_T_CONST:
             return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
         /* 新的专用指令（各类型专用栈，不改变 Value 栈深度） */
-        case OPC_LOAD_INT8_VAR: case OPC_LOAD_INT16_VAR: case OPC_LOAD_INT32_VAR: case OPC_LOAD_INT64_VAR:
+        case OPC_LOAD_INT8_VAR: case OPC_LOAD_INT16_VAR: case OPC_LOAD_SHORT_VAR: case OPC_LOAD_INT32_VAR: case OPC_LOAD_INT64_VAR:
         case OPC_LOAD_UINT8_VAR: case OPC_LOAD_UINT16_VAR: case OPC_LOAD_UINT32_VAR: case OPC_LOAD_UINT64_VAR:
         case OPC_LOAD_LONG_VAR: case OPC_LOAD_ULONG_VAR:
         case OPC_LOAD_BOOL_VAR: case OPC_LOAD_CHAR_VAR: case OPC_LOAD_BYTE_VAR:
@@ -173,7 +174,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LOAD_SIZE_T_VAR: case OPC_LOAD_SSIZE_T_VAR:
         case OPC_LOAD_LONG_DOUBLE_VAR:
             return 0;                        /* 压入专用栈，不改变 Value 栈深度 */
-        case OPC_STORE_INT8_VAR: case OPC_STORE_INT16_VAR: case OPC_STORE_INT32_VAR: case OPC_STORE_INT64_VAR:
+        case OPC_STORE_INT8_VAR: case OPC_STORE_INT16_VAR: case OPC_STORE_SHORT_VAR: case OPC_STORE_INT32_VAR: case OPC_STORE_INT64_VAR:
         case OPC_STORE_UINT8_VAR: case OPC_STORE_UINT16_VAR: case OPC_STORE_UINT32_VAR: case OPC_STORE_UINT64_VAR:
         case OPC_STORE_LONG_VAR: case OPC_STORE_ULONG_VAR:
         case OPC_STORE_BOOL_VAR: case OPC_STORE_CHAR_VAR: case OPC_STORE_BYTE_VAR:
@@ -192,6 +193,7 @@ static int op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT_ADD: case OPC_INT_SUB: case OPC_INT_MUL: case OPC_INT_DIV: case OPC_INT_MOD:
             return 0;                        /* 从 int 栈弹2压1，不改变 Value 栈深度（零开销算术运算） */
         case OPC_INT_TO_VALUE:
+        case OPC_SHORT_TO_VALUE:
             return +1;                       /* 从 int 栈弹出1个，包装成 Value 压入 Value 栈（+1） */
         case OPC_INT_GT: case OPC_INT_LT: case OPC_INT_GE: case OPC_INT_LE: case OPC_INT_EQ: case OPC_INT_NE:
             return +1;                       /* 从 int 栈弹出2个，比较结果(bool)压入 Value 栈（+1） */

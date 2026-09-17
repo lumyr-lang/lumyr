@@ -32,7 +32,7 @@ AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args);
 AstNode* ast_null_coalesce(AstNode* left, AstNode* right);
 AstNode* ast_macro_def(char* name, AstNode* params, AstNode* body);
 AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body);
-AstNode* new_cast_node(int cast_type, AstNode* child);
+AstNode* new_cast_node(CastKind cast_type, AstNode* child);
 AstNode* ast_unary(BinOp op, AstNode* child);
 AstNode* ast_ternary(AstNode* cond, AstNode* t, AstNode* f);
 AstNode* ast_switch(AstNode* expr, AstNode* cases);
@@ -49,7 +49,7 @@ AstNode* ast_case_append(AstNode* case_list, AstNode* one_case);
 AstNode* ast_func_def(char* name, AstNode* params, AstNode* body);
 AstNode* ast_extern_func(char* name, AstNode* params, char* ret_type_name, char* libname);
 // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
-AstNode* ast_type_annotation(int cast_type, AstNode* expr);
+AstNode* ast_type_annotation(CastKind cast_type, AstNode* expr);
 AstNode* ast_interface_annotation(char* interface_name, AstNode* expr);
 // 形参；is_ellipsis=1代表 ...args
 AstNode* ast_param(char* name, int is_ellipsis, AstNode* default_val);

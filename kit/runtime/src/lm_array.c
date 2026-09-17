@@ -42,7 +42,7 @@ Value lumyr_del(Value* arr, Value idx)
         return *arr;
     }
     if(arr->type != VAL_ARRAY) runtime_error("del() 第一个参数必须是数组或字典");
-    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("del() 下标必须是整数");
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_SHORT && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UCHAR && idx.type != VAL_UINT16 && idx.type != VAL_USHORT && idx.type != VAL_UINT32 && idx.type != VAL_UINT && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("del() 下标必须是整数");
     long long i = lumyr_extract_ll(idx);
     int n = arr->v.array->len;
     if(i < 0 || i >= n) { char b[96]; snprintf(b, sizeof b, "del() 下标 %lld 越界（长度 %d）", i, n); runtime_error(b); }
@@ -72,7 +72,7 @@ Value lumyr_array_add(Value* arr, Value val)
 Value lumyr_insert(Value* arr, Value idx, Value val)
 {
     if(arr->type != VAL_ARRAY) runtime_error("insert() 第一个参数必须是数组");
-    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("insert() 下标必须是整数");
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_SHORT && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UCHAR && idx.type != VAL_UINT16 && idx.type != VAL_USHORT && idx.type != VAL_UINT32 && idx.type != VAL_UINT && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("insert() 下标必须是整数");
     long long i = lumyr_extract_ll(idx);
     int n = arr->v.array->len;
     if(i < 0 || i > n) { char b[96]; snprintf(b, sizeof b, "insert() 下标 %lld 越界（允许 0..%d）", i, n); runtime_error(b); }
@@ -124,7 +124,7 @@ Value lumyr_array_set_method(Value arr, Value idx, Value val)
         return arr;
     }
     if(arr.type != VAL_ARRAY) runtime_error("set() 第一个参数必须是数组或字典");
-    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UINT16 && idx.type != VAL_UINT32 && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("set() 下标必须是整数");
+    if(idx.type != VAL_INT && idx.type != VAL_INT8 && idx.type != VAL_INT16 && idx.type != VAL_SHORT && idx.type != VAL_INT32 && idx.type != VAL_INT64 && idx.type != VAL_BYTE && idx.type != VAL_UINT8 && idx.type != VAL_UCHAR && idx.type != VAL_UINT16 && idx.type != VAL_USHORT && idx.type != VAL_UINT32 && idx.type != VAL_UINT && idx.type != VAL_UINT64 && idx.type != VAL_LONG && idx.type != VAL_ULONG && idx.type != VAL_SIZE_T && idx.type != VAL_SSIZE_T && idx.type != VAL_BOOL && idx.type != VAL_CHAR && idx.type != VAL_DOUBLE) runtime_error("set() 下标必须是整数");
     long long i = lumyr_extract_ll(idx);
     if(i < 0 || i >= arr.v.array->len) {
         char b[96]; snprintf(b, sizeof b, "set() 下标 %lld 越界（长度 %d）", i, arr.v.array->len);

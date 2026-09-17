@@ -96,7 +96,7 @@ struct AstNode {
             AstNode* body;
         } for_node;
         struct {
-            int cast_type;
+            CastKind cast_type;
             struct AstNode* child;
         } cast;
         struct {
@@ -151,7 +151,7 @@ struct AstNode {
         } extern_func;
 
         struct {
-            int cast_type;       // 标注的类型（CastKind枚举），如 CAST_INT/CAST_DOUBLE/CAST_LONG
+            CastKind cast_type;       // 标注的类型（CastKind枚举），如 CAST_INT/CAST_DOUBLE/CAST_LONG
             AstNode* expr;       // 被标注的表达式
         } type_annotation;
 

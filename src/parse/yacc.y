@@ -41,7 +41,7 @@ static void type_prop_clear(void)
 
 /* struct 声明属性收集器（用精确 CastKind 类型） */
 static char** g_struct_prop_names = NULL;
-static int* g_struct_cast_kinds = NULL;
+static CastKind* g_struct_cast_kinds = NULL;
 static char** g_struct_prop_struct_names = NULL;
 static int g_struct_prop_n = 0, g_struct_prop_cap = 0;
 static char* g_current_struct_name = NULL; /* 当前正在解析的 struct 名，用于方法注册 */
@@ -131,12 +131,12 @@ static void g_struct_method_clear(void) {
     g_struct_method_n = 0;
     g_struct_method_cap = 0;
 }
-static void struct_prop_push(char* name, int ck, char* struct_name)
+static void struct_prop_push(char* name, CastKind ck, char* struct_name)
 {
     if(g_struct_prop_n >= g_struct_prop_cap) {
         int nc = g_struct_prop_cap > 0 ? g_struct_prop_cap * 2 : 8;
         g_struct_prop_names = (char**)realloc(g_struct_prop_names, (size_t)nc * sizeof(char*));
-        g_struct_cast_kinds = (int*)realloc(g_struct_cast_kinds, (size_t)nc * sizeof(int));
+        g_struct_cast_kinds = (CastKind*)realloc(g_struct_cast_kinds, (size_t)nc * sizeof(CastKind));
         g_struct_prop_struct_names = (char**)realloc(g_struct_prop_struct_names, (size_t)nc * sizeof(char*));
         g_struct_prop_cap = nc;
     }
@@ -255,7 +255,7 @@ static AstNode* build_try_multi(AstNode* body, AstNode* catch_chain, AstNode* fi
 }
 
 extern int yylineno;
-AstNode* new_cast_node(int cast_type, AstNode* child);
+AstNode* new_cast_node(CastKind cast_type, AstNode* child);
 AstNode* maybe_template(const char* s);      // 字符串模板拆解（parse/tmpl.c）
 void yyerror(const char* s);
 static int g_lambda_seq = 0;                 // 匿名函数内部名 _lambda_N

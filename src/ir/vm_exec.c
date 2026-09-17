@@ -296,6 +296,12 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 stack[sp++] = lumyr_make_int((long long)iv);
                 break;
             }
+            case OPC_SHORT_TO_VALUE: {
+                /* 把 short 专用栈顶的 short 值包装成 Value，压入 Value 栈 */
+                short sv = SHORT_POP();
+                stack[sp++] = lumyr_make_short(sv);
+                break;
+            }
             case OPC_INT_GT: {
                 /* int 大于比较：直接从 int 栈弹出两个 int，比较后结果(bool)压入 Value 栈 */
                 int b = INT_POP();
@@ -621,6 +627,11 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 INT16_PUSH((int16_t)in.a);
                 break;
             }
+            case OPC_PUSH_SHORT_CONST: {
+                /* short常量零开销压栈：直接把常量值压入short专用栈，不创建Value */
+                SHORT_PUSH((short)in.a);
+                break;
+            }
             case OPC_PUSH_INT32_CONST: {
                 /* int32常量零开销压栈：直接把常量值压入int32专用栈，不创建Value */
                 INT32_PUSH((int32_t)in.a);
@@ -700,6 +711,14 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 int16_t i16v = stackframe_get_int16(frame, name, &fnd);
                 if(!fnd) runtime_undefined("变量", name);
                 INT16_PUSH(i16v);
+                break;
+            }
+            case OPC_LOAD_SHORT_VAR: {
+                const char* name = bf->syms[in.a];
+                _Bool fnd = 0;
+                short sv = stackframe_get_short(frame, name, &fnd);
+                if(!fnd) runtime_undefined("变量", name);
+                SHORT_PUSH(sv);
                 break;
             }
             case OPC_LOAD_INT32_VAR: {
@@ -903,6 +922,16 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                 Value ret;
                 ret.type = VAL_INT16;
                 ret.v.i = (long long)i16v;
+                stack[sp++] = ret;
+                break;
+            }
+            case OPC_STORE_SHORT_VAR: {
+                const char* name = bf->syms[in.a];
+                short sv = SHORT_POP();
+                stackframe_bind_short(frame, name, sv);
+                Value ret;
+                ret.type = VAL_SHORT;
+                ret.v.sh = sv;
                 stack[sp++] = ret;
                 break;
             }
@@ -1124,29 +1153,366 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
             case OPC_NEG: { Value v = stack[--sp]; stack[sp++] = lumyr_unary_minus(v); break; }
             case OPC_POS: { Value v = stack[--sp]; stack[sp++] = lumyr_unary_plus(v); break; }
             case OPC_PRE_INC:  { const char* n = bf->syms[in.a]; _Bool fnd = 0;
-                                 Value __old = stackframe_get(frame, n, &fnd);
-                                 if(!fnd) runtime_undefined("变量", n);
-                                 Value __nv = lumyr_pre_inc(&__old);
-                                 stackframe_bind(frame, n, __nv);          // 词法遮蔽：写当前帧
-                                 stack[sp++] = __nv; break; }
+                                 /* 先查询变量类型（CastKind），直接操作专用数组，零转换开销 */
+                                 int ttag = stackframe_get_type_tag(frame, n);
+                                 Value __nv;
+                                 switch(ttag) {
+                                     case CAST_INT: {
+                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         if(!p) { /* 回退到 Value 路径 */ goto inc_val_pre; }
+                                         int_inc(p);
+                                         __nv = lumyr_make_int(*p);
+                                         break;
+                                     }
+                                     case CAST_INT8: {
+                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         int8_inc(p);
+                                         __nv = lumyr_make_int8(*p);
+                                         break;
+                                     }
+                                     case CAST_INT16: {
+                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         int16_inc(p);
+                                         __nv = lumyr_make_int16(*p);
+                                         break;
+                                     }
+                                     /* CAST_SHORT 与 CAST_INT16 共用 int16_vals */
+                                     case CAST_INT32: {
+                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         int32_inc(p);
+                                         __nv = lumyr_make_int32(*p);
+                                         break;
+                                     }
+                                     case CAST_INT64: {
+                                         int64_t* p = stackframe_get_int64_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         int64_inc(p);
+                                         __nv = lumyr_make_int64(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT: {
+                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         uint_inc(p);
+                                         __nv = lumyr_make_uint(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT8: {
+                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         uint8_inc(p);
+                                         __nv = lumyr_make_uint8(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT16: {
+                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         uint16_inc(p);
+                                         __nv = lumyr_make_uint16(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT32: {
+                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         uint32_inc(p);
+                                         __nv = lumyr_make_uint32(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT64: {
+                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         if(!p) goto inc_val_pre;
+                                         uint64_inc(p);
+                                         __nv = lumyr_make_uint64(*p);
+                                         break;
+                                     }
+                                     default: goto inc_val_pre;
+                                 }
+                                 stack[sp++] = __nv; break;
+                                 inc_val_pre: {
+                                     Value __old = stackframe_get(frame, n, &fnd);
+                                     if(!fnd) runtime_undefined("变量", n);
+                                     __nv = lumyr_pre_inc(&__old);
+                                     stackframe_bind(frame, n, __nv);
+                                     stack[sp++] = __nv;
+                                 } break; }
             case OPC_POST_INC: { const char* n = bf->syms[in.a]; _Bool fnd = 0;
-                                 Value __old = stackframe_get(frame, n, &fnd);
-                                 if(!fnd) runtime_undefined("变量", n);
-                                 Value __nv = lumyr_post_inc(&__old);
-                                 stackframe_bind(frame, n, __old);          // 参数已被改为新值
-                                 stack[sp++] = __nv; break; }               // 返回值 = 旧值
+                                 /* 先查询变量类型（CastKind），直接操作专用数组，零转换开销 */
+                                 int ttag = stackframe_get_type_tag(frame, n);
+                                 Value __old_v;
+                                 switch(ttag) {
+                                     case CAST_INT: {
+                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         int v = *p;
+                                         int_inc(p);
+                                         __old_v = lumyr_make_int(v);
+                                         break;
+                                     }
+                                     case CAST_INT8: {
+                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         int8_t v = *p;
+                                         int8_inc(p);
+                                         __old_v = lumyr_make_int8(v);
+                                         break;
+                                     }
+                                     case CAST_INT16: {
+                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         int16_t v = *p;
+                                         int16_inc(p);
+                                         __old_v = lumyr_make_int16(v);
+                                         break;
+                                     }
+                                     case CAST_INT32: {
+                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         int32_t v = *p;
+                                         int32_inc(p);
+                                         __old_v = lumyr_make_int32(v);
+                                         break;
+                                     }
+                                     case CAST_INT64: {
+                                         int64_t* p = stackframe_get_int64_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         int64_t v = *p;
+                                         int64_inc(p);
+                                         __old_v = lumyr_make_int64(v);
+                                         break;
+                                     }
+                                     case CAST_UINT: {
+                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         unsigned int v = *p;
+                                         uint_inc(p);
+                                         __old_v = lumyr_make_uint(v);
+                                         break;
+                                     }
+                                     case CAST_UINT8: {
+                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         uint8_t v = *p;
+                                         uint8_inc(p);
+                                         __old_v = lumyr_make_uint8(v);
+                                         break;
+                                     }
+                                     case CAST_UINT16: {
+                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         uint16_t v = *p;
+                                         uint16_inc(p);
+                                         __old_v = lumyr_make_uint16(v);
+                                         break;
+                                     }
+                                     case CAST_UINT32: {
+                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         uint32_t v = *p;
+                                         uint32_inc(p);
+                                         __old_v = lumyr_make_uint32(v);
+                                         break;
+                                     }
+                                     case CAST_UINT64: {
+                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         if(!p) goto inc_val_post;
+                                         uint64_t v = *p;
+                                         uint64_inc(p);
+                                         __old_v = lumyr_make_uint64(v);
+                                         break;
+                                     }
+                                     default: goto inc_val_post;
+                                 }
+                                 stack[sp++] = __old_v; break;
+                                 inc_val_post: {
+                                     Value __old = stackframe_get(frame, n, &fnd);
+                                     if(!fnd) runtime_undefined("变量", n);
+                                     Value __nv = lumyr_post_inc(&__old);
+                                     stackframe_bind(frame, n, __old);
+                                     stack[sp++] = __nv;
+                                 } break; }               // 返回值 = 旧值
             case OPC_PRE_DEC:  { const char* n = bf->syms[in.a]; _Bool fnd = 0;
-                                 Value __old = stackframe_get(frame, n, &fnd);
-                                 if(!fnd) runtime_undefined("变量", n);
-                                 Value __nv = lumyr_pre_dec(&__old);
-                                 stackframe_bind(frame, n, __nv);          // 词法遮蔽：写当前帧
-                                 stack[sp++] = __nv; break; }
+                                 /* 先查询变量类型（CastKind），直接操作专用数组，零转换开销 */
+                                 int ttag = stackframe_get_type_tag(frame, n);
+                                 Value __nv;
+                                 switch(ttag) {
+                                     case CAST_INT: {
+                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         int_dec(p);
+                                         __nv = lumyr_make_int(*p);
+                                         break;
+                                     }
+                                     case CAST_INT8: {
+                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         int8_dec(p);
+                                         __nv = lumyr_make_int8(*p);
+                                         break;
+                                     }
+                                     case CAST_INT16: {
+                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         int16_dec(p);
+                                         __nv = lumyr_make_int16(*p);
+                                         break;
+                                     }
+                                     case CAST_INT32: {
+                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         int32_dec(p);
+                                         __nv = lumyr_make_int32(*p);
+                                         break;
+                                     }
+                                     case CAST_INT64: {
+                                         int64_t* p = stackframe_get_int64_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         int64_dec(p);
+                                         __nv = lumyr_make_int64(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT: {
+                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         uint_dec(p);
+                                         __nv = lumyr_make_uint(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT8: {
+                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         uint8_dec(p);
+                                         __nv = lumyr_make_uint8(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT16: {
+                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         uint16_dec(p);
+                                         __nv = lumyr_make_uint16(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT32: {
+                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         uint32_dec(p);
+                                         __nv = lumyr_make_uint32(*p);
+                                         break;
+                                     }
+                                     case CAST_UINT64: {
+                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         if(!p) goto dec_val_pre;
+                                         uint64_dec(p);
+                                         __nv = lumyr_make_uint64(*p);
+                                         break;
+                                     }
+                                     default: goto dec_val_pre;
+                                 }
+                                 stack[sp++] = __nv; break;
+                                 dec_val_pre: {
+                                     Value __old = stackframe_get(frame, n, &fnd);
+                                     if(!fnd) runtime_undefined("变量", n);
+                                     __nv = lumyr_pre_dec(&__old);
+                                     stackframe_bind(frame, n, __nv);
+                                     stack[sp++] = __nv;
+                                 } break; }
             case OPC_POST_DEC: { const char* n = bf->syms[in.a]; _Bool fnd = 0;
-                                 Value __old = stackframe_get(frame, n, &fnd);
-                                 if(!fnd) runtime_undefined("变量", n);
-                                 Value __nv = lumyr_post_dec(&__old);
-                                 stackframe_bind(frame, n, __old);          // 参数已被改为新值
-                                 stack[sp++] = __nv; break; }               // 返回值 = 旧值
+                                 /* 先查询变量类型（CastKind），直接操作专用数组，零转换开销 */
+                                 int ttag = stackframe_get_type_tag(frame, n);
+                                 Value __old_v;
+                                 switch(ttag) {
+                                     case CAST_INT: {
+                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         int v = *p;
+                                         int_dec(p);
+                                         __old_v = lumyr_make_int(v);
+                                         break;
+                                     }
+                                     case CAST_INT8: {
+                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         int8_t v = *p;
+                                         int8_dec(p);
+                                         __old_v = lumyr_make_int8(v);
+                                         break;
+                                     }
+                                     case CAST_INT16: {
+                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         int16_t v = *p;
+                                         int16_dec(p);
+                                         __old_v = lumyr_make_int16(v);
+                                         break;
+                                     }
+                                     case CAST_INT32: {
+                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         int32_t v = *p;
+                                         int32_dec(p);
+                                         __old_v = lumyr_make_int32(v);
+                                         break;
+                                     }
+                                     case CAST_INT64: {
+                                         int64_t* p = stackframe_get_int64_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         int64_t v = *p;
+                                         int64_dec(p);
+                                         __old_v = lumyr_make_int64(v);
+                                         break;
+                                     }
+                                     case CAST_UINT: {
+                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         unsigned int v = *p;
+                                         uint_dec(p);
+                                         __old_v = lumyr_make_uint(v);
+                                         break;
+                                     }
+                                     case CAST_UINT8: {
+                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         uint8_t v = *p;
+                                         uint8_dec(p);
+                                         __old_v = lumyr_make_uint8(v);
+                                         break;
+                                     }
+                                     case CAST_UINT16: {
+                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         uint16_t v = *p;
+                                         uint16_dec(p);
+                                         __old_v = lumyr_make_uint16(v);
+                                         break;
+                                     }
+                                     case CAST_UINT32: {
+                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         uint32_t v = *p;
+                                         uint32_dec(p);
+                                         __old_v = lumyr_make_uint32(v);
+                                         break;
+                                     }
+                                     case CAST_UINT64: {
+                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         if(!p) goto dec_val_post;
+                                         uint64_t v = *p;
+                                         uint64_dec(p);
+                                         __old_v = lumyr_make_uint64(v);
+                                         break;
+                                     }
+                                     default: goto dec_val_post;
+                                 }
+                                 stack[sp++] = __old_v; break;
+                                 dec_val_post: {
+                                     Value __old = stackframe_get(frame, n, &fnd);
+                                     if(!fnd) runtime_undefined("变量", n);
+                                     Value __nv = lumyr_post_dec(&__old);
+                                     stackframe_bind(frame, n, __old);
+                                     stack[sp++] = __nv;
+                                 } break; }               // 返回值 = 旧值
             case OPC_CAST_INT:    { Value v = stack[--sp]; stack[sp++] = lumyr_cast_int(v); break; }
             case OPC_CAST_DOUBLE: { Value v = stack[--sp]; stack[sp++] = lumyr_cast_double(v); break; }
             case OPC_CAST_CHAR:   { Value v = stack[--sp]; stack[sp++] = lumyr_cast_char(v); break; }

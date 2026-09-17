@@ -31,6 +31,7 @@ typedef enum {
     STACK_BYTE,            /* byte栈 */
     STACK_INT8,            /* int8栈 */
     STACK_INT16,           /* int16栈 */
+    STACK_SHORT,           /* short栈 */
     STACK_INT32,           /* int32栈 */
     STACK_INT64,           /* int64栈 */
     STACK_UINT8,           /* uint8栈 */

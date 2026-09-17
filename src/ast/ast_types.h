@@ -24,7 +24,7 @@ typedef struct {
     int is_class;        // 是否是 class（1=class，0=非 class）
     int is_abstract;     // 是否是抽象类（1=抽象类，0=普通类）
     char* parent;        // 父类名（NULL=无父类，仅 class 使用）
-    int* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
+    CastKind* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）
     int* field_offsets;    // struct 字段偏移量（编译通道用，NULL=未计算）
     /* struct/class 方法 */
@@ -96,7 +96,7 @@ InterfaceDef* interface_get(int idx);
 void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, void* user_data), void* user_data);
 
 // struct 注册（字段用精确 CastKind 类型）
-TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops);
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops);
 // 查找是否是 struct（返回 TypeDef* 或 NULL）
 TypeDef* struct_lookup(const char* name);
 // 添加 struct 方法

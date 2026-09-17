@@ -32,6 +32,11 @@
 #define INT16_PEEK() (((int16_t*)stack_global_get_stack(STACK_INT16))[(*stack_global_get_sp(STACK_INT16)) - 1])
 #define INT16_TOP(idx) (((int16_t*)stack_global_get_stack(STACK_INT16))[(*stack_global_get_sp(STACK_INT16)) - 1 - (idx)])
 
+#define SHORT_PUSH(val) do { stack_global_ensure(STACK_SHORT, 1); ((short*)stack_global_get_stack(STACK_SHORT))[(*stack_global_get_sp(STACK_SHORT))++] = (val); } while(0)
+#define SHORT_POP() (((short*)stack_global_get_stack(STACK_SHORT))[--(*stack_global_get_sp(STACK_SHORT))])
+#define SHORT_PEEK() (((short*)stack_global_get_stack(STACK_SHORT))[(*stack_global_get_sp(STACK_SHORT)) - 1])
+#define SHORT_TOP(idx) (((short*)stack_global_get_stack(STACK_SHORT))[(*stack_global_get_sp(STACK_SHORT)) - 1 - (idx)])
+
 #define INT32_PUSH(val) do { stack_global_ensure(STACK_INT32, 1); ((int32_t*)stack_global_get_stack(STACK_INT32))[(*stack_global_get_sp(STACK_INT32))++] = (val); } while(0)
 #define INT32_POP() (((int32_t*)stack_global_get_stack(STACK_INT32))[--(*stack_global_get_sp(STACK_INT32))])
 #define INT32_PEEK() (((int32_t*)stack_global_get_stack(STACK_INT32))[(*stack_global_get_sp(STACK_INT32)) - 1])

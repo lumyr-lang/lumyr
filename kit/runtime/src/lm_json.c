@@ -276,23 +276,74 @@ static void jq_stringify(SB* b, Value v, Value enc)
     switch(v.type) {
         case VAL_NONE: sb_puts(b, "null"); break;
         case VAL_BOOL: sb_puts(b, v.v.b ? "true" : "false"); break;
+        /* 有符号整数类型：每个类型独立 case，直接读对应字段 */
         case VAL_INT: {
-            char tmp[32];
-            snprintf(tmp, sizeof(tmp), "%lld", v.v.i);
-            sb_puts(b, tmp);
-            break;
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%d", v.v.i); sb_puts(b, tmp); break;
         }
+        case VAL_INT8: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", (int)v.v.i8); sb_puts(b, tmp); break;
+        }
+        case VAL_INT16: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", (int)v.v.i16); sb_puts(b, tmp); break;
+        }
+        case VAL_SHORT: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", (int)v.v.sh); sb_puts(b, tmp); break;
+        }
+        case VAL_INT32: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%d", (int)v.v.i32); sb_puts(b, tmp); break;
+        }
+        case VAL_INT64: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", (long long)v.v.i64); sb_puts(b, tmp); break;
+        }
+        case VAL_LONG_LONG: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lld", v.v.ll); sb_puts(b, tmp); break;
+        }
+        case VAL_LONG: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%ld", v.v.l); sb_puts(b, tmp); break;
+        }
+        /* 无符号整数类型：每个类型独立 case，直接读对应字段 */
         case VAL_BYTE: {
-            char tmp[16];
-            snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.u8);  // 使用专用的u8成员
-            sb_puts(b, tmp);
-            break;
+            char tmp[8]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.by); sb_puts(b, tmp); break;
+        }
+        case VAL_UINT8: {
+            char tmp[8]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.u8); sb_puts(b, tmp); break;
+        }
+        case VAL_UCHAR: {
+            char tmp[8]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.uc); sb_puts(b, tmp); break;
+        }
+        case VAL_UINT16: {
+            char tmp[8]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.u16); sb_puts(b, tmp); break;
+        }
+        case VAL_USHORT: {
+            char tmp[8]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.us); sb_puts(b, tmp); break;
+        }
+        case VAL_UINT32: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.u32); sb_puts(b, tmp); break;
+        }
+        case VAL_UINT: {
+            char tmp[16]; snprintf(tmp, sizeof(tmp), "%u", (unsigned int)v.v.ui); sb_puts(b, tmp); break;
+        }
+        case VAL_UINT64: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%llu", (unsigned long long)v.v.u64); sb_puts(b, tmp); break;
+        }
+        case VAL_ULONG: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%lu", v.v.ul); sb_puts(b, tmp); break;
+        }
+        case VAL_SIZE_T: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%zu", v.v.st); sb_puts(b, tmp); break;
+        }
+        case VAL_SSIZE_T: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%zd", v.v.sst); sb_puts(b, tmp); break;
+        }
+        /* 浮点类型：每个类型独立 case */
+        case VAL_FLOAT: {
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", (double)v.v.f); sb_puts(b, tmp); break;
         }
         case VAL_DOUBLE: {
-            char tmp[64];
-            snprintf(tmp, sizeof(tmp), "%g", v.v.d);
-            sb_puts(b, tmp);
-            break;
+            char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v.v.d); sb_puts(b, tmp); break;
+        }
+        case VAL_LONG_DOUBLE: {
+            char tmp[64]; snprintf(tmp, sizeof(tmp), "%Lg", v.v.ld); sb_puts(b, tmp); break;
         }
         case VAL_CHAR: {
             char one[2] = { v.v.c, '\0' };

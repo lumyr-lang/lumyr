@@ -382,11 +382,46 @@ void lumyr_class_set_field(Value obj, const char* field_name, Value value)
     /* 根据字段类型写入字段值 */
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
-        case CLASS_FIELD_INT:
-            *(long long*)field_ptr = lumyr_extract_ll(value);
+        case CLASS_FIELD_INT: {
+            /* 根据字段宽度一对一写入，类型匹配时零转换开销 */
+            long long __ival;
+            if(fi->size == 1) {
+                if(value.type == VAL_INT8)      __ival = value.v.i8;
+                else if(value.type == VAL_BYTE) __ival = value.v.by;
+                else if(value.type == VAL_UCHAR) __ival = value.v.uc;
+                else __ival = lumyr_extract_ll(value);
+                *(int8_t*)field_ptr = (int8_t)__ival;
+            } else if(fi->size == 2) {
+                if(value.type == VAL_INT16)     __ival = value.v.i16;
+                else if(value.type == VAL_SHORT) __ival = value.v.sh;
+                else if(value.type == VAL_UINT16) __ival = value.v.u16;
+                else if(value.type == VAL_USHORT) __ival = value.v.us;
+                else __ival = lumyr_extract_ll(value);
+                *(int16_t*)field_ptr = (int16_t)__ival;
+            } else if(fi->size == 4) {
+                if(value.type == VAL_INT)        __ival = value.v.i;
+                else if(value.type == VAL_INT32) __ival = value.v.i32;
+                else if(value.type == VAL_UINT32) __ival = value.v.u32;
+                else if(value.type == VAL_UINT)  __ival = value.v.ui;
+                else __ival = lumyr_extract_ll(value);
+                *(int32_t*)field_ptr = (int32_t)__ival;
+            } else {
+                if(value.type == VAL_INT64)      __ival = value.v.i64;
+                else if(value.type == VAL_LONG_LONG) __ival = value.v.ll;
+                else if(value.type == VAL_LONG)  __ival = value.v.l;
+                else if(value.type == VAL_SIZE_T) __ival = value.v.st;
+                else if(value.type == VAL_SSIZE_T) __ival = value.v.sst;
+                else __ival = lumyr_extract_ll(value);
+                *(long long*)field_ptr = __ival;
+            }
             break;
+        }
         case CLASS_FIELD_DOUBLE:
-            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)lumyr_extract_ll(value);
+            /* 浮点类型匹配时直接读，整数类型用 value_as_number 保留小数 */
+            if(value.type == VAL_DOUBLE)      *(double*)field_ptr = value.v.d;
+            else if(value.type == VAL_FLOAT)  *(double*)field_ptr = (double)value.v.f;
+            else if(value.type == VAL_LONG_DOUBLE) *(double*)field_ptr = (double)value.v.ld;
+            else *(double*)field_ptr = value_as_number(value);
             break;
         case CLASS_FIELD_STRING:
             /* 字符串字段需要深拷贝 */

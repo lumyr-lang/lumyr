@@ -21,11 +21,11 @@
 
 /* ========== 辅助函数：获取变量的类型标记 ========== */
 
-static int get_var_cast_type(Ctx* c, const char* name) {
-    if(!c || !c->fn || !name) return -1;
+static CastKind get_var_cast_type(Ctx* c, const char* name) {
+    if(!c || !c->fn || !name) return (CastKind)-1;
     int idx = bf_sym(c->fn, name);
-    if(idx < 0) return -1;
-    if(!c->fn->var_type_tags) return -1;
+    if(idx < 0) return (CastKind)-1;
+    if(!c->fn->var_type_tags) return (CastKind)-1;
     return c->fn->var_type_tags[idx];
 }
 
@@ -33,138 +33,138 @@ static int get_var_cast_type(Ctx* c, const char* name) {
 
 int arith_is_int_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_INT;
 }
 
 int arith_is_uint_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT32;
 }
 
 int arith_is_double_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_DOUBLE;
 }
 
 int arith_is_float_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_FLOAT;
 }
 
 int arith_is_long_long_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_LONGLONG;
 }
 
 int arith_is_long_double_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_LONG_DOUBLE;
 }
 
 int arith_is_bool_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_BOOL;
 }
 
 int arith_is_char_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_CHAR;
 }
 
 int arith_is_byte_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_BYTE;
 }
 
 int arith_is_int8_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_INT8;
 }
 
 int arith_is_int16_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_INT16;
 }
 
 int arith_is_int32_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_INT32;
 }
 
 int arith_is_int64_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_INT64;
 }
 
 int arith_is_uint8_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT8;
 }
 
 int arith_is_uint16_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT16;
 }
 
 int arith_is_uint32_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT32;
 }
 
 int arith_is_uint64_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_UINT64;
 }
 
 int arith_is_long_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_LONG;
 }
 
 int arith_is_ulong_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_ULONG;
 }
 
 int arith_is_size_t_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_SIZE_T;
 }
 
 int arith_is_ssize_t_var(Ctx* c, AstNode* node) {
     if(!node || node->type != AST_VAR) return 0;
-    int ct = get_var_cast_type(c, node->u.varname);
+    CastKind ct = get_var_cast_type(c, node->u.varname);
     return ct == CAST_SSIZE_T;
 }
 
 /* ========== 表达式类型判断 ========== */
 
-int arith_get_expr_type(Ctx* c, AstNode* node) {
+ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
 
     /* 变量引用：根据变量类型标记判断 */
     if(node->type == AST_VAR) {
-        int ct = get_var_cast_type(c, node->u.varname);
+        CastKind ct = get_var_cast_type(c, node->u.varname);
         switch(ct) {
             case CAST_BOOL: return EXPR_TYPE_BOOL;
             case CAST_CHAR: return EXPR_TYPE_CHAR;
@@ -191,8 +191,8 @@ int arith_get_expr_type(Ctx* c, AstNode* node) {
 
     /* 二元运算：递归判断左右操作数类型，取较高优先级的类型 */
     if(node->type == AST_BINOP) {
-        int left_type = arith_get_expr_type(c, node->u.bin.left);
-        int right_type = arith_get_expr_type(c, node->u.bin.right);
+        ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
+        ExprType right_type = arith_get_expr_type(c, node->u.bin.right);
         if(left_type == EXPR_TYPE_NONE) return right_type;
         if(right_type == EXPR_TYPE_NONE) return left_type;
         return (left_type > right_type) ? left_type : right_type;
@@ -437,40 +437,21 @@ int arith_try_optimize_binop(Ctx* c, AstNode* node, int bop) {
 
 /* ========== 运算结果处理 ========== */
 
-void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, int result_type) {
+void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, ExprType result_type) {
     if(!c || !binop) return;
 
     /* 根据运算结果类型选择对应的专用存储指令 */
     switch(result_type) {
-        case EXPR_TYPE_INT:
+        /* 整数类型 */
+        case EXPR_TYPE_BOOL:
             c_expr(c, binop);
-            emit(c, OPC_STORE_INT_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_INT;
+            emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_BOOL;
             break;
-        case EXPR_TYPE_UINT:
+        case EXPR_TYPE_CHAR:
             c_expr(c, binop);
-            emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_UINT32;
-            break;
-        case EXPR_TYPE_DOUBLE:
-            c_expr(c, binop);
-            emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
-            break;
-        case EXPR_TYPE_FLOAT:
-            c_expr(c, binop);
-            emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_FLOAT;
-            break;
-        case EXPR_TYPE_LONG_LONG:
-            c_expr(c, binop);
-            emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
-            break;
-        case EXPR_TYPE_LONG_DOUBLE:
-            c_expr(c, binop);
-            emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
+            emit(c, OPC_STORE_CHAR_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_CHAR;
             break;
         case EXPR_TYPE_INT8:
             c_expr(c, binop);
@@ -482,45 +463,102 @@ void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, int result_
             emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
             c->fn->var_type_tags[var_idx] = CAST_INT16;
             break;
+        case EXPR_TYPE_INT:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_INT;
+            break;
         case EXPR_TYPE_INT64:
             c_expr(c, binop);
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
             c->fn->var_type_tags[var_idx] = CAST_INT64;
             break;
+        case EXPR_TYPE_LONG_LONG:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
+            break;
+        case EXPR_TYPE_LONG:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_LONG;
+            break;
+        /* 无符号整数类型 */
+        case EXPR_TYPE_BYTE:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_BYTE_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_BYTE;
+            break;
+        case EXPR_TYPE_UINT8:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_UINT8_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_UINT8;
+            break;
+        case EXPR_TYPE_UINT16:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_UINT16_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_UINT16;
+            break;
+        case EXPR_TYPE_UINT:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_UINT32;
+            break;
+        case EXPR_TYPE_UINT64:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_UINT64;
+            break;
+        case EXPR_TYPE_ULONG:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_ULONG;
+            break;
+        case EXPR_TYPE_SIZE_T:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
+            break;
+        case EXPR_TYPE_SSIZE_T:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
+            break;
+        /* 浮点类型 */
+        case EXPR_TYPE_FLOAT:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_FLOAT;
+            break;
+        case EXPR_TYPE_DOUBLE:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
+            break;
+        case EXPR_TYPE_LONG_DOUBLE:
+            c_expr(c, binop);
+            emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+            c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
+            break;
         default:
-            /* 未知类型，不处理 */
+            /* EXPR_TYPE_NONE 或未知类型，不处理 */
             break;
     }
 }
 
-int arith_handle_print_result(Ctx* c, AstNode* single_arg, int result_type) {
+int arith_handle_print_result(Ctx* c, AstNode* single_arg, ExprType result_type) {
     if(!c || !single_arg) return 0;
 
     /* 根据运算结果类型选择对应的专用打印指令 */
     switch(result_type) {
-        case EXPR_TYPE_INT:
+        /* 整数类型 */
+        case EXPR_TYPE_BOOL:
             c_expr(c, single_arg);
-            emit(c, OPC_PRINT_INT, 0, 0);
+            emit(c, OPC_PRINT_BOOL, 0, 0);
             return 1;
-        case EXPR_TYPE_UINT:
+        case EXPR_TYPE_CHAR:
             c_expr(c, single_arg);
-            emit(c, OPC_PRINT_UINT, 0, 0);
-            return 1;
-        case EXPR_TYPE_DOUBLE:
-            c_expr(c, single_arg);
-            emit(c, OPC_PRINT_DOUBLE, 0, 0);
-            return 1;
-        case EXPR_TYPE_FLOAT:
-            c_expr(c, single_arg);
-            emit(c, OPC_PRINT_FLOAT, 0, 0);
-            return 1;
-        case EXPR_TYPE_LONG_LONG:
-            c_expr(c, single_arg);
-            emit(c, OPC_PRINT_LONG_LONG, 0, 0);
-            return 1;
-        case EXPR_TYPE_LONG_DOUBLE:
-            c_expr(c, single_arg);
-            emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+            emit(c, OPC_PRINT_CHAR, 0, 0);
             return 1;
         case EXPR_TYPE_INT8:
             c_expr(c, single_arg);
@@ -530,12 +568,70 @@ int arith_handle_print_result(Ctx* c, AstNode* single_arg, int result_type) {
             c_expr(c, single_arg);
             emit(c, OPC_PRINT_INT16, 0, 0);
             return 1;
+        case EXPR_TYPE_INT:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_INT, 0, 0);
+            return 1;
         case EXPR_TYPE_INT64:
             c_expr(c, single_arg);
             emit(c, OPC_PRINT_INT64, 0, 0);
             return 1;
+        case EXPR_TYPE_LONG_LONG:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_LONG_LONG, 0, 0);
+            return 1;
+        case EXPR_TYPE_LONG:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_LONG, 0, 0);
+            return 1;
+        /* 无符号整数类型 */
+        case EXPR_TYPE_BYTE:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_BYTE, 0, 0);
+            return 1;
+        case EXPR_TYPE_UINT8:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_UINT8, 0, 0);
+            return 1;
+        case EXPR_TYPE_UINT16:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_UINT16, 0, 0);
+            return 1;
+        case EXPR_TYPE_UINT:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_UINT, 0, 0);
+            return 1;
+        case EXPR_TYPE_UINT64:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_UINT64, 0, 0);
+            return 1;
+        case EXPR_TYPE_ULONG:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_ULONG, 0, 0);
+            return 1;
+        case EXPR_TYPE_SIZE_T:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_SIZE_T, 0, 0);
+            return 1;
+        case EXPR_TYPE_SSIZE_T:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_SSIZE_T, 0, 0);
+            return 1;
+        /* 浮点类型 */
+        case EXPR_TYPE_FLOAT:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_FLOAT, 0, 0);
+            return 1;
+        case EXPR_TYPE_DOUBLE:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_DOUBLE, 0, 0);
+            return 1;
+        case EXPR_TYPE_LONG_DOUBLE:
+            c_expr(c, single_arg);
+            emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+            return 1;
         default:
-            /* 未知类型，返回 0 表示需要走通用路径 */
+            /* EXPR_TYPE_NONE 或未知类型，返回 0 表示需要走通用路径 */
             return 0;
     }
 }

@@ -314,7 +314,7 @@ void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, vo
 }
 
 /* ===== struct 注册 ===== */
-TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char** struct_names, int nprops)
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops)
 {
     // 先注册为普通 type（用 ValueType，从 CastKind 转换）
     ValueType* vtypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
@@ -326,7 +326,7 @@ TypeDef* struct_register(const char* name, char** props, int* cast_kinds, char**
 
     // 标记为 struct 并保存精确 CastKind 类型
     td->is_struct = 1;
-    td->field_cast_kinds = (int*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(int));
+    td->field_cast_kinds = (CastKind*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(char*));
     for(int k = 0; k < nprops; k++) {
         td->field_cast_kinds[k] = cast_kinds[k];
@@ -425,7 +425,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     td->is_class = 1;
     td->parent = parent ? strdup(parent) : NULL;
     /* 设置 field_cast_kinds：根据 ValueType 转换成 CastKind，用于 C 代码生成时生成精确的字段类型 */
-    td->field_cast_kinds = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+    td->field_cast_kinds = (CastKind*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
     for(int k = 0; k < merged_nprops; k++) {
         td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);

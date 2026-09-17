@@ -813,35 +813,82 @@ Value val_clone(const Value* src) {
 // -------- debug打印 --------
 const char* val_typename(ValueType t) {
     switch(t) {
-    case VAL_NONE: return "none";
-    case VAL_INT: return "int";
-    case VAL_DOUBLE: return "double";
-    case VAL_BOOL: return "bool";
-    case VAL_CHAR: return "char";
-    case VAL_STRING: return "string";
-    case VAL_FUNC: return "func";
-    case VAL_ARRAY: return "array";
-    case VAL_MAP: return "map";
-    case VAL_ERROR: return "error";
-    case VAL_BYTE: return "byte";
-    case VAL_GENERATOR: return "generator";
-    case VAL_STRUCT_PTR: return "struct_ptr";
-    case VAL_CLASS_PTR: return "class_ptr";
-    case VAL_TYPED_ARRAY: return "typed_array";
-    default: return "unknown";
+    /* 有符号整数类型 */
+    case VAL_INT:          return "int";
+    case VAL_INT8:         return "int8";
+    case VAL_INT16:        return "int16";
+    case VAL_SHORT:        return "short";
+    case VAL_INT32:        return "int32";
+    case VAL_INT64:        return "int64";
+    case VAL_LONG_LONG:    return "long_long";
+    case VAL_LONG:         return "long";
+    /* 无符号整数类型 */
+    case VAL_BYTE:         return "byte";
+    case VAL_UINT8:        return "uint8";
+    case VAL_UCHAR:        return "uchar";
+    case VAL_UINT16:       return "uint16";
+    case VAL_USHORT:       return "ushort";
+    case VAL_UINT32:       return "uint32";
+    case VAL_UINT:         return "uint";
+    case VAL_UINT64:       return "uint64";
+    case VAL_ULONG:        return "ulong";
+    case VAL_SIZE_T:       return "size_t";
+    case VAL_SSIZE_T:      return "ssize_t";
+    /* 浮点类型 */
+    case VAL_FLOAT:        return "float";
+    case VAL_DOUBLE:       return "double";
+    case VAL_LONG_DOUBLE:  return "long_double";
+    /* 其他类型 */
+    case VAL_BOOL:         return "bool";
+    case VAL_CHAR:         return "char";
+    case VAL_STRING:       return "string";
+    case VAL_FUNC:         return "func";
+    case VAL_ARRAY:        return "array";
+    case VAL_MAP:          return "map";
+    case VAL_ERROR:        return "error";
+    case VAL_NONE:         return "none";
+    case VAL_GENERATOR:    return "generator";
+    case VAL_STRUCT_PTR:   return "struct_ptr";
+    case VAL_CLASS_PTR:    return "class_ptr";
+    case VAL_TYPED_ARRAY:  return "typed_array";
+    default:               return "unknown";
     }
 }
 
 void val_print(const Value* v) {
     if(!v) { printf("(null value)"); return; }
     switch(v->type) {
-    case VAL_INT: printf("%lld", v->v.i); break;
-    case VAL_DOUBLE: printf("%g", v->v.d); break;
-    case VAL_BOOL: printf("%s", v->v.b ? "true" : "false"); break;
-    case VAL_CHAR: printf("'%c'", v->v.c); break;
-    case VAL_STRING: printf("\"%s\"", lumyr_str_cstr(v)); break;
-    case VAL_ERROR: printf("[error:%s] %s", v->v.err.type ? v->v.err.type : "", v->v.err.message ? v->v.err.message : ""); break;
-    case VAL_FUNC: printf("<func>"); break;
+    /* 有符号整数类型 */
+    case VAL_INT:          printf("%d", v->v.i); break;
+    case VAL_INT8:         printf("%d", (int)v->v.i8); break;
+    case VAL_INT16:        printf("%d", (int)v->v.i16); break;
+    case VAL_SHORT:        printf("%d", (int)v->v.sh); break;
+    case VAL_INT32:        printf("%d", (int)v->v.i32); break;
+    case VAL_INT64:        printf("%lld", (long long)v->v.i64); break;
+    case VAL_LONG_LONG:    printf("%lld", v->v.ll); break;
+    case VAL_LONG:         printf("%ld", v->v.l); break;
+    /* 无符号整数类型 */
+    case VAL_BYTE:         printf("%u", (unsigned int)v->v.by); break;
+    case VAL_UINT8:        printf("%u", (unsigned int)v->v.u8); break;
+    case VAL_UCHAR:        printf("%u", (unsigned int)v->v.uc); break;
+    case VAL_UINT16:       printf("%u", (unsigned int)v->v.u16); break;
+    case VAL_USHORT:       printf("%u", (unsigned int)v->v.us); break;
+    case VAL_UINT32:       printf("%u", (unsigned int)v->v.u32); break;
+    case VAL_UINT:         printf("%u", (unsigned int)v->v.ui); break;
+    case VAL_UINT64:       printf("%llu", (unsigned long long)v->v.u64); break;
+    case VAL_ULONG:        printf("%lu", v->v.ul); break;
+    case VAL_SIZE_T:       printf("%zu", v->v.st); break;
+    case VAL_SSIZE_T:      printf("%zd", v->v.sst); break;
+    /* 浮点类型 */
+    case VAL_FLOAT:        printf("%g", (double)v->v.f); break;
+    case VAL_DOUBLE:       printf("%g", v->v.d); break;
+    case VAL_LONG_DOUBLE:  printf("%Lg", v->v.ld); break;
+    /* 其他类型 */
+    case VAL_BOOL:         printf("%s", v->v.b ? "true" : "false"); break;
+    case VAL_CHAR:         printf("'%c'", v->v.c); break;
+    case VAL_STRING:       printf("\"%s\"", lumyr_str_cstr(v)); break;
+    case VAL_ERROR:        printf("[error:%s] %s", v->v.err.type ? v->v.err.type : "", v->v.err.message ? v->v.err.message : ""); break;
+    case VAL_FUNC:         printf("<func>"); break;
     case VAL_ARRAY: {
         printf("[");
         for(int i=0;i<v->v.array->len;i++){
@@ -856,45 +903,155 @@ void val_print(const Value* v) {
     }
 }
 
-// ==================== 自增自减 ====================
+// ==================== 类型化自增自减（直接操作原始指针，零转换开销） ====================
+/* 有符号整数 */
+void int_inc(int* v) { (*v)++; }
+void int8_inc(int8_t* v) { (*v)++; }
+void int16_inc(int16_t* v) { (*v)++; }
+void int32_inc(int32_t* v) { (*v)++; }
+void int64_inc(int64_t* v) { (*v)++; }
+void long_inc(long* v) { (*v)++; }
+void short_inc(short* v) { (*v)++; }
+
+/* 无符号整数 */
+void uint_inc(unsigned int* v) { (*v)++; }
+void uint8_inc(uint8_t* v) { (*v)++; }
+void uint16_inc(uint16_t* v) { (*v)++; }
+void uint32_inc(uint32_t* v) { (*v)++; }
+void uint64_inc(uint64_t* v) { (*v)++; }
+void ulong_inc(unsigned long* v) { (*v)++; }
+void ushort_inc(unsigned short* v) { (*v)++; }
+void byte_inc(unsigned char* v) { (*v)++; }
+void uchar_inc(unsigned char* v) { (*v)++; }
+void size_inc(size_t* v) { (*v)++; }
+void ssize_inc(ssize_t* v) { (*v)++; }
+
+/* 浮点 */
+void float_inc(float* v) { (*v) += 1.0f; }
+void double_inc(double* v) { (*v) += 1.0; }
+void long_double_inc(long double* v) { (*v) += 1.0L; }
+
+/* 其他 */
+void bool_inc(_Bool* v) { (*v) = 1; }
+void char_inc(char* v) { (*v)++; }
+
+/* 有符号整数自减 */
+void int_dec(int* v) { (*v)--; }
+void int8_dec(int8_t* v) { (*v)--; }
+void int16_dec(int16_t* v) { (*v)--; }
+void int32_dec(int32_t* v) { (*v)--; }
+void int64_dec(int64_t* v) { (*v)--; }
+void long_dec(long* v) { (*v)--; }
+void short_dec(short* v) { (*v)--; }
+
+/* 无符号整数自减 */
+void uint_dec(unsigned int* v) { (*v)--; }
+void uint8_dec(uint8_t* v) { (*v)--; }
+void uint16_dec(uint16_t* v) { (*v)--; }
+void uint32_dec(uint32_t* v) { (*v)--; }
+void uint64_dec(uint64_t* v) { (*v)--; }
+void ulong_dec(unsigned long* v) { (*v)--; }
+void ushort_dec(unsigned short* v) { (*v)--; }
+void byte_dec(unsigned char* v) { (*v)--; }
+void uchar_dec(unsigned char* v) { (*v)--; }
+void size_dec(size_t* v) { (*v)--; }
+void ssize_dec(ssize_t* v) { (*v)--; }
+
+/* 浮点自减 */
+void float_dec(float* v) { (*v) -= 1.0f; }
+void double_dec(double* v) { (*v) -= 1.0; }
+void long_double_dec(long double* v) { (*v) -= 1.0L; }
+
+/* 其他自减 */
+void bool_dec(_Bool* v) { (*v) = 0; }
+void char_dec(char* v) { (*v)--; }
+
+// ==================== 通用自增自减（Value* 路径，兼容旧代码） ====================
+/* 自增辅助：所有整数和浮点类型都支持 */
+static void value_inc(Value* v) {
+    switch(v->type) {
+        /* 有符号整数类型 */
+        case VAL_INT:          v->v.i += 1; break;
+        case VAL_INT8:         v->v.i8 += 1; break;
+        case VAL_INT16:        v->v.i16 += 1; break;
+        case VAL_SHORT:         v->v.sh += 1; break;
+        case VAL_INT32:        v->v.i32 += 1; break;
+        case VAL_INT64:        v->v.i64 += 1; break;
+        case VAL_LONG_LONG:    v->v.ll += 1; break;
+        case VAL_LONG:          v->v.l += 1; break;
+        /* 无符号整数类型 */
+        case VAL_BYTE:          v->v.by += 1; break;
+        case VAL_UINT8:        v->v.u8 += 1; break;
+        case VAL_UCHAR:         v->v.uc += 1; break;
+        case VAL_UINT16:       v->v.u16 += 1; break;
+        case VAL_USHORT:        v->v.us += 1; break;
+        case VAL_UINT32:       v->v.u32 += 1; break;
+        case VAL_UINT:          v->v.ui += 1; break;
+        case VAL_UINT64:        v->v.u64 += 1; break;
+        case VAL_ULONG:         v->v.ul += 1; break;
+        case VAL_SIZE_T:        v->v.st += 1; break;
+        case VAL_SSIZE_T:      v->v.sst += 1; break;
+        /* 浮点类型 */
+        case VAL_FLOAT:         v->v.f += 1.0f; break;
+        case VAL_DOUBLE:        v->v.d += 1.0; break;
+        case VAL_LONG_DOUBLE:   v->v.ld += 1.0L; break;
+        /* 字符类型 */
+        case VAL_CHAR:          v->v.c += 1; break;
+        default: runtime_error("inc: 类型不支持自增");
+    }
+}
+
+static void value_dec(Value* v) {
+    switch(v->type) {
+        /* 有符号整数类型 */
+        case VAL_INT:          v->v.i -= 1; break;
+        case VAL_INT8:         v->v.i8 -= 1; break;
+        case VAL_INT16:        v->v.i16 -= 1; break;
+        case VAL_SHORT:         v->v.sh -= 1; break;
+        case VAL_INT32:        v->v.i32 -= 1; break;
+        case VAL_INT64:        v->v.i64 -= 1; break;
+        case VAL_LONG_LONG:    v->v.ll -= 1; break;
+        case VAL_LONG:          v->v.l -= 1; break;
+        /* 无符号整数类型 */
+        case VAL_BYTE:          v->v.by -= 1; break;
+        case VAL_UINT8:        v->v.u8 -= 1; break;
+        case VAL_UCHAR:         v->v.uc -= 1; break;
+        case VAL_UINT16:       v->v.u16 -= 1; break;
+        case VAL_USHORT:        v->v.us -= 1; break;
+        case VAL_UINT32:       v->v.u32 -= 1; break;
+        case VAL_UINT:          v->v.ui -= 1; break;
+        case VAL_UINT64:        v->v.u64 -= 1; break;
+        case VAL_ULONG:         v->v.ul -= 1; break;
+        case VAL_SIZE_T:        v->v.st -= 1; break;
+        case VAL_SSIZE_T:      v->v.sst -= 1; break;
+        /* 浮点类型 */
+        case VAL_FLOAT:         v->v.f -= 1.0f; break;
+        case VAL_DOUBLE:        v->v.d -= 1.0; break;
+        case VAL_LONG_DOUBLE:   v->v.ld -= 1.0L; break;
+        /* 字符类型 */
+        case VAL_CHAR:          v->v.c -= 1; break;
+        default: runtime_error("dec: 类型不支持自减");
+    }
+}
+
 Value lumyr_post_inc(Value* v) {
     Value old = *v;
-    switch(v->type) {
-        case VAL_INT:    v->v.i += 1; break;
-        case VAL_DOUBLE: v->v.d += 1.0; break;
-        case VAL_CHAR:   v->v.c += 1; break;
-        default: runtime_error("post_inc:类型不支持++");
-    }
+    value_inc(v);
     return old;
 }
 
 Value lumyr_pre_inc(Value* v) {
-    switch(v->type) {
-        case VAL_INT:    v->v.i += 1; break;
-        case VAL_DOUBLE: v->v.d += 1.0; break;
-        case VAL_CHAR:   v->v.c += 1; break;
-        default: runtime_error("pre_inc:类型不支持++");
-    }
+    value_inc(v);
     return *v;
 }
 
 Value lumyr_post_dec(Value* v) {
     Value old = *v;
-    switch(v->type) {
-        case VAL_INT:    v->v.i -= 1; break;
-        case VAL_DOUBLE: v->v.d -= 1.0; break;
-        case VAL_CHAR:   v->v.c -= 1; break;
-        default: runtime_error("post_dec:类型不支持--");
-    }
+    value_dec(v);
     return old;
 }
 
 Value lumyr_pre_dec(Value* v) {
-    switch(v->type) {
-        case VAL_INT:    v->v.i -= 1; break;
-        case VAL_DOUBLE: v->v.d -= 1.0; break;
-        case VAL_CHAR:   v->v.c -= 1; break;
-        default: runtime_error("pre_dec:类型不支持--");
-    }
+    value_dec(v);
     return *v;
 }

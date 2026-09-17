@@ -287,7 +287,7 @@ AstNode* ast_unary(BinOp op, AstNode* child)
     return n;
 }
 
-AstNode* new_cast_node(int cast_type, AstNode* child)
+AstNode* new_cast_node(CastKind cast_type, AstNode* child)
 {
     AstNode* n = ast_new(AST_CAST);
     n->u.cast.cast_type = cast_type;
@@ -519,7 +519,7 @@ AstNode* ast_extern_func(char* name, AstNode* params, char* ret_type_name, char*
 // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
 // 数组字面量：直接设置 AST_ARRAY_LIT 节点的 elem_type 字段，创建类型化数组
 // 其他表达式：创建 AST_TYPE_ANNOTATION 节点，运行时进行类型转换
-AstNode* ast_type_annotation(int cast_type, AstNode* expr) {
+AstNode* ast_type_annotation(CastKind cast_type, AstNode* expr) {
     if(expr && expr->type == AST_ARRAY_LIT) {
         // 数组字面量：直接设置 elem_type 字段，创建类型化数组
         expr->u.array_lit.elem_type = castkind_to_valtype(cast_type);

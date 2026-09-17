@@ -27,15 +27,26 @@ typedef struct RuntimeFunc {
 } RuntimeFunc;
 
 // 强制转换类型，给 new_cast_node 使用
+// 与 ValueType 枚举一一对应，覆盖所有数据类型
 typedef enum {
+    /* 基础类型 */
+    CAST_NONE,       // null
     CAST_INT,
     CAST_DOUBLE,
     CAST_STRING,
     CAST_BOOL,
     CAST_ASCII,
     CAST_CHAR,
-    CAST_BYTE,     // (byte)x 强转：C 风格截断为 8 位无符号整数
-    // 固定宽度整数（运行时统一 long long 存储，强转时 C 风格截断）
+    CAST_BYTE,       // (byte)x 强转：C 风格截断为 8 位无符号整数
+    CAST_FUNC,       // 函数引用
+    CAST_ARRAY,      // 数组
+    CAST_MAP,        // 字典/哈希表
+    CAST_ERROR,      // 错误对象
+    CAST_GENERATOR,  // 生成器
+    CAST_STRUCT_PTR, // C 结构体指针
+    CAST_CLASS_PTR,  // class 实例指针
+    CAST_TYPED_ARRAY,// 类型化数组
+    /* 固定宽度整数（运行时统一 long long 存储，强转时 C 风格截断） */
     CAST_INT8,
     CAST_INT16,
     CAST_INT32,
@@ -48,7 +59,7 @@ typedef enum {
     CAST_LONG,       // long：平台相关，lm 统一 64 位
     CAST_LONGLONG,   // long long：64 位（= int 默认）
     CAST_FLOAT,      // float：32 位单精度，运行时 double 存储，强转时截断精度
-    // 补充 C 标准类型（与 FFI 类型对齐，运行时统一 long long/double 存储）
+    /* 补充 C 标准类型（与 FFI 类型对齐，运行时统一 long long/double 存储） */
     CAST_ULONG,      // unsigned long
     CAST_UCHAR,      // unsigned char（= byte，但语义明确）
     CAST_SHORT,      // short（16 位有符号）
@@ -58,6 +69,7 @@ typedef enum {
     CAST_VOID,       // void（无类型/无返回值）
     CAST_LONG_DOUBLE,// long double（扩展精度浮点）
     CAST_PTR,        // 指针/句柄（用 int 存储指针值）
+    CAST_CALLBACK,   // 回调函数（函数指针）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -89,7 +101,8 @@ typedef enum {
     VAL_LONG,         // long
     VAL_UINT8,        // uint8_t / unsigned char / byte
     VAL_UINT16,       // uint16_t / unsigned short
-    VAL_UINT32,       // uint32_t / unsigned int / uint
+    VAL_UINT32,       // uint32_t
+    VAL_UINT,         // unsigned int / uint（与 uint32 同宽，type 隔离）
     VAL_UINT64,       // uint64_t / unsigned long long
     VAL_ULONG,        // unsigned long
     VAL_UCHAR,        // unsigned char
@@ -154,15 +167,21 @@ struct Value {
     union {                  // 24字节，偏移8
         // ===== 有符号整数类型 =====
         int i;                // VAL_INT：32位有符号整数（与C语言int对齐）
-        long long ll;         // VAL_LONG_LONG / VAL_INT64：64位有符号整数（与C语言long long对齐）
+        long long ll;         // VAL_LONG_LONG：64位有符号整数（与C语言long long对齐）
+        int64_t i64;          // VAL_INT64：64位有符号整数
         int8_t i8;            // VAL_INT8：8位有符号整数
-        int16_t i16;          // VAL_INT16 / VAL_SHORT：16位有符号整数
+        int16_t i16;          // VAL_INT16：16位有符号整数
+        short sh;             // VAL_SHORT：16位有符号整数
         int32_t i32;          // VAL_INT32：32位有符号整数
         long l;               // VAL_LONG：long类型
         // ===== 无符号整数类型 =====
-        uint8_t u8;           // VAL_UINT8 / VAL_BYTE / VAL_UCHAR：8位无符号整数
-        uint16_t u16;         // VAL_UINT16 / VAL_USHORT：16位无符号整数
+        uint8_t u8;           // VAL_UINT8：8位无符号整数
+        unsigned char uc;     // VAL_UCHAR：8位无符号整数
+        uint8_t by;           // VAL_BYTE：8位无符号整数
+        uint16_t u16;         // VAL_UINT16：16位无符号整数
+        unsigned short us;    // VAL_USHORT：16位无符号整数
         uint32_t u32;         // VAL_UINT32：32位无符号整数
+        unsigned int ui;      // VAL_UINT：32位无符号整数
         uint64_t u64;         // VAL_UINT64：64位无符号整数
         unsigned long ul;     // VAL_ULONG：unsigned long类型
         // ===== 浮点类型 =====
@@ -274,7 +293,7 @@ typedef struct StackFrame {
     Value** cells;
     int cell_cnt;
     int cell_cap;
-    int* type_tags;   /* 变量类型标记（CastKind 枚举，-1 表示无精确类型），与 names/vals 平行数组 */
+    CastKind* type_tags;   /* 变量类型标记（CastKind 枚举，-1 表示无精确类型），与 names/vals 平行数组 */
 } StackFrame;
 
 #include <string.h>

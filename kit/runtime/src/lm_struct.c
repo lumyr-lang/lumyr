@@ -323,17 +323,49 @@ void lumyr_struct_set_field(Value obj, const char* field_name, Value value)
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     switch(fi->type) {
         case STRUCT_FIELD_INT: {
-            /* 根据字段宽度精确写入，避免越界写入相邻字段
-               使用辅助函数根据value类型提取整数值，各数据类型专用 */
-            long long __ival = lumyr_extract_ll(value);
-            if(fi->size == 1) { *(int8_t*)field_ptr = (int8_t)__ival; break; }
-            if(fi->size == 2) { *(int16_t*)field_ptr = (int16_t)__ival; break; }
-            if(fi->size == 4) { *(int32_t*)field_ptr = (int32_t)__ival; break; }
-            *(long long*)field_ptr = __ival;
+            /* 根据字段宽度一对一写入，类型匹配时零转换开销 */
+            long long __ival;
+            if(fi->size == 1) {
+                /* 8位有符号字段：匹配 INT8/SHORT/INT16 等8位类型时直接读 */
+                if(value.type == VAL_INT8)      __ival = value.v.i8;
+                else if(value.type == VAL_BYTE) __ival = value.v.by;
+                else if(value.type == VAL_UCHAR) __ival = value.v.uc;
+                else __ival = lumyr_extract_ll(value);
+                *(int8_t*)field_ptr = (int8_t)__ival;
+            } else if(fi->size == 2) {
+                /* 16位有符号字段：匹配 INT16/SHORT 时直接读 */
+                if(value.type == VAL_INT16)     __ival = value.v.i16;
+                else if(value.type == VAL_SHORT) __ival = value.v.sh;
+                else if(value.type == VAL_UINT16) __ival = value.v.u16;
+                else if(value.type == VAL_USHORT) __ival = value.v.us;
+                else __ival = lumyr_extract_ll(value);
+                *(int16_t*)field_ptr = (int16_t)__ival;
+            } else if(fi->size == 4) {
+                /* 32位有符号字段：匹配 INT/INT32/UINT32 时直接读 */
+                if(value.type == VAL_INT)        __ival = value.v.i;
+                else if(value.type == VAL_INT32) __ival = value.v.i32;
+                else if(value.type == VAL_UINT32) __ival = value.v.u32;
+                else if(value.type == VAL_UINT)  __ival = value.v.ui;
+                else __ival = lumyr_extract_ll(value);
+                *(int32_t*)field_ptr = (int32_t)__ival;
+            } else {
+                /* 64位有符号字段：匹配 INT64/LONG_LONG/LONG 时直接读 */
+                if(value.type == VAL_INT64)      __ival = value.v.i64;
+                else if(value.type == VAL_LONG_LONG) __ival = value.v.ll;
+                else if(value.type == VAL_LONG)  __ival = value.v.l;
+                else if(value.type == VAL_SIZE_T) __ival = value.v.st;
+                else if(value.type == VAL_SSIZE_T) __ival = value.v.sst;
+                else __ival = lumyr_extract_ll(value);
+                *(long long*)field_ptr = __ival;
+            }
             break;
         }
         case STRUCT_FIELD_DOUBLE:
-            *(double*)field_ptr = value.type == VAL_DOUBLE ? value.v.d : (double)lumyr_extract_ll(value);
+            /* 浮点类型匹配时直接读，整数类型用 value_as_number 保留小数 */
+            if(value.type == VAL_DOUBLE)      *(double*)field_ptr = value.v.d;
+            else if(value.type == VAL_FLOAT)  *(double*)field_ptr = (double)value.v.f;
+            else if(value.type == VAL_LONG_DOUBLE) *(double*)field_ptr = (double)value.v.ld;
+            else *(double*)field_ptr = value_as_number(value);
             break;
         case STRUCT_FIELD_STRING:
             /* 字符串字段需要深拷贝 */
@@ -371,19 +403,50 @@ int lumyr_struct_eq(Value a, Value b)
         Value va = lumyr_struct_get_field(a, fields[i].name);
         Value vb = lumyr_struct_get_field(b, fields[i].name);
         if(va.type != vb.type) return 0;
-        if(va.type == VAL_INT) { if(va.v.i != vb.v.i) return 0; }
-        else if(va.type == VAL_DOUBLE) { if(va.v.d != vb.v.d) return 0; }
-        else if(va.type == VAL_BOOL) { if(va.v.b != vb.v.b) return 0; }
-        else if(va.type == VAL_STRING) {
-            const char* sa = lumyr_str_cstr(&va);
-            const char* sb = lumyr_str_cstr(&vb);
-            if(!sa || !sb || strcmp(sa, sb) != 0) return 0;
-        }
-        else if(va.type == VAL_STRUCT_PTR) {
-            if(!lumyr_struct_eq(va, vb)) return 0;
-        }
-        else {
-            if(lumyr_extract_ll(va) != lumyr_extract_ll(vb)) return 0;
+        /* 每个类型一对一比较，直接读对应字段，零转换开销 */
+        switch(va.type) {
+            case VAL_INT:          if(va.v.i != vb.v.i) return 0; break;
+            case VAL_INT8:         if(va.v.i8 != vb.v.i8) return 0; break;
+            case VAL_INT16:        if(va.v.i16 != vb.v.i16) return 0; break;
+            case VAL_SHORT:        if(va.v.sh != vb.v.sh) return 0; break;
+            case VAL_INT32:        if(va.v.i32 != vb.v.i32) return 0; break;
+            case VAL_INT64:        if(va.v.i64 != vb.v.i64) return 0; break;
+            case VAL_LONG_LONG:    if(va.v.ll != vb.v.ll) return 0; break;
+            case VAL_LONG:         if(va.v.l != vb.v.l) return 0; break;
+            case VAL_BYTE:         if(va.v.by != vb.v.by) return 0; break;
+            case VAL_UINT8:        if(va.v.u8 != vb.v.u8) return 0; break;
+            case VAL_UCHAR:        if(va.v.uc != vb.v.uc) return 0; break;
+            case VAL_UINT16:       if(va.v.u16 != vb.v.u16) return 0; break;
+            case VAL_USHORT:       if(va.v.us != vb.v.us) return 0; break;
+            case VAL_UINT32:       if(va.v.u32 != vb.v.u32) return 0; break;
+            case VAL_UINT:         if(va.v.ui != vb.v.ui) return 0; break;
+            case VAL_UINT64:       if(va.v.u64 != vb.v.u64) return 0; break;
+            case VAL_ULONG:        if(va.v.ul != vb.v.ul) return 0; break;
+            case VAL_SIZE_T:       if(va.v.st != vb.v.st) return 0; break;
+            case VAL_SSIZE_T:      if(va.v.sst != vb.v.sst) return 0; break;
+            case VAL_FLOAT:        if(va.v.f != vb.v.f) return 0; break;
+            case VAL_DOUBLE:       if(va.v.d != vb.v.d) return 0; break;
+            case VAL_LONG_DOUBLE:  if(va.v.ld != vb.v.ld) return 0; break;
+            case VAL_BOOL:         if(va.v.b != vb.v.b) return 0; break;
+            case VAL_CHAR:         if(va.v.c != vb.v.c) return 0; break;
+            case VAL_STRING: {
+                const char* sa = lumyr_str_cstr(&va);
+                const char* sb = lumyr_str_cstr(&vb);
+                if(!sa || !sb || strcmp(sa, sb) != 0) return 0;
+                break;
+            }
+            case VAL_STRUCT_PTR:
+                if(!lumyr_struct_eq(va, vb)) return 0;
+                break;
+            case VAL_ARRAY:
+            case VAL_MAP:
+                /* 数组/map 比较：引用相等即相等（浅比较） */
+                if(va.v.array != vb.v.array) return 0;
+                break;
+            default:
+                /* 其他类型：用引用比较 */
+                if(va.v.ll != vb.v.ll) return 0;
+                break;
         }
     }
     return 1;

@@ -38,6 +38,7 @@ typedef struct {
     const char* name;       /* 字段名 */
     int offset;             /* 字段在 C 结构体中的偏移量（字节） */
     ClassFieldType type;    /* 字段类型 */
+    int size;               /* 字段的字节宽度（用于整数类型的精确读取） */
     int access_modifier;    /* 访问修饰符（0=public, 1=private, 2=protected） */
 } ClassFieldInfo;
 

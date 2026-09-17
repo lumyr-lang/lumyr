@@ -18,11 +18,15 @@ Value lumyr_make_char(char ch);
 Value lumyr_make_byte(unsigned char b);   // byte：8 位无符号整数（0-255）
 Value lumyr_make_int8(int8_t i8);          // int8：8 位有符号整数（-128 到 127）
 Value lumyr_make_int16(int16_t i16);        // int16：16 位有符号整数（-32768 到 32767）
+Value lumyr_make_short(int16_t s);           // short：16位有符号整数（与int16同宽，type=VAL_SHORT）
 Value lumyr_make_int32(int32_t i32);        // int32：32 位有符号整数（-2147483648 到 2147483647）
 Value lumyr_make_int64(int64_t i64);        // int64：64 位有符号整数（-9223372036854775808 到 9223372036854775807）
 Value lumyr_make_uint8(uint8_t u8);          // uint8：8 位无符号整数（0 到 255）
+Value lumyr_make_uchar(unsigned char uc);    // uchar：8位无符号整数（与uint8同宽，type=VAL_UCHAR）
 Value lumyr_make_uint16(uint16_t u16);        // uint16：16 位无符号整数（0 到 65535）
+Value lumyr_make_ushort(unsigned short us);  // ushort：16位无符号整数（与uint16同宽，type=VAL_USHORT）
 Value lumyr_make_uint32(uint32_t u32);        // uint32：32 位无符号整数（0 到 4294967295）
+Value lumyr_make_uint(unsigned int ui);         // uint：unsigned int（与uint32同宽，type=VAL_UINT）
 Value lumyr_make_uint64(uint64_t u64);        // uint64：64 位无符号整数（0 到 18446744073709551615）
 Value lumyr_make_long(long lv);                  // long：长整数（平台相关，通常 32 位或 64 位）
 Value lumyr_make_ulong(unsigned long ulv);        // unsigned long：无符号长整数（平台相关）
@@ -116,6 +120,69 @@ double value_as_number(Value x);    // 值转数值（数值/布尔/字符）
 char*  value_to_str(Value v);       // 值转字符串（malloc，调用方 free）
 long long array_index_of(Value idx); // 下标值转 long long
 long long range_to_ll(Value v);       // range 参数转 long long
+
+// ===== 类型化自增自减（直接操作原始指针，零转换开销） =====
+/* 有符号整数 */
+void int_inc(int* v);
+void int8_inc(int8_t* v);
+void int16_inc(int16_t* v);
+void int32_inc(int32_t* v);
+void int64_inc(int64_t* v);
+void long_inc(long* v);
+void short_inc(short* v);
+
+/* 无符号整数 */
+void uint_inc(unsigned int* v);
+void uint8_inc(uint8_t* v);
+void uint16_inc(uint16_t* v);
+void uint32_inc(uint32_t* v);
+void uint64_inc(uint64_t* v);
+void ulong_inc(unsigned long* v);
+void ushort_inc(unsigned short* v);
+void byte_inc(unsigned char* v);
+void uchar_inc(unsigned char* v);
+void size_inc(size_t* v);
+void ssize_inc(ssize_t* v);
+
+/* 浮点 */
+void float_inc(float* v);
+void double_inc(double* v);
+void long_double_inc(long double* v);
+
+/* 其他 */
+void bool_inc(_Bool* v);
+void char_inc(char* v);
+
+/* 有符号整数自减 */
+void int_dec(int* v);
+void int8_dec(int8_t* v);
+void int16_dec(int16_t* v);
+void int32_dec(int32_t* v);
+void int64_dec(int64_t* v);
+void long_dec(long* v);
+void short_dec(short* v);
+
+/* 无符号整数自减 */
+void uint_dec(unsigned int* v);
+void uint8_dec(uint8_t* v);
+void uint16_dec(uint16_t* v);
+void uint32_dec(uint32_t* v);
+void uint64_dec(uint64_t* v);
+void ulong_dec(unsigned long* v);
+void ushort_dec(unsigned short* v);
+void byte_dec(unsigned char* v);
+void uchar_dec(unsigned char* v);
+void size_dec(size_t* v);
+void ssize_dec(ssize_t* v);
+
+/* 浮点自减 */
+void float_dec(float* v);
+void double_dec(double* v);
+void long_double_dec(long double* v);
+
+/* 其他自减 */
+void bool_dec(_Bool* v);
+void char_dec(char* v);
 
 // ===== 子模块头（职责拆分） =====
 #include "lm_string.h"

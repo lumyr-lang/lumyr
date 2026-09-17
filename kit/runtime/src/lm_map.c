@@ -22,15 +22,42 @@
 static uint32_t value_hash(Value v) {
     uint32_t h = (uint32_t)v.type * 2654435761u;
     switch(v.type) {
-        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
-        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
-        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
-            h ^= (uint32_t)(lumyr_extract_ll(v) * 2654435761u);
+        /* 整数类型：每个类型独立 case，直接读对应字段，零转换开销 */
+        case VAL_INT:          h ^= (uint32_t)(v.v.i * 2654435761u); break;
+        case VAL_INT8:         h ^= (uint32_t)(v.v.i8 * 2654435761u); break;
+        case VAL_INT16:        h ^= (uint32_t)(v.v.i16 * 2654435761u); break;
+        case VAL_SHORT:        h ^= (uint32_t)(v.v.sh * 2654435761u); break;
+        case VAL_INT32:        h ^= (uint32_t)(v.v.i32 * 2654435761u); break;
+        case VAL_INT64:        h ^= (uint32_t)(v.v.i64 * 2654435761u); break;
+        case VAL_LONG_LONG:    h ^= (uint32_t)(v.v.ll * 2654435761u); break;
+        case VAL_LONG:         h ^= (uint32_t)(v.v.l * 2654435761u); break;
+        case VAL_BYTE:         h ^= (uint32_t)(v.v.by * 2654435761u); break;
+        case VAL_UINT8:        h ^= (uint32_t)(v.v.u8 * 2654435761u); break;
+        case VAL_UCHAR:        h ^= (uint32_t)(v.v.uc * 2654435761u); break;
+        case VAL_UINT16:       h ^= (uint32_t)(v.v.u16 * 2654435761u); break;
+        case VAL_USHORT:       h ^= (uint32_t)(v.v.us * 2654435761u); break;
+        case VAL_UINT32:       h ^= (uint32_t)(v.v.u32 * 2654435761u); break;
+        case VAL_UINT:         h ^= (uint32_t)(v.v.ui * 2654435761u); break;
+        case VAL_UINT64:       h ^= (uint32_t)(v.v.u64 * 2654435761u); break;
+        case VAL_ULONG:        h ^= (uint32_t)(v.v.ul * 2654435761u); break;
+        case VAL_SIZE_T:       h ^= (uint32_t)(v.v.st * 2654435761u); break;
+        case VAL_SSIZE_T:      h ^= (uint32_t)(v.v.sst * 2654435761u); break;
+        case VAL_FLOAT: {
+            uint32_t bits;
+            memcpy(&bits, &v.v.f, sizeof(bits));
+            h ^= bits;
             break;
+        }
         case VAL_DOUBLE: {
             uint64_t bits;
             memcpy(&bits, &v.v.d, sizeof(bits));
             h ^= (uint32_t)(bits ^ (bits >> 32));
+            break;
+        }
+        case VAL_LONG_DOUBLE: {
+            uint64_t bits[2];
+            memcpy(bits, &v.v.ld, sizeof(bits));
+            h ^= (uint32_t)(bits[0] ^ bits[1]);
             break;
         }
         case VAL_BOOL:
@@ -69,26 +96,43 @@ static uint32_t value_hash(Value v) {
 // 返回 -1/0/1
 static int key_compare(Value a, Value b) {
     if(a.type != b.type) {
-        // int/byte 互通
-        if((a.type == VAL_INT || a.type == VAL_INT8 || a.type == VAL_INT16 || a.type == VAL_INT32 || a.type == VAL_INT64 || a.type == VAL_BYTE || a.type == VAL_UINT8 || a.type == VAL_UINT16 || a.type == VAL_UINT32 || a.type == VAL_UINT64 || a.type == VAL_LONG || a.type == VAL_ULONG || a.type == VAL_SIZE_T || a.type == VAL_SSIZE_T) &&
-           (b.type == VAL_INT || b.type == VAL_INT8 || b.type == VAL_INT16 || b.type == VAL_INT32 || b.type == VAL_INT64 || b.type == VAL_BYTE || b.type == VAL_UINT8 || b.type == VAL_UINT16 || b.type == VAL_UINT32 || b.type == VAL_UINT64 || b.type == VAL_LONG || b.type == VAL_ULONG || b.type == VAL_SIZE_T || b.type == VAL_SSIZE_T))
+        // 跨类型整数比较：统一用 lumyr_extract_ll 转换
+        int a_int = (a.type >= VAL_INT && a.type <= VAL_SSIZE_T);
+        int b_int = (b.type >= VAL_INT && b.type <= VAL_SSIZE_T);
+        if(a_int && b_int)
             return (lumyr_extract_ll(a) > lumyr_extract_ll(b)) - (lumyr_extract_ll(a) < lumyr_extract_ll(b));
         return (a.type < b.type) ? -1 : 1;
     }
     switch(a.type) {
-        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
-        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
-        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
-            return (lumyr_extract_ll(a) > lumyr_extract_ll(b)) - (lumyr_extract_ll(a) < lumyr_extract_ll(b));
-        case VAL_DOUBLE:
-            return (a.v.d > b.v.d) - (a.v.d < b.v.d);
-        case VAL_BOOL:
-            return (a.v.b > b.v.b) - (a.v.b < b.v.b);
-        case VAL_CHAR:
-            return ((unsigned char)a.v.c > (unsigned char)b.v.c) -
-                   ((unsigned char)a.v.c < (unsigned char)b.v.c);
+        /* 整数类型：每个类型独立 case，直接读对应字段，零转换开销 */
+        case VAL_INT:          return (a.v.i > b.v.i) - (a.v.i < b.v.i);
+        case VAL_INT8:         return (a.v.i8 > b.v.i8) - (a.v.i8 < b.v.i8);
+        case VAL_INT16:        return (a.v.i16 > b.v.i16) - (a.v.i16 < b.v.i16);
+        case VAL_SHORT:        return (a.v.sh > b.v.sh) - (a.v.sh < b.v.sh);
+        case VAL_INT32:        return (a.v.i32 > b.v.i32) - (a.v.i32 < b.v.i32);
+        case VAL_INT64:        return (a.v.i64 > b.v.i64) - (a.v.i64 < b.v.i64);
+        case VAL_LONG_LONG:    return (a.v.ll > b.v.ll) - (a.v.ll < b.v.ll);
+        case VAL_LONG:         return (a.v.l > b.v.l) - (a.v.l < b.v.l);
+        case VAL_BYTE:         return (a.v.by > b.v.by) - (a.v.by < b.v.by);
+        case VAL_UINT8:        return (a.v.u8 > b.v.u8) - (a.v.u8 < b.v.u8);
+        case VAL_UCHAR:        return (a.v.uc > b.v.uc) - (a.v.uc < b.v.uc);
+        case VAL_UINT16:       return (a.v.u16 > b.v.u16) - (a.v.u16 < b.v.u16);
+        case VAL_USHORT:       return (a.v.us > b.v.us) - (a.v.us < b.v.us);
+        case VAL_UINT32:       return (a.v.u32 > b.v.u32) - (a.v.u32 < b.v.u32);
+        case VAL_UINT:         return (a.v.ui > b.v.ui) - (a.v.ui < b.v.ui);
+        case VAL_UINT64:       return (a.v.u64 > b.v.u64) - (a.v.u64 < b.v.u64);
+        case VAL_ULONG:        return (a.v.ul > b.v.ul) - (a.v.ul < b.v.ul);
+        case VAL_SIZE_T:       return (a.v.st > b.v.st) - (a.v.st < b.v.st);
+        case VAL_SSIZE_T:      return (a.v.sst > b.v.sst) - (a.v.sst < b.v.sst);
+        case VAL_FLOAT:        return (a.v.f > b.v.f) - (a.v.f < b.v.f);
+        case VAL_DOUBLE:       return (a.v.d > b.v.d) - (a.v.d < b.v.d);
+        case VAL_LONG_DOUBLE:  return (a.v.ld > b.v.ld) - (a.v.ld < b.v.ld);
+        case VAL_BOOL:         return (a.v.b > b.v.b) - (a.v.b < b.v.b);
+        case VAL_CHAR:         return ((unsigned char)a.v.c > (unsigned char)b.v.c) -
+                                     ((unsigned char)a.v.c < (unsigned char)b.v.c);
         case VAL_STRING: {
-            int c = strcmp(lumyr_str_cstr(&a) ? lumyr_str_cstr(&a) : "", lumyr_str_cstr(&b) ? lumyr_str_cstr(&b) : "");
+            int c = strcmp(lumyr_str_cstr(&a) ? lumyr_str_cstr(&a) : "",
+                           lumyr_str_cstr(&b) ? lumyr_str_cstr(&b) : "");
             return (c > 0) - (c < 0);
         }
         case VAL_MAP: {
@@ -106,20 +150,41 @@ static int key_compare(Value a, Value b) {
 // 键相等（先比 hash 再比值）
 static int key_eq(Value a, Value b) {
     if(a.type != b.type) {
-        if((a.type == VAL_INT || a.type == VAL_INT8 || a.type == VAL_INT16 || a.type == VAL_INT32 || a.type == VAL_INT64 || a.type == VAL_BYTE || a.type == VAL_UINT8 || a.type == VAL_UINT16 || a.type == VAL_UINT32 || a.type == VAL_UINT64 || a.type == VAL_LONG || a.type == VAL_ULONG || a.type == VAL_SIZE_T || a.type == VAL_SSIZE_T) &&
-           (b.type == VAL_INT || b.type == VAL_INT8 || b.type == VAL_INT16 || b.type == VAL_INT32 || b.type == VAL_INT64 || b.type == VAL_BYTE || b.type == VAL_UINT8 || b.type == VAL_UINT16 || b.type == VAL_UINT32 || b.type == VAL_UINT64 || b.type == VAL_LONG || b.type == VAL_ULONG || b.type == VAL_SIZE_T || b.type == VAL_SSIZE_T))
+        // 跨类型整数比较：统一用 lumyr_extract_ll 转换
+        int a_int = (a.type >= VAL_INT && a.type <= VAL_SSIZE_T);
+        int b_int = (b.type >= VAL_INT && b.type <= VAL_SSIZE_T);
+        if(a_int && b_int)
             return lumyr_extract_ll(a) == lumyr_extract_ll(b);
         return 0;
     }
     switch(a.type) {
-        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
-        case VAL_BYTE: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
-        case VAL_LONG: case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
-            return lumyr_extract_ll(a) == lumyr_extract_ll(b);
-        case VAL_DOUBLE: return a.v.d == b.v.d;
-        case VAL_BOOL: return a.v.b == b.v.b;
-        case VAL_CHAR: return a.v.c == b.v.c;
-        case VAL_STRING: return strcmp(lumyr_str_cstr(&a) ? lumyr_str_cstr(&a) : "", lumyr_str_cstr(&b) ? lumyr_str_cstr(&b) : "") == 0;
+        /* 整数类型：每个类型独立 case，直接读对应字段，零转换开销 */
+        case VAL_INT:          return a.v.i == b.v.i;
+        case VAL_INT8:         return a.v.i8 == b.v.i8;
+        case VAL_INT16:        return a.v.i16 == b.v.i16;
+        case VAL_SHORT:        return a.v.sh == b.v.sh;
+        case VAL_INT32:        return a.v.i32 == b.v.i32;
+        case VAL_INT64:        return a.v.i64 == b.v.i64;
+        case VAL_LONG_LONG:    return a.v.ll == b.v.ll;
+        case VAL_LONG:         return a.v.l == b.v.l;
+        case VAL_BYTE:         return a.v.by == b.v.by;
+        case VAL_UINT8:        return a.v.u8 == b.v.u8;
+        case VAL_UCHAR:        return a.v.uc == b.v.uc;
+        case VAL_UINT16:       return a.v.u16 == b.v.u16;
+        case VAL_USHORT:       return a.v.us == b.v.us;
+        case VAL_UINT32:       return a.v.u32 == b.v.u32;
+        case VAL_UINT:         return a.v.ui == b.v.ui;
+        case VAL_UINT64:       return a.v.u64 == b.v.u64;
+        case VAL_ULONG:        return a.v.ul == b.v.ul;
+        case VAL_SIZE_T:       return a.v.st == b.v.st;
+        case VAL_SSIZE_T:      return a.v.sst == b.v.sst;
+        case VAL_FLOAT:        return a.v.f == b.v.f;
+        case VAL_DOUBLE:       return a.v.d == b.v.d;
+        case VAL_LONG_DOUBLE:  return a.v.ld == b.v.ld;
+        case VAL_BOOL:         return a.v.b == b.v.b;
+        case VAL_CHAR:         return a.v.c == b.v.c;
+        case VAL_STRING:       return strcmp(lumyr_str_cstr(&a) ? lumyr_str_cstr(&a) : "",
+                                             lumyr_str_cstr(&b) ? lumyr_str_cstr(&b) : "") == 0;
         case VAL_MAP: {
             if(a.v.map->len != b.v.map->len) return 0;
             MapIter it; map_iter_init(&it, a.v.map);

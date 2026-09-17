@@ -1387,15 +1387,24 @@ static void emit_class_def_cb(const char* name, TypeDef* td, void* user_data)
                     depth++;
                     find_cur = find_cur->parent ? type_lookup(find_cur->parent) : NULL;
                 }
-                /* 生成字段类型 */
+                /* 生成字段类型和宽度 */
                 const char* ftype_str = "CLASS_FIELD_INT";
-                if(ftype == CAST_DOUBLE || ftype == CAST_FLOAT || ftype == CAST_LONG_DOUBLE) ftype_str = "CLASS_FIELD_DOUBLE";
-                else if(ftype == CAST_STRING) ftype_str = "CLASS_FIELD_STRING";
-                else if(ftype == CAST_BOOL) ftype_str = "CLASS_FIELD_BOOL";
+                int fsize = 8;  /* 默认 long long 8字节 */
+                if(ftype == CAST_DOUBLE || ftype == CAST_FLOAT || ftype == CAST_LONG_DOUBLE) {
+                    ftype_str = "CLASS_FIELD_DOUBLE";
+                    fsize = 8;
+                }
+                else if(ftype == CAST_STRING) { ftype_str = "CLASS_FIELD_STRING"; fsize = sizeof(void*); }
+                else if(ftype == CAST_BOOL) { ftype_str = "CLASS_FIELD_BOOL"; fsize = sizeof(int); }
+                /* 整数类型按宽度设置 size */
+                else if(ftype == CAST_INT8 || ftype == CAST_UINT8 || ftype == CAST_BYTE || ftype == CAST_UCHAR) fsize = 1;
+                else if(ftype == CAST_INT16 || ftype == CAST_SHORT || ftype == CAST_UINT16 || ftype == CAST_USHORT) fsize = 2;
+                else if(ftype == CAST_INT || ftype == CAST_INT32 || ftype == CAST_UINT32 || ftype == CAST_UINT) fsize = 4;
+                else if(ftype == CAST_INT64 || ftype == CAST_LONGLONG || ftype == CAST_UINT64 || ftype == CAST_ULONG) fsize = 8;
                 /* 生成字段信息表项 */
                 fprintf(out, "    {\"%s\", offsetof(lumyr_class_%s, ", fname, td->name);
                 for(int d = 0; d < depth; d++) fprintf(out, "super.");
-                fprintf(out, "%s), %s, %d},\n", fname, ftype_str, fam);
+                fprintf(out, "%s), %s, %d, %d},\n", fname, ftype_str, fsize, fam);
             }
         }
         fprintf(out, "};\n\n");

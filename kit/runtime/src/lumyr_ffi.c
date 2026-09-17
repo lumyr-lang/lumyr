@@ -222,7 +222,7 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
             all_float_args = 0;
             if(((ptype) >= VAL_INT && (ptype) <= VAL_BOOL)) {
                 /* 所有整数类型：x86-64 调用约定自动提升为 64 位，直接传递 long long */
-                cargs[i] = (long long)value_as_number(args[i]);
+                cargs[i] = lumyr_extract_ll(args[i]);
             } else switch(ptype) {
             case VAL_PTR:
                 /* 指针/句柄：从 int 值直接传递（Lumyr 中用 int 存储指针） */
@@ -345,20 +345,27 @@ Value lumyr_ffi_call(FFIFunc* func, Value* args, int argc) {
         }
         return val_double(dret);
     }
-    /* 整数类型返回值：根据具体类型进行符号扩展或零扩展 */
+    /* 整数类型返回值：根据具体类型构造对应类型的 Value */
     if(((func->ret_type) >= VAL_INT && (func->ret_type) <= VAL_BOOL)) {
         switch(func->ret_type) {
-            case VAL_INT8:   return val_int((int64_t)(int8_t)ret);
-            case VAL_INT16:  return val_int((int64_t)(int16_t)ret);
-            case VAL_INT32:  return val_int((int64_t)(int32_t)ret);
-            case VAL_CHAR:   return val_int((int64_t)(char)ret);
-            case VAL_UINT8:  return val_int((int64_t)(uint8_t)ret);
-            case VAL_UINT16: return val_int((int64_t)(uint16_t)ret);
-            case VAL_UINT32: return val_int((int64_t)(uint32_t)ret);
-            case VAL_UCHAR:  return val_int((int64_t)(unsigned char)ret);
-            case VAL_BOOL:   return val_bool(ret ? 1 : 0);
+            case VAL_INT8:    return lumyr_make_int8((int8_t)ret);
+            case VAL_INT16:   return lumyr_make_int16((int16_t)ret);
+            case VAL_INT32:   return lumyr_make_int32((int32_t)ret);
+            case VAL_CHAR:    return lumyr_make_char((char)ret);
+            case VAL_UINT8:   return lumyr_make_uint8((uint8_t)ret);
+            case VAL_UINT16:  return lumyr_make_uint16((uint16_t)ret);
+            case VAL_UINT32:  return lumyr_make_uint32((uint32_t)ret);
+            case VAL_UCHAR:   return lumyr_make_uchar((unsigned char)ret);
+            case VAL_BOOL:    return lumyr_make_bool(ret ? 1 : 0);
             /* 64 位类型直接返回 */
-            default:         return val_int((int64_t)ret);
+            case VAL_INT64:      return lumyr_make_int64((long long)ret);
+            case VAL_LONG_LONG:  return lumyr_make_long_long((long long)ret);
+            case VAL_LONG:       return lumyr_make_long((long)ret);
+            case VAL_UINT64:     return lumyr_make_uint64((unsigned long long)ret);
+            case VAL_ULONG:      return lumyr_make_ulong((unsigned long)ret);
+            case VAL_SIZE_T:     return lumyr_make_size_t((size_t)ret);
+            case VAL_SSIZE_T:    return lumyr_make_ssize_t((ssize_t)ret);
+            default:             return lumyr_make_int((int)ret);
         }
     }
     switch(func->ret_type) {

@@ -45,7 +45,7 @@ int arith_is_ssize_t_var(Ctx* c, AstNode* node);
 /* ========== 表达式类型判断 ========== */
 
 /* 获取表达式的类型（用于算术运算结果的上下文感知） */
-int arith_get_expr_type(Ctx* c, AstNode* node);
+ExprType arith_get_expr_type(Ctx* c, AstNode* node);
 
 /* ========== 算术运算和比较运算优化 ========== */
 
@@ -72,7 +72,7 @@ int arith_try_optimize_binop(Ctx* c, AstNode* node, int bop);
  *   var_idx - 变量索引
  *   result_type - 运算结果类型（EXPR_TYPE_*）
  */
-void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, int result_type);
+void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, ExprType result_type);
 
 /*
  * 处理 print 场景中的算术运算结果
@@ -83,6 +83,6 @@ void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, int result_
  *   single_arg - print 的参数表达式
  *   result_type - 运算结果类型（EXPR_TYPE_*）
  */
-int arith_handle_print_result(Ctx* c, AstNode* single_arg, int result_type);
+int arith_handle_print_result(Ctx* c, AstNode* single_arg, ExprType result_type);
 
 #endif /* LUMYR_IR_ARITH_H */

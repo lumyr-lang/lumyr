@@ -31,6 +31,40 @@ int stackframe_get_type_tag(StackFrame* f, const char* name);
 // 直接从 int_vals 数组读取，用于 OPC_LOAD_INT_VAR 指令
 int stackframe_get_int(StackFrame* f, const char* name, _Bool* found);
 
+// 获取 int 类型变量的原始指针，用于自增自减等直接操作
+// 返回 NULL 表示未找到或不是 int 类型
+int* stackframe_get_int_ptr(StackFrame* f, const char* name);
+
+// 获取 int8 类型变量的原始指针
+int8_t* stackframe_get_int8_ptr(StackFrame* f, const char* name);
+
+// 获取 int16 类型变量的原始指针
+int16_t* stackframe_get_int16_ptr(StackFrame* f, const char* name);
+
+// 获取 short 类型变量的原始指针
+short* stackframe_get_short_ptr(StackFrame* f, const char* name);
+
+// 获取 int32 类型变量的原始指针
+int32_t* stackframe_get_int32_ptr(StackFrame* f, const char* name);
+
+// 获取 int64 类型变量的原始指针
+int64_t* stackframe_get_int64_ptr(StackFrame* f, const char* name);
+
+// 获取 uint 类型变量的原始指针
+unsigned int* stackframe_get_uint_ptr(StackFrame* f, const char* name);
+
+// 获取 uint8 类型变量的原始指针
+uint8_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name);
+
+// 获取 uint16 类型变量的原始指针
+uint16_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name);
+
+// 获取 uint32 类型变量的原始指针
+uint32_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name);
+
+// 获取 uint64 类型变量的原始指针
+uint64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name);
+
 // 绑定语义（参数绑定用）：只在当前帧查找/创建，不向上查找，遮蔽父帧同名变量
 void stackframe_bind(StackFrame* f, const char* name, Value v);
 
@@ -85,6 +119,12 @@ int16_t stackframe_get_int16(StackFrame* f, const char* name, _Bool* found);
 
 // 绑定 int16 变量：同时更新 vals 和 int16_vals，零重复提取
 void stackframe_bind_int16(StackFrame* f, const char* name, int16_t i16v);
+
+// 获取 short 类型变量的原始 short 值，零提取、零类型检查
+short stackframe_get_short(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 short 变量：同时更新 vals 和 short_vals，零重复提取
+void stackframe_bind_short(StackFrame* f, const char* name, short sv);
 
 // 获取 int32 类型变量的原始 int32 值，零提取、零类型检查
 int32_t stackframe_get_int32(StackFrame* f, const char* name, _Bool* found);
@@ -157,6 +197,18 @@ long double stackframe_get_long_double(StackFrame* f, const char* name, _Bool* f
 
 // 绑定 long double 变量：同时更新 vals 和 long_double_vals，零重复提取
 void stackframe_bind_long_double(StackFrame* f, const char* name, long double ldv);
+
+// 获取 uchar 类型变量的原始 unsigned char 值，零提取、零类型检查
+unsigned char stackframe_get_uchar(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 uchar 变量：同时更新 vals 和 uchar_vals，零重复提取
+void stackframe_bind_uchar(StackFrame* f, const char* name, unsigned char ucv);
+
+// 获取 ushort 类型变量的原始 unsigned short 值，零提取、零类型检查
+unsigned short stackframe_get_ushort(StackFrame* f, const char* name, _Bool* found);
+
+// 绑定 ushort 变量：同时更新 vals 和 ushort_vals，零重复提取
+void stackframe_bind_ushort(StackFrame* f, const char* name, unsigned short usv);
 
 // ---- 闭包单元（cell）支持 ----
 // 把 name→cell_ptr 注册到当前帧 cell 表（lambda 调用时注入捕获变量用）。
