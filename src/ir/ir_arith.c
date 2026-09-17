@@ -180,7 +180,8 @@ int arith_is_ssize_t_var(Ctx* c, AstNode* node) {
 ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
 
-    /* 变量引用：根据变量类型标记判断 */
+    /* 变量引用：根据变量类型标记判断实际专用栈。
+       配套 c_expr(AST_VAR) 发 LOAD_*_VAR（专用栈）、赋值发 STORE_*_VAR（专用栈）。 */
     if(node->type == AST_VAR) {
         CastKind ct = get_var_cast_type(c, node->u.varname);
         switch(ct) {
@@ -268,32 +269,17 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
     if(node->type == AST_CHAR) return EXPR_TYPE_NONE;
 
     /* 类型转换：根据转换类型判断 */
-    if(node->type == AST_CAST || node->type == AST_TYPE_ANNOTATION) {
-        /* 类型转换节点的类型标记存储在 cast_type 字段中 */
-        int ct = node->u.type_annotation.cast_type;
-        switch(ct) {
-            case CAST_BOOL: return EXPR_TYPE_BOOL;
-            case CAST_CHAR: return EXPR_TYPE_CHAR;
-            case CAST_INT8: return EXPR_TYPE_INT8;
-            case CAST_INT16: return EXPR_TYPE_INT16;
-            case CAST_SHORT: return EXPR_TYPE_SHORT;
-            case CAST_INT: return EXPR_TYPE_INT;
-            case CAST_INT64: return EXPR_TYPE_INT64;
-            case CAST_LONGLONG: return EXPR_TYPE_LONG_LONG;
-            case CAST_LONG: return EXPR_TYPE_LONG;
-            case CAST_BYTE: return EXPR_TYPE_BYTE;
-            case CAST_UINT8: return EXPR_TYPE_UINT8;
-            case CAST_UINT16: return EXPR_TYPE_UINT16;
-            case CAST_UINT32: return EXPR_TYPE_UINT;
-            case CAST_UINT64: return EXPR_TYPE_UINT64;
-            case CAST_ULONG: return EXPR_TYPE_ULONG;
-            case CAST_SIZE_T: return EXPR_TYPE_SIZE_T;
-            case CAST_SSIZE_T: return EXPR_TYPE_SSIZE_T;
-            case CAST_FLOAT: return EXPR_TYPE_FLOAT;
-            case CAST_DOUBLE: return EXPR_TYPE_DOUBLE;
-            case CAST_LONG_DOUBLE: return EXPR_TYPE_LONG_DOUBLE;
-            default: return EXPR_TYPE_NONE;
-        }
+    if(node->type == AST_CAST) {
+        /* 强转 (int8)x：OPC_CAST_xxx 在 Value 栈上弹1压1，结果仍在 Value 栈，
+           不进专用栈。返回 NONE 让 print/赋值走通用 Value 路径。 */
+        return EXPR_TYPE_NONE;
+    }
+    if(node->type == AST_TYPE_ANNOTATION) {
+        /* 类型标注 <int8>1000：折叠走 LOAD_CONST（Value 栈），非折叠走 OPC_CAST_xxx（Value 栈弹1压1）。
+           结果基本都在 Value 栈，返回 NONE 让 print 走通用 PRINT（除 long double 保持专用栈）。 */
+        if(node->u.type_annotation.cast_type == CAST_LONG_DOUBLE)
+            return EXPR_TYPE_LONG_DOUBLE;
+        return EXPR_TYPE_NONE;
     }
 
     return EXPR_TYPE_NONE;

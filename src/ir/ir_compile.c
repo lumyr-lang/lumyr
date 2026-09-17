@@ -1690,11 +1690,53 @@ static int expr_type_to_value_op(ExprType et)
 }
 
 /* 递归编译 print 的参数列表（左嵌套 AST_SEQ: seq(seq(a,b),c)），返回参数数量 */
+/* 根据变量类型标记返回对应的专用 LOAD_*_VAR 指令（压专用栈）；无专用类型返回 -1 */
+static int get_var_load_op(Ctx* c, int var_idx) {
+    if(!c->fn->var_type_tags || var_idx < 0 || var_idx >= c->fn->sym_cnt) return -1;
+    switch(c->fn->var_type_tags[var_idx]) {
+        case CAST_INT:      return OPC_LOAD_INT_VAR;
+        case CAST_DOUBLE:   return OPC_LOAD_DOUBLE_VAR;
+        case CAST_FLOAT:    return OPC_LOAD_FLOAT_VAR;
+        case CAST_UINT32:   return OPC_LOAD_UINT_VAR;
+        case CAST_LONGLONG: return OPC_LOAD_LONG_LONG_VAR;
+        case CAST_LONG_DOUBLE: return OPC_LOAD_LONG_DOUBLE_VAR;
+        case CAST_BOOL:     return OPC_LOAD_BOOL_VAR;
+        case CAST_CHAR:     return OPC_LOAD_CHAR_VAR;
+        case CAST_BYTE:     return OPC_LOAD_BYTE_VAR;
+        case CAST_INT8:     return OPC_LOAD_INT8_VAR;
+        case CAST_INT16:    return OPC_LOAD_INT16_VAR;
+        case CAST_SHORT:    return OPC_LOAD_SHORT_VAR;
+        case CAST_INT32:    return OPC_LOAD_INT32_VAR;
+        case CAST_INT64:    return OPC_LOAD_INT64_VAR;
+        case CAST_UINT8:    return OPC_LOAD_UINT8_VAR;
+        case CAST_UINT16:   return OPC_LOAD_UINT16_VAR;
+        case CAST_UINT64:   return OPC_LOAD_UINT64_VAR;
+        case CAST_LONG:     return OPC_LOAD_LONG_VAR;
+        case CAST_ULONG:    return OPC_LOAD_ULONG_VAR;
+        case CAST_SIZE_T:   return OPC_LOAD_SIZE_T_VAR;
+        case CAST_SSIZE_T:  return OPC_LOAD_SSIZE_T_VAR;
+        default:            return -1;
+    }
+}
+
 static int c_print_args_recursive(Ctx* c, AstNode* args)
 {
     if(!args) return 0;
     if(args->type != AST_SEQ) {
+        /* 专用类型变量：c_expr 发 LOAD_VAR（Value 栈），但 print 按专用类型发 PRINT_*（专用栈）。
+           这里直接发 LOAD_*_VAR 压专用栈，再 TO_VALUE 搬回 Value 栈供通用 PRINT。 */
+        int load_op = -1;
+        if(args->type == AST_VAR)
+            load_op = get_var_load_op(c, bf_sym(c->fn, args->u.varname));
+        if(load_op >= 0) {
+            emit(c, load_op, bf_sym(c->fn, args->u.varname), 0);
+            int tov = expr_type_to_value_op(arith_get_expr_type(c, args));
+            if(tov >= 0) emit(c, tov, 0, 0);
+            return 1;
+        }
         c_expr(c, args);
+        /* 通用 OPC_PRINT 只从 Value 栈取参：若该参数结果落在专用栈（类型化数组元素 a[i]、
+           binop 优化结果），先搬回 Value 栈。AST_VAR 已在上面专用处理。 */
         /* 通用 OPC_PRINT 只从 Value 栈取参：若该参数结果落在专用栈，先搬回 Value 栈，
            保证多参数 print（如 print("x=", a[0])）不会跨栈错取。
            注意比较/逻辑运算（OP_GT..OP_LOGIC_OR）结果是 bool，由专用比较指令直接压入
@@ -2064,6 +2106,7 @@ void c_expr(Ctx* c, AstNode* node)
             emit(c, OPC_LOAD_CONST, bf_const(c->fn, intern_string(node->u.sval)), 0);
             break;
         case AST_VAR:
+            /* 通用路径：压 Value 栈。专用消费方（print/赋值/binop 优化）按需发 LOAD_*_VAR。 */
             emit(c, OPC_LOAD_VAR, bf_sym(c->fn, node->u.varname), 0);
             break;
         case AST_FUNCREF:
