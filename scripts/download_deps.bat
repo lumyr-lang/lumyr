@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
-REM download_deps.bat - 下载 Lumyr 编译器所需的第三方依赖源码
-REM Windows 版本
+REM download_deps.bat - Download Lumyr compiler dependencies
+REM Windows version
 REM ============================================================
 
 setlocal enabledelayedexpansion
@@ -11,11 +11,11 @@ echo Downloading Lumyr compiler dependencies...
 echo ============================================================
 echo.
 
-REM 创建目录
+REM Create directories
 if not exist "vendor" mkdir vendor
 if not exist "build_tools" mkdir build_tools
 
-REM ========== vendor 目录（第三方库源码依赖） ==========
+REM ========== vendor directory (third-party library source code) ==========
 
 echo [1/6] Downloading libcurl 8.22.0...
 if not exist "vendor\libcurl" (
@@ -27,7 +27,7 @@ if not exist "vendor\libcurl" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 
@@ -41,7 +41,7 @@ if not exist "vendor\libiconv" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 
@@ -55,11 +55,11 @@ if not exist "vendor\tre" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 
-REM ========== build_tools 目录（编译工具链源码） ==========
+REM ========== build_tools directory (build toolchain source code) ==========
 
 echo [4/6] Downloading flex 2.6.4...
 if not exist "build_tools\flex" (
@@ -71,7 +71,7 @@ if not exist "build_tools\flex" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 
@@ -85,7 +85,7 @@ if not exist "build_tools\bison" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 
@@ -99,7 +99,7 @@ if not exist "build_tools\m4" (
     cd ..
     echo   Done.
 ) else (
-    echo   Already exists, skipping.
+    echo   Already cached, skipping download, next...
 )
 echo.
 

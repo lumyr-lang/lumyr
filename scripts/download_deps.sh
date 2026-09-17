@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-# download_deps.sh - 下载 Lumyr 编译器所需的第三方依赖源码
-# macOS / Linux 版本
+# download_deps.sh - Download Lumyr compiler dependencies
+# macOS / Linux version
 # ============================================================
 
 set -e
@@ -11,11 +11,11 @@ echo "Downloading Lumyr compiler dependencies..."
 echo "============================================================"
 echo ""
 
-# 创建目录
+# Create directories
 mkdir -p vendor
 mkdir -p build_tools
 
-# ========== vendor 目录（第三方库源码依赖） ==========
+# ========== vendor directory (third-party library source code) ==========
 
 echo "[1/6] Downloading libcurl 8.22.0..."
 if [ ! -d "vendor/libcurl" ]; then
@@ -27,7 +27,7 @@ if [ ! -d "vendor/libcurl" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
@@ -41,7 +41,7 @@ if [ ! -d "vendor/libiconv" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
@@ -55,11 +55,11 @@ if [ ! -d "vendor/tre" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
-# ========== build_tools 目录（编译工具链源码） ==========
+# ========== build_tools directory (build toolchain source code) ==========
 
 echo "[4/6] Downloading flex 2.6.4..."
 if [ ! -d "build_tools/flex" ]; then
@@ -71,7 +71,7 @@ if [ ! -d "build_tools/flex" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
@@ -85,7 +85,7 @@ if [ ! -d "build_tools/bison" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
@@ -99,7 +99,7 @@ if [ ! -d "build_tools/m4" ]; then
     cd ..
     echo "  Done."
 else
-    echo "  Already exists, skipping."
+    echo "  Already cached, skipping download, next..."
 fi
 echo ""
 
