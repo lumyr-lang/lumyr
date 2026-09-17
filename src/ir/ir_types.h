@@ -45,6 +45,18 @@ typedef enum {
     EXPR_TYPE_COUNT
 } ExprType;
 
+/* ========== 类型化数组变量标记（存于 var_type_tags，与 CastKind 同槽，故取 1000+ 避冲突） ==========
+   当变量被声明为某元素类型的类型化数组（如 a = <double>[...]）时，其 tag 取下列值，
+   供类型推导（arith_get_expr_type）在遇到下标表达式 a[i] 时还原元素的 ExprType。 */
+#define VAR_TYPE_INT_ARRAY    1000
+#define VAR_TYPE_DOUBLE_ARRAY 1001
+#define VAR_TYPE_FLOAT_ARRAY  1002
+#define VAR_TYPE_UINT_ARRAY   1003
+#define VAR_TYPE_BOOL_ARRAY   1004
+#define VAR_TYPE_CHAR_ARRAY   1005
+#define VAR_TYPE_BYTE_ARRAY   1006
+#define VAR_TYPE_INT8_ARRAY   1007
+
 /* ========== 控制层结构体 ========== */
 
 /*

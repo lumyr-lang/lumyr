@@ -493,6 +493,7 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             /* 固定宽度整数类型 */
             case OPC_STORE_INT8_VAR:
             case OPC_STORE_INT16_VAR:
+            case OPC_STORE_SHORT_VAR:
             case OPC_STORE_INT32_VAR:
             case OPC_STORE_INT64_VAR:
             case OPC_STORE_UINT8_VAR:
@@ -522,6 +523,7 @@ void scan_var_refs(BytecodeFunc* fn, NameSet* set, int include_load)
             /* 固定宽度整数类型 */
             case OPC_LOAD_INT8_VAR:
             case OPC_LOAD_INT16_VAR:
+            case OPC_LOAD_SHORT_VAR:
             case OPC_LOAD_INT32_VAR:
             case OPC_LOAD_INT64_VAR:
             case OPC_LOAD_UINT8_VAR:

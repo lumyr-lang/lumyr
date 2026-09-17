@@ -577,6 +577,14 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __int16_stack[__int16_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_PUSH_SHORT_CONST: {
+                fprintf(out, "    __short_stack[__short_stack_sp++] = (short)%d;\n", in.a);
+                break;
+            }
+            case OPC_LOAD_SHORT_VAR: {
+                fprintf(out, "    __short_stack[__short_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_INT32_CONST: {
                 fprintf(out, "    __int32_stack[__int32_stack_sp++] = (int32_t)%d;\n", in.a);
                 break;
@@ -697,6 +705,11 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __stk[__stk_sp++] = lumyr_make_int((long long)__iv); }\n");
                 break;
             }
+            case OPC_SHORT_TO_VALUE: {
+                /* 把 short 专用栈顶的 short 值包装成 Value，压入 Value 栈 */
+                fprintf(out, "    { short __shv = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_short(__shv); }\n");
+                break;
+            }
             case OPC_LONG_LONG_GT: {
                 /* long long 大于比较：直接从 long long 专用栈弹出两个 long long，比较后结果(bool)压入 Value 栈 */
                 fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla > __llb); }\n");
@@ -725,6 +738,227 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_LONG_LONG_NE: {
                 /* long long 不等于比较 */
                 fprintf(out, "    { long long __llb = __long_long_stack[--__long_long_stack_sp]; long long __lla = __long_long_stack[--__long_long_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__lla != __llb); }\n");
+                break;
+            }
+            /* ===== 固定宽度整数类型专用算术/比较指令（CC模式，自动批量生成，与 VM 语义一致） ===== */
+            case OPC_INT8_ADD: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __int8_stack[__int8_stack_sp++] = __i8a + __i8b; }\n");
+                break;
+            }
+            case OPC_INT8_SUB: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __int8_stack[__int8_stack_sp++] = __i8a - __i8b; }\n");
+                break;
+            }
+            case OPC_INT8_MUL: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __int8_stack[__int8_stack_sp++] = __i8a * __i8b; }\n");
+                break;
+            }
+            case OPC_INT8_DIV: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __int8_stack[__int8_stack_sp++] = __i8a / __i8b; }\n");
+                break;
+            }
+            case OPC_INT8_MOD: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __int8_stack[__int8_stack_sp++] = __i8a %% __i8b; }\n");
+                break;
+            }
+            case OPC_INT8_GT: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a > __i8b); }\n");
+                break;
+            }
+            case OPC_INT8_LT: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a < __i8b); }\n");
+                break;
+            }
+            case OPC_INT8_GE: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a >= __i8b); }\n");
+                break;
+            }
+            case OPC_INT8_LE: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a <= __i8b); }\n");
+                break;
+            }
+            case OPC_INT8_EQ: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a == __i8b); }\n");
+                break;
+            }
+            case OPC_INT8_NE: {
+                fprintf(out, "    { int8_t __i8b = __int8_stack[--__int8_stack_sp]; int8_t __i8a = __int8_stack[--__int8_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i8a != __i8b); }\n");
+                break;
+            }
+            case OPC_INT16_ADD: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __int16_stack[__int16_stack_sp++] = __i16a + __i16b; }\n");
+                break;
+            }
+            case OPC_INT16_SUB: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __int16_stack[__int16_stack_sp++] = __i16a - __i16b; }\n");
+                break;
+            }
+            case OPC_INT16_MUL: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __int16_stack[__int16_stack_sp++] = __i16a * __i16b; }\n");
+                break;
+            }
+            case OPC_INT16_DIV: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __int16_stack[__int16_stack_sp++] = __i16a / __i16b; }\n");
+                break;
+            }
+            case OPC_INT16_MOD: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __int16_stack[__int16_stack_sp++] = __i16a %% __i16b; }\n");
+                break;
+            }
+            case OPC_INT16_GT: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a > __i16b); }\n");
+                break;
+            }
+            case OPC_INT16_LT: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a < __i16b); }\n");
+                break;
+            }
+            case OPC_INT16_GE: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a >= __i16b); }\n");
+                break;
+            }
+            case OPC_INT16_LE: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a <= __i16b); }\n");
+                break;
+            }
+            case OPC_INT16_EQ: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a == __i16b); }\n");
+                break;
+            }
+            case OPC_INT16_NE: {
+                fprintf(out, "    { int16_t __i16b = __int16_stack[--__int16_stack_sp]; int16_t __i16a = __int16_stack[--__int16_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i16a != __i16b); }\n");
+                break;
+            }
+            case OPC_SHORT_ADD: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __short_stack[__short_stack_sp++] = __sha + __shb; }\n");
+                break;
+            }
+            case OPC_SHORT_SUB: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __short_stack[__short_stack_sp++] = __sha - __shb; }\n");
+                break;
+            }
+            case OPC_SHORT_MUL: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __short_stack[__short_stack_sp++] = __sha * __shb; }\n");
+                break;
+            }
+            case OPC_SHORT_DIV: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __short_stack[__short_stack_sp++] = __sha / __shb; }\n");
+                break;
+            }
+            case OPC_SHORT_MOD: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __short_stack[__short_stack_sp++] = __sha %% __shb; }\n");
+                break;
+            }
+            case OPC_SHORT_GT: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha > __shb); }\n");
+                break;
+            }
+            case OPC_SHORT_LT: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha < __shb); }\n");
+                break;
+            }
+            case OPC_SHORT_GE: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha >= __shb); }\n");
+                break;
+            }
+            case OPC_SHORT_LE: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha <= __shb); }\n");
+                break;
+            }
+            case OPC_SHORT_EQ: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha == __shb); }\n");
+                break;
+            }
+            case OPC_SHORT_NE: {
+                fprintf(out, "    { short __shb = __short_stack[--__short_stack_sp]; short __sha = __short_stack[--__short_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__sha != __shb); }\n");
+                break;
+            }
+            case OPC_INT32_ADD: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __int32_stack[__int32_stack_sp++] = __i32a + __i32b; }\n");
+                break;
+            }
+            case OPC_INT32_SUB: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __int32_stack[__int32_stack_sp++] = __i32a - __i32b; }\n");
+                break;
+            }
+            case OPC_INT32_MUL: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __int32_stack[__int32_stack_sp++] = __i32a * __i32b; }\n");
+                break;
+            }
+            case OPC_INT32_DIV: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __int32_stack[__int32_stack_sp++] = __i32a / __i32b; }\n");
+                break;
+            }
+            case OPC_INT32_MOD: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __int32_stack[__int32_stack_sp++] = __i32a %% __i32b; }\n");
+                break;
+            }
+            case OPC_INT32_GT: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a > __i32b); }\n");
+                break;
+            }
+            case OPC_INT32_LT: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a < __i32b); }\n");
+                break;
+            }
+            case OPC_INT32_GE: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a >= __i32b); }\n");
+                break;
+            }
+            case OPC_INT32_LE: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a <= __i32b); }\n");
+                break;
+            }
+            case OPC_INT32_EQ: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a == __i32b); }\n");
+                break;
+            }
+            case OPC_INT32_NE: {
+                fprintf(out, "    { int32_t __i32b = __int32_stack[--__int32_stack_sp]; int32_t __i32a = __int32_stack[--__int32_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i32a != __i32b); }\n");
+                break;
+            }
+            case OPC_INT64_ADD: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __int64_stack[__int64_stack_sp++] = __i64a + __i64b; }\n");
+                break;
+            }
+            case OPC_INT64_SUB: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __int64_stack[__int64_stack_sp++] = __i64a - __i64b; }\n");
+                break;
+            }
+            case OPC_INT64_MUL: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __int64_stack[__int64_stack_sp++] = __i64a * __i64b; }\n");
+                break;
+            }
+            case OPC_INT64_DIV: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __int64_stack[__int64_stack_sp++] = __i64a / __i64b; }\n");
+                break;
+            }
+            case OPC_INT64_MOD: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __int64_stack[__int64_stack_sp++] = __i64a %% __i64b; }\n");
+                break;
+            }
+            case OPC_INT64_GT: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a > __i64b); }\n");
+                break;
+            }
+            case OPC_INT64_LT: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a < __i64b); }\n");
+                break;
+            }
+            case OPC_INT64_GE: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a >= __i64b); }\n");
+                break;
+            }
+            case OPC_INT64_LE: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a <= __i64b); }\n");
+                break;
+            }
+            case OPC_INT64_EQ: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a == __i64b); }\n");
+                break;
+            }
+            case OPC_INT64_NE: {
+                fprintf(out, "    { int64_t __i64b = __int64_stack[--__int64_stack_sp]; int64_t __i64a = __int64_stack[--__int64_stack_sp]; __stk[__stk_sp++] = lumyr_make_bool(__i64a != __i64b); }\n");
                 break;
             }
             case OPC_LONG_DOUBLE_GT: {
@@ -817,8 +1051,8 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             case OPC_PUSH_DOUBLE_CONST: {
-                /* double 常量零开销压栈：直接从常量池读取double值，压入double专用栈，不创建Value */
-                fprintf(out, "    __double_stack[__double_stack_sp++] = bf->consts[%d].v.d;\n", in.a);
+                /* double 常量零开销压栈：从 a=低32位, b=高32位 重组 double 值，压入 double 专用栈 */
+                fprintf(out, "    { uint64_t __bits = ((uint64_t)(uint32_t)%d << 32) | (uint32_t)%d; double __dv; memcpy(&__dv, &__bits, sizeof(double)); __double_stack[__double_stack_sp++] = __dv; }\n", in.b, in.a);
                 break;
             }
             case OPC_DOUBLE_ADD: {
@@ -899,9 +1133,14 @@ void emit_insns(BytecodeFunc* fn)
                 break;
             }
             /* ===== float 类型零开销专用指令（CC模式） ===== */
+            case OPC_LOAD_FLOAT_VAR: {
+                /* float 类型零开销加载：压入 float 专用栈 */
+                fprintf(out, "    __float_stack[__float_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_FLOAT_CONST: {
-                /* float 常量零开销压栈：直接从常量池读取float值，压入float专用栈，不创建Value */
-                fprintf(out, "    __float_stack[__float_stack_sp++] = (float)bf->consts[%d].v.f;\n", in.a);
+                /* float 常量零开销压栈：从 a=位模式 重组 float 值，压入 float 专用栈 */
+                fprintf(out, "    { uint32_t __fbits = (uint32_t)%d; float __fv; memcpy(&__fv, &__fbits, sizeof(float)); __float_stack[__float_stack_sp++] = __fv; }\n", in.a);
                 break;
             }
             case OPC_FLOAT_ADD: {
@@ -987,6 +1226,11 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    __uint_stack[__uint_stack_sp++] = %s;\n", cvar_rw(nm));
                 break;
             }
+            case OPC_LOAD_UINT32_VAR: {
+                /* uint32 类型零开销加载：压入 uint32 专用栈 */
+                fprintf(out, "    __uint32_stack[__uint32_stack_sp++] = %s;\n", cvar_rw(nm));
+                break;
+            }
             case OPC_PUSH_UINT8_CONST: {
                 fprintf(out, "    __uint8_stack[__uint8_stack_sp++] = (uint8_t)%d;\n", in.a);
                 break;
@@ -1047,6 +1291,11 @@ void emit_insns(BytecodeFunc* fn)
                 /* uint 常量零开销压栈：直接把常量值压入uint专用栈，不创建Value
                    用于 <uint>42 字面量赋值等场景，避免创建 Value 再提取的开销 */
                 fprintf(out, "    __uint_stack[__uint_stack_sp++] = %uu;\n", (unsigned int)in.a);
+                break;
+            }
+            case OPC_PUSH_UINT32_CONST: {
+                /* uint32 常量零开销压栈：压入 uint32 专用栈 */
+                fprintf(out, "    __uint32_stack[__uint32_stack_sp++] = (uint32_t)%uu;\n", (unsigned int)in.a);
                 break;
             }
             case OPC_UINT_ADD: {
@@ -1227,6 +1476,10 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int16_t __i16v = __int16_stack[--__int16_stack_sp]; %s = __i16v; __stk[__stk_sp++] = lumyr_make_int16(__i16v); }\n", cvar_rw(nm));
                 break;
             }
+            case OPC_STORE_SHORT_VAR: {
+                fprintf(out, "    { short __shv = __short_stack[--__short_stack_sp]; %s = __shv; __stk[__stk_sp++] = lumyr_make_short(__shv); }\n", cvar_rw(nm));
+                break;
+            }
             case OPC_STORE_INT32_VAR: {
                 fprintf(out, "    { int32_t __i32v = __int32_stack[--__int32_stack_sp]; %s = __i32v; __stk[__stk_sp++] = lumyr_make_int32(__i32v); }\n", cvar_rw(nm));
                 break;
@@ -1276,6 +1529,21 @@ void emit_insns(BytecodeFunc* fn)
                     /* Value类型或其他类型：包装成Value后赋值 */
                     fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; %s = lumyr_make_uint32(__uv); __stk[__stk_sp++] = %s; }\n", cvar_rw(nm), cvar_rw(nm));
                 }
+                break;
+            }
+            case OPC_STORE_UINT32_VAR: {
+                /* uint32 类型零开销存储：从 uint32 专用栈弹出，存到变量并压回 Value 栈 */
+                fprintf(out, "    { uint32_t __u32v = __uint32_stack[--__uint32_stack_sp]; %s = __u32v; __stk[__stk_sp++] = lumyr_make_uint32(__u32v); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_DOUBLE_VAR: {
+                /* double 类型零开销存储：从 double 专用栈弹出，存到变量并压回 Value 栈 */
+                fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; %s = __dv; __stk[__stk_sp++] = lumyr_make_double(__dv); }\n", cvar_rw(nm));
+                break;
+            }
+            case OPC_STORE_FLOAT_VAR: {
+                /* float 类型零开销存储：float 变量在 Value 栈以 double 存储，与 VM 一致 */
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; %s = __fv; __stk[__stk_sp++] = lumyr_make_double((double)__fv); }\n", cvar_rw(nm));
                 break;
             }
             case OPC_ADD: fprintf(out, "    { Value __l = __stk[__stk_sp-2], __r = __stk[__stk_sp-1]; __stk[__stk_sp-2] = lumyr_add(__l, __r); __stk_sp--; }\n"); break;
@@ -2417,6 +2685,16 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { long double __ldv = __long_double_stack[--__long_double_stack_sp]; printf(\"%%Lf\\n\", __ldv); }\n");
                 break;
             }
+            case OPC_PRINT_DOUBLE: {
+                /* double 类型零开销打印：从 double 专用栈弹出，%g 与 VM 一致 */
+                fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; printf(\"%%g\\n\", __dv); }\n");
+                break;
+            }
+            case OPC_PRINT_FLOAT: {
+                /* float 类型零开销打印：从 float 专用栈弹出，%g 与 VM 一致 */
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; printf(\"%%g\\n\", (double)__fv); }\n");
+                break;
+            }
             case OPC_PRINT_INT: {
                 /* int 类型零开销打印：直接从int专用栈弹出int值并打印，不转换为Value */
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; printf(\"%%d\\n\", __iv); }\n");
@@ -2445,6 +2723,10 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    { int16_t __i16v = __int16_stack[--__int16_stack_sp]; printf(\"%%d\\n\", __i16v); }\n");
                 break;
             }
+            case OPC_PRINT_SHORT: {
+                fprintf(out, "    { short __shv = __short_stack[--__short_stack_sp]; printf(\"%%d\\n\", __shv); }\n");
+                break;
+            }
             case OPC_PRINT_INT32: {
                 fprintf(out, "    { int32_t __i32v = __int32_stack[--__int32_stack_sp]; printf(\"%%d\\n\", __i32v); }\n");
                 break;
@@ -2456,6 +2738,11 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_PRINT_UINT: {
                 /* uint 类型零开销打印：直接从uint专用栈弹出uint值并打印，不转换为Value */
                 fprintf(out, "    { unsigned int __uiv = __uint_stack[--__uint_stack_sp]; printf(\"%%u\\n\", __uiv); }\n");
+                break;
+            }
+            case OPC_PRINT_UINT32: {
+                /* uint32 类型零开销打印：从 uint32 专用栈弹出 */
+                fprintf(out, "    { uint32_t __u32v = __uint32_stack[--__uint32_stack_sp]; printf(\"%%u\\n\", __u32v); }\n");
                 break;
             }
             case OPC_PRINT_UINT8: {
@@ -2518,6 +2805,511 @@ void emit_insns(BytecodeFunc* fn)
                 fprintf(out, "    }\n");
                 break;
             }
+            /* ===== 其余固定宽度/浮点类型化数组字面量/下标（CC模式，批量生成，与 VM 语义一致） ===== */
+            case OPC_BOOL_ARRAY_LIT: {
+                /* BOOL 类型化数组字面量：a=1 从 __bool_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_bool_array(__n); TypedArray* __tarr = __arr.v.typed_array; _Bool* __items = (_Bool*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __bool_stack[__bool_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __bool_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (_Bool)lumyr_to_bool(__v); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_BOOL_ARRAY_GET: {
+                /* BOOL 类型化数组下标访问：读元素压入 __bool_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_BOOL) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      _Bool __gv = ((_Bool*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __bool_stack[__bool_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_BYTE_ARRAY_LIT: {
+                /* BYTE 类型化数组字面量：a=1 从 __byte_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_byte_array(__n); TypedArray* __tarr = __arr.v.typed_array; unsigned char* __items = (unsigned char*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __byte_stack[__byte_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __byte_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (unsigned char)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_BYTE_ARRAY_GET: {
+                /* BYTE 类型化数组下标访问：读元素压入 __byte_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_BYTE) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      unsigned char __gv = ((unsigned char*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __byte_stack[__byte_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_CHAR_ARRAY_LIT: {
+                /* CHAR 类型化数组字面量：a=1 从 __char_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_char_array(__n); TypedArray* __tarr = __arr.v.typed_array; char* __items = (char*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __char_stack[__char_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __char_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (char)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_CHAR_ARRAY_GET: {
+                /* CHAR 类型化数组下标访问：读元素压入 __char_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_CHAR) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      char __gv = ((char*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __char_stack[__char_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_DOUBLE_ARRAY_LIT: {
+                /* DOUBLE 类型化数组字面量：a=1 从 __double_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_double_array(__n); TypedArray* __tarr = __arr.v.typed_array; double* __items = (double*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __double_stack[__double_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __double_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (double)value_as_number(__v); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_DOUBLE_ARRAY_GET: {
+                /* DOUBLE 类型化数组下标访问：读元素压入 __double_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_DOUBLE) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      double __gv = ((double*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __double_stack[__double_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_FLOAT_ARRAY_LIT: {
+                /* FLOAT 类型化数组字面量：a=1 从 __float_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_float_array(__n); TypedArray* __tarr = __arr.v.typed_array; float* __items = (float*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __float_stack[__float_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __float_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (float)value_as_number(__v); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_FLOAT_ARRAY_GET: {
+                /* FLOAT 类型化数组下标访问：读元素压入 __float_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_FLOAT) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      float __gv = ((float*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __float_stack[__float_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT8_ARRAY_LIT: {
+                /* INT8 类型化数组字面量：a=1 从 __int8_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_int8_array(__n); TypedArray* __tarr = __arr.v.typed_array; int8_t* __items = (int8_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __int8_stack[__int8_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __int8_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (int8_t)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT8_ARRAY_GET: {
+                /* INT8 类型化数组下标访问：读元素压入 __int8_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_INT8) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      int8_t __gv = ((int8_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __int8_stack[__int8_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT16_ARRAY_LIT: {
+                /* INT16 类型化数组字面量：a=1 从 __int16_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_int16_array(__n); TypedArray* __tarr = __arr.v.typed_array; int16_t* __items = (int16_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __int16_stack[__int16_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __int16_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (int16_t)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT16_ARRAY_GET: {
+                /* INT16 类型化数组下标访问：读元素压入 __int16_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_INT16) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      int16_t __gv = ((int16_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __int16_stack[__int16_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT32_ARRAY_LIT: {
+                /* INT32 类型化数组字面量：a=1 从 __int32_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_int32_array(__n); TypedArray* __tarr = __arr.v.typed_array; int32_t* __items = (int32_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __int32_stack[__int32_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __int32_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (int32_t)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT32_ARRAY_GET: {
+                /* INT32 类型化数组下标访问：读元素压入 __int32_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_INT32) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      int32_t __gv = ((int32_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __int32_stack[__int32_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT64_ARRAY_LIT: {
+                /* INT64 类型化数组字面量：a=1 从 __int64_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_int64_array(__n); TypedArray* __tarr = __arr.v.typed_array; int64_t* __items = (int64_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __int64_stack[__int64_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __int64_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (int64_t)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_INT64_ARRAY_GET: {
+                /* INT64 类型化数组下标访问：读元素压入 __int64_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_INT64) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      int64_t __gv = ((int64_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __int64_stack[__int64_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_LONG_ARRAY_LIT: {
+                /* LONG 类型化数组字面量：a=1 从 __long_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_long_array(__n); TypedArray* __tarr = __arr.v.typed_array; long* __items = (long*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __long_stack[__long_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __long_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (long)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_LONG_ARRAY_GET: {
+                /* LONG 类型化数组下标访问：读元素压入 __long_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_LONG) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      long __gv = ((long*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __long_stack[__long_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_ARRAY_LIT: {
+                /* LONG_DOUBLE 类型化数组字面量：a=1 从 __long_double_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_long_double_array(__n); TypedArray* __tarr = __arr.v.typed_array; long double* __items = (long double*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __long_double_stack[__long_double_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __long_double_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (long double)value_as_number(__v); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_LONG_DOUBLE_ARRAY_GET: {
+                /* LONG_DOUBLE 类型化数组下标访问：读元素压入 __long_double_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_LONG_DOUBLE) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      long double __gv = ((long double*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __long_double_stack[__long_double_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_SIZE_T_ARRAY_LIT: {
+                /* SIZE_T 类型化数组字面量：a=1 从 __size_t_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_size_t_array(__n); TypedArray* __tarr = __arr.v.typed_array; size_t* __items = (size_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __size_t_stack[__size_t_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __size_t_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (size_t)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_SIZE_T_ARRAY_GET: {
+                /* SIZE_T 类型化数组下标访问：读元素压入 __size_t_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_SIZE_T) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      size_t __gv = ((size_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __size_t_stack[__size_t_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_SSIZE_T_ARRAY_LIT: {
+                /* SSIZE_T 类型化数组字面量：a=1 从 __ssize_t_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_ssize_t_array(__n); TypedArray* __tarr = __arr.v.typed_array; ssize_t* __items = (ssize_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __ssize_t_stack[__ssize_t_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __ssize_t_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (ssize_t)(__v.type==VAL_DOUBLE?(long long)__v.v.d : __v.type==VAL_FLOAT?(long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(long long)__v.v.ld : (long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_SSIZE_T_ARRAY_GET: {
+                /* SSIZE_T 类型化数组下标访问：读元素压入 __ssize_t_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_SSIZE_T) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      ssize_t __gv = ((ssize_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __ssize_t_stack[__ssize_t_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT8_ARRAY_LIT: {
+                /* UINT8 类型化数组字面量：a=1 从 __uint8_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_uint8_array(__n); TypedArray* __tarr = __arr.v.typed_array; uint8_t* __items = (uint8_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __uint8_stack[__uint8_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __uint8_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (uint8_t)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT8_ARRAY_GET: {
+                /* UINT8 类型化数组下标访问：读元素压入 __uint8_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_UINT8) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      uint8_t __gv = ((uint8_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __uint8_stack[__uint8_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT16_ARRAY_LIT: {
+                /* UINT16 类型化数组字面量：a=1 从 __uint16_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_uint16_array(__n); TypedArray* __tarr = __arr.v.typed_array; uint16_t* __items = (uint16_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __uint16_stack[__uint16_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __uint16_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (uint16_t)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT16_ARRAY_GET: {
+                /* UINT16 类型化数组下标访问：读元素压入 __uint16_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_UINT16) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      uint16_t __gv = ((uint16_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __uint16_stack[__uint16_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT32_ARRAY_LIT: {
+                /* UINT32 类型化数组字面量：a=1 从 __uint32_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_uint32_array(__n); TypedArray* __tarr = __arr.v.typed_array; uint32_t* __items = (uint32_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __uint32_stack[__uint32_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __uint32_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (uint32_t)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT32_ARRAY_GET: {
+                /* UINT32 类型化数组下标访问：读元素压入 __uint32_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_UINT32) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      uint32_t __gv = ((uint32_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __uint32_stack[__uint32_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT64_ARRAY_LIT: {
+                /* UINT64 类型化数组字面量：a=1 从 __uint64_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_uint64_array(__n); TypedArray* __tarr = __arr.v.typed_array; uint64_t* __items = (uint64_t*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __uint64_stack[__uint64_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __uint64_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (uint64_t)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_UINT64_ARRAY_GET: {
+                /* UINT64 类型化数组下标访问：读元素压入 __uint64_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_UINT64) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      uint64_t __gv = ((uint64_t*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __uint64_stack[__uint64_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_ULONG_ARRAY_LIT: {
+                /* ULONG 类型化数组字面量：a=1 从 __ulong_stack 读，a=0 从 Value 栈转换 */
+                int __n = in.b;
+                fprintf(out, "    { int __n = %d; Value __arr = val_ulong_array(__n); TypedArray* __tarr = __arr.v.typed_array; unsigned long* __items = (unsigned long*)__tarr->items;\n", __n);
+                if(in.a == 1) {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { __items[__k] = __ulong_stack[__ulong_stack_sp - __n + __k]; }\n");
+                    fprintf(out, "      __ulong_stack_sp -= __n;\n");
+                    fprintf(out, "      __stk[__stk_sp++] = __arr;\n");
+                } else {
+                    fprintf(out, "      for(int __k = 0; __k < __n; __k++) { Value __v = __stk[__stk_sp - __n + __k]; __items[__k] = (unsigned long)(__v.type==VAL_DOUBLE?(unsigned long long)__v.v.d : __v.type==VAL_FLOAT?(unsigned long long)__v.v.f : __v.type==VAL_LONG_DOUBLE?(unsigned long long)__v.v.ld : (unsigned long long)__v.v.i); }\n");
+                    fprintf(out, "      __stk_sp = __stk_sp - __n + 1; __stk_sp--; __stk[__stk_sp++] = __arr;\n");
+                }
+                fprintf(out, "      __tarr->len = __n;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
+            case OPC_ULONG_ARRAY_GET: {
+                /* ULONG 类型化数组下标访问：读元素压入 __ulong_stack */
+                fprintf(out, "    { Value __idx = __stk[--__stk_sp]; Value __arrv = __stk[--__stk_sp]; int __iidx = (int)lumyr_extract_int(__idx);\n");
+                fprintf(out, "      if(__arrv.type != VAL_TYPED_ARRAY || !__arrv.v.typed_array) { runtime_error(\"类型错误：需要类型化数组\"); }\n");
+                fprintf(out, "      TypedArray* __tarr = __arrv.v.typed_array;\n");
+                fprintf(out, "      if(__tarr->elem_type != VAL_ULONG) { runtime_error(\"类型错误：数组元素类型不匹配\"); }\n");
+                fprintf(out, "      if(__iidx < 0 || __iidx >= __tarr->len) { runtime_error(\"数组越界\"); }\n");
+                fprintf(out, "      unsigned long __gv = ((unsigned long*)__tarr->items)[__iidx];\n");
+                fprintf(out, "      __ulong_stack[__ulong_stack_sp++] = __gv;\n");
+                fprintf(out, "    }\n");
+                break;
+            }
             /* ===== uint 类型数组零开销专用指令（CC模式） ===== */
             case OPC_UINT_ARRAY_SET: {
                 /* uint 类型化数组元素赋值：从 uint 专用栈弹出值，从 Value 栈弹出索引和数组，
@@ -2559,6 +3351,27 @@ void emit_insns(BytecodeFunc* fn)
             case OPC_INT_TO_DOUBLE: {
                 /* 从 int 栈弹出一个 int，转换为 double，压入 double 栈 */
                 fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __double_stack[__double_stack_sp++] = (double)__iv; }\n");
+                break;
+            }
+            case OPC_INT_TO_LONG_DOUBLE: {
+                /* 从 int 栈弹出，转换为 long double，压入 long double 栈 */
+                fprintf(out, "    { int __iv = __int_stack[--__int_stack_sp]; __long_double_stack[__long_double_stack_sp++] = (long double)__iv; }\n");
+                break;
+            }
+            case OPC_DOUBLE_TO_LONG_DOUBLE: {
+                fprintf(out, "    { double __dv = __double_stack[--__double_stack_sp]; __long_double_stack[__long_double_stack_sp++] = (long double)__dv; }\n");
+                break;
+            }
+            case OPC_FLOAT_TO_LONG_DOUBLE: {
+                fprintf(out, "    { float __fv = __float_stack[--__float_stack_sp]; __long_double_stack[__long_double_stack_sp++] = (long double)__fv; }\n");
+                break;
+            }
+            case OPC_LONG_LONG_TO_LONG_DOUBLE: {
+                fprintf(out, "    { long long __llv = __long_long_stack[--__long_long_stack_sp]; __long_double_stack[__long_double_stack_sp++] = (long double)__llv; }\n");
+                break;
+            }
+            case OPC_UINT_TO_LONG_DOUBLE: {
+                fprintf(out, "    { unsigned int __uv = __uint_stack[--__uint_stack_sp]; __long_double_stack[__long_double_stack_sp++] = (long double)__uv; }\n");
                 break;
             }
             case OPC_UINT_TO_FLOAT: {

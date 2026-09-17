@@ -208,6 +208,27 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         }
     }
 
+    /* 类型化数组下标 a[i]：还原元素的 ExprType（变量 tag 为 VAR_TYPE_*_ARRAY）。
+       这样多参数 print 等通用 Value 栈场景才能在取值后插入 *_TO_VALUE，避免跨栈错取。 */
+    if(node->type == AST_INDEX) {
+        AstNode* arr = node->u.index.arr;
+        if(arr && arr->type == AST_VAR) {
+            CastKind ct = get_var_cast_type(c, arr->u.varname);
+            switch(ct) {
+                case VAR_TYPE_INT_ARRAY:    return EXPR_TYPE_INT;
+                case VAR_TYPE_DOUBLE_ARRAY: return EXPR_TYPE_DOUBLE;
+                case VAR_TYPE_FLOAT_ARRAY:  return EXPR_TYPE_FLOAT;
+                case VAR_TYPE_UINT_ARRAY:   return EXPR_TYPE_UINT;
+                case VAR_TYPE_BOOL_ARRAY:   return EXPR_TYPE_BOOL;
+                case VAR_TYPE_CHAR_ARRAY:   return EXPR_TYPE_CHAR;
+                case VAR_TYPE_BYTE_ARRAY:   return EXPR_TYPE_BYTE;
+                case VAR_TYPE_INT8_ARRAY:   return EXPR_TYPE_INT8;
+                default:                    return EXPR_TYPE_NONE;
+            }
+        }
+        return EXPR_TYPE_NONE;
+    }
+
     /* 二元运算：递归判断左右操作数类型
        规则：
        - 两个都是已知类型 → 类型提升

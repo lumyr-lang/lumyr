@@ -21,18 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* 变量类型标记特殊值：1000 表示变量是 int 类型化数组（用于上下文感知类型推导） */
-#define VAR_TYPE_INT_ARRAY 1000
-/* 变量类型标记特殊值：1001 表示变量是 double 类型化数组（用于上下文感知类型推导） */
-#define VAR_TYPE_DOUBLE_ARRAY 1001
-/* 变量类型标记特殊值：1002 表示变量是 float 类型化数组（用于上下文感知类型推导） */
-#define VAR_TYPE_FLOAT_ARRAY 1002
-/* 变量类型标记特殊值：1003 表示变量是 uint 类型化数组（用于上下文感知类型推导） */
-#define VAR_TYPE_UINT_ARRAY 1003
-#define VAR_TYPE_BOOL_ARRAY 1004
-#define VAR_TYPE_CHAR_ARRAY 1005
-#define VAR_TYPE_BYTE_ARRAY 1006
-#define VAR_TYPE_INT8_ARRAY 1007
+/* 类型化数组变量标记 VAR_TYPE_*_ARRAY 统一定义在 ir_types.h（与 CastKind 同槽，取 1000+） */
 
 // ---------------- 全局函数表 ----------------
 // yacc 期注册每个函数（ir_compile_function），main.c 注册 main（ir_compile_main）。
@@ -1650,12 +1639,53 @@ static int fold_const(Ctx* c, AstNode* node, Value* out)
     }
 }
 
+/* ExprType（专用栈结果）→ 对应的 *_TO_VALUE 指令；无专用栈（Value/未知）返回 -1。
+   多参数 print 走通用 OPC_PRINT（只从 Value 栈取参），因此专用栈上的参数必须先搬回 Value 栈。 */
+static int expr_type_to_value_op(ExprType et)
+{
+    switch(et) {
+        case EXPR_TYPE_BOOL:        return OPC_BOOL_TO_VALUE;
+        case EXPR_TYPE_CHAR:        return OPC_CHAR_TO_VALUE;
+        case EXPR_TYPE_INT8:        return OPC_INT8_TO_VALUE;
+        case EXPR_TYPE_INT16:       return OPC_INT16_TO_VALUE;
+        case EXPR_TYPE_SHORT:       return OPC_SHORT_TO_VALUE;
+        case EXPR_TYPE_INT:         return OPC_INT_TO_VALUE;
+        case EXPR_TYPE_INT64:       return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_LONG_LONG:   return OPC_LONG_LONG_TO_VALUE;
+        case EXPR_TYPE_LONG:        return OPC_LONG_TO_VALUE;
+        case EXPR_TYPE_BYTE:        return OPC_BYTE_TO_VALUE;
+        case EXPR_TYPE_UINT8:       return OPC_UINT8_TO_VALUE;
+        case EXPR_TYPE_UINT16:      return OPC_UINT16_TO_VALUE;
+        case EXPR_TYPE_UINT:        return OPC_UINT_TO_VALUE;
+        case EXPR_TYPE_UINT64:      return OPC_UINT64_TO_VALUE;
+        case EXPR_TYPE_ULONG:       return OPC_ULONG_TO_VALUE;
+        case EXPR_TYPE_SIZE_T:      return OPC_SIZE_T_TO_VALUE;
+        case EXPR_TYPE_SSIZE_T:     return OPC_SSIZE_T_TO_VALUE;
+        case EXPR_TYPE_FLOAT:       return OPC_FLOAT_TO_VALUE;
+        case EXPR_TYPE_DOUBLE:      return OPC_DOUBLE_TO_VALUE;
+        case EXPR_TYPE_LONG_DOUBLE: return OPC_LONG_DOUBLE_TO_VALUE;
+        default:                    return -1;
+    }
+}
+
 /* 递归编译 print 的参数列表（左嵌套 AST_SEQ: seq(seq(a,b),c)），返回参数数量 */
 static int c_print_args_recursive(Ctx* c, AstNode* args)
 {
     if(!args) return 0;
     if(args->type != AST_SEQ) {
         c_expr(c, args);
+        /* 通用 OPC_PRINT 只从 Value 栈取参：若该参数结果落在专用栈，先搬回 Value 栈，
+           保证多参数 print（如 print("x=", a[0])）不会跨栈错取。
+           注意比较/逻辑运算（OP_GT..OP_LOGIC_OR）结果是 bool，由专用比较指令直接压入
+           通用 Value 栈，不能再插 *_TO_VALUE，否则会从空的专用栈误弹。 */
+        int tov = -1;
+        int is_cmp_logic = (args->type == AST_BINOP) &&
+                           (args->u.bin.op >= OP_GT && args->u.bin.op <= OP_LOGIC_OR);
+        if(!is_cmp_logic) {
+            ExprType et = arith_get_expr_type(c, args);
+            tov = expr_type_to_value_op(et);
+        }
+        if(tov >= 0) emit(c, tov, 0, 0);
         return 1;
     }
     int n1 = c_print_args_recursive(c, args->u.seq.first);
@@ -1754,15 +1784,19 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
             emit(c, OPC_PUSH_SSIZE_T_CONST, (int)(sstv & 0xFFFFFFFF), (int)((sstv >> 32) & 0xFFFFFFFF));
             break;
         }
-        /* 浮点类型：a=常量池下标 */
+        /* 浮点类型：a/b=位模式（与 VM 重组逻辑一致） */
         case CAST_FLOAT: {
-            int const_idx = bf_const(c->fn, v);
-            emit(c, OPC_PUSH_FLOAT_CONST, const_idx, 0);
+            float fv = v.v.f;
+            uint32_t bits = 0;
+            memcpy(&bits, &fv, sizeof(float));
+            emit(c, OPC_PUSH_FLOAT_CONST, (int)bits, 0);
             break;
         }
         case CAST_DOUBLE: {
-            int const_idx = bf_const(c->fn, v);
-            emit(c, OPC_PUSH_DOUBLE_CONST, const_idx, 0);
+            double dv = v.v.d;
+            uint64_t bits = 0;
+            memcpy(&bits, &dv, sizeof(double));
+            emit(c, OPC_PUSH_DOUBLE_CONST, (int)(uint32_t)bits, (int)(uint32_t)(bits >> 32));
             break;
         }
         /* long double：a=低32位, b=高32位 */
@@ -1777,6 +1811,72 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
         default:
             emit(c, OPC_LOAD_CONST, bf_const(c->fn, v), 0);
             break;
+    }
+}
+
+/* 根据目标 CastKind 和原始常量 Value，构造目标类型的 Value（C 风格截断/扩展）。
+   抽自 AST_TYPE_ANNOTATION 常量折叠逻辑，供混合类型专用栈路径复用。 */
+static Value build_cast_const_value(CastKind ct, Value raw) {
+    Value fv;
+    long long llv = lumyr_extract_ll(raw);
+    unsigned long long ullv = (unsigned long long)llv;
+    double dv = value_as_number(raw);
+    switch(ct) {
+        case CAST_VOID:       fv = val_none(); break;
+        case CAST_BOOL:       fv = lumyr_make_bool(llv != 0); break;
+        case CAST_CHAR:       fv = lumyr_make_char((char)(unsigned char)llv); break;
+        case CAST_BYTE:       fv = lumyr_make_byte((unsigned char)llv); break;
+        case CAST_INT8:       fv = lumyr_make_int8((int8_t)llv); break;
+        case CAST_INT16:      fv = lumyr_make_int16((int16_t)llv); break;
+        case CAST_SHORT:      fv = lumyr_make_short((int16_t)llv); break;
+        case CAST_INT32:      fv = lumyr_make_int32((int32_t)llv); break;
+        case CAST_INT:        fv = lumyr_make_int((int)llv); break;
+        case CAST_INT64:      fv = lumyr_make_int64(llv); break;
+        case CAST_LONGLONG:   fv = lumyr_make_long_long(llv); break;
+        case CAST_LONG:       fv = lumyr_make_long((long)llv); break;
+        case CAST_UINT8:      fv = lumyr_make_uint8((uint8_t)ullv); break;
+        case CAST_UCHAR:      fv = lumyr_make_uchar((unsigned char)ullv); break;
+        case CAST_UINT16:     fv = lumyr_make_uint16((uint16_t)ullv); break;
+        case CAST_USHORT:     fv = lumyr_make_ushort((unsigned short)ullv); break;
+        case CAST_UINT32:     fv = lumyr_make_uint32((uint32_t)ullv); break;
+        case CAST_UINT:       fv = lumyr_make_uint((unsigned int)ullv); break;
+        case CAST_UINT64:     fv = lumyr_make_uint64(ullv); break;
+        case CAST_ULONG:      fv = lumyr_make_ulong((unsigned long)ullv); break;
+        case CAST_SIZE_T:     fv = lumyr_make_size_t((size_t)ullv); break;
+        case CAST_SSIZE_T:    fv = lumyr_make_ssize_t((ssize_t)llv); break;
+        case CAST_FLOAT:      fv = lumyr_make_float((float)dv); break;
+        case CAST_DOUBLE:     fv = lumyr_make_double(dv); break;
+        case CAST_LONG_DOUBLE: fv = lumyr_make_long_double((long double)dv); break;
+        case CAST_PTR:        fv = lumyr_make_int64(llv); break;
+        default:              fv = lumyr_make_int(llv); break;
+    }
+    return fv;
+}
+
+/* ExprType → CastKind 映射（用于裸字面量按目标专用类型提升） */
+static CastKind expr_type_to_cast(ExprType t) {
+    switch(t) {
+        case EXPR_TYPE_BOOL: return CAST_BOOL;
+        case EXPR_TYPE_CHAR: return CAST_CHAR;
+        case EXPR_TYPE_INT8: return CAST_INT8;
+        case EXPR_TYPE_INT16: return CAST_INT16;
+        case EXPR_TYPE_SHORT: return CAST_SHORT;
+        case EXPR_TYPE_INT: return CAST_INT;
+        case EXPR_TYPE_INT64: return CAST_INT64;
+        case EXPR_TYPE_LONG_LONG: return CAST_LONGLONG;
+        case EXPR_TYPE_LONG: return CAST_LONG;
+        case EXPR_TYPE_BYTE: return CAST_BYTE;
+        case EXPR_TYPE_UINT8: return CAST_UINT8;
+        case EXPR_TYPE_UINT16: return CAST_UINT16;
+        case EXPR_TYPE_UINT: return CAST_UINT;
+        case EXPR_TYPE_UINT64: return CAST_UINT64;
+        case EXPR_TYPE_ULONG: return CAST_ULONG;
+        case EXPR_TYPE_SIZE_T: return CAST_SIZE_T;
+        case EXPR_TYPE_SSIZE_T: return CAST_SSIZE_T;
+        case EXPR_TYPE_FLOAT: return CAST_FLOAT;
+        case EXPR_TYPE_DOUBLE: return CAST_DOUBLE;
+        case EXPR_TYPE_LONG_DOUBLE: return CAST_LONG_DOUBLE;
+        default: return CAST_INT;
     }
 }
 
@@ -1805,6 +1905,43 @@ static OpCode get_load_var_opcode(ExprType expr_type) {
         case EXPR_TYPE_LONG_DOUBLE: return OPC_LOAD_LONG_DOUBLE_VAR;
         default: return OPC_LOAD_VAR;
     }
+}
+
+/* 把一个操作数加载到它对应的专用栈（混合类型专用栈路径复用）。
+   - 变量引用 → OPC_LOAD_*_VAR
+   - 类型标注常量 <type>字面量 → 按标注类型 PUSH_*_CONST
+   - 裸字面量（AST_INT/AST_NUM/AST_BOOL/AST_CHAR）→ 按目标 op_type 提升后 PUSH_*_CONST
+   - 嵌套表达式 → 递归 c_expr（结果已在专用栈） */
+static void emit_load_operand_typed(Ctx* c, AstNode* operand, ExprType op_type, int var_idx) {
+    if(operand->type == AST_VAR) {
+        emit(c, get_load_var_opcode(op_type), var_idx, 0);
+        return;
+    }
+    if(operand->type == AST_TYPE_ANNOTATION) {
+        Value raw;
+        if(fold_const(c, operand->u.type_annotation.expr, &raw)) {
+            CastKind ct = (CastKind)operand->u.type_annotation.cast_type;
+            Value fv = build_cast_const_value(ct, raw);
+            emit_typed_const(c, ct, fv);
+            return;
+        }
+        c_expr(c, operand);
+        return;
+    }
+    if(operand->type == AST_INT || operand->type == AST_NUM ||
+       operand->type == AST_BOOL || operand->type == AST_CHAR) {
+        Value raw;
+        if(fold_const(c, operand, &raw)) {
+            CastKind ct = expr_type_to_cast(op_type);
+            Value fv = build_cast_const_value(ct, raw);
+            emit_typed_const(c, ct, fv);
+            return;
+        }
+        c_expr(c, operand);
+        return;
+    }
+    /* 嵌套表达式：递归编译（结果应已在专用栈） */
+    c_expr(c, operand);
 }
 
 /* 根据 ExprType 类型返回对应的 TO_VALUE 指令 */
@@ -2442,7 +2579,7 @@ void c_expr(Ctx* c, AstNode* node)
                 /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
                 emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 /* 记录变量类型标记为 double */
-                c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
             }
             /* 优化1c：赋值为 <float>arr[idx] 形式时，使用 OPC_FLOAT_ARRAY_GET + OPC_STORE_FLOAT_VAR
                零包装零重复提取，直接从 float 类型化数组读取并存储到 float 变量 */
@@ -2542,7 +2679,7 @@ void c_expr(Ctx* c, AstNode* node)
                     /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
                     emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 double 类型 */
-                    c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                    c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
                 }
                 /* 检查数组变量是否标记为 float 类型化数组 */
                 else if(arr_idx >= 0 && c->fn->var_type_tags &&
@@ -2619,7 +2756,7 @@ void c_expr(Ctx* c, AstNode* node)
                         /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
                         c_expr(c, binop);
                         emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
-                        c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                        c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
                     } else if(result_type == EXPR_TYPE_LONG_LONG) {
                         /* long long类型算术运算：结果在long long专用栈中，直接使用OPC_STORE_LONG_LONG_VAR */
                         c_expr(c, binop);
@@ -2681,7 +2818,7 @@ void c_expr(Ctx* c, AstNode* node)
                     /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
                     emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 double 类型 */
-                    c->fn->var_type_tags[var_idx] = 1; /* CAST_DOUBLE */
+                    c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
                 }
                 /* 检查右侧变量是否标记为 float 类型（CAST_FLOAT） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
@@ -2736,6 +2873,13 @@ void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_LOAD_INT16_VAR, rhs_idx, 0);
                     emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT16;
+                }
+                /* 检查右侧变量是否标记为 short 类型（CAST_SHORT） */
+                else if(rhs_idx >= 0 && c->fn->var_type_tags &&
+                   c->fn->var_type_tags[rhs_idx] == CAST_SHORT) {
+                    emit(c, OPC_LOAD_SHORT_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+                    c->fn->var_type_tags[var_idx] = CAST_SHORT;
                 }
                 /* 检查右侧变量是否标记为 int32 类型（CAST_INT32） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
@@ -2830,7 +2974,7 @@ void c_expr(Ctx* c, AstNode* node)
                         case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
                         case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
                         case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
-                        case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = 1 /* CAST_DOUBLE */; break;
+                        case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_DOUBLE; break;
                         case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
                         case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
                         default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
@@ -2844,7 +2988,7 @@ void c_expr(Ctx* c, AstNode* node)
                     case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
                     case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
                     case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
-                    case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = 1 /* CAST_DOUBLE */; break;
+                    case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_DOUBLE; break;
                     case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
                     case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
                     default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
@@ -3190,52 +3334,13 @@ void c_expr(Ctx* c, AstNode* node)
                         result_type = (left_type > right_type) ? left_type : right_type;
                     }
                     /* 加载左操作数到对应专用栈
-                       对于变量引用使用 OPC_LOAD_*_VAR，对于字面量使用 OPC_PUSH_*_CONST，
-                       对于嵌套表达式直接递归编译（结果已在专用栈） */
-                    if(node->u.bin.left->type == AST_VAR) {
-                        emit(c, get_load_var_opcode(left_type), left_idx, 0);
-                    } else if(node->u.bin.left->type == AST_INT && left_type == EXPR_TYPE_INT) {
-                        /* 字面量 int：直接压入 int 专用栈（零开销） */
-                        emit(c, OPC_PUSH_INT_CONST, node->u.bin.left->u.inum, 0);
-                    } else if(node->u.bin.left->type == AST_INT && left_type == EXPR_TYPE_INT64) {
-                        /* 字面量 int 提升为 int64：压入 int64 专用栈 */
-                        long long llv = (long long)node->u.bin.left->u.inum;
-                        emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(llv & 0xFFFFFFFF), (int)((llv >> 32) & 0xFFFFFFFF));
-                    } else if(node->u.bin.left->type == AST_NUM && left_type == EXPR_TYPE_DOUBLE) {
-                        /* 字面量 double：直接压入 double 专用栈 */
-                        double dv = node->u.bin.left->u.num;
-                        union { double d; int i[2]; } u;
-                        u.d = dv;
-                        emit(c, OPC_PUSH_DOUBLE_CONST, u.i[0], u.i[1]);
-                    } else {
-                        /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
-                        c_expr(c, node->u.bin.left);
-                    }
+                       变量用 OPC_LOAD_*_VAR，字面量/类型标注用 PUSH_*_CONST，
+                       嵌套表达式递归编译（结果已在专用栈） */
+                    emit_load_operand_typed(c, node->u.bin.left, left_type, left_idx);
                     /* 左操作数类型提升 */
                     emit_mixed_type_promote(c, left_type, result_type);
-                    /* 加载右操作数到对应专用栈
-                       对于变量引用使用 OPC_LOAD_*_VAR，对于字面量使用 OPC_PUSH_*_CONST，
-                       对于嵌套表达式直接递归编译（结果已在专用栈） */
-                    if(node->u.bin.right->type == AST_VAR) {
-                        emit(c, get_load_var_opcode(right_type), right_idx, 0);
-                    } else if(node->u.bin.right->type == AST_INT && right_type == EXPR_TYPE_INT) {
-                        /* 字面量 int：直接压入 int 专用栈（零开销） */
-                        emit(c, OPC_PUSH_INT_CONST, node->u.bin.right->u.inum, 0);
-                    } else if(node->u.bin.right->type == AST_INT && right_type == EXPR_TYPE_INT64) {
-                        /* 字面量 int 提升为 int64：压入 int64 专用栈 */
-                        long long llv = (long long)node->u.bin.right->u.inum;
-                        emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(llv & 0xFFFFFFFF), (int)((llv >> 32) & 0xFFFFFFFF));
-                    } else if(node->u.bin.right->type == AST_NUM && right_type == EXPR_TYPE_DOUBLE) {
-                        /* 字面量 double：直接压入 double 专用栈 */
-                        double dv = node->u.bin.right->u.num;
-                        /* double 需要拆成两个 int 传入（和 PUSH_DOUBLE_CONST 的 VM 实现一致） */
-                        union { double d; int i[2]; } u;
-                        u.d = dv;
-                        emit(c, OPC_PUSH_DOUBLE_CONST, u.i[0], u.i[1]);
-                    } else {
-                        /* 嵌套表达式：直接递归编译，结果已在专用栈中 */
-                        c_expr(c, node->u.bin.right);
-                    }
+                    /* 加载右操作数到对应专用栈 */
+                    emit_load_operand_typed(c, node->u.bin.right, right_type, right_idx);
                     /* 右操作数类型提升 */
                     emit_mixed_type_promote(c, right_type, result_type);
                     /* 执行大类型的算术运算（结果在大类型专用栈中）
@@ -4359,7 +4464,7 @@ static void c_stmt(Ctx* c, AstNode* node)
                     int right_is_double = is_double_var(c, single_arg->u.bin.right);
                     int left_is_float = is_float_var(c, single_arg->u.bin.left);
                     int right_is_float = is_float_var(c, single_arg->u.bin.right);
-                    ExprType result_type = get_expr_type(c, single_arg);
+                    ExprType result_type = arith_get_expr_type(c, single_arg);
                     if(result_type == EXPR_TYPE_INT) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT, 0, 0);
@@ -4453,6 +4558,10 @@ static void c_stmt(Ctx* c, AstNode* node)
                     } else if(tag == CAST_INT16) {
                         emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT16, 0, 0);
+                        break;
+                    } else if(tag == CAST_SHORT) {
+                        emit(c, OPC_LOAD_SHORT_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_SHORT, 0, 0);
                         break;
                     } else if(tag == CAST_INT32) {
                         emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);

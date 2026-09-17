@@ -80,6 +80,13 @@ static const StackInfo stack_info_table[STACK_TYPE_COUNT] = {
         .elem_size = sizeof(int16_t),
         .has_dedicated_stack = 1,
     },
+    [STACK_SHORT] = {
+        .type = STACK_SHORT,
+        .name = "__short_stack",
+        .c_type = "short",
+        .elem_size = sizeof(short),
+        .has_dedicated_stack = 1,
+    },
     [STACK_INT32] = {
         .type = STACK_INT32,
         .name = "__int32_stack",
