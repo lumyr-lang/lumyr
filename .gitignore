@@ -84,25 +84,9 @@ lumyr_debug.log
 !prebuilt/**/*.exe
 !prebuilt/**/*.dll
 
-# vendor 和 build_tools 中的编译产物和临时下载文件（不入库）
-vendor/*/config.h
-vendor/*/config.status
-vendor/*/config.log
-vendor/*/Makefile
-vendor/*/Makefile.in
-vendor/*/*.o
-vendor/*/*.la
-vendor/*.tar.gz
-vendor/*.zip
-build_tools/*/config.h
-build_tools/*/config.status
-build_tools/*/config.log
-build_tools/*/Makefile
-build_tools/*/Makefile.in
-build_tools/*/*.o
-build_tools/*/*.la
-build_tools/*.tar.gz
-build_tools/*.zip
+# vendor 和 build_tools 目录（源码不入库，通过下载脚本获取）
+vendor/
+build_tools/
 
 # 规则文件和实现步骤记录（不入库）
 development_rules.md
