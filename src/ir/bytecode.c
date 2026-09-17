@@ -653,6 +653,7 @@ static const char* opc_name(OpCode op)
         case OPC_INT_DIV: return "INT_DIV";
         case OPC_INT_MOD: return "INT_MOD";
         case OPC_INT_TO_VALUE: return "INT_TO_VALUE";
+        case OPC_SHORT_TO_VALUE: return "SHORT_TO_VALUE";
         case OPC_INT_GT: return "INT_GT";
         case OPC_INT_LT: return "INT_LT";
         case OPC_INT_GE: return "INT_GE";
@@ -766,6 +767,7 @@ static const char* opc_name(OpCode op)
         case OPC_PUSH_BYTE_CONST: return "PUSH_BYTE_CONST";
         case OPC_PUSH_INT8_CONST: return "PUSH_INT8_CONST";
         case OPC_PUSH_INT16_CONST: return "PUSH_INT16_CONST";
+        case OPC_PUSH_SHORT_CONST: return "PUSH_SHORT_CONST";
         case OPC_PUSH_INT32_CONST: return "PUSH_INT32_CONST";
         case OPC_PUSH_INT64_CONST: return "PUSH_INT64_CONST";
         case OPC_PUSH_UINT8_CONST: return "PUSH_UINT8_CONST";
@@ -790,6 +792,8 @@ static const char* opc_name(OpCode op)
         case OPC_PRINT_INT8: return "PRINT_INT8";
         case OPC_LOAD_INT16_VAR: return "LOAD_INT16_VAR";
         case OPC_STORE_INT16_VAR: return "STORE_INT16_VAR";
+        case OPC_LOAD_SHORT_VAR: return "LOAD_SHORT_VAR";
+        case OPC_STORE_SHORT_VAR: return "STORE_SHORT_VAR";
         case OPC_PRINT_INT16: return "PRINT_INT16";
         case OPC_LOAD_INT32_VAR: return "LOAD_INT32_VAR";
         case OPC_STORE_INT32_VAR: return "STORE_INT32_VAR";
