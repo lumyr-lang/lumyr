@@ -52,12 +52,8 @@ int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
 /* STORE_VAR：从 VALUE 栈弹值存储到帧槽位 */
 int vm_exec_var_store(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    Value val;
-    if (stack_vm_pop(g_stack_mgr, STACK_VALUE, &val) < 0) {
-        fprintf(stderr, "VM Error: VALUE stack underflow at STORE_VAR (idx=%d)\n", idx);
-        return -1;
-    }
-    ctx->frame->vals[idx] = val;
+    Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
+    ctx->frame->vals[idx] = stk[--g_stack_mgr->sp[STACK_VALUE]];
     return 1;
 }
 
@@ -74,9 +70,8 @@ int vm_exec_var_load_int64(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_store_int64(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     frame_ensure_slots(ctx->frame, idx + 1);
-    int64_t val;
-    stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
-    ctx->frame->int_slots[idx] = val;
+    int sp = --g_stack_mgr->sp[STACK_INT64];
+    ctx->frame->int_slots[idx] = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
     return 1;
 }
 
@@ -93,9 +88,8 @@ int vm_exec_var_load_double(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     frame_ensure_slots(ctx->frame, idx + 1);
-    double val;
-    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
-    ctx->frame->flt_slots[idx] = val;
+    int sp = --g_stack_mgr->sp[STACK_DOUBLE];
+    ctx->frame->flt_slots[idx] = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
     return 1;
 }
 
@@ -112,8 +106,7 @@ int vm_exec_var_load_ptr(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     frame_ensure_slots(ctx->frame, idx + 1);
-    void* val;
-    stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
-    ctx->frame->ptr_slots[idx] = val;
+    int sp = --g_stack_mgr->sp[STACK_PTR];
+    ctx->frame->ptr_slots[idx] = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
     return 1;
 }
