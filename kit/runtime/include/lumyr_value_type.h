@@ -269,7 +269,7 @@ typedef struct StackFrame {
     Value** cells;
     int cell_cnt;
     int cell_cap;
-    CastKind* type_tags;   /* 变量类型标记（CastKind 枚举，-1 表示无精确类型），与 names/vals 平行数组 */
+    uint8_t* type_tags;   /* 变量类型标记（CastKind 枚举，0=CAST_NONE 表示无精确类型），与 names/vals 平行数组 */
 } StackFrame;
 
 
