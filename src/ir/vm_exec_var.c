@@ -91,6 +91,7 @@ int vm_exec_var_load_double(VMExecCtx* ctx, Instruction* in) {
 /* STORE_DOUBLE_VAR：从 DOUBLE 栈弹值存储到帧 flt_slots */
 int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
+    frame_ensure_slots(ctx->frame, idx + 1);
     int sp = --g_stack_mgr->sp[STACK_DOUBLE];
     ctx->frame->flt_slots[idx] = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
     return 1;
@@ -109,6 +110,7 @@ int vm_exec_var_load_ptr(VMExecCtx* ctx, Instruction* in) {
 /* STORE_PTR_VAR：从 PTR 栈弹值存储到帧 ptr_slots */
 int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
+    frame_ensure_slots(ctx->frame, idx + 1);
     int sp = --g_stack_mgr->sp[STACK_PTR];
     ctx->frame->ptr_slots[idx] = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
     return 1;

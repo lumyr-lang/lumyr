@@ -18,12 +18,10 @@ typedef struct {
     Instruction* code;          /* 指令数组 */
     int pc;                     /* 指令指针 */
     StackFrame* frame;          /* 当前栈帧 */
-    Value* consts;               /* 常量池 */
+    ConstEntry* const_pool;     /* 统一常量池（大常量：int64/uint64/double/string） */
     const char** syms;          /* 符号表 */
-    const char** string_consts;  /* 字符串常量池 */
     int const_cnt;
     int sym_cnt;
-    int str_const_cnt;
     VMStackManager stacks;       /* 4 核心栈管理器 */
 } VMExecCtx;
 

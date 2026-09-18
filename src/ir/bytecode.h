@@ -11,7 +11,9 @@
 BytecodeFunc* bytecode_func_new(const char* name, int is_main);
 void bytecode_func_free(BytecodeFunc* fn);
 int bf_sym(BytecodeFunc* fn, const char* name);
-int bf_const(BytecodeFunc* fn, Value v);
+int bf_add_i64_const(BytecodeFunc* fn, int64_t val);
+int bf_add_double_const(BytecodeFunc* fn, double val);
+int bf_add_str_const(BytecodeFunc* fn, const char* s);
 void bf_emit(BytecodeFunc* fn, OpCode op, int a, int b);
 int bf_emit_here(BytecodeFunc* fn, OpCode op, int a, int b);
 const char* opc_name(OpCode op);

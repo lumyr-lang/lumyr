@@ -22,12 +22,10 @@ Value vm_run(BytecodeFunc* fn) {
     VMExecCtx ctx = {0};
     ctx.fn = fn;
     ctx.code = fn->code;
-    ctx.consts = fn->consts;
+    ctx.const_pool = fn->const_pool;
     ctx.const_cnt = fn->const_cnt;
     ctx.syms = (const char**)fn->syms;
     ctx.sym_cnt = fn->sym_cnt;
-    ctx.string_consts = fn->string_consts;
-    ctx.str_const_cnt = fn->str_const_cnt;
 
     /* 创建全局栈帧 */
     ctx.frame = stackframe_new(NULL);

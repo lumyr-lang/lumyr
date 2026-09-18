@@ -21,8 +21,7 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn->code);
     for(int i = 0; i < fn->sym_cnt; i++) free(fn->syms[i]);
     free(fn->syms);
-    for(int i = 0; i < fn->const_cnt; i++) val_destroy(&fn->consts[i]);
-    free(fn->consts);
+    free(fn->const_pool);  /* 统一常量池 */
     for(int i = 0; i < fn->param_cnt + fn->has_variadic; i++) free(fn->params[i]);
     free(fn->params);
     free(fn->param_is_ref);
@@ -93,19 +92,53 @@ static int const_equal(Value a, Value b)
     }
 }
 
-int bf_const(BytecodeFunc* fn, Value v)
-{
+/* 添加 int64 到大常量池，返回索引 */
+int bf_add_i64_const(BytecodeFunc* fn, int64_t val) {
+    /* 去重检查 */
     for(int i = 0; i < fn->const_cnt; i++) {
-        if(const_equal(fn->consts[i], v)) return i;
+        if(fn->const_pool[i].type == CONST_INT64 && fn->const_pool[i].i64 == val) return i;
     }
     if(fn->const_cnt >= fn->const_cap) {
         fn->const_cap = fn->const_cap ? fn->const_cap * 2 : 16;
-        fn->consts = (Value*)realloc(fn->consts, sizeof(Value) * fn->const_cap);
-        if(!fn->consts) { perror("bf_const"); exit(EXIT_FAILURE); }
+        fn->const_pool = (ConstEntry*)realloc(fn->const_pool, sizeof(ConstEntry) * fn->const_cap);
+        if(!fn->const_pool) { perror("bf_add_i64_const"); exit(EXIT_FAILURE); }
     }
-    fn->consts[fn->const_cnt] = val_clone(&v);   // 常量池浅拷贝持有（GC 引用语义）
-    /* 钉住字符串常量：常量表不是 GC 根，需防止被 sweep；内联字符串无需钉住 */
-    if (v.type == VAL_STRING && !v.str_inline && v.v.s) gc_pin(v.v.s);
+    fn->const_pool[fn->const_cnt].type = CONST_INT64;
+    fn->const_pool[fn->const_cnt].i64 = val;
+    return fn->const_cnt++;
+}
+
+/* 添加 double 到大常量池，返回索引 */
+int bf_add_double_const(BytecodeFunc* fn, double val) {
+    /* 去重检查 */
+    for(int i = 0; i < fn->const_cnt; i++) {
+        if(fn->const_pool[i].type == CONST_DOUBLE && fn->const_pool[i].d == val) return i;
+    }
+    if(fn->const_cnt >= fn->const_cap) {
+        fn->const_cap = fn->const_cap ? fn->const_cap * 2 : 16;
+        fn->const_pool = (ConstEntry*)realloc(fn->const_pool, sizeof(ConstEntry) * fn->const_cap);
+        if(!fn->const_pool) { perror("bf_add_double_const"); exit(EXIT_FAILURE); }
+    }
+    fn->const_pool[fn->const_cnt].type = CONST_DOUBLE;
+    fn->const_pool[fn->const_cnt].d = val;
+    return fn->const_cnt++;
+}
+
+/* 添加字符串到大常量池，返回索引 */
+int bf_add_str_const(BytecodeFunc* fn, const char* s) {
+    /* 去重检查 */
+    for(int i = 0; i < fn->const_cnt; i++) {
+        if(fn->const_pool[i].type == CONST_STRING && strcmp(fn->const_pool[i].s, s) == 0) return i;
+    }
+    if(fn->const_cnt >= fn->const_cap) {
+        fn->const_cap = fn->const_cap ? fn->const_cap * 2 : 16;
+        fn->const_pool = (ConstEntry*)realloc(fn->const_pool, sizeof(ConstEntry) * fn->const_cap);
+        if(!fn->const_pool) { perror("bf_add_str_const"); exit(EXIT_FAILURE); }
+    }
+    fn->const_pool[fn->const_cnt].type = CONST_STRING;
+    fn->const_pool[fn->const_cnt].s = strdup(s);  /* 拷贝字符串，防止 AST 释放后指针失效 */
+    /* 钉住字符串 */
+    gc_pin((void*)fn->const_pool[fn->const_cnt].s);
     return fn->const_cnt++;
 }
 
@@ -408,7 +441,19 @@ void bc_disasm(FILE* out, BytecodeFunc* fn)
         switch(in.op) {
             case OPC_LOAD_CONST: {
                 char cb[128];
-                const_to_text(fn->consts[in.a], cb, sizeof(cb));
+                /* 从统一常量池加载 */
+                if(in.a < fn->const_cnt) {
+                    ConstEntry* e = &fn->const_pool[in.a];
+                    switch(e->type) {
+                        case CONST_INT64: snprintf(cb, sizeof(cb), "%lld", (long long)e->i64); break;
+                        case CONST_UINT64: snprintf(cb, sizeof(cb), "%llu", (unsigned long long)e->u64); break;
+                        case CONST_DOUBLE: snprintf(cb, sizeof(cb), "%g", e->d); break;
+                        case CONST_STRING: snprintf(cb, sizeof(cb), "\"%s\"", e->s); break;
+                        default: snprintf(cb, sizeof(cb), "?"); break;
+                    }
+                } else {
+                    snprintf(cb, sizeof(cb), "?");
+                }
                 snprintf(txt, sizeof(txt), "%s %d ; %s", opc_name(in.op), in.a, cb);
                 break;
             }

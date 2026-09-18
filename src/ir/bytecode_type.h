@@ -32,8 +32,9 @@ typedef enum {
 
     /* ===== 常量加载 ===== */
     OPC_LOAD_CONST,    // a=常量池下标：从常量池加载 Value，压入 Value 栈
-    OPC_PUSH_INT64_CONST,   // a=低32位, b=高32位：压入 int64 栈（所有整数类型统一）
-    OPC_PUSH_DOUBLE_CONST,  // a=低32位, b=高32位：压入 double 栈（所有浮点类型统一）
+    OPC_PUSH_INT64_CONST,   // a=值（int32 范围小常量内嵌）：压入 int64 栈
+    OPC_PUSH_CONST_IDX,     // a=常量池索引：从统一常量池加载大常量（int64/uint64/double/string）
+    OPC_PUSH_DOUBLE_CONST,  // a=低32位, b=高32位：压入 double 栈
     OPC_PUSH_PTR_CONST,     // a=指针常量值：压入指针栈（字符串、对象指针）
     OPC_LOAD_STRING_CONST,  // a=字符串常量池索引：压字符串指针到 PTR 栈
 
@@ -288,6 +289,28 @@ typedef enum {
 } BuiltinId;
 
 /* ============================================================
+ * 统一常量池条目
+ * 小常量（int32 范围）直接内嵌在指令里，不进池
+ * 大常量（int64/uint64/double/string）进池，指令存索引
+ * ============================================================ */
+typedef enum {
+    CONST_INT64,    // 有符号 64 位整数
+    CONST_UINT64,   // 无符号 64 位整数
+    CONST_DOUBLE,   // 双精度浮点数
+    CONST_STRING    // 字符串指针
+} ConstType;
+
+typedef struct {
+    ConstType type;
+    union {
+        int64_t i64;
+        uint64_t u64;
+        double d;
+        const char* s;
+    };
+} ConstEntry;
+
+/* ============================================================
  * BytecodeFunc 结构体：一个可执行单元（main 或一个 lum 函数）
  * ============================================================ */
 typedef struct {
@@ -297,10 +320,8 @@ typedef struct {
     int code_len, code_cap;
     char** syms;               // 符号名池（变量名/函数名）
     int sym_cnt, sym_cap;
-    Value* consts;             // 常量池
+    ConstEntry* const_pool;    // 统一常量池（大常量：int64/uint64/double/string）
     int const_cnt, const_cap;
-    const char** string_consts;  // 字符串常量池（原始指针，直接走 PTR 栈）
-    int str_const_cnt, str_const_cap;
     char** params;             // 参数名（普通参数在前，可变参数最后）
     int param_cnt;             // 普通参数个数
     int has_variadic;

@@ -25,30 +25,6 @@ ExprType c_expr(Ctx* c, AstNode* node);
  * 表达式编译
  * ============================================================ */
 
-/* 添加常量到常量池，返回索引 */
-static int c_add_const(Ctx* c, Value v) {
-    BytecodeFunc* fn = c->fn;
-    if(fn->const_cnt >= fn->const_cap) {
-        fn->const_cap = fn->const_cap ? fn->const_cap * 2 : 16;
-        fn->consts = realloc(fn->consts, fn->const_cap * sizeof(Value));
-    }
-    int idx = fn->const_cnt++;
-    fn->consts[idx] = v;
-    return idx;
-}
-
-/* 添加字符串到字符串常量池，返回索引 */
-static int c_add_string_const(Ctx* c, const char* s) {
-    BytecodeFunc* fn = c->fn;
-    if(fn->str_const_cnt >= fn->str_const_cap) {
-        fn->str_const_cap = fn->str_const_cap ? fn->str_const_cap * 2 : 16;
-        fn->string_consts = realloc(fn->string_consts, fn->str_const_cap * sizeof(const char*));
-    }
-    int idx = fn->str_const_cnt++;
-    fn->string_consts[idx] = s;
-    return idx;
-}
-
 /* 查找变量索引，返回 -1 表示未找到 */
 static int c_find_var(Ctx* c, const char* name) {
     for(int i = 0; i < c->var_cnt; i++) {
@@ -86,47 +62,45 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     
     switch(node->type) {
     case AST_INT: {
-        /* 整数字面量：压入 INT64 栈 */
+        /* 整数字面量：小常量内嵌，大常量走常量池 */
         int64_t val = node->u.inum;
-        int low = (int)(val & 0xFFFFFFFF);
-        int high = (int)((val >> 32) & 0xFFFFFFFF);
-        emit(c, OPC_PUSH_INT64_CONST, low, high);
+        if(val >= INT32_MIN && val <= INT32_MAX) {
+            /* 小常量（int32 范围）：直接内嵌在指令里 */
+            emit(c, OPC_PUSH_INT64_CONST, (int)val, 0);
+        } else {
+            /* 大常量（超出 int32 范围）：走常量池 */
+            int idx = bf_add_i64_const(c->fn, val);
+            emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+        }
         return EXPR_TYPE_INT;
     }
 
     case AST_NUM: {
-        /* 浮点数字面量：压入 DOUBLE 栈 */
+        /* 浮点数字面量：走常量池 */
         double val = node->u.num;
-        uint64_t bits;
-        memcpy(&bits, &val, sizeof(double));
-        int low = (int)(bits & 0xFFFFFFFF);
-        int high = (int)((bits >> 32) & 0xFFFFFFFF);
-        emit(c, OPC_PUSH_DOUBLE_CONST, low, high);
+        int idx = bf_add_double_const(c->fn, val);
+        emit(c, OPC_PUSH_CONST_IDX, idx, 0);
         return EXPR_TYPE_DOUBLE;
     }
 
     case AST_BOOL: {
-        /* 布尔字面量：压入 INT64 栈（1=真，0=假） */
+        /* 布尔字面量：小常量（0/1），直接内嵌 */
         int64_t val = node->u.bval ? 1 : 0;
-        int low = (int)(val & 0xFFFFFFFF);
-        int high = (int)((val >> 32) & 0xFFFFFFFF);
-        emit(c, OPC_PUSH_INT64_CONST, low, high);
+        emit(c, OPC_PUSH_INT64_CONST, (int)val, 0);
         return EXPR_TYPE_INT;
     }
 
     case AST_CHAR: {
-        /* 字符字面量：压入 INT64 栈（字符编码值） */
+        /* 字符字面量：小常量（0~255），直接内嵌 */
         int64_t val = (int64_t)node->u.ch;
-        int low = (int)(val & 0xFFFFFFFF);
-        int high = (int)((val >> 32) & 0xFFFFFFFF);
-        emit(c, OPC_PUSH_INT64_CONST, low, high);
+        emit(c, OPC_PUSH_INT64_CONST, (int)val, 0);
         return EXPR_TYPE_INT;
     }
 
     case AST_STRING: {
-        /* 字符串字面量：压入 PTR 栈 */
-        int idx = c_add_string_const(c, node->u.sval);
-        emit(c, OPC_LOAD_STRING_CONST, idx, 0);
+        /* 字符串字面量：走统一常量池，压入 PTR 栈 */
+        int idx = bf_add_str_const(c->fn, node->u.sval);
+        emit(c, OPC_PUSH_CONST_IDX, idx, 0);
         return EXPR_TYPE_PTR;
     }
     

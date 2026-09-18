@@ -22,11 +22,10 @@ int vm_exec_stack_pop(VMExecCtx* ctx, Instruction* in);
 int vm_exec_stack_dup(VMExecCtx* ctx, Instruction* in);
 
 /* 常量加载 */
-int vm_exec_load_const(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_int64_const(VMExecCtx* ctx, Instruction* in);
+int vm_exec_load_const_idx(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_double_const(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_ptr_const(VMExecCtx* ctx, Instruction* in);
-int vm_exec_load_string_const(VMExecCtx* ctx, Instruction* in);
 
 /* 变量存取 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in);
@@ -105,11 +104,10 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_DUP: handled = vm_exec_stack_dup(ctx, &in); break;
 
         /* ===== 常量加载 ===== */
-        case OPC_LOAD_CONST: handled = vm_exec_load_const(ctx, &in); break;
         case OPC_PUSH_INT64_CONST: handled = vm_exec_load_int64_const(ctx, &in); break;
+        case OPC_PUSH_CONST_IDX: handled = vm_exec_load_const_idx(ctx, &in); break;
         case OPC_PUSH_DOUBLE_CONST: handled = vm_exec_load_double_const(ctx, &in); break;
         case OPC_PUSH_PTR_CONST: handled = vm_exec_load_ptr_const(ctx, &in); break;
-        case OPC_LOAD_STRING_CONST: handled = vm_exec_load_string_const(ctx, &in); break;
 
         /* ===== 变量存取 ===== */
         case OPC_LOAD_VAR: handled = vm_exec_var_load(ctx, &in); break;
