@@ -1,0 +1,119 @@
+// 全量数据类型测试
+// 测试所有基础数据类型的声明、赋值、打印、运算
+
+print("=== 1. 有符号整数类型 ===");
+a_int = <int>42;
+a_short = <short>100;
+a_int8 = <int8>127;
+a_int16 = <int16>32767;
+a_int32 = <int32>2147483647;
+a_int64 = <int64>9223372036854775807;
+a_long = <long>1234567890;
+a_longlong = <long long>9876543210;
+print(a_int);
+print(a_short);
+print(a_int8);
+print(a_int16);
+print(a_int32);
+print(a_int64);
+print(a_long);
+print(a_longlong);
+
+print("=== 2. 无符号整数类型 ===");
+a_uint = <uint>42;
+a_ushort = <ushort>100;
+a_uint8 = <uint8>255;
+a_uint16 = <uint16>65535;
+a_uint32 = <uint32>4294967295;
+a_uint64 = <uint64>18446744073709551615;
+a_ulong = <ulong>1234567890;
+a_byte = <byte>200;
+a_uchar = <uchar>65;
+print(a_uint);
+print(a_ushort);
+print(a_uint8);
+print(a_uint16);
+print(a_uint32);
+print(a_uint64);
+print(a_ulong);
+print(a_byte);
+print(a_uchar);
+
+print("=== 3. 布尔和字符类型 ===");
+a_bool_true = <bool>true;
+a_bool_false = <bool>false;
+a_char_a = <char>'A';
+a_char_z = <char>'Z';
+print(a_bool_true);
+print(a_bool_false);
+print(a_char_a);
+print(a_char_z);
+
+print("=== 4. 浮点类型 ===");
+a_float = <float>3.14;
+a_double = <double>3.14159265358979;
+a_longdouble = <long double>1.23456789012345;
+print(a_float);
+print(a_double);
+print(a_longdouble);
+
+print("=== 5. 字符串类型 ===");
+a_str1 = <string>"hello";
+a_str2 = <string>"world";
+a_str3 = <string>"lumyr language";
+print(a_str1);
+print(a_str2);
+print(a_str3);
+
+print("=== 6. size_t / ssize_t ===");
+a_sizet = <size_t>1000000;
+a_ssizet = <ssize_t>-1000000;
+print(a_sizet);
+print(a_ssizet);
+
+print("=== 7. 混合运算：int + int ===");
+x1 = <int>100;
+y1 = <int>23;
+print(x1 + y1);
+print(x1 - y1);
+print(x1 * y1);
+print(x1 / y1);
+print(x1 % y1);
+
+print("=== 8. 混合运算：int + double ===");
+x2 = <int>100;
+y2 = <double>3.14;
+print(x2 + y2);
+print(x2 - y2);
+print(x2 * y2);
+print(x2 / y2);
+
+print("=== 9. 混合运算：short + int ===");
+x3 = <short>100;
+y3 = <int>23;
+print(x3 + y3);
+print(x3 - y3);
+
+print("=== 10. 混合运算：uint + int ===");
+x4 = <uint>100;
+y4 = <int>23;
+print(x4 + y4);
+print(x4 - y4);
+
+print("=== 11. 变量类型继承 ===");
+v1 = <int>10;
+v2 = v1;  // v2 继承 v1 的类型
+v3 = v1 + v2;  // v3 也是 int
+print(v1);
+print(v2);
+print(v3);
+
+print("=== 12. 默认类型（无标注） ===");
+d1 = 42;
+d2 = 3.14;
+d3 = "hello default";
+print(d1);
+print(d2);
+print(d3);
+
+print("=== 全量数据类型测试完成 ===");

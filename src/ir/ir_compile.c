@@ -186,14 +186,36 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         return child_type;
     }
 
+    case AST_UNARY: {
+        /* 一元运算：负号 */
+        ExprType child_type = c_expr(c, node->u.uny.child);
+        if(node->u.uny.op == OP_UNARY_MINUS) {
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_NEG, 0, 0);  /* 通用 NEG，后续改为 INT64_NEG */
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_NEG, 0, 0);  /* 通用 NEG */
+            }
+        }
+        return child_type;
+    }
+
     case AST_BINOP: {
         /* 二元运算 */
         ExprType lt = c_expr(c, node->u.bin.left);
         ExprType rt = c_expr(c, node->u.bin.right);
-        
+
         /* 类型提升：int + double → double */
         ExprType result = arith_get_expr_type(c, node);
-        
+
+        /* 如果结果是 double，但左操作数是 int，需要转换 */
+        if(result == EXPR_TYPE_DOUBLE && lt == EXPR_TYPE_INT) {
+            emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+        }
+        /* 如果结果是 double，但右操作数是 int，需要转换 */
+        if(result == EXPR_TYPE_DOUBLE && rt == EXPR_TYPE_INT) {
+            emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+        }
+
         /* 根据运算符和类型选择指令 */
         switch(node->u.bin.op) {
         case OP_ADD:
@@ -240,24 +262,70 @@ ExprType c_expr(Ctx* c, AstNode* node) {
  * 语句编译
  * ============================================================ */
 
+/* 获取表达式的精确类型（CastKind），用于打印格式化 */
+static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
+    if(!node) return CAST_NONE;
+
+    /* 字面量 */
+    if(node->type == AST_INT) return CAST_INT;
+    if(node->type == AST_NUM) return CAST_DOUBLE;
+    if(node->type == AST_BOOL) return CAST_BOOL;
+    if(node->type == AST_CHAR) return CAST_CHAR;
+    if(node->type == AST_STRING) return CAST_STRING;
+
+    /* 类型标注 */
+    if(node->type == AST_TYPE_ANNOTATION) {
+        return node->u.type_annotation.cast_type;
+    }
+    if(node->type == AST_CAST) {
+        return node->u.cast.cast_type;
+    }
+
+    /* 变量：查符号表 */
+    if(node->type == AST_VAR) {
+        int idx = c_find_var(c, node->u.varname);
+        if(idx >= 0) {
+            /* 从 BytecodeFunc 的 var_type_tags 获取 */
+            int bf_idx = bf_sym(c->fn, node->u.varname);
+            if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) {
+                return (CastKind)c->fn->var_type_tags[bf_idx];
+            }
+        }
+    }
+
+    /* 二元运算：递归判断 */
+    if(node->type == AST_BINOP) {
+        CastKind lt = c_expr_cast_type(c, node->u.bin.left);
+        CastKind rt = c_expr_cast_type(c, node->u.bin.right);
+        /* double 优先级最高 */
+        if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
+        if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
+        /* int 优先级 */
+        return lt;
+    }
+
+    return CAST_NONE;
+}
+
 /* 编译语句 */
 void c_stmt(Ctx* c, AstNode* node) {
     if(!node) return;
-    
+
     switch(node->type) {
     case AST_PRINT: {
-        /* print 语句：根据表达式类型选择打印指令 */
+        /* print 语句：根据表达式类型选择打印指令，a 字段存精确类型 */
         AstNode* args = node->u.print.args;
         if(args) {
             ExprType arg_type = c_expr(c, args);
+            CastKind cast_type = c_expr_cast_type(c, args);
             if(arg_type == EXPR_TYPE_INT) {
-                emit(c, OPC_PRINT_INT64, 0, 0);
+                emit(c, OPC_PRINT_INT64, (int)cast_type, 0);
             } else if(arg_type == EXPR_TYPE_DOUBLE) {
-                emit(c, OPC_PRINT_DOUBLE, 0, 0);
+                emit(c, OPC_PRINT_DOUBLE, (int)cast_type, 0);
             } else if(arg_type == EXPR_TYPE_PTR) {
-                emit(c, OPC_PRINT_PTR, 0, 0);
+                emit(c, OPC_PRINT_PTR, (int)cast_type, 0);
             } else {
-                emit(c, OPC_PRINT, 0, 0);
+                emit(c, OPC_PRINT, (int)cast_type, 0);
             }
         }
         break;
@@ -267,7 +335,11 @@ void c_stmt(Ctx* c, AstNode* node) {
         /* 赋值语句：注册变量，根据表达式类型选择存储指令 */
         const char* var_name = node->u.assign.varname;
         ExprType rt = c_expr(c, node->u.assign.expr);
+        CastKind cast_type = c_expr_cast_type(c, node->u.assign.expr);
         int var_idx = c_add_var(c, var_name, rt);
+        /* 记录精确类型到 BytecodeFunc 的 var_type_tags */
+        int bf_idx = bf_sym(c->fn, var_name);
+        c->fn->var_type_tags[bf_idx] = (int)cast_type;
         if(rt == EXPR_TYPE_INT) {
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
         } else if(rt == EXPR_TYPE_DOUBLE) {

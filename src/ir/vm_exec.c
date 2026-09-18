@@ -238,6 +238,26 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_INT64_DIV: handled = vm_exec_arith_int64_div(ctx, &in); break;
         case OPC_INT64_MOD: handled = vm_exec_arith_int64_mod(ctx, &in); break;
 
+        case OPC_INT64_TO_DOUBLE: {
+            int64_t val;
+            stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
+            double dval = (double)val;
+            stack_vm_push(g_stack_mgr, STACK_DOUBLE, &dval);
+            handled = 1;
+            break;
+        }
+
+        case OPC_NEG: {
+            /* 通用 NEG：根据当前栈类型处理 */
+            /* 简化：先处理 INT64 栈 */
+            int64_t val;
+            stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
+            val = -val;
+            stack_vm_push(g_stack_mgr, STACK_INT64, &val);
+            handled = 1;
+            break;
+        }
+
         /* ===== 算术运算（DOUBLE 栈） ===== */
         case OPC_DOUBLE_ADD: handled = vm_exec_arith_double_add(ctx, &in); break;
         case OPC_DOUBLE_SUB: handled = vm_exec_arith_double_sub(ctx, &in); break;
@@ -278,7 +298,30 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_PRINT_INT64: {
             int sp = --g_stack_mgr->sp[STACK_INT64];
             int64_t val = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
-            printf("%lld\n", (long long)val);
+            CastKind ct = (CastKind)in.a;
+            switch(ct) {
+                case CAST_UINT8:
+                case CAST_UINT16:
+                case CAST_UINT32:
+                case CAST_UINT:
+                case CAST_UINT64:
+                case CAST_ULONG:
+                case CAST_USHORT:
+                case CAST_UCHAR:
+                case CAST_BYTE:
+                case CAST_SIZE_T:
+                    printf("%llu\n", (unsigned long long)val);
+                    break;
+                case CAST_CHAR:
+                    printf("%c\n", (char)val);
+                    break;
+                case CAST_BOOL:
+                    printf("%s\n", val ? "true" : "false");
+                    break;
+                default:
+                    printf("%lld\n", (long long)val);
+                    break;
+            }
             handled = 1;
             break;
         }
