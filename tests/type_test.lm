@@ -1,0 +1,62 @@
+// type() 函数测试：验证类型推断和类型继承
+
+print("=== 1. 字面量类型 ===");
+a_int = <int>42;
+a_short = <short>100;
+a_int8 = <int8>127;
+a_int16 = <int16>32767;
+a_int32 = <int32>2147483647;
+a_int64 = <int64>9223372036854775807;
+a_uint = <uint>42;
+a_uint8 = <uint8>255;
+a_uint16 = <uint16>65535;
+a_uint32 = <uint32>4294967295;
+a_uint64 = <uint64>18446744073709551615;
+a_float = <float>3.14;
+a_double = <double>3.14159;
+a_bool = <bool>true;
+a_char = <char>'A';
+a_str = <string>"hello";
+
+print(type(a_int));
+print(type(a_short));
+print(type(a_int8));
+print(type(a_int16));
+print(type(a_int32));
+print(type(a_int64));
+print(type(a_uint));
+print(type(a_uint8));
+print(type(a_uint16));
+print(type(a_uint32));
+print(type(a_uint64));
+print(type(a_float));
+print(type(a_double));
+print(type(a_bool));
+print(type(a_char));
+print(type(a_str));
+
+print("=== 2. 变量类型继承 ===");
+b1 = <int>10;
+b2 = b1;  // b2 应该继承 b1 的 int 类型
+print(type(b1));
+print(type(b2));
+
+print("=== 3. 运算结果类型 ===");
+c1 = <int>100;
+c2 = <int>23;
+c3 = c1 + c2;  // c3 应该是 int
+print(type(c3));
+
+c4 = <double>3.14;
+c5 = c1 + c4;  // c5 应该是 double（类型提升）
+print(type(c5));
+
+print("=== 4. 默认类型（无标注） ===");
+d1 = 42;
+d2 = 3.14;
+d3 = "hello";
+print(type(d1));
+print(type(d2));
+print(type(d3));
+
+print("=== type() 测试完成 ===");

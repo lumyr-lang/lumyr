@@ -62,3 +62,12 @@ int vm_exec_load_ptr_const(VMExecCtx* ctx, Instruction* in) {
     ((void**)g_stack_mgr->stacks[STACK_PTR])[sp] = val;
     return 1;
 }
+
+/* LOAD_STRING_CONST：从字符串常量池加载字符串，压入 PTR 栈 */
+int vm_exec_load_string_const(VMExecCtx* ctx, Instruction* in) {
+    int idx = in->a;
+    const char* s = ctx->const_pool[idx].s;
+    int sp = g_stack_mgr->sp[STACK_PTR]++;
+    ((void**)g_stack_mgr->stacks[STACK_PTR])[sp] = (void*)s;
+    return 1;
+}

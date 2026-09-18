@@ -12,6 +12,7 @@
 #include "ast/ast_node_type.h"
 #include "ast/stackframe.h"
 #include "ast/ast_runtime_sym.h"
+#include "ast/ast_types.h"
 #include "lm_value.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,7 @@
 /* 前向声明 */
 void c_stmt(Ctx* c, AstNode* node);
 ExprType c_expr(Ctx* c, AstNode* node);
+static const char* c_expr_type_name(Ctx* c, AstNode* node);
 
 /* ============================================================
  * 表达式编译
@@ -160,6 +162,41 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         return child_type;
     }
 
+    case AST_CALL: {
+        /* 函数调用：识别内置函数 type() */
+        const char* func_name = node->u.call.name;
+        AstNode* args = node->u.call.args;
+        int argc = 0;
+        /* 计算参数个数 */
+        AstNode* p = args;
+        while(p) {
+            argc++;
+            if(p->type == AST_SEQ) {
+                p = p->u.seq.second;
+            } else {
+                break;
+            }
+        }
+        /* 识别内置函数 */
+        if(strcmp(func_name, "type") == 0 && argc == 1) {
+            /* type(x)：编译期推断类型，直接 push 字符串常量 */
+            AstNode* arg = args;
+            if(args && args->type == AST_SEQ) {
+                arg = args->u.seq.first;
+            }
+            /* 编译期推断类型名 */
+            const char* type_name = c_expr_type_name(c, arg);
+            /* 添加字符串常量，压入 PTR 栈 */
+            int const_idx = bf_add_str_const(c->fn, type_name);
+            emit(c, OPC_PUSH_CONST_IDX, const_idx, 0);
+            /* type() 返回字符串 */
+            return EXPR_TYPE_PTR;
+        }
+        /* 其他内置函数暂时不处理 */
+        fprintf(stderr, "IR: unknown function %s\n", func_name);
+        return EXPR_TYPE_NONE;
+    }
+
     case AST_UNARY: {
         /* 一元运算：负号 */
         ExprType child_type = c_expr(c, node->u.uny.child);
@@ -235,6 +272,57 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 /* ============================================================
  * 语句编译
  * ============================================================ */
+
+/* 获取表达式的类型名字符串（编译期推断，用于 type() 函数） */
+static const char* c_expr_type_name(Ctx* c, AstNode* node) {
+    if(!node) return "null";
+
+    /* 字面量 */
+    if(node->type == AST_INT) return "int";
+    if(node->type == AST_NUM) return "double";
+    if(node->type == AST_BOOL) return "bool";
+    if(node->type == AST_CHAR) return "char";
+    if(node->type == AST_STRING) return "string";
+    if(node->type == AST_NONE) return "null";
+
+    /* 类型标注 <int>expr → 返回标注的类型 */
+    if(node->type == AST_TYPE_ANNOTATION) {
+        return castkind_to_name(node->u.type_annotation.cast_type);
+    }
+
+    /* 强转 (int)expr → 返回强转的类型 */
+    if(node->type == AST_CAST) {
+        return castkind_to_name(node->u.cast.cast_type);
+    }
+
+    /* 变量：查符号表，返回变量的精确类型 */
+    if(node->type == AST_VAR) {
+        int bf_idx = bf_sym(c->fn, node->u.varname);
+        if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) {
+            CastKind ck = (CastKind)c->fn->var_type_tags[bf_idx];
+            return castkind_to_name(ck);
+        }
+        return "unknown";
+    }
+
+    /* 二元运算：根据左右操作数类型推导 */
+    if(node->type == AST_BINOP) {
+        const char* lt = c_expr_type_name(c, node->u.bin.left);
+        const char* rt = c_expr_type_name(c, node->u.bin.right);
+        /* double 优先级最高 */
+        if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
+        /* string 拼接 */
+        if(strcmp(lt, "string") == 0 || strcmp(rt, "string") == 0) return "string";
+        return "int";
+    }
+
+    /* 一元运算：递归分析子表达式 */
+    if(node->type == AST_UNARY) {
+        return c_expr_type_name(c, node->u.uny.child);
+    }
+
+    return "unknown";
+}
 
 /* 获取表达式的精确类型（CastKind），用于打印格式化 */
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
