@@ -712,11 +712,17 @@ int typecheck_expr(AstNode* node)
             err |= typecheck_expr(node->u.print.args);
             node->val_type = VAL_NONE;
             break;
-        case AST_SEQ:
-            err |= typecheck_expr(node->u.seq.first);
-            err |= typecheck_expr(node->u.seq.second);
-            node->val_type = node->u.seq.second->val_type;
+        case AST_SEQ: {
+            /* 迭代遍历，避免长链表导致栈溢出 */
+            AstNode* cur = node;
+            while(cur && cur->type == AST_SEQ) {
+                err |= typecheck_expr(cur->u.seq.first);
+                cur = cur->u.seq.second;
+            }
+            if(cur) err |= typecheck_expr(cur);
+            node->val_type = (cur ? cur->val_type : VAL_NONE);
             break;
+        }
         case AST_IF:{
             err |= typecheck_expr(node->u.ifnode.cond);
             err |= typecheck_expr(node->u.ifnode.then_stmt);
