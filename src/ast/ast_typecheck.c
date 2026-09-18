@@ -714,21 +714,32 @@ int typecheck_expr(AstNode* node)
             break;
         case AST_SEQ: {
             /* 迭代遍历，避免长链表导致栈溢出 */
-            /* 注意：first 字段也可能是 AST_SEQ，需要递归展平 */
+            /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归 */
+            AstNode* stack[256];
+            int sp = 0;
             AstNode* cur = node;
-            /* 先向左展平：把 first 链也拉平 */
-            while(cur && cur->type == AST_SEQ && cur->u.seq.first && cur->u.seq.first->type == AST_SEQ) {
-                /* first 也是 SEQ，交换：把 first 的 second 接到当前的 second 后面 */
-                /* 不修改 AST 结构，直接迭代处理 */
-                break;
+            ValueType last_type = VAL_NONE;
+            
+            while(cur || sp > 0) {
+                /* 向左遍历到底，把路径上的节点压栈 */
+                while(cur && cur->type == AST_SEQ) {
+                    if(sp < 256) stack[sp++] = cur;
+                    cur = cur->u.seq.first;
+                }
+                /* 处理叶子节点 */
+                if(cur) {
+                    err |= typecheck_expr(cur);
+                    last_type = cur->val_type;
+                }
+                /* 弹出栈顶，处理 second */
+                if(sp > 0) {
+                    AstNode* n = stack[--sp];
+                    cur = n->u.seq.second;
+                } else {
+                    cur = NULL;
+                }
             }
-            /* 简单迭代：只处理 second 链表，first 交给递归 */
-            while(cur && cur->type == AST_SEQ) {
-                err |= typecheck_expr(cur->u.seq.first);
-                cur = cur->u.seq.second;
-            }
-            if(cur) err |= typecheck_expr(cur);
-            node->val_type = (cur ? cur->val_type : VAL_NONE);
+            node->val_type = last_type;
             break;
         }
         case AST_IF:{

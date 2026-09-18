@@ -653,12 +653,29 @@ void c_stmt(Ctx* c, AstNode* node) {
     
     case AST_SEQ: {
         /* 语句序列：迭代遍历，避免长链表导致栈溢出 */
+        /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归 */
+        AstNode* stack[256];
+        int sp = 0;
         AstNode* cur = node;
-        while(cur && cur->type == AST_SEQ) {
-            c_stmt(c, cur->u.seq.first);
-            cur = cur->u.seq.second;
+        
+        while(cur || sp > 0) {
+            /* 向左遍历到底，把路径上的节点压栈 */
+            while(cur && cur->type == AST_SEQ) {
+                if(sp < 256) stack[sp++] = cur;
+                cur = cur->u.seq.first;
+            }
+            /* 处理叶子节点 */
+            if(cur) {
+                c_stmt(c, cur);
+            }
+            /* 弹出栈顶，处理 second */
+            if(sp > 0) {
+                AstNode* n = stack[--sp];
+                cur = n->u.seq.second;
+            } else {
+                cur = NULL;
+            }
         }
-        if(cur) c_stmt(c, cur);
         break;
     }
     
