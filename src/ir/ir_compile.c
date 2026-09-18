@@ -22,6 +22,7 @@
 void c_stmt(Ctx* c, AstNode* node);
 ExprType c_expr(Ctx* c, AstNode* node);
 static const char* c_expr_type_name(Ctx* c, AstNode* node);
+static CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 
 /* ============================================================
  * 表达式编译
@@ -220,6 +221,21 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 二元运算 */
         /* 特殊处理：字符串拼接（PTR 栈）需要按顺序转换操作数 */
         ExprType result = arith_get_expr_type(c, node);
+        CastKind lt_cast = c_expr_cast_type(c, node->u.bin.left);
+        CastKind rt_cast = c_expr_cast_type(c, node->u.bin.right);
+
+        /* bigint 运算：两个操作数都是 bigint */
+        if(lt_cast == CAST_BIGINT && rt_cast == CAST_BIGINT) {
+            ExprType lt = c_expr(c, node->u.bin.left);
+            ExprType rt = c_expr(c, node->u.bin.right);
+            switch(node->u.bin.op) {
+            case OP_ADD: emit(c, OPC_BIGINT_ADD, 0, 0); break;
+            case OP_SUB: emit(c, OPC_BIGINT_SUB, 0, 0); break;
+            case OP_MUL: emit(c, OPC_BIGINT_MUL, 0, 0); break;
+            case OP_DIV: emit(c, OPC_BIGINT_DIV, 0, 0); break;
+            }
+            return EXPR_TYPE_PTR;
+        }
 
         if(result == EXPR_TYPE_PTR && node->u.bin.op == OP_ADD) {
             /* 字符串拼接：先编译左操作数，立即转换；再编译右操作数，立即转换 */
@@ -388,6 +404,8 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         /* double 优先级最高 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
+        /* bigint 运算：结果是 bigint */
+        if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
         /* 整数运算：结果统一返回 CAST_INT（不要保留 CHAR/BOOL，否则打印会按字符/布尔） */
         return CAST_INT;
     }
