@@ -159,16 +159,17 @@ f\"([^"\\]|\\.)*\"   {
 [0-9]+                  {
     /* 使用 strtoull 解析整数字面量，支持 uint64 最大值（18446744073709551615）
        优先级：先尝试用无符号解析，后续根据上下文（类型注解）决定如何解释
-       如果超过 uint64 最大值，strtoull 会设置 errno = ERANGE */
+       如果超过 uint64 最大值，存成字符串（用于 <bigint> 类型） */
     errno = 0;
     unsigned long long ullval = strtoull(yytext, NULL, 10);
     if(errno == ERANGE) {
-        /* 超过 uint64 最大值，报错 */
-        fprintf(stderr, "词法错误：整数字面量溢出，超出 uint64 最大值范围：%s\n", yytext);
-        exit(EXIT_FAILURE);
+        /* 超过 uint64 最大值，存成字符串（用于 <bigint> 类型） */
+        yylval.s = strdup(yytext);
+        LEX_RET(BIG_INTEGER);
+    } else {
+        yylval.ll = (long long)ullval;
+        LEX_RET(INTEGER);
     }
-    yylval.ll = (long long)ullval;
-    LEX_RET(INTEGER);
 }
 
 "++"        { LEX_RET(PLUSPLUS); }

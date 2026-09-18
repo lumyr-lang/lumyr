@@ -330,7 +330,8 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
     AstNode* node;
 }
 
-%token PRINT ID NUMBER INTEGER PLUS MINUS MUL DIV ASSIGN SEMI LPAREN RPAREN
+%token PRINT ID NUMBER INTEGER BIG_INTEGER PLUS MINUS MUL DIV ASSIGN SEMI LPAREN RPAREN
+%token<s> BIG_INTEGER
 %token TRUE FALSE NULL_LIT STRING_LIT FSTRING_LIT MAP_OPEN
 %token IF ELSEIF ELSE
 %token GE LE EQ NE GT LT
@@ -1361,6 +1362,7 @@ type_keyword
 const_expr
     : NUMBER                  { $$ = ast_num($1); }
     | INTEGER                 { $$ = ast_int($1); }
+    | BIG_INTEGER             { $$ = ast_string($1); free($1); }  /* 超大整数存成字符串，用于 <bigint> */
     | char_lit                { $$ = ast_new_char($1); }
     | STRING_LIT              { $$ = ast_string($1); free($1); }
     | TRUE                    { $$ = ast_bool(1); }
@@ -1403,6 +1405,7 @@ char_lit
 primary
     : NUMBER                  { $$ = ast_num($1); }
     | INTEGER                 { $$ = ast_int($1); }
+    | BIG_INTEGER             { $$ = ast_string($1); free($1); }  /* 超大整数存成字符串，用于 <bigint> */
     | TRUE                    { $$ = ast_bool(1); }
     | FALSE                   { $$ = ast_bool(0); }
     | NULL_LIT                { $$ = ast_none(); }
