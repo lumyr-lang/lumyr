@@ -33,9 +33,9 @@ void static_sym_restore(void)
     /* 遍历当前层级新创建的符号，从红黑树中删除并释放 */
     for(int i = 0; i < level->count; i++) {
         if(static_sym_tree) {
-            SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NULL, level->names[i]);
+            SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, level->names[i]);
             if(entry) {
-                rbtree_delete(static_sym_tree, NULL, level->names[i]);
+                rbtree_delete(static_sym_tree, NS_VARIABLE, NULL, level->names[i]);
                 free(entry->name);
                 free(entry);
             }
@@ -92,7 +92,7 @@ int static_sym_put(const char* name, ValueType ty)
 {
     if(!static_sym_tree) static_sym_tree = rbtree_create();
     /* 查找是否已存在 */
-    SymStaticEntry* existing = (SymStaticEntry*)rbtree_find(static_sym_tree, NULL, name);
+    SymStaticEntry* existing = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
     if(existing) {
         /* 已存在，直接更新类型（与原来的数组实现一致） */
         existing->ty = ty;
@@ -103,7 +103,7 @@ int static_sym_put(const char* name, ValueType ty)
     entry->name = strdup(name);
     entry->ty = ty;
     entry->next = NULL;
-    rbtree_insert(static_sym_tree, NULL, name, entry);
+    rbtree_insert(static_sym_tree, NS_VARIABLE, NULL, name, entry);
     /* 记录到当前作用域层级（用于恢复时删除） */
     scope_record_name(name);
     return 1;
@@ -113,7 +113,7 @@ int static_sym_get(const char* name, ValueType* out_ty)
 {
     if(strcmp(name, "log") == 0) { *out_ty = VAL_MAP; return 1; }  // 预定义全局对象 log
     if(!static_sym_tree) return 0;
-    SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NULL, name);
+    SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
     if(entry) {
         *out_ty = entry->ty;
         return 1;

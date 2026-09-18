@@ -6,6 +6,7 @@
 #define LUMYR_VM_TYPES_H
 
 #include "bytecode.h"
+#include "stack_manager.h"
 #include "ast/ast_node.h"
 #include "ast/stackframe.h"
 #include "lm_value.h"
@@ -13,14 +14,15 @@
 
 /* ========== VM 执行上下文（4 核心栈设计） ========== */
 typedef struct {
-    BytecodeFunc* fn;       /* 当前函数字节码 */
-    Instruction* code;      /* 指令数组 */
-    int pc;                 /* 指令指针 */
-    StackFrame* frame;      /* 当前栈帧 */
-    Value* consts;          /* 常量池 */
-    const char** syms;      /* 符号表 */
+    BytecodeFunc* fn;           /* 当前函数字节码 */
+    Instruction* code;          /* 指令数组 */
+    int pc;                     /* 指令指针 */
+    StackFrame* frame;          /* 当前栈帧 */
+    Value* consts;               /* 常量池 */
+    const char** syms;          /* 符号表 */
     int const_cnt;
     int sym_cnt;
+    VMStackManager stacks;       /* 4 核心栈管理器 */
 } VMExecCtx;
 
 /* ========== 生成器支持 ========== */

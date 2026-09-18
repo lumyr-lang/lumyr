@@ -1,5 +1,5 @@
 #include "bytecode.h"
-#include "bytecode_stack.h"
+#include "bc_stack.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>

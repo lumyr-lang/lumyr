@@ -93,7 +93,7 @@ int annotation_register(const char* name, int type_marks, int category, AstNode*
     /* 插入到红黑树中，key 为 (target_class, target_func) */
     /* 对于类注解（没有 target_func），用 "__class__" 作为 method_name */
     const char* method_name = target_func ? target_func : "__class__";
-    rbtree_insert(g_annotation_tree, target_class, method_name, info);
+    rbtree_insert(g_annotation_tree, NS_PROPERTY, target_class, method_name, info);
 
     return 1;
 }
@@ -103,7 +103,7 @@ AnnotationInfo* annotation_lookup_func(const char* class_name, const char* func_
     if (!func_name || !annotation_name || !g_annotation_tree) return NULL;
 
     /* 从红黑树中查找 */
-    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, class_name, func_name);
+    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, NS_PROPERTY, class_name, func_name);
     if (info && info->name && strcmp(info->name, annotation_name) == 0) {
         return info;
     }
@@ -116,7 +116,7 @@ AnnotationInfo* annotation_lookup_class(const char* class_name, const char* anno
     if (!class_name || !annotation_name || !g_annotation_tree) return NULL;
 
     /* 从红黑树中查找，类注解的 method_name 为 "__class__" */
-    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, class_name, "__class__");
+    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, NS_PROPERTY, class_name, "__class__");
     if (info && info->name && strcmp(info->name, annotation_name) == 0) {
         return info;
     }

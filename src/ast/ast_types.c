@@ -17,11 +17,11 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
 {
     if(!g_types_tree) g_types_tree = rbtree_create();
     // 重名：覆盖（后声明优先，与变量赋值一致）
-    TypeDef* td = (TypeDef*)rbtree_find(g_types_tree, NULL, name);
+    TypeDef* td = (TypeDef*)rbtree_find(g_types_tree, NS_STRUCT, NULL, name);
     if(!td) {
         td = (TypeDef*)calloc(1, sizeof(TypeDef));
         td->name = strdup(name);
-        rbtree_insert(g_types_tree, NULL, name, td);
+        rbtree_insert(g_types_tree, NS_STRUCT, NULL, name, td);
     }
     // 释放旧属性（重声明覆盖）
     if(td->props) {
@@ -74,7 +74,7 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
 TypeDef* type_lookup(const char* name)
 {
     if(!g_types_tree || !name) return NULL;
-    return (TypeDef*)rbtree_find(g_types_tree, NULL, name);
+    return (TypeDef*)rbtree_find(g_types_tree, NS_STRUCT, NULL, name);
 }
 
 /* type_get 已废弃，请使用 type_lookup 按名称查找 */
@@ -225,7 +225,7 @@ static RBTree* g_interfaces_tree = NULL;
 InterfaceDef* interface_register(const char* name, void* methods, const char* parent) {
     if(!g_interfaces_tree) g_interfaces_tree = rbtree_create();
     /* 检查是否已存在 */
-    InterfaceDef* existing = (InterfaceDef*)rbtree_find(g_interfaces_tree, NULL, name);
+    InterfaceDef* existing = (InterfaceDef*)rbtree_find(g_interfaces_tree, NS_CLASS, NULL, name);
     if(existing) {
         return existing; /* 已存在，返回原指针 */
     }
@@ -276,13 +276,13 @@ InterfaceDef* interface_register(const char* name, void* methods, const char* pa
     }
 
     /* 插入到红黑树 */
-    rbtree_insert(g_interfaces_tree, NULL, name, idef);
+    rbtree_insert(g_interfaces_tree, NS_CLASS, NULL, name, idef);
     return idef;
 }
 
 InterfaceDef* interface_lookup(const char* name) {
     if(!g_interfaces_tree || !name) return NULL;
-    return (InterfaceDef*)rbtree_find(g_interfaces_tree, NULL, name);
+    return (InterfaceDef*)rbtree_find(g_interfaces_tree, NS_CLASS, NULL, name);
 }
 
 /* interface_get 已废弃，请使用 interface_lookup 按名称查找 */
