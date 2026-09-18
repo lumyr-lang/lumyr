@@ -99,10 +99,17 @@ static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
         strcpy(result + int_len + 1, bi_str + int_len);
     }
 
+    /* 直接创建 Decimal 对象，不调用 lumyr_decimal_from_string，避免重新计算 precision */
+    Decimal* d = (Decimal*)malloc(sizeof(Decimal));
+    d->str = result;
+    d->precision = precision;
+    d->sign = 1;
+    if(result[0] == '-') {
+        d->sign = -1;
+    }
+
     free(bi_str);
 
-    Decimal* d = lumyr_decimal_from_string(result);
-    free(result);
     return d;
 }
 
@@ -263,8 +270,14 @@ Decimal* lumyr_decimal_div(Decimal* a, Decimal* b) {
         memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
     }
 
-    /* a 需要乘以 10^(b_prec + result_prec)，对齐精度 */
-    int total_pad = b->precision + result_prec;
+    /* a / b = (a_int / 10^a_prec) / (b_int / 10^b_prec) = (a_int / b_int) * 10^(b_prec - a_prec) */
+    /* 如果 a_prec = b_prec，那么 a / b = a_int / b_int */
+    /* 如果我们想要保留 result_prec 位小数，那么我们需要：
+       a_int * 10^result_prec / b_int，然后把结果除以 10^result_prec */
+    /* 所以 total_pad = result_prec + (b_prec - a_prec) */
+    int total_pad = result_prec + (b->precision - a->precision);
+    if(total_pad < 0) total_pad = 0;
+
     int a_len = strlen(a_int);
     a_int = (char*)realloc(a_int, a_len + total_pad + 1);
     for(int i = 0; i < total_pad; i++) {
