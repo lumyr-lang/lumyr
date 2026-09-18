@@ -1,0 +1,7 @@
+// bitdecimal 类型标注测试
+print("=== bitdecimal 类型标注测试 ===");
+
+a = <bitdecimal>"1234567890.123456789";
+print("bitdecimal:", type(a));
+
+print("=== 测试完成 ===");

@@ -183,7 +183,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                                     ann_child->type == AST_NUM ||
                                     ann_child->type == AST_STRING);
         ExprType child_type;
-        if((ct == CAST_BIGINT || ct == CAST_DECIMAL) && ann_lit) {
+        if((ct == CAST_BIGINT || ct == CAST_DECIMAL || ct == CAST_BITDECIMAL) && ann_lit) {
             child_type = (ann_child->type == AST_NUM) ? EXPR_TYPE_DOUBLE :
                          (ann_child->type == AST_STRING) ? EXPR_TYPE_PTR : EXPR_TYPE_INT;
         } else {
@@ -201,6 +201,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case 16: ct_name = "CAST_UINT"; break;
             case 17: ct_name = "CAST_BIGINT"; break;
             case 18: ct_name = "CAST_DECIMAL"; break;
+            case 40: ct_name = "CAST_BITDECIMAL"; break;
         }
         fprintf(stderr, "DEBUG: TYPE_ANNOTATION: ct=%d (%s), child_type=%d\n", (int)ct, ct_name, (int)child_type);
         /* 根据 CastKind 返回表达式类型，必要时 emit 跨栈转换指令 */
@@ -290,6 +291,39 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 }
             }
             emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
+            return EXPR_TYPE_PTR;
+        } else if(ct == CAST_BITDECIMAL) {
+            /* <bitdecimal>expr：从字符串创建 bitdecimal 对象（基于 GMP mpf_t）
+             * 方案 B：如果子表达式是字面量，直接把字面量转成字符串，零转换开销
+             * 如果不是字面量，还是先识别成原来的类型，再转换 */
+            AstNode* child = node->u.type_annotation.expr;
+            if(child->type == AST_INT) {
+                /* 整数字面量：直接把整数转成字符串，零转换开销 */
+                int64_t val = child->u.inum;
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%lld", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_NUM) {
+                /* 浮点数字面量：直接把浮点数转成字符串，零转换开销 */
+                double val = child->u.num;
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%.15g", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_STRING) {
+                /* 字符串字面量：直接压入字符串常量，零转换开销 */
+                int idx = bf_add_str_const(c->fn, child->u.sval);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else {
+                /* 其他表达式：先识别成原来的类型，再转换 */
+                if(child_type == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                }
+            }
+            emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_STRING) {
             /* string 是堆分配对象，走 PTR 栈；必要时从 INT/DOUBLE 转换 */
@@ -523,6 +557,40 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         return result;
     }
     
+    case AST_SEQ: {
+        /* 语句序列：编译所有语句，返回最后一个表达式的类型 */
+        ExprType last_type = EXPR_TYPE_NONE;
+        AstNode* cur = node;
+        while(cur && cur->type == AST_SEQ) {
+            last_type = c_expr(c, cur->u.seq.first);
+            cur = cur->u.seq.second;
+        }
+        if(cur) {
+            last_type = c_expr(c, cur);
+        }
+        return last_type;
+    }
+
+    case AST_ASSIGN: {
+        /* 赋值语句：编译右值，返回其类型 */
+        ExprType rt = c_expr(c, node->u.assign.expr);
+        CastKind cast_type = c_expr_cast_type(c, node->u.assign.expr);
+        int var_idx = c_add_var(c, node->u.assign.varname, rt);
+        /* 记录精确类型到 BytecodeFunc 的 var_type_tags */
+        int bf_idx = bf_sym(c->fn, node->u.assign.varname);
+        c->fn->var_type_tags[bf_idx] = (int)cast_type;
+        if(rt == EXPR_TYPE_INT) {
+            emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+        } else if(rt == EXPR_TYPE_DOUBLE) {
+            emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+        } else if(rt == EXPR_TYPE_PTR) {
+            emit(c, OPC_STORE_PTR_VAR, var_idx, 0);
+        } else {
+            emit(c, OPC_STORE_VAR, var_idx, 0);
+        }
+        return rt;
+    }
+
     default:
         fprintf(stderr, "IR: unknown expr type %d\n", node->type);
         return EXPR_TYPE_NONE;
@@ -581,6 +649,11 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
         if(strcmp(lt, "float") == 0 || strcmp(rt, "float") == 0) return "double";
         /* 5. 其他都是 int */
         return "int";
+    }
+
+    /* 赋值语句：返回右值的类型 */
+    if(node->type == AST_ASSIGN) {
+        return c_expr_type_name(c, node->u.assign.expr);
     }
 
     /* 一元运算：递归分析子表达式 */

@@ -74,6 +74,7 @@ typedef enum {
     /* 高精度类型（任意精度/十进制浮点） */
     CAST_BIGINT,     // bigint：任意精度整数（堆分配，PTR 栈存储）
     CAST_DECIMAL,    // decimal：高精度十进制浮点（堆分配，PTR 栈存储）
+    CAST_BITDECIMAL, // bitdecimal：基于 GMP mpf_t 的高精度十进制浮点（堆分配，PTR 栈存储）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -119,7 +120,8 @@ typedef enum {
     VAL_PTR,          // void* / 任意指针 / 句柄
     VAL_CALLBACK,     // 回调函数
     VAL_BIGINT,       // bigint：任意精度整数（堆分配对象，PTR 栈存储指针）
-    VAL_DECIMAL       // decimal：高精度十进制浮点（堆分配对象，PTR 栈存储指针）
+    VAL_DECIMAL,      // decimal：高精度十进制浮点（堆分配对象，PTR 栈存储指针）
+    VAL_BITDECIMAL    // bitdecimal：基于 GMP mpf_t 的高精度十进制浮点（堆分配对象，PTR 栈存储指针）
 } ValueType;
 
 // 数组运行时对象，VAL_ARRAY 使用（原地修改语义，cap 预分配容量）
@@ -211,6 +213,9 @@ struct Value {
         void* generator;       // VAL_GENERATOR：GeneratorObject* 指针（vm.c 中定义）
         void* struct_ptr;      // VAL_STRUCT_PTR：C结构体指针（零拷贝传递，类型由外部标识）
         TypedArray* typed_array;  // VAL_TYPED_ARRAY：类型化数组（统一处理，通过 elem_type 区分元素类型）
+        void* bigint;           // VAL_BIGINT：BigInt* 指针（堆分配对象）
+        void* decimal;          // VAL_DECIMAL：Decimal* 指针（堆分配对象）
+        void* bitdecimal;       // VAL_BITDECIMAL：BitDecimal* 指针（堆分配对象，基于 GMP mpf_t）
     } v;
 };
 

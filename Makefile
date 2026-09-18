@@ -128,6 +128,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_value.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_bigint.c
 # decimal 高精度十进制浮点
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_decimal.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_bitdecimal.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 

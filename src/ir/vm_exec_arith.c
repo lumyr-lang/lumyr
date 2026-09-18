@@ -7,6 +7,7 @@
 #include "lm_value.h"
 #include "lm_bigint.h"
 #include "lm_decimal.h"
+#include "lm_bitdecimal.h"
 #include <ctype.h>
 
 /* ========== 算术运算（INT64 栈专用） ========== */
@@ -242,6 +243,19 @@ int vm_exec_decimal_from_string(VMExecCtx* ctx, Instruction* in) {
     /* 如果 s 是动态分配的，由 GC 管理 */
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &d);
+    return 1;
+}
+
+/* 从字符串创建 bitdecimal（基于 GMP mpf_t） */
+int vm_exec_bitdecimal_from_string(VMExecCtx* ctx, Instruction* in) {
+    char* s;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &s);
+
+    BitDecimal* bd = lumyr_bitdecimal_from_string(s);
+    /* 不要释放 s，因为 s 可能是常量池中的字符串，不应该被释放 */
+    /* 如果 s 是动态分配的，由 GC 管理 */
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &bd);
     return 1;
 }
 

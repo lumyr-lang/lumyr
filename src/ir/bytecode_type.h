@@ -113,6 +113,7 @@ typedef enum {
 
     /* ===== decimal 高精度十进制浮点 ===== */
     OPC_DECIMAL_FROM_STRING,  // 从 PTR 栈弹字符串指针，转 decimal 对象，压回 PTR 栈
+    OPC_BITDECIMAL_FROM_STRING, // 从 PTR 栈弹字符串指针，转 bitdecimal 对象（基于 GMP mpf_t），压回 PTR 栈
     OPC_DECIMAL_ADD,           // 从 PTR 栈弹 2 个 decimal 指针，相加，结果压回 PTR 栈
     OPC_DECIMAL_SUB,          // 从 PTR 栈弹 2 个 decimal 指针，相减，结果压回 PTR 栈
     OPC_DECIMAL_MUL,           // 从 PTR 栈弹 2 个 decimal 指针，相乘，结果压回 PTR 栈

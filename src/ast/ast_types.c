@@ -201,6 +201,7 @@ char* castkind_to_name(int ck) {
         case CAST_PTR: return strdup("ptr");
         case CAST_BIGINT: return strdup("bigint");
         case CAST_DECIMAL: return strdup("decimal");
+        case CAST_BITDECIMAL: return strdup("bitdecimal");
         default: return strdup("int");
     }
 }
