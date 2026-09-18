@@ -471,14 +471,14 @@ static int all_int_vars(Ctx* c, AstNode* e) {
         return all_int_vars(c, e->u.seq.first) && all_int_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 int 候选，运行时 OPC_INT_ARRAY_GET 会检查是否是 int 类型化数组 */
+        /* 数组访问表达式：视为 int 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 int 类型化数组 */
         return 1;
     }
     return is_int_var(c, e);
 }
 
 // 编译 int 泛型数组元素：全部压入 int 栈（零检查零转换）
-// 支持：声明为 int 的变量（OPC_LOAD_INT_VAR）、int 类型化数组元素访问（OPC_INT_ARRAY_GET）
+// 支持：声明为 int 的变量（OPC_LOAD_INT64_VAR）、int 类型化数组元素访问（OPC_INT64_ARRAY_LIT）
 static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
@@ -487,20 +487,20 @@ static void compile_int_array_elems(Ctx* c, AstNode* e, int* n) {
         return;
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_INT_ARRAY_GET
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_INT64_ARRAY_LIT
            运行时会检查是否是 int 类型化数组，如果是直接读取 int 值压入 int 栈，零包装！
            如果不是，回退到普通数组访问（包装成 Value，然后需要转换） */
         AstNode* arr = e->u.index.arr;
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_INT_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
-    /* 声明为 int 类型的变量：使用 OPC_LOAD_INT_VAR，直接压入 int 栈 */
+    /* 声明为 int 类型的变量：使用 OPC_LOAD_INT64_VAR，直接压入 int 栈 */
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -529,14 +529,14 @@ static int typed_array_get_op(Ctx* c, const char* vname) {
     if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return -1;
     int tag = (c->fn->var_type_tags ? c->fn->var_type_tags[var_idx] : -1);
     switch(tag) {
-        case VAR_TYPE_INT_ARRAY:    return OPC_INT_ARRAY_GET;
-        case VAR_TYPE_DOUBLE_ARRAY: return OPC_DOUBLE_ARRAY_GET;
-        case VAR_TYPE_FLOAT_ARRAY:  return OPC_FLOAT_ARRAY_GET;
-        case VAR_TYPE_UINT_ARRAY:   return OPC_UINT_ARRAY_GET;
-        case VAR_TYPE_BOOL_ARRAY:   return OPC_BOOL_ARRAY_GET;
-        case VAR_TYPE_CHAR_ARRAY:   return OPC_CHAR_ARRAY_GET;
-        case VAR_TYPE_BYTE_ARRAY:   return OPC_BYTE_ARRAY_GET;
-        case VAR_TYPE_INT8_ARRAY:   return OPC_INT8_ARRAY_GET;
+        case VAR_TYPE_INT_ARRAY:    return OPC_INT64_ARRAY_LIT;
+        case VAR_TYPE_DOUBLE_ARRAY: return OPC_DOUBLE_ARRAY_LIT;
+        case VAR_TYPE_FLOAT_ARRAY:  return OPC_DOUBLE_ARRAY_LIT;
+        case VAR_TYPE_UINT_ARRAY:   return OPC_INT64_ARRAY_LIT;
+        case VAR_TYPE_BOOL_ARRAY:   return OPC_INT64_ARRAY_LIT;
+        case VAR_TYPE_CHAR_ARRAY:   return OPC_INT64_ARRAY_LIT;
+        case VAR_TYPE_BYTE_ARRAY:   return OPC_INT64_ARRAY_LIT;
+        case VAR_TYPE_INT8_ARRAY:   return OPC_INT64_ARRAY_LIT;
         default:                    return -1;
     }
 }
@@ -555,14 +555,14 @@ static int all_double_vars(Ctx* c, AstNode* e) {
         return all_double_vars(c, e->u.seq.first) && all_double_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 double 候选，运行时 OPC_DOUBLE_ARRAY_GET 会检查是否是 double 类型化数组 */
+        /* 数组访问表达式：视为 double 候选，运行时 OPC_DOUBLE_ARRAY_LIT 会检查是否是 double 类型化数组 */
         return 1;
     }
     return is_double_var(c, e);
 }
 
 // 编译 double 泛型数组元素：全部压入 double 栈（零检查零转换）
-// 支持：声明为 double 的变量（OPC_LOAD_DOUBLE_VAR）、double 类型化数组元素访问（OPC_DOUBLE_ARRAY_GET）
+// 支持：声明为 double 的变量（OPC_LOAD_DOUBLE_VAR）、double 类型化数组元素访问（OPC_DOUBLE_ARRAY_LIT）
 static void compile_double_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
@@ -571,14 +571,14 @@ static void compile_double_array_elems(Ctx* c, AstNode* e, int* n) {
         return;
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_DOUBLE_ARRAY_GET
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_DOUBLE_ARRAY_LIT
            运行时会检查是否是 double 类型化数组，如果是直接读取 double 值压入 double 栈，零包装！
            如果不是，回退到普通数组访问（包装成 Value，然后需要转换） */
         AstNode* arr = e->u.index.arr;
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
@@ -696,14 +696,14 @@ static int all_float_vars(Ctx* c, AstNode* e) {
         return all_float_vars(c, e->u.seq.first) && all_float_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 float 候选，运行时 OPC_FLOAT_ARRAY_GET 会检查是否是 float 类型化数组 */
+        /* 数组访问表达式：视为 float 候选，运行时 OPC_DOUBLE_ARRAY_LIT 会检查是否是 float 类型化数组 */
         return 1;
     }
     return is_float_var(c, e);
 }
 
 // 编译 float 泛型数组元素：全部压入 float 栈（零检查零转换）
-// 支持：声明为 float 的变量（OPC_LOAD_FLOAT_VAR）、float 类型化数组元素访问（OPC_FLOAT_ARRAY_GET）
+// 支持：声明为 float 的变量（OPC_LOAD_DOUBLE_VAR）、float 类型化数组元素访问（OPC_DOUBLE_ARRAY_LIT）
 static void compile_float_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
@@ -712,18 +712,18 @@ static void compile_float_array_elems(Ctx* c, AstNode* e, int* n) {
         return;
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_FLOAT_ARRAY_GET */
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_DOUBLE_ARRAY_LIT */
         AstNode* arr = e->u.index.arr;
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
+        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
-    /* 声明为 float 类型的变量：使用 OPC_LOAD_FLOAT_VAR，直接压入 float 栈 */
+    /* 声明为 float 类型的变量：使用 OPC_LOAD_DOUBLE_VAR，直接压入 float 栈 */
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_FLOAT_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -742,14 +742,14 @@ static int all_uint_vars(Ctx* c, AstNode* e) {
         return all_uint_vars(c, e->u.seq.first) && all_uint_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 uint 候选，运行时 OPC_UINT_ARRAY_GET 会检查是否是 uint 类型化数组 */
+        /* 数组访问表达式：视为 uint 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 uint 类型化数组 */
         return 1;
     }
     return is_uint_var(c, e);
 }
 
 // 编译 uint 泛型数组元素：全部压入 uint 栈（零检查零转换）
-// 支持：声明为 uint 的变量（OPC_LOAD_UINT_VAR）、uint 类型化数组元素访问（OPC_UINT_ARRAY_GET）
+// 支持：声明为 uint 的变量（OPC_LOAD_INT64_VAR）、uint 类型化数组元素访问（OPC_INT64_ARRAY_LIT）
 static void compile_uint_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
@@ -758,18 +758,18 @@ static void compile_uint_array_elems(Ctx* c, AstNode* e, int* n) {
         return;
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_UINT_ARRAY_GET */
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_INT64_ARRAY_LIT */
         AstNode* arr = e->u.index.arr;
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_UINT_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
-    /* 声明为 uint 类型的变量：使用 OPC_LOAD_UINT_VAR，直接压入 uint 栈 */
+    /* 声明为 uint 类型的变量：使用 OPC_LOAD_INT64_VAR，直接压入 uint 栈 */
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_UINT_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -788,14 +788,14 @@ static int all_long_long_vars(Ctx* c, AstNode* e) {
         return all_long_long_vars(c, e->u.seq.first) && all_long_long_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 long long 候选，运行时 OPC_LONG_LONG_ARRAY_GET 会检查是否是 long long 类型化数组 */
+        /* 数组访问表达式：视为 long long 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 long long 类型化数组 */
         return 1;
     }
     return is_long_long_var(c, e);
 }
 
 // 编译 long long 泛型数组元素：全部压入 long long 栈（零检查零转换）
-// 支持：声明为 long long 的变量（OPC_LOAD_LONG_LONG_VAR）、long long 类型化数组元素访问（OPC_LONG_LONG_ARRAY_GET）
+// 支持：声明为 long long 的变量（OPC_LOAD_INT64_VAR）、long long 类型化数组元素访问（OPC_INT64_ARRAY_LIT）
 static void compile_long_long_array_elems(Ctx* c, AstNode* e, int* n) {
     if(!e) return;
     if(e->type == AST_SEQ) {
@@ -804,18 +804,18 @@ static void compile_long_long_array_elems(Ctx* c, AstNode* e, int* n) {
         return;
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_LONG_LONG_ARRAY_GET */
+        /* 数组访问表达式：编译 arr 和 idx，然后发射 OPC_INT64_ARRAY_LIT */
         AstNode* arr = e->u.index.arr;
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_LONG_LONG_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
-    /* 声明为 long long 类型的变量：使用 OPC_LOAD_LONG_LONG_VAR，直接压入 long long 栈 */
+    /* 声明为 long long 类型的变量：使用 OPC_LOAD_INT64_VAR，直接压入 long long 栈 */
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -852,12 +852,12 @@ static void compile_bool_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_BOOL_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -894,12 +894,12 @@ static void compile_char_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_CHAR_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -936,12 +936,12 @@ static void compile_byte_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_BYTE_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -960,7 +960,7 @@ static int all_int8_vars(Ctx* c, AstNode* e) {
         return all_int8_vars(c, e->u.seq.first) && all_int8_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 int8 候选，运行时 OPC_INT8_ARRAY_GET 会检查是否是 int8 类型化数组 */
+        /* 数组访问表达式：视为 int8 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 int8 类型化数组 */
         return 1;
     }
     return is_int8_var(c, e);
@@ -979,12 +979,12 @@ static void compile_int8_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_INT8_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1003,7 +1003,7 @@ static int all_int16_vars(Ctx* c, AstNode* e) {
         return all_int16_vars(c, e->u.seq.first) && all_int16_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 int16 候选，运行时 OPC_INT16_ARRAY_GET 会检查是否是 int16 类型化数组 */
+        /* 数组访问表达式：视为 int16 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 int16 类型化数组 */
         return 1;
     }
     return is_int16_var(c, e);
@@ -1022,12 +1022,12 @@ static void compile_int16_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_INT16_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1046,7 +1046,7 @@ static int all_int32_vars(Ctx* c, AstNode* e) {
         return all_int32_vars(c, e->u.seq.first) && all_int32_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 int32 候选，运行时 OPC_INT32_ARRAY_GET 会检查是否是 int32 类型化数组 */
+        /* 数组访问表达式：视为 int32 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 int32 类型化数组 */
         return 1;
     }
     return is_int32_var(c, e);
@@ -1065,12 +1065,12 @@ static void compile_int32_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_INT32_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1089,7 +1089,7 @@ static int all_int64_vars(Ctx* c, AstNode* e) {
         return all_int64_vars(c, e->u.seq.first) && all_int64_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 int64 候选，运行时 OPC_INT64_ARRAY_GET 会检查是否是 int64 类型化数组 */
+        /* 数组访问表达式：视为 int64 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 int64 类型化数组 */
         return 1;
     }
     return is_int64_var(c, e);
@@ -1108,7 +1108,7 @@ static void compile_int64_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_INT64_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
@@ -1132,7 +1132,7 @@ static int all_uint8_vars(Ctx* c, AstNode* e) {
         return all_uint8_vars(c, e->u.seq.first) && all_uint8_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 uint8 候选，运行时 OPC_UINT8_ARRAY_GET 会检查是否是 uint8 类型化数组 */
+        /* 数组访问表达式：视为 uint8 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 uint8 类型化数组 */
         return 1;
     }
     return is_uint8_var(c, e);
@@ -1151,12 +1151,12 @@ static void compile_uint8_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_UINT8_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1175,7 +1175,7 @@ static int all_uint16_vars(Ctx* c, AstNode* e) {
         return all_uint16_vars(c, e->u.seq.first) && all_uint16_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 uint16 候选，运行时 OPC_UINT16_ARRAY_GET 会检查是否是 uint16 类型化数组 */
+        /* 数组访问表达式：视为 uint16 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 uint16 类型化数组 */
         return 1;
     }
     return is_uint16_var(c, e);
@@ -1194,12 +1194,12 @@ static void compile_uint16_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_UINT16_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_UINT16_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1218,7 +1218,7 @@ static int all_uint32_vars(Ctx* c, AstNode* e) {
         return all_uint32_vars(c, e->u.seq.first) && all_uint32_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 uint32 候选，运行时 OPC_UINT32_ARRAY_GET 会检查是否是 uint32 类型化数组 */
+        /* 数组访问表达式：视为 uint32 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 uint32 类型化数组 */
         return 1;
     }
     return is_uint32_var(c, e);
@@ -1237,12 +1237,12 @@ static void compile_uint32_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_UINT32_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_UINT32_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1261,7 +1261,7 @@ static int all_uint64_vars(Ctx* c, AstNode* e) {
         return all_uint64_vars(c, e->u.seq.first) && all_uint64_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 uint64 候选，运行时 OPC_UINT64_ARRAY_GET 会检查是否是 uint64 类型化数组 */
+        /* 数组访问表达式：视为 uint64 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 uint64 类型化数组 */
         return 1;
     }
     return is_uint64_var(c, e);
@@ -1280,12 +1280,12 @@ static void compile_uint64_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_UINT64_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_UINT64_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1304,7 +1304,7 @@ static int all_long_vars(Ctx* c, AstNode* e) {
         return all_long_vars(c, e->u.seq.first) && all_long_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 long 候选，运行时 OPC_LONG_ARRAY_GET 会检查是否是 long 类型化数组 */
+        /* 数组访问表达式：视为 long 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 long 类型化数组 */
         return 1;
     }
     return is_long_var(c, e);
@@ -1323,12 +1323,12 @@ static void compile_long_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_LONG_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_LONG_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1347,7 +1347,7 @@ static int all_ulong_vars(Ctx* c, AstNode* e) {
         return all_ulong_vars(c, e->u.seq.first) && all_ulong_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 unsigned long 候选，运行时 OPC_ULONG_ARRAY_GET 会检查是否是 unsigned long 类型化数组 */
+        /* 数组访问表达式：视为 unsigned long 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 unsigned long 类型化数组 */
         return 1;
     }
     return is_ulong_var(c, e);
@@ -1366,12 +1366,12 @@ static void compile_ulong_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_ULONG_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_ULONG_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1390,7 +1390,7 @@ static int all_size_t_vars(Ctx* c, AstNode* e) {
         return all_size_t_vars(c, e->u.seq.first) && all_size_t_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 size_t 候选，运行时 OPC_SIZE_T_ARRAY_GET 会检查是否是 size_t 类型化数组 */
+        /* 数组访问表达式：视为 size_t 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 size_t 类型化数组 */
         return 1;
     }
     return is_size_t_var(c, e);
@@ -1409,12 +1409,12 @@ static void compile_size_t_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_SIZE_T_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_SIZE_T_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1433,7 +1433,7 @@ static int all_ssize_t_vars(Ctx* c, AstNode* e) {
         return all_ssize_t_vars(c, e->u.seq.first) && all_ssize_t_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 ssize_t 候选，运行时 OPC_SSIZE_T_ARRAY_GET 会检查是否是 ssize_t 类型化数组 */
+        /* 数组访问表达式：视为 ssize_t 候选，运行时 OPC_INT64_ARRAY_LIT 会检查是否是 ssize_t 类型化数组 */
         return 1;
     }
     return is_ssize_t_var(c, e);
@@ -1452,12 +1452,12 @@ static void compile_ssize_t_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_SSIZE_T_ARRAY_GET, 0, 0);
+        emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1476,7 +1476,7 @@ static int all_long_double_vars(Ctx* c, AstNode* e) {
         return all_long_double_vars(c, e->u.seq.first) && all_long_double_vars(c, e->u.seq.second);
     }
     if(e->type == AST_INDEX) {
-        /* 数组访问表达式：视为 long double 候选，运行时 OPC_LONG_DOUBLE_ARRAY_GET 会检查是否是 long double 类型化数组 */
+        /* 数组访问表达式：视为 long double 候选，运行时 OPC_DOUBLE_ARRAY_LIT 会检查是否是 long double 类型化数组 */
         return 1;
     }
     return is_long_double_var(c, e);
@@ -1495,12 +1495,12 @@ static void compile_long_double_array_elems(Ctx* c, AstNode* e, int* n) {
         AstNode* idx = e->u.index.idx;
         c_expr(c, arr);
         c_expr(c, idx);
-        emit(c, OPC_LONG_DOUBLE_ARRAY_GET, 0, 0);
+        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
         (*n)++;
         return;
     }
     int var_idx = bf_sym(c->fn, e->u.varname);
-    emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
+    emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
     (*n)++;
 }
 
@@ -1664,27 +1664,27 @@ static int fold_const(Ctx* c, AstNode* node, Value* out)
 static int expr_type_to_value_op(ExprType et)
 {
     switch(et) {
-        case EXPR_TYPE_BOOL:        return OPC_BOOL_TO_VALUE;
-        case EXPR_TYPE_CHAR:        return OPC_CHAR_TO_VALUE;
-        case EXPR_TYPE_INT8:        return OPC_INT8_TO_VALUE;
-        case EXPR_TYPE_INT16:       return OPC_INT16_TO_VALUE;
-        case EXPR_TYPE_SHORT:       return OPC_SHORT_TO_VALUE;
-        case EXPR_TYPE_INT:         return OPC_INT_TO_VALUE;
-        case EXPR_TYPE_INT32:       return OPC_INT32_TO_VALUE;
+        case EXPR_TYPE_BOOL:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_CHAR:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT8:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT16:       return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SHORT:       return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT:         return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT32:       return OPC_INT64_TO_VALUE;
         case EXPR_TYPE_INT64:       return OPC_INT64_TO_VALUE;
-        case EXPR_TYPE_LONG_LONG:   return OPC_LONG_LONG_TO_VALUE;
-        case EXPR_TYPE_LONG:        return OPC_LONG_TO_VALUE;
-        case EXPR_TYPE_BYTE:        return OPC_BYTE_TO_VALUE;
-        case EXPR_TYPE_UINT8:       return OPC_UINT8_TO_VALUE;
-        case EXPR_TYPE_UINT16:      return OPC_UINT16_TO_VALUE;
-        case EXPR_TYPE_UINT:        return OPC_UINT_TO_VALUE;
-        case EXPR_TYPE_UINT64:      return OPC_UINT64_TO_VALUE;
-        case EXPR_TYPE_ULONG:       return OPC_ULONG_TO_VALUE;
-        case EXPR_TYPE_SIZE_T:      return OPC_SIZE_T_TO_VALUE;
-        case EXPR_TYPE_SSIZE_T:     return OPC_SSIZE_T_TO_VALUE;
-        case EXPR_TYPE_FLOAT:       return OPC_FLOAT_TO_VALUE;
+        case EXPR_TYPE_LONG_LONG:   return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_LONG:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_BYTE:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT8:       return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT16:      return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT:        return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT64:      return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_ULONG:       return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SIZE_T:      return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SSIZE_T:     return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_FLOAT:       return OPC_DOUBLE_TO_VALUE;
         case EXPR_TYPE_DOUBLE:      return OPC_DOUBLE_TO_VALUE;
-        case EXPR_TYPE_LONG_DOUBLE: return OPC_LONG_DOUBLE_TO_VALUE;
+        case EXPR_TYPE_LONG_DOUBLE: return OPC_DOUBLE_TO_VALUE;
         default:                    return -1;
     }
 }
@@ -1694,27 +1694,27 @@ static int expr_type_to_value_op(ExprType et)
 static int get_var_load_op(Ctx* c, int var_idx) {
     if(!c->fn->var_type_tags || var_idx < 0 || var_idx >= c->fn->sym_cnt) return -1;
     switch(c->fn->var_type_tags[var_idx]) {
-        case CAST_INT:      return OPC_LOAD_INT_VAR;
+        case CAST_INT:      return OPC_LOAD_INT64_VAR;
         case CAST_DOUBLE:   return OPC_LOAD_DOUBLE_VAR;
-        case CAST_FLOAT:    return OPC_LOAD_FLOAT_VAR;
-        case CAST_UINT32:   return OPC_LOAD_UINT_VAR;
-        case CAST_LONGLONG: return OPC_LOAD_LONG_LONG_VAR;
-        case CAST_LONG_DOUBLE: return OPC_LOAD_LONG_DOUBLE_VAR;
-        case CAST_BOOL:     return OPC_LOAD_BOOL_VAR;
-        case CAST_CHAR:     return OPC_LOAD_CHAR_VAR;
-        case CAST_BYTE:     return OPC_LOAD_BYTE_VAR;
-        case CAST_INT8:     return OPC_LOAD_INT8_VAR;
-        case CAST_INT16:    return OPC_LOAD_INT16_VAR;
-        case CAST_SHORT:    return OPC_LOAD_SHORT_VAR;
-        case CAST_INT32:    return OPC_LOAD_INT32_VAR;
+        case CAST_FLOAT:    return OPC_LOAD_DOUBLE_VAR;
+        case CAST_UINT32:   return OPC_LOAD_INT64_VAR;
+        case CAST_LONGLONG: return OPC_LOAD_INT64_VAR;
+        case CAST_LONG_DOUBLE: return OPC_LOAD_DOUBLE_VAR;
+        case CAST_BOOL:     return OPC_LOAD_INT64_VAR;
+        case CAST_CHAR:     return OPC_LOAD_INT64_VAR;
+        case CAST_BYTE:     return OPC_LOAD_INT64_VAR;
+        case CAST_INT8:     return OPC_LOAD_INT64_VAR;
+        case CAST_INT16:    return OPC_LOAD_INT64_VAR;
+        case CAST_SHORT:    return OPC_LOAD_INT64_VAR;
+        case CAST_INT32:    return OPC_LOAD_INT64_VAR;
         case CAST_INT64:    return OPC_LOAD_INT64_VAR;
-        case CAST_UINT8:    return OPC_LOAD_UINT8_VAR;
-        case CAST_UINT16:   return OPC_LOAD_UINT16_VAR;
-        case CAST_UINT64:   return OPC_LOAD_UINT64_VAR;
-        case CAST_LONG:     return OPC_LOAD_LONG_VAR;
-        case CAST_ULONG:    return OPC_LOAD_ULONG_VAR;
-        case CAST_SIZE_T:   return OPC_LOAD_SIZE_T_VAR;
-        case CAST_SSIZE_T:  return OPC_LOAD_SSIZE_T_VAR;
+        case CAST_UINT8:    return OPC_LOAD_INT64_VAR;
+        case CAST_UINT16:   return OPC_LOAD_INT64_VAR;
+        case CAST_UINT64:   return OPC_LOAD_INT64_VAR;
+        case CAST_LONG:     return OPC_LOAD_INT64_VAR;
+        case CAST_ULONG:    return OPC_LOAD_INT64_VAR;
+        case CAST_SIZE_T:   return OPC_LOAD_INT64_VAR;
+        case CAST_SSIZE_T:  return OPC_LOAD_INT64_VAR;
         default:            return -1;
     }
 }
@@ -1769,46 +1769,46 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
     switch(cast_type) {
         /* 整数类型：a=常量值 */
         case CAST_INT:
-            emit(c, OPC_PUSH_INT_CONST, (int)v.v.i, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (int)v.v.i, 0);
             break;
         case CAST_INT32:
-            emit(c, OPC_PUSH_INT_CONST, (int32_t)v.v.i32, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (int32_t)v.v.i32, 0);
             break;
         case CAST_UINT32:
-            emit(c, OPC_PUSH_UINT32_CONST, (uint32_t)v.v.u32, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint32_t)v.v.u32, 0);
             break;
         case CAST_UINT:
-            emit(c, OPC_PUSH_UINT32_CONST, (uint32_t)v.v.ui, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint32_t)v.v.ui, 0);
             break;
         case CAST_INT8:
-            emit(c, OPC_PUSH_INT8_CONST, (int8_t)v.v.i8, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (int8_t)v.v.i8, 0);
             break;
         case CAST_INT16:
-            emit(c, OPC_PUSH_INT16_CONST, (int16_t)v.v.i16, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (int16_t)v.v.i16, 0);
             break;
         case CAST_SHORT:
-            emit(c, OPC_PUSH_INT16_CONST, (int16_t)v.v.sh, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (int16_t)v.v.sh, 0);
             break;
         case CAST_UINT8:
-            emit(c, OPC_PUSH_UINT8_CONST, (uint8_t)v.v.u8, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint8_t)v.v.u8, 0);
             break;
         case CAST_UCHAR:
-            emit(c, OPC_PUSH_UINT8_CONST, (uint8_t)v.v.uc, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint8_t)v.v.uc, 0);
             break;
         case CAST_UINT16:
-            emit(c, OPC_PUSH_UINT16_CONST, (uint16_t)v.v.u16, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint16_t)v.v.u16, 0);
             break;
         case CAST_USHORT:
-            emit(c, OPC_PUSH_UINT16_CONST, (uint16_t)v.v.us, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint16_t)v.v.us, 0);
             break;
         case CAST_BYTE:
-            emit(c, OPC_PUSH_BYTE_CONST, (uint8_t)v.v.by, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (uint8_t)v.v.by, 0);
             break;
         case CAST_CHAR:
-            emit(c, OPC_PUSH_CHAR_CONST, (char)v.v.c, 0);
+            emit(c, OPC_PUSH_INT64_CONST, (char)v.v.c, 0);
             break;
         case CAST_BOOL:
-            emit(c, OPC_PUSH_BOOL_CONST, v.v.b ? 1 : 0, 0);
+            emit(c, OPC_PUSH_INT64_CONST, v.v.b ? 1 : 0, 0);
             break;
         /* 64位整数类型：a=低32位, b=高32位 */
         case CAST_INT64: {
@@ -1818,32 +1818,32 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
         }
         case CAST_LONGLONG: {
             long long llv = v.v.ll;  /* lumyr_make_long_long 存在 v.v.ll */
-            emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(uint32_t)llv, (int)(uint32_t)(llv >> 32));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)llv, (int)(uint32_t)(llv >> 32));
             break;
         }
         case CAST_LONG: {
             long lv = v.v.l;
-            emit(c, OPC_PUSH_LONG_CONST, (int)(lv & 0xFFFFFFFF), (int)((lv >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(lv & 0xFFFFFFFF), (int)((lv >> 32) & 0xFFFFFFFF));
             break;
         }
         case CAST_UINT64: {
             unsigned long long ullv = v.v.u64;  /* lumyr_make_uint64 存在 v.v.u64 */
-            emit(c, OPC_PUSH_UINT64_CONST, (int)(ullv & 0xFFFFFFFF), (int)((ullv >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(ullv & 0xFFFFFFFF), (int)((ullv >> 32) & 0xFFFFFFFF));
             break;
         }
         case CAST_ULONG: {
             unsigned long long ullv = (unsigned long long)v.v.ul;  /* lumyr_make_ulong 存在 v.v.ul */
-            emit(c, OPC_PUSH_UINT64_CONST, (int)(ullv & 0xFFFFFFFF), (int)((ullv >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(ullv & 0xFFFFFFFF), (int)((ullv >> 32) & 0xFFFFFFFF));
             break;
         }
         case CAST_SIZE_T: {
             size_t stv = v.v.st;
-            emit(c, OPC_PUSH_SIZE_T_CONST, (int)(stv & 0xFFFFFFFF), (int)((stv >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(stv & 0xFFFFFFFF), (int)((stv >> 32) & 0xFFFFFFFF));
             break;
         }
         case CAST_SSIZE_T: {
             ssize_t sstv = v.v.sst;
-            emit(c, OPC_PUSH_SSIZE_T_CONST, (int)(sstv & 0xFFFFFFFF), (int)((sstv >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_INT64_CONST, (int)(sstv & 0xFFFFFFFF), (int)((sstv >> 32) & 0xFFFFFFFF));
             break;
         }
         /* 浮点类型：a/b=位模式（与 VM 重组逻辑一致） */
@@ -1851,7 +1851,7 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
             float fv = v.v.f;
             uint32_t bits = 0;
             memcpy(&bits, &fv, sizeof(float));
-            emit(c, OPC_PUSH_FLOAT_CONST, (int)bits, 0);
+            emit(c, OPC_PUSH_DOUBLE_CONST, (int)bits, 0);
             break;
         }
         case CAST_DOUBLE: {
@@ -1866,7 +1866,7 @@ static void emit_typed_const(Ctx* c, CastKind cast_type, Value v) {
             long double ldv = v.v.ld;
             unsigned long long bits = 0;
             memcpy(&bits, &ldv, sizeof(unsigned long long));
-            emit(c, OPC_PUSH_LONG_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
+            emit(c, OPC_PUSH_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
             break;
         }
         /* 其他类型：默认使用 OPC_LOAD_CONST */
@@ -1945,26 +1945,26 @@ static CastKind expr_type_to_cast(ExprType t) {
 /* 根据 ExprType 类型返回对应的变量加载指令 */
 static OpCode get_load_var_opcode(ExprType expr_type) {
     switch(expr_type) {
-        case EXPR_TYPE_BOOL: return OPC_LOAD_BOOL_VAR;
-        case EXPR_TYPE_CHAR: return OPC_LOAD_CHAR_VAR;
-        case EXPR_TYPE_INT8: return OPC_LOAD_INT8_VAR;
-        case EXPR_TYPE_INT16: return OPC_LOAD_INT16_VAR;
-        case EXPR_TYPE_SHORT: return OPC_LOAD_SHORT_VAR;
-        case EXPR_TYPE_INT: return OPC_LOAD_INT_VAR;
+        case EXPR_TYPE_BOOL: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_CHAR: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_INT8: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_INT16: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_SHORT: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_INT: return OPC_LOAD_INT64_VAR;
         case EXPR_TYPE_INT64: return OPC_LOAD_INT64_VAR;
-        case EXPR_TYPE_LONG_LONG: return OPC_LOAD_LONG_LONG_VAR;
-        case EXPR_TYPE_LONG: return OPC_LOAD_LONG_VAR;
-        case EXPR_TYPE_BYTE: return OPC_LOAD_BYTE_VAR;
-        case EXPR_TYPE_UINT8: return OPC_LOAD_UINT8_VAR;
-        case EXPR_TYPE_UINT16: return OPC_LOAD_UINT16_VAR;
-        case EXPR_TYPE_UINT: return OPC_LOAD_UINT_VAR;
-        case EXPR_TYPE_UINT64: return OPC_LOAD_UINT64_VAR;
-        case EXPR_TYPE_ULONG: return OPC_LOAD_ULONG_VAR;
-        case EXPR_TYPE_SIZE_T: return OPC_LOAD_SIZE_T_VAR;
-        case EXPR_TYPE_SSIZE_T: return OPC_LOAD_SSIZE_T_VAR;
-        case EXPR_TYPE_FLOAT: return OPC_LOAD_FLOAT_VAR;
+        case EXPR_TYPE_LONG_LONG: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_LONG: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_BYTE: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_UINT8: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_UINT16: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_UINT: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_UINT64: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_ULONG: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_SIZE_T: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_SSIZE_T: return OPC_LOAD_INT64_VAR;
+        case EXPR_TYPE_FLOAT: return OPC_LOAD_DOUBLE_VAR;
         case EXPR_TYPE_DOUBLE: return OPC_LOAD_DOUBLE_VAR;
-        case EXPR_TYPE_LONG_DOUBLE: return OPC_LOAD_LONG_DOUBLE_VAR;
+        case EXPR_TYPE_LONG_DOUBLE: return OPC_LOAD_DOUBLE_VAR;
         default: return OPC_LOAD_VAR;
     }
 }
@@ -2010,28 +2010,28 @@ static void emit_load_operand_typed(Ctx* c, AstNode* operand, ExprType op_type, 
 static OpCode get_to_value_opcode(ExprType expr_type) {
     switch(expr_type) {
         /* 整数类型 */
-        case EXPR_TYPE_BOOL: return OPC_BOOL_TO_VALUE;
-        case EXPR_TYPE_CHAR: return OPC_CHAR_TO_VALUE;
-        case EXPR_TYPE_INT8: return OPC_INT8_TO_VALUE;
-        case EXPR_TYPE_INT16: return OPC_INT16_TO_VALUE;
-        case EXPR_TYPE_SHORT: return OPC_SHORT_TO_VALUE;
-        case EXPR_TYPE_INT: return OPC_INT_TO_VALUE;
+        case EXPR_TYPE_BOOL: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_CHAR: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT8: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT16: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SHORT: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_INT: return OPC_INT64_TO_VALUE;
         case EXPR_TYPE_INT64: return OPC_INT64_TO_VALUE;
-        case EXPR_TYPE_LONG_LONG: return OPC_LONG_LONG_TO_VALUE;
-        case EXPR_TYPE_LONG: return OPC_LONG_TO_VALUE;
+        case EXPR_TYPE_LONG_LONG: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_LONG: return OPC_INT64_TO_VALUE;
         /* 无符号整数类型 */
-        case EXPR_TYPE_BYTE: return OPC_BYTE_TO_VALUE;
-        case EXPR_TYPE_UINT8: return OPC_UINT8_TO_VALUE;
-        case EXPR_TYPE_UINT16: return OPC_UINT16_TO_VALUE;
-        case EXPR_TYPE_UINT: return OPC_UINT_TO_VALUE;
-        case EXPR_TYPE_UINT64: return OPC_UINT64_TO_VALUE;
-        case EXPR_TYPE_ULONG: return OPC_ULONG_TO_VALUE;
-        case EXPR_TYPE_SIZE_T: return OPC_SIZE_T_TO_VALUE;
-        case EXPR_TYPE_SSIZE_T: return OPC_SSIZE_T_TO_VALUE;
+        case EXPR_TYPE_BYTE: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT8: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT16: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_UINT64: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_ULONG: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SIZE_T: return OPC_INT64_TO_VALUE;
+        case EXPR_TYPE_SSIZE_T: return OPC_INT64_TO_VALUE;
         /* 浮点类型 */
-        case EXPR_TYPE_FLOAT: return OPC_FLOAT_TO_VALUE;
+        case EXPR_TYPE_FLOAT: return OPC_DOUBLE_TO_VALUE;
         case EXPR_TYPE_DOUBLE: return OPC_DOUBLE_TO_VALUE;
-        case EXPR_TYPE_LONG_DOUBLE: return OPC_LONG_DOUBLE_TO_VALUE;
+        case EXPR_TYPE_LONG_DOUBLE: return OPC_DOUBLE_TO_VALUE;
         default: return OPC_NOP; /* EXPR_TYPE_NONE 等无专用栈的类型 */
     }
 }
@@ -2041,32 +2041,32 @@ static void emit_mixed_type_promote(Ctx* c, ExprType src_type, ExprType dst_type
     
     /* 先处理有专用转换指令的类型 */
     if(src_type == EXPR_TYPE_INT) {
-        if(dst_type == EXPR_TYPE_UINT) { emit(c, OPC_INT_TO_UINT, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_INT_TO_FLOAT, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT_TO_DOUBLE, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_INT_TO_LONG_LONG, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT_TO_LONG_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_UINT) { emit(c, OPC_INT64_TO_VALUE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_INT64_TO_VALUE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
     }
     if(src_type == EXPR_TYPE_UINT) {
-        if(dst_type == EXPR_TYPE_INT) { emit(c, OPC_UINT_TO_INT, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_UINT_TO_FLOAT, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_UINT_TO_DOUBLE, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_UINT_TO_LONG_LONG, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_UINT_TO_LONG_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_INT) { emit(c, OPC_INT64_TO_VALUE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_INT64_TO_VALUE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
     }
     if(src_type == EXPR_TYPE_FLOAT) {
-        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_FLOAT_TO_LONG_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_DOUBLE_TO_INT64, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
     }
     if(src_type == EXPR_TYPE_DOUBLE) {
-        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_DOUBLE_TO_LONG_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_LONG) { emit(c, OPC_DOUBLE_TO_INT64, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
     }
     if(src_type == EXPR_TYPE_LONG_LONG) {
-        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0); return; }
-        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_LONG_LONG_TO_LONG_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_FLOAT) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
+        if(dst_type == EXPR_TYPE_LONG_DOUBLE) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); return; }
     }
     
     /* 对于没有专用转换指令的类型，使用通用路径：
@@ -2262,7 +2262,7 @@ void c_expr(Ctx* c, AstNode* node)
                     }
                 }
             }
-            /* 优化0ld：赋值为 <long double>字面量 形式时，使用 OPC_PUSH_LONG_DOUBLE_CONST + OPC_STORE_LONG_DOUBLE_VAR
+            /* 优化0ld：赋值为 <long double>字面量 形式时，使用 OPC_PUSH_DOUBLE_CONST + OPC_STORE_DOUBLE_VAR
                零包装零重复提取，直接把字面量值压入 long double 栈并存储到 long double 变量
                注意：Windows平台下long double是128位(16字节)，但指令只能传递64位，
                所以先转换为double(64位)，传递double的位模式，VM中再提升为long double */
@@ -2274,8 +2274,8 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 将 double 的位模式复制到 uint64_t，然后拆分为低32位和高32位 */
                 uint64_t bits = 0;
                 memcpy(&bits, &d_val, sizeof(double));
-                emit(c, OPC_PUSH_LONG_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
-                emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                emit(c, OPC_PUSH_DOUBLE_CONST, (int)(bits & 0xFFFFFFFF), (int)((bits >> 32) & 0xFFFFFFFF));
+                emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
             }
             /* 优化0d：赋值为 <double>字面量 形式时，使用 OPC_PUSH_DOUBLE_CONST + OPC_STORE_DOUBLE_VAR
@@ -2291,7 +2291,7 @@ void c_expr(Ctx* c, AstNode* node)
                 emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
             }
-            /* 优化0f：赋值为 <float>字面量 形式时，使用 OPC_PUSH_FLOAT_CONST + OPC_STORE_FLOAT_VAR
+            /* 优化0f：赋值为 <float>字面量 形式时，使用 OPC_PUSH_DOUBLE_CONST + OPC_STORE_DOUBLE_VAR
                零包装零重复提取，直接把字面量值压入 float 栈并存储到 float 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_FLOAT &&
@@ -2300,11 +2300,11 @@ void c_expr(Ctx* c, AstNode* node)
                 float f_val = (float)node->u.assign.expr->u.type_annotation.expr->u.num;
                 uint32_t bits = 0;
                 memcpy(&bits, &f_val, sizeof(float));
-                emit(c, OPC_PUSH_FLOAT_CONST, (int)bits, 0);
-                emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                emit(c, OPC_PUSH_DOUBLE_CONST, (int)bits, 0);
+                emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 c->fn->var_type_tags[var_idx] = CAST_FLOAT;
             }
-            /* 优化0：赋值为 <int>字面量 形式时，使用 OPC_PUSH_INT_CONST + OPC_STORE_INT_VAR
+            /* 优化0：赋值为 <int>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                零包装零重复提取，直接把字面量值压入 int 栈并存储到 int 变量
                避免创建 Value 再提取的开销
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
@@ -2313,15 +2313,15 @@ void c_expr(Ctx* c, AstNode* node)
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_INT_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0u：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_UINT_CONST + OPC_STORE_UINT_VAR
+            /* 优化0u：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                零包装零重复提取，直接把字面量值压入 uint 栈并存储到 uint 变量
                避免创建 Value 再提取的开销 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2329,22 +2329,22 @@ void c_expr(Ctx* c, AstNode* node)
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_UINT32_CONST, (uint32_t)literal_val, 0);
-                    emit(c, OPC_STORE_UINT32_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (uint32_t)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0uint：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_UINT_CONST + OPC_STORE_UINT_VAR */
+            /* 优化0uint：赋值为 <uint>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_UINT_CONST, (unsigned int)literal_val, 0);
-                    emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (unsigned int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT;
                 } else {
                     c_expr(c, node->u.assign.expr);
@@ -2352,8 +2352,8 @@ void c_expr(Ctx* c, AstNode* node)
                 }
             }
             /* 优化0b：赋值为 <bool>表达式 形式时，使用专用路径
-               如果是bool字面量，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
-               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_BOOL_VAR */
+               如果是bool字面量，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
+               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
                node->u.assign.expr->u.type_annotation.expr) {
@@ -2361,22 +2361,22 @@ void c_expr(Ctx* c, AstNode* node)
                 if(inner_expr->type == AST_BOOL) {
                     /* bool字面量：直接压入bool栈，零检查零转换 */
                     int literal_val = inner_expr->u.bval ? 1 : 0;
-                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, literal_val, 0);
                 } else if(inner_expr->type == AST_INT) {
                     /* 整数字面量：非零为true，零为false */
                     int literal_val = inner_expr->u.inum ? 1 : 0;
-                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, literal_val, 0);
                 } else {
                     /* 其他表达式：编译表达式压入Value栈，然后转换为bool压入bool栈 */
                     c_expr(c, inner_expr);
                     emit(c, OPC_TO_BOOL, 0, 0);
                 }
-                /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
-                emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                /* OPC_STORE_INT64_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 /* 记录变量类型标记为 bool */
                 c->fn->var_type_tags[var_idx] = CAST_BOOL;
             }
-            /* 优化0ll：赋值为 <long long>字面量 形式时，使用 OPC_PUSH_LONG_LONG_CONST + OPC_STORE_LONG_LONG_VAR
+            /* 优化0ll：赋值为 <long long>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                零包装零重复提取，直接把字面量值压入 long long 栈并存储到 long long 变量
                避免创建 Value 再提取的开销
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
@@ -2385,15 +2385,15 @@ void c_expr(Ctx* c, AstNode* node)
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_LONG_LONG_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
-                    emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)literal_val, (int)(uint32_t)(literal_val >> 32));
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0c：赋值为 <char>字面量 形式时，使用 OPC_PUSH_CHAR_CONST + OPC_STORE_CHAR_VAR
+            /* 优化0c：赋值为 <char>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                零包装零重复提取，直接把字面量值压入 char 栈并存储到 char 变量
                避免创建 Value 再提取的开销 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2404,14 +2404,14 @@ void c_expr(Ctx* c, AstNode* node)
                 AstNode* inner_expr = node->u.assign.expr->u.type_annotation.expr;
                 char literal_val = (inner_expr->type == AST_CHAR) ?
                     (char)inner_expr->u.ch : (char)(unsigned char)inner_expr->u.inum;
-                /* OPC_PUSH_CHAR_CONST：直接把常量值压入 char 栈，零检查零转换 */
-                emit(c, OPC_PUSH_CHAR_CONST, (int)literal_val, 0);
-                /* OPC_STORE_CHAR_VAR：从 char 栈弹出，存储到 char_vals，零重复提取 */
-                emit(c, OPC_STORE_CHAR_VAR, var_idx, 0);
+                /* OPC_PUSH_INT64_CONST：直接把常量值压入 char 栈，零检查零转换 */
+                emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                /* OPC_STORE_INT64_VAR：从 char 栈弹出，存储到 char_vals，零重复提取 */
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 /* 记录变量类型标记为 char */
                 c->fn->var_type_tags[var_idx] = CAST_CHAR;
             }
-            /* 优化0byte：赋值为 <byte>字面量 形式时，使用 OPC_PUSH_BYTE_CONST + OPC_STORE_BYTE_VAR
+            /* 优化0byte：赋值为 <byte>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                零包装零重复提取，直接把字面量值压入 byte 栈并存储到 byte 变量
                避免创建 Value 再提取的开销 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
@@ -2419,67 +2419,67 @@ void c_expr(Ctx* c, AstNode* node)
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_BYTE_CONST, (unsigned char)literal_val, 0);
-                    emit(c, OPC_STORE_BYTE_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (unsigned char)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_BYTE;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0int8：赋值为 <int8>字面量 形式时，使用 OPC_PUSH_INT8_CONST + OPC_STORE_INT8_VAR
+            /* 优化0int8：赋值为 <int8>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT8 &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_INT8_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT8;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0int16：赋值为 <int16>字面量 形式时，使用 OPC_PUSH_INT16_CONST + OPC_STORE_INT16_VAR
+            /* 优化0int16：赋值为 <int16>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT16 &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_INT16_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT16;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0short：赋值为 <short>字面量 形式时，使用 OPC_PUSH_SHORT_CONST + OPC_STORE_SHORT_VAR */
+            /* 优化0short：赋值为 <short>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_SHORT &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_SHORT_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SHORT;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0int32：赋值为 <int32>字面量 形式时，使用 OPC_PUSH_INT32_CONST + OPC_STORE_INT32_VAR
+            /* 优化0int32：赋值为 <int32>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT32 &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_INT32_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT32;
                 } else {
                     c_expr(c, node->u.assign.expr);
@@ -2502,37 +2502,37 @@ void c_expr(Ctx* c, AstNode* node)
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0uint8：赋值为 <uint8>字面量 形式时，使用 OPC_PUSH_UINT8_CONST + OPC_STORE_UINT8_VAR */
+            /* 优化0uint8：赋值为 <uint8>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                (node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT8 ||
                 node->u.assign.expr->u.type_annotation.cast_type == CAST_UCHAR) &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_UINT8_CONST, (uint8_t)literal_val, 0);
-                    emit(c, OPC_STORE_UINT8_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (uint8_t)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = node->u.assign.expr->u.type_annotation.cast_type;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0uint16：赋值为 <uint16>字面量 形式时，使用 OPC_PUSH_UINT16_CONST + OPC_STORE_UINT16_VAR */
+            /* 优化0uint16：赋值为 <uint16>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                (node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT16 ||
                 node->u.assign.expr->u.type_annotation.cast_type == CAST_USHORT) &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_UINT16_CONST, (uint16_t)literal_val, 0);
-                    emit(c, OPC_STORE_UINT16_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (uint16_t)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = node->u.assign.expr->u.type_annotation.cast_type;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0uint64：赋值为 <uint64>字面量 形式时，使用 OPC_PUSH_UINT64_CONST + OPC_STORE_UINT64_VAR
+            /* 优化0uint64：赋值为 <uint64>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                64位值合并：in.a低32位 + in.b高32位 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT64 &&
@@ -2540,73 +2540,73 @@ void c_expr(Ctx* c, AstNode* node)
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
                     uint64_t uv = (uint64_t)literal_val;
-                    emit(c, OPC_PUSH_UINT64_CONST, (int)(uint32_t)uv, (int)(uint32_t)(uv >> 32));
-                    emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)(uint32_t)uv, (int)(uint32_t)(uv >> 32));
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT64;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0long：赋值为 <long>字面量 形式时，使用 OPC_PUSH_LONG_CONST + OPC_STORE_LONG_VAR
+            /* 优化0long：赋值为 <long>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_LONG &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_LONG_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_LONG;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0ulong：赋值为 <ulong>字面量 形式时，使用 OPC_PUSH_ULONG_CONST + OPC_STORE_ULONG_VAR */
+            /* 优化0ulong：赋值为 <ulong>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_ULONG &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_ULONG_CONST, (int)(unsigned long)literal_val, 0);
-                    emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)(unsigned long)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_ULONG;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0size_t：赋值为 <size_t>字面量 形式时，使用 OPC_PUSH_SIZE_T_CONST + OPC_STORE_SIZE_T_VAR */
+            /* 优化0size_t：赋值为 <size_t>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_SIZE_T &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_SIZE_T_CONST, (int)(size_t)literal_val, 0);
-                    emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)(size_t)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化0ssize_t：赋值为 <ssize_t>字面量 形式时，使用 OPC_PUSH_SSIZE_T_CONST + OPC_STORE_SSIZE_T_VAR
+            /* 优化0ssize_t：赋值为 <ssize_t>字面量 形式时，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
                支持正整数字面量和负整数字面量（AST_UNARY + OP_UNARY_MINUS） */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_SSIZE_T &&
                node->u.assign.expr->u.type_annotation.expr) {
                 long long literal_val;
                 if (extract_int_literal_value(node->u.assign.expr->u.type_annotation.expr, &literal_val)) {
-                    emit(c, OPC_PUSH_SSIZE_T_CONST, (int)literal_val, 0);
-                    emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, (int)literal_val, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
                 } else {
                     c_expr(c, node->u.assign.expr);
                     emit(c, OPC_STORE_VAR, var_idx, 0);
                 }
             }
-            /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT_ARRAY_GET + OPC_STORE_INT_VAR
+            /* 优化1：赋值为 <int>arr[idx] 形式时，使用 OPC_INT64_ARRAY_LIT + OPC_STORE_INT64_VAR
                零包装零重复提取，直接从 int 类型化数组读取并存储到 int 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_INT &&
@@ -2618,14 +2618,14 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 编译 arr 和 idx（压入 Value 栈） */
                 c_expr(c, arr);
                 c_expr(c, idx);
-                /* OPC_INT_ARRAY_GET：直接读取 int 值，压入 int 栈，零包装 */
-                emit(c, OPC_INT_ARRAY_GET, 0, 0);
-                /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
-                emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                /* OPC_INT64_ARRAY_LIT：直接读取 int 值，压入 int 栈，零包装 */
+                emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
+                /* OPC_STORE_INT64_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 /* 记录变量类型标记为 int */
                 c->fn->var_type_tags[var_idx] = CAST_INT;
             }
-            /* 优化1b：赋值为 <double>arr[idx] 形式时，使用 OPC_DOUBLE_ARRAY_GET + OPC_STORE_DOUBLE_VAR
+            /* 优化1b：赋值为 <double>arr[idx] 形式时，使用 OPC_DOUBLE_ARRAY_LIT + OPC_STORE_DOUBLE_VAR
                零包装零重复提取，直接从 double 类型化数组读取并存储到 double 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_DOUBLE &&
@@ -2637,14 +2637,14 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 编译 arr 和 idx（压入 Value 栈） */
                 c_expr(c, arr);
                 c_expr(c, idx);
-                /* OPC_DOUBLE_ARRAY_GET：直接读取 double 值，压入 double 栈，零包装 */
-                emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                /* OPC_DOUBLE_ARRAY_LIT：直接读取 double 值，压入 double 栈，零包装 */
+                emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
                 /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
                 emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 /* 记录变量类型标记为 double */
                 c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
             }
-            /* 优化1c：赋值为 <float>arr[idx] 形式时，使用 OPC_FLOAT_ARRAY_GET + OPC_STORE_FLOAT_VAR
+            /* 优化1c：赋值为 <float>arr[idx] 形式时，使用 OPC_DOUBLE_ARRAY_LIT + OPC_STORE_DOUBLE_VAR
                零包装零重复提取，直接从 float 类型化数组读取并存储到 float 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_FLOAT &&
@@ -2656,14 +2656,14 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 编译 arr 和 idx（压入 Value 栈） */
                 c_expr(c, arr);
                 c_expr(c, idx);
-                /* OPC_FLOAT_ARRAY_GET：直接读取 float 值，压入 float 栈，零包装 */
-                emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
-                /* OPC_STORE_FLOAT_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
-                emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                /* OPC_DOUBLE_ARRAY_LIT：直接读取 float 值，压入 float 栈，零包装 */
+                emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
+                /* OPC_STORE_DOUBLE_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
+                emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                 /* 记录变量类型标记为 float */
                 c->fn->var_type_tags[var_idx] = CAST_FLOAT;
             }
-            /* 优化1d：赋值为 <uint32>arr[idx] 形式时，使用 OPC_UINT_ARRAY_GET + OPC_STORE_UINT_VAR
+            /* 优化1d：赋值为 <uint32>arr[idx] 形式时，使用 OPC_INT64_ARRAY_LIT + OPC_STORE_INT64_VAR
                零包装零重复提取，直接从 uint 类型化数组读取并存储到 uint 变量 */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_UINT32 &&
@@ -2675,16 +2675,16 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 编译 arr 和 idx（压入 Value 栈） */
                 c_expr(c, arr);
                 c_expr(c, idx);
-                /* OPC_UINT_ARRAY_GET：直接读取 uint 值，压入 uint 栈，零包装 */
-                emit(c, OPC_UINT_ARRAY_GET, 0, 0);
-                /* OPC_STORE_UINT_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
-                emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                /* OPC_INT64_ARRAY_LIT：直接读取 uint 值，压入 uint 栈，零包装 */
+                emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
+                /* OPC_STORE_INT64_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 /* 记录变量类型标记为 uint */
                 c->fn->var_type_tags[var_idx] = CAST_UINT32;
             }
             /* 优化0b：赋值为 <bool>表达式 形式时，使用专用路径
-               如果是bool字面量，使用 OPC_PUSH_BOOL_CONST + OPC_STORE_BOOL_VAR
-               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_BOOL_VAR */
+               如果是bool字面量，使用 OPC_PUSH_INT64_CONST + OPC_STORE_INT64_VAR
+               否则编译表达式后从Value栈提取bool值，使用 OPC_STORE_INT64_VAR */
             else if(node->u.assign.expr && node->u.assign.expr->type == AST_TYPE_ANNOTATION &&
                node->u.assign.expr->u.type_annotation.cast_type == CAST_BOOL &&
                node->u.assign.expr->u.type_annotation.expr) {
@@ -2692,18 +2692,18 @@ void c_expr(Ctx* c, AstNode* node)
                 if(inner_expr->type == AST_BOOL) {
                     /* bool字面量：直接压入bool栈，零检查零转换 */
                     int literal_val = inner_expr->u.bval ? 1 : 0;
-                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, literal_val, 0);
                 } else if(inner_expr->type == AST_INT) {
                     /* 整数字面量：非零为true，零为false */
                     int literal_val = inner_expr->u.inum ? 1 : 0;
-                    emit(c, OPC_PUSH_BOOL_CONST, literal_val, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, literal_val, 0);
                 } else {
                     /* 其他表达式：编译表达式压入Value栈，然后转换为bool压入bool栈 */
                     c_expr(c, inner_expr);
                     emit(c, OPC_TO_BOOL, 0, 0);
                 }
-                /* OPC_STORE_BOOL_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
-                emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                /* OPC_STORE_INT64_VAR：从 bool 栈弹出，存储到 bool_vals，零重复提取 */
+                emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                 /* 记录变量类型标记为 bool */
                 c->fn->var_type_tags[var_idx] = CAST_BOOL;
             }
@@ -2722,10 +2722,10 @@ void c_expr(Ctx* c, AstNode* node)
                     /* 编译 arr 和 idx（压入 Value 栈） */
                     c_expr(c, arr);
                     c_expr(c, idx);
-                    /* OPC_INT_ARRAY_GET：直接读取 int 值，压入 int 栈，零包装 */
-                    emit(c, OPC_INT_ARRAY_GET, 0, 0);
-                    /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
-                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    /* OPC_INT64_ARRAY_LIT：直接读取 int 值，压入 int 栈，零包装 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
+                    /* OPC_STORE_INT64_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_INT;
                 }
@@ -2737,8 +2737,8 @@ void c_expr(Ctx* c, AstNode* node)
                     /* 编译 arr 和 idx（压入 Value 栈） */
                     c_expr(c, arr);
                     c_expr(c, idx);
-                    /* OPC_DOUBLE_ARRAY_GET：直接读取 double 值，压入 double 栈，零包装 */
-                    emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                    /* OPC_DOUBLE_ARRAY_LIT：直接读取 double 值，压入 double 栈，零包装 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
                     /* OPC_STORE_DOUBLE_VAR：从 double 栈弹出，存储到 double_vals，零重复提取 */
                     emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 double 类型 */
@@ -2752,10 +2752,10 @@ void c_expr(Ctx* c, AstNode* node)
                     /* 编译 arr 和 idx（压入 Value 栈） */
                     c_expr(c, arr);
                     c_expr(c, idx);
-                    /* OPC_FLOAT_ARRAY_GET：直接读取 float 值，压入 float 栈，零包装 */
-                    emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
-                    /* OPC_STORE_FLOAT_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
-                    emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                    /* OPC_DOUBLE_ARRAY_LIT：直接读取 float 值，压入 float 栈，零包装 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
+                    /* OPC_STORE_DOUBLE_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
+                    emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 float 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_FLOAT;
                 }
@@ -2767,10 +2767,10 @@ void c_expr(Ctx* c, AstNode* node)
                     /* 编译 arr 和 idx（压入 Value 栈） */
                     c_expr(c, arr);
                     c_expr(c, idx);
-                    /* OPC_UINT_ARRAY_GET：直接读取 uint 值，压入 uint 栈，零包装 */
-                    emit(c, OPC_UINT_ARRAY_GET, 0, 0);
-                    /* OPC_STORE_UINT_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
-                    emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                    /* OPC_INT64_ARRAY_LIT：直接读取 uint 值，压入 uint 栈，零包装 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);
+                    /* OPC_STORE_INT64_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 uint 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
                 } else {
@@ -2796,24 +2796,24 @@ void c_expr(Ctx* c, AstNode* node)
                     int right_is_float = is_float_var(c, binop->u.bin.right);
                     ExprType result_type = arith_get_expr_type(c, binop);
                     if(result_type == EXPR_TYPE_INT) {
-                        /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT_VAR */
+                        /* int类型算术运算：结果在int专用栈中，直接使用OPC_STORE_INT64_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT;
                     } else if(result_type == EXPR_TYPE_SHORT) {
-                        /* short类型算术运算：结果在short专用栈中，直接使用OPC_STORE_SHORT_VAR */
+                        /* short类型算术运算：结果在short专用栈中，直接使用OPC_STORE_INT64_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_SHORT;
                     } else if(result_type == EXPR_TYPE_UINT) {
-                        /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_UINT_VAR */
+                        /* uint类型算术运算：结果在uint专用栈中，直接使用OPC_STORE_INT64_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_UINT32;
                     } else if(result_type == EXPR_TYPE_FLOAT) {
-                        /* float类型算术运算：结果在float专用栈中，直接使用OPC_STORE_FLOAT_VAR */
+                        /* float类型算术运算：结果在float专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_FLOAT;
                     } else if(result_type == EXPR_TYPE_DOUBLE) {
                         /* double类型算术运算：结果在double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
@@ -2821,27 +2821,27 @@ void c_expr(Ctx* c, AstNode* node)
                         emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
                     } else if(result_type == EXPR_TYPE_LONG_LONG) {
-                        /* long long类型算术运算：结果在long long专用栈中，直接使用OPC_STORE_LONG_LONG_VAR */
+                        /* long long类型算术运算：结果在long long专用栈中，直接使用OPC_STORE_INT64_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
                     } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
-                        /* long double类型算术运算：结果在long double专用栈中，直接使用OPC_STORE_LONG_DOUBLE_VAR */
+                        /* long double类型算术运算：结果在long double专用栈中，直接使用OPC_STORE_DOUBLE_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
                     } else if(result_type == EXPR_TYPE_INT8) {
-                        /* int8类型算术运算：结果在int8专用栈中，直接使用OPC_STORE_INT8_VAR */
+                        /* int8类型算术运算：结果在int8专用栈中，直接使用OPC_STORE_INT64_VAR */
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT8;
                     } else if(result_type == EXPR_TYPE_INT16) {
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT16;
                     } else if(result_type == EXPR_TYPE_INT) {
                         c_expr(c, binop);
-                        emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                        emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                         c->fn->var_type_tags[var_idx] = CAST_INT32;
                     } else if(result_type == EXPR_TYPE_INT64) {
                         c_expr(c, binop);
@@ -2866,10 +2866,10 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 检查右侧变量是否标记为 int 类型（CAST_INT = 2） */
                 if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_INT) {
-                    /* OPC_LOAD_INT_VAR：直接从 int_vals 读取，零提取 */
-                    emit(c, OPC_LOAD_INT_VAR, rhs_idx, 0);
-                    /* OPC_STORE_INT_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
-                    emit(c, OPC_STORE_INT_VAR, var_idx, 0);
+                    /* OPC_LOAD_INT64_VAR：直接从 int_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    /* OPC_STORE_INT64_VAR：从 int 栈弹出，存储到 int_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 int 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_INT;
                 }
@@ -2886,69 +2886,69 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 检查右侧变量是否标记为 float 类型（CAST_FLOAT） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_FLOAT) {
-                    /* OPC_LOAD_FLOAT_VAR：直接从 float_vals 读取，零提取 */
-                    emit(c, OPC_LOAD_FLOAT_VAR, rhs_idx, 0);
-                    /* OPC_STORE_FLOAT_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
-                    emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0);
+                    /* OPC_LOAD_DOUBLE_VAR：直接从 float_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_DOUBLE_VAR, rhs_idx, 0);
+                    /* OPC_STORE_DOUBLE_VAR：从 float 栈弹出，存储到 float_vals，零重复提取 */
+                    emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 float 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_FLOAT;
                 }
                 /* 检查右侧变量是否标记为 uint 类型（CAST_UINT32） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_UINT32) {
-                    /* OPC_LOAD_UINT_VAR：直接从 uint_vals 读取，零提取 */
-                    emit(c, OPC_LOAD_UINT_VAR, rhs_idx, 0);
-                    /* OPC_STORE_UINT_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
-                    emit(c, OPC_STORE_UINT_VAR, var_idx, 0);
+                    /* OPC_LOAD_INT64_VAR：直接从 uint_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    /* OPC_STORE_INT64_VAR：从 uint 栈弹出，存储到 uint_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 uint 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_UINT32;
                 }
                 /* 检查右侧变量是否标记为 long long 类型（CAST_LONGLONG） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_LONGLONG) {
-                    /* OPC_LOAD_LONG_LONG_VAR：直接从 longlong_vals 读取，零提取 */
-                    emit(c, OPC_LOAD_LONG_LONG_VAR, rhs_idx, 0);
-                    /* OPC_STORE_LONG_LONG_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
-                    emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0);
+                    /* OPC_LOAD_INT64_VAR：直接从 longlong_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    /* OPC_STORE_INT64_VAR：从 long long 栈弹出，存储到 longlong_vals，零重复提取 */
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 long long 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_LONGLONG;
                 }
                 /* 检查右侧变量是否标记为 long double 类型（CAST_LONG_DOUBLE） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_LONG_DOUBLE) {
-                    /* OPC_LOAD_LONG_DOUBLE_VAR：直接从 longdouble_vals 读取，零提取 */
-                    emit(c, OPC_LOAD_LONG_DOUBLE_VAR, rhs_idx, 0);
-                    /* OPC_STORE_LONG_DOUBLE_VAR：从 long double 栈弹出，存储到 longdouble_vals，零重复提取 */
-                    emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0);
+                    /* OPC_LOAD_DOUBLE_VAR：直接从 longdouble_vals 读取，零提取 */
+                    emit(c, OPC_LOAD_DOUBLE_VAR, rhs_idx, 0);
+                    /* OPC_STORE_DOUBLE_VAR：从 long double 栈弹出，存储到 longdouble_vals，零重复提取 */
+                    emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
                     /* 上下文感知：自动将左侧变量标记为 long double 类型 */
                     c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE;
                 }
                 /* 检查右侧变量是否标记为 int8 类型（CAST_INT8） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_INT8) {
-                    emit(c, OPC_LOAD_INT8_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_INT8_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT8;
                 }
                 /* 检查右侧变量是否标记为 int16 类型（CAST_INT16） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_INT16) {
-                    emit(c, OPC_LOAD_INT16_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_INT16_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT16;
                 }
                 /* 检查右侧变量是否标记为 short 类型（CAST_SHORT） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_SHORT) {
-                    emit(c, OPC_LOAD_SHORT_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_SHORT_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SHORT;
                 }
                 /* 检查右侧变量是否标记为 int32 类型（CAST_INT32） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_INT32) {
-                    emit(c, OPC_LOAD_INT32_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_INT32_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_INT32;
                 }
                 /* 检查右侧变量是否标记为 int64 类型（CAST_INT64） */
@@ -2961,71 +2961,71 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 检查右侧变量是否标记为 uint8 类型（CAST_UINT8） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_UINT8) {
-                    emit(c, OPC_LOAD_UINT8_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_UINT8_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT8;
                 }
                 /* 检查右侧变量是否标记为 uint16 类型（CAST_UINT16） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_UINT16) {
-                    emit(c, OPC_LOAD_UINT16_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_UINT16_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT16;
                 }
                 /* 检查右侧变量是否标记为 uint64 类型（CAST_UINT64） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_UINT64) {
-                    emit(c, OPC_LOAD_UINT64_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_UINT64_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_UINT64;
                 }
                 /* 检查右侧变量是否标记为 long 类型（CAST_LONG） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_LONG) {
-                    emit(c, OPC_LOAD_LONG_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_LONG_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_LONG;
                 }
                 /* 检查右侧变量是否标记为 ulong 类型（CAST_ULONG） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_ULONG) {
-                    emit(c, OPC_LOAD_ULONG_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_ULONG_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_ULONG;
                 }
                 /* 检查右侧变量是否标记为 size_t 类型（CAST_SIZE_T） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_SIZE_T) {
-                    emit(c, OPC_LOAD_SIZE_T_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_SIZE_T_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SIZE_T;
                 }
                 /* 检查右侧变量是否标记为 ssize_t 类型（CAST_SSIZE_T） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_SSIZE_T) {
-                    emit(c, OPC_LOAD_SSIZE_T_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_SSIZE_T_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_SSIZE_T;
                 }
                 /* 检查右侧变量是否标记为 bool 类型（CAST_BOOL） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_BOOL) {
-                    emit(c, OPC_LOAD_BOOL_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_BOOL_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_BOOL;
                 }
                 /* 检查右侧变量是否标记为 char 类型（CAST_CHAR） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_CHAR) {
-                    emit(c, OPC_LOAD_CHAR_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_CHAR_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_CHAR;
                 }
                 /* 检查右侧变量是否标记为 byte 类型（CAST_BYTE） */
                 else if(rhs_idx >= 0 && c->fn->var_type_tags &&
                    c->fn->var_type_tags[rhs_idx] == CAST_BYTE) {
-                    emit(c, OPC_LOAD_BYTE_VAR, rhs_idx, 0);
-                    emit(c, OPC_STORE_BYTE_VAR, var_idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, rhs_idx, 0);
+                    emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
                     c->fn->var_type_tags[var_idx] = CAST_BYTE;
                 } else {
                     /* 通用赋值路径：根据右操作数类型选择对应的存储指令
@@ -3034,12 +3034,12 @@ void c_expr(Ctx* c, AstNode* node)
                     ExprType rhs_expr_type = arith_get_expr_type(c, node->u.assign.expr);
                     c_expr(c, node->u.assign.expr);
                     switch(rhs_expr_type) {
-                        case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
-                        case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
-                        case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
+                        case EXPR_TYPE_INT: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
                         case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_DOUBLE; break;
-                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
-                        case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
+                        case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
                         default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
                     }
                 }
@@ -3048,12 +3048,12 @@ void c_expr(Ctx* c, AstNode* node)
                 ExprType rhs_expr_type2 = arith_get_expr_type(c, node->u.assign.expr);
                 c_expr(c, node->u.assign.expr);
                 switch(rhs_expr_type2) {
-                    case EXPR_TYPE_INT: emit(c, OPC_STORE_INT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
-                    case EXPR_TYPE_UINT: emit(c, OPC_STORE_UINT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
-                    case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_FLOAT_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
+                    case EXPR_TYPE_INT: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_INT; break;
+                    case EXPR_TYPE_UINT: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_UINT32; break;
+                    case EXPR_TYPE_FLOAT: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_FLOAT; break;
                     case EXPR_TYPE_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_DOUBLE; break;
-                    case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_LONG_LONG_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
-                    case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_LONG_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
+                    case EXPR_TYPE_LONG_LONG: emit(c, OPC_STORE_INT64_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONGLONG; break;
+                    case EXPR_TYPE_LONG_DOUBLE: emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0); c->fn->var_type_tags[var_idx] = CAST_LONG_DOUBLE; break;
                     default: emit(c, OPC_STORE_VAR, var_idx, 0); break;
                 }
             }
@@ -3081,7 +3081,7 @@ void c_expr(Ctx* c, AstNode* node)
                 break;
             }
             /* 优化：int 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
-               如果左右操作数都是声明为 int 的变量，使用 OPC_INT_ADD 等专用指令，
+               如果左右操作数都是声明为 int 的变量，使用 OPC_INT64_ADD 等专用指令，
                直接从 int 专用栈弹出两个 int，运算后结果压回 int 专用栈，完全不涉及 Value 栈 */
             int left_is_int = is_int_var(c, node->u.bin.left);
             int right_is_int = is_int_var(c, node->u.bin.right);
@@ -3127,72 +3127,72 @@ void c_expr(Ctx* c, AstNode* node)
                 /* 编译左右操作数（使用 int 专用路径，压入 int 栈） */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_INT_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_INT_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_int_arith) {
                     /* 生成 int 专用算术运算指令 */
                     static const OpCode int_arith_map[] = {
-                        [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
-                        [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, int_arith_map[bop], 0, 0);
                     /* 结果保持在 int 专用栈中，后续操作通过上下文感知来处理
-                       （赋值给 int 变量时使用 OPC_STORE_INT_VAR，print 时使用 OPC_PRINT_INT 等） */
+                       （赋值给 int 变量时使用 OPC_STORE_INT64_VAR，print 时使用 OPC_PRINT_INT64 等） */
                 } else {
                     /* 生成 int 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode int_cmp_map[] = {
-                        [OP_GT] = OPC_INT_GT, [OP_LT] = OPC_INT_LT, [OP_GE] = OPC_INT_GE,
-                        [OP_LE] = OPC_INT_LE, [OP_EQ] = OPC_INT_EQ, [OP_NE] = OPC_INT_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, int_cmp_map[bop], 0, 0);
                 }
             } else if(left_is_uint && right_is_uint && (is_uint_arith || is_uint_cmp)) {
                 /* 优化：uint 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
-                   如果左右操作数都是声明为 uint 的变量，使用 OPC_UINT_ADD 等专用指令，
+                   如果左右操作数都是声明为 uint 的变量，使用 OPC_INT64_ADD 等专用指令，
                    直接从 uint 专用栈弹出两个 uint，运算后结果压回 uint 专用栈，完全不涉及 Value 栈 */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_UINT_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_UINT_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_uint_arith) {
                     /* 生成 uint 专用算术运算指令 */
                     static const OpCode uint_arith_map[] = {
-                        [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
-                        [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, uint_arith_map[bop], 0, 0);
                     /* 结果保持在 uint 专用栈中，后续操作通过上下文感知来处理
-                       （赋值给 uint 变量时使用 OPC_STORE_UINT_VAR，print 时使用 OPC_PRINT_UINT 等） */
+                       （赋值给 uint 变量时使用 OPC_STORE_INT64_VAR，print 时使用 OPC_PRINT_INT64 等） */
                 } else {
                     /* 生成 uint 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode uint_cmp_map[] = {
-                        [OP_GT] = OPC_UINT_GT, [OP_LT] = OPC_UINT_LT, [OP_GE] = OPC_UINT_GE,
-                        [OP_LE] = OPC_UINT_LE, [OP_EQ] = OPC_UINT_EQ, [OP_NE] = OPC_UINT_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, uint_cmp_map[bop], 0, 0);
                 }
             } else if(left_is_long_long && right_is_long_long && (is_long_long_arith || is_long_long_cmp)) {
                 /* 优化：long long 类型专用算术/比较运算指令（零检查零转换零 Value 开销）
-                   如果左右操作数都是声明为 long long 的变量，使用 OPC_LONG_LONG_ADD 等专用指令，
+                   如果左右操作数都是声明为 long long 的变量，使用 OPC_INT64_ADD 等专用指令，
                    直接从 long long 专用栈弹出两个 long long，运算后结果压回 long long 专用栈，完全不涉及 Value 栈 */
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_LONG_LONG_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_LONG_LONG_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_long_long_arith) {
                     /* 生成 long long 专用算术运算指令 */
                     static const OpCode long_long_arith_map[] = {
-                        [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
-                        [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, long_long_arith_map[bop], 0, 0);
                     /* 结果保持在 long long 专用栈中，后续操作通过上下文感知来处理
-                       （赋值给 long long 变量时使用 OPC_STORE_LONG_LONG_VAR，print 时使用 OPC_PRINT_LONG_LONG 等） */
+                       （赋值给 long long 变量时使用 OPC_STORE_INT64_VAR，print 时使用 OPC_PRINT_INT64 等） */
                 } else {
                     /* 生成 long long 专用比较运算指令，比较结果(bool)直接压入 Value 栈 */
                     static const OpCode long_long_cmp_map[] = {
-                        [OP_GT] = OPC_LONG_LONG_GT, [OP_LT] = OPC_LONG_LONG_LT, [OP_GE] = OPC_LONG_LONG_GE,
-                        [OP_LE] = OPC_LONG_LONG_LE, [OP_EQ] = OPC_LONG_LONG_EQ, [OP_NE] = OPC_LONG_LONG_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, long_long_cmp_map[bop], 0, 0);
                 }
@@ -3226,18 +3226,18 @@ void c_expr(Ctx* c, AstNode* node)
             else if(left_is_float && right_is_float && (is_float_arith || is_float_cmp)) {
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_FLOAT_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_FLOAT_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
                 if(is_float_arith) {
                     static const OpCode float_arith_map[] = {
-                        [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
-                        [OP_DIV] = OPC_FLOAT_DIV,
+                        [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                        [OP_DIV] = OPC_DOUBLE_DIV,
                     };
                     emit(c, float_arith_map[bop], 0, 0);
                 } else {
                     static const OpCode float_cmp_map[] = {
-                        [OP_GT] = OPC_FLOAT_GT, [OP_LT] = OPC_FLOAT_LT, [OP_GE] = OPC_FLOAT_GE,
-                        [OP_LE] = OPC_FLOAT_LE, [OP_EQ] = OPC_FLOAT_EQ, [OP_NE] = OPC_FLOAT_NE,
+                        [OP_GT] = OPC_DOUBLE_GT, [OP_LT] = OPC_DOUBLE_LT, [OP_GE] = OPC_DOUBLE_GE,
+                        [OP_LE] = OPC_DOUBLE_LE, [OP_EQ] = OPC_DOUBLE_EQ, [OP_NE] = OPC_DOUBLE_NE,
                     };
                     emit(c, float_cmp_map[bop], 0, 0);
                 }
@@ -3246,18 +3246,18 @@ void c_expr(Ctx* c, AstNode* node)
             else if(left_is_long_double && right_is_long_double && (is_long_double_arith || is_long_double_cmp)) {
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_LONG_DOUBLE_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_LONG_DOUBLE_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_DOUBLE_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_DOUBLE_VAR, right_idx, 0);
                 if(is_long_double_arith) {
                     static const OpCode long_double_arith_map[] = {
-                        [OP_ADD] = OPC_LONG_DOUBLE_ADD, [OP_SUB] = OPC_LONG_DOUBLE_SUB, [OP_MUL] = OPC_LONG_DOUBLE_MUL,
-                        [OP_DIV] = OPC_LONG_DOUBLE_DIV,
+                        [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                        [OP_DIV] = OPC_DOUBLE_DIV,
                     };
                     emit(c, long_double_arith_map[bop], 0, 0);
                 } else {
                     static const OpCode long_double_cmp_map[] = {
-                        [OP_GT] = OPC_LONG_DOUBLE_GT, [OP_LT] = OPC_LONG_DOUBLE_LT, [OP_GE] = OPC_LONG_DOUBLE_GE,
-                        [OP_LE] = OPC_LONG_DOUBLE_LE, [OP_EQ] = OPC_LONG_DOUBLE_EQ, [OP_NE] = OPC_LONG_DOUBLE_NE,
+                        [OP_GT] = OPC_DOUBLE_GT, [OP_LT] = OPC_DOUBLE_LT, [OP_GE] = OPC_DOUBLE_GE,
+                        [OP_LE] = OPC_DOUBLE_LE, [OP_EQ] = OPC_DOUBLE_EQ, [OP_NE] = OPC_DOUBLE_NE,
                     };
                     emit(c, long_double_cmp_map[bop], 0, 0);
                 }
@@ -3266,18 +3266,18 @@ void c_expr(Ctx* c, AstNode* node)
             else if(left_is_int8 && right_is_int8 && (is_int8_arith || is_int8_cmp)) {
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_INT8_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_INT8_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_int8_arith) {
                     static const OpCode int8_arith_map[] = {
-                        [OP_ADD] = OPC_INT8_ADD, [OP_SUB] = OPC_INT8_SUB, [OP_MUL] = OPC_INT8_MUL,
-                        [OP_DIV] = OPC_INT8_DIV, [OP_MOD] = OPC_INT8_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, int8_arith_map[bop], 0, 0);
                 } else {
                     static const OpCode int8_cmp_map[] = {
-                        [OP_GT] = OPC_INT8_GT, [OP_LT] = OPC_INT8_LT, [OP_GE] = OPC_INT8_GE,
-                        [OP_LE] = OPC_INT8_LE, [OP_EQ] = OPC_INT8_EQ, [OP_NE] = OPC_INT8_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, int8_cmp_map[bop], 0, 0);
                 }
@@ -3286,18 +3286,18 @@ void c_expr(Ctx* c, AstNode* node)
             else if(left_is_int16 && right_is_int16 && (is_int16_arith || is_int16_cmp)) {
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_INT16_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_INT16_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_int16_arith) {
                     static const OpCode int16_arith_map[] = {
-                        [OP_ADD] = OPC_INT16_ADD, [OP_SUB] = OPC_INT16_SUB, [OP_MUL] = OPC_INT16_MUL,
-                        [OP_DIV] = OPC_INT16_DIV, [OP_MOD] = OPC_INT16_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, int16_arith_map[bop], 0, 0);
                 } else {
                     static const OpCode int16_cmp_map[] = {
-                        [OP_GT] = OPC_INT16_GT, [OP_LT] = OPC_INT16_LT, [OP_GE] = OPC_INT16_GE,
-                        [OP_LE] = OPC_INT16_LE, [OP_EQ] = OPC_INT16_EQ, [OP_NE] = OPC_INT16_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, int16_cmp_map[bop], 0, 0);
                 }
@@ -3306,18 +3306,18 @@ void c_expr(Ctx* c, AstNode* node)
             else if(left_is_int32 && right_is_int32 && (is_int32_arith || is_int32_cmp)) {
                 int left_idx = bf_sym(c->fn, node->u.bin.left->u.varname);
                 int right_idx = bf_sym(c->fn, node->u.bin.right->u.varname);
-                emit(c, OPC_LOAD_INT32_VAR, left_idx, 0);
-                emit(c, OPC_LOAD_INT32_VAR, right_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, left_idx, 0);
+                emit(c, OPC_LOAD_INT64_VAR, right_idx, 0);
                 if(is_int32_arith) {
                     static const OpCode int32_arith_map[] = {
-                        [OP_ADD] = OPC_INT32_ADD, [OP_SUB] = OPC_INT32_SUB, [OP_MUL] = OPC_INT32_MUL,
-                        [OP_DIV] = OPC_INT32_DIV, [OP_MOD] = OPC_INT32_MOD,
+                        [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                        [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                     };
                     emit(c, int32_arith_map[bop], 0, 0);
                 } else {
                     static const OpCode int32_cmp_map[] = {
-                        [OP_GT] = OPC_INT32_GT, [OP_LT] = OPC_INT32_LT, [OP_GE] = OPC_INT32_GE,
-                        [OP_LE] = OPC_INT32_LE, [OP_EQ] = OPC_INT32_EQ, [OP_NE] = OPC_INT32_NE,
+                        [OP_GT] = OPC_INT64_GT, [OP_LT] = OPC_INT64_LT, [OP_GE] = OPC_INT64_GE,
+                        [OP_LE] = OPC_INT64_LE, [OP_EQ] = OPC_INT64_EQ, [OP_NE] = OPC_INT64_NE,
                     };
                     emit(c, int32_cmp_map[bop], 0, 0);
                 }
@@ -3421,26 +3421,26 @@ void c_expr(Ctx* c, AstNode* node)
                        使用 ExprType 枚举判断类型，支持所有数据类型 */
                     if(result_type == EXPR_TYPE_INT) {
                         static const OpCode int_arith_map[] = {
-                            [OP_ADD] = OPC_INT_ADD, [OP_SUB] = OPC_INT_SUB, [OP_MUL] = OPC_INT_MUL,
-                            [OP_DIV] = OPC_INT_DIV, [OP_MOD] = OPC_INT_MOD,
+                            [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                            [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                         };
                         emit(c, int_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_SHORT) {
                         static const OpCode short_arith_map[] = {
-                            [OP_ADD] = OPC_SHORT_ADD, [OP_SUB] = OPC_SHORT_SUB, [OP_MUL] = OPC_SHORT_MUL,
-                            [OP_DIV] = OPC_SHORT_DIV, [OP_MOD] = OPC_SHORT_MOD,
+                            [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                            [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                         };
                         emit(c, short_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_UINT) {
                         static const OpCode uint_arith_map[] = {
-                            [OP_ADD] = OPC_UINT_ADD, [OP_SUB] = OPC_UINT_SUB, [OP_MUL] = OPC_UINT_MUL,
-                            [OP_DIV] = OPC_UINT_DIV, [OP_MOD] = OPC_UINT_MOD,
+                            [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                            [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                         };
                         emit(c, uint_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_FLOAT) {
                         static const OpCode float_arith_map[] = {
-                            [OP_ADD] = OPC_FLOAT_ADD, [OP_SUB] = OPC_FLOAT_SUB, [OP_MUL] = OPC_FLOAT_MUL,
-                            [OP_DIV] = OPC_FLOAT_DIV,
+                            [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                            [OP_DIV] = OPC_DOUBLE_DIV,
                         };
                         emit(c, float_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_DOUBLE) {
@@ -3451,14 +3451,14 @@ void c_expr(Ctx* c, AstNode* node)
                         emit(c, double_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_LONG_LONG) {
                         static const OpCode long_long_arith_map[] = {
-                            [OP_ADD] = OPC_LONG_LONG_ADD, [OP_SUB] = OPC_LONG_LONG_SUB, [OP_MUL] = OPC_LONG_LONG_MUL,
-                            [OP_DIV] = OPC_LONG_LONG_DIV, [OP_MOD] = OPC_LONG_LONG_MOD,
+                            [OP_ADD] = OPC_INT64_ADD, [OP_SUB] = OPC_INT64_SUB, [OP_MUL] = OPC_INT64_MUL,
+                            [OP_DIV] = OPC_INT64_DIV, [OP_MOD] = OPC_INT64_MOD,
                         };
                         emit(c, long_long_arith_map[bop], 0, 0);
                     } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
                         static const OpCode long_double_arith_map[] = {
-                            [OP_ADD] = OPC_LONG_DOUBLE_ADD, [OP_SUB] = OPC_LONG_DOUBLE_SUB, [OP_MUL] = OPC_LONG_DOUBLE_MUL,
-                            [OP_DIV] = OPC_LONG_DOUBLE_DIV,
+                            [OP_ADD] = OPC_DOUBLE_ADD, [OP_SUB] = OPC_DOUBLE_SUB, [OP_MUL] = OPC_DOUBLE_MUL,
+                            [OP_DIV] = OPC_DOUBLE_DIV,
                         };
                         emit(c, long_double_arith_map[bop], 0, 0);
                     } else {
@@ -3474,7 +3474,7 @@ void c_expr(Ctx* c, AstNode* node)
                         emit(c, gen_map[bop], 0, 0);
                     }
                     /* 结果保持在大类型专用栈中，后续操作通过上下文感知处理
-                       （赋值时用 OPC_STORE_FLOAT_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_FLOAT/OPC_PRINT_DOUBLE） */
+                       （赋值时用 OPC_STORE_DOUBLE_VAR/OPC_STORE_DOUBLE_VAR，print 时用 OPC_PRINT_DOUBLE/OPC_PRINT_DOUBLE） */
                     break;
                 }
                 /* 左右操作数不都是已知类型，走通用路径 */
@@ -3636,33 +3636,33 @@ void c_expr(Ctx* c, AstNode* node)
                 if(target_expr_type != EXPR_TYPE_NONE) {
                     if(inner_expr_type != target_expr_type) {
                         /* 使用专用栈之间的直接转换指令 */
-                        if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT_TO_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_INT_TO_FLOAT, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_INT_TO_LONG_LONG, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_UINT) emit(c, OPC_INT_TO_UINT, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_UINT_TO_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_UINT_TO_FLOAT, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_UINT_TO_LONG_LONG, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_INT) emit(c, OPC_UINT_TO_INT, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_FLOAT_TO_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_FLOAT_TO_LONG_LONG, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_DOUBLE_TO_LONG_LONG, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_LONG_LONG_TO_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_LONG_LONG_TO_FLOAT, 0, 0);
+                        if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_INT64_TO_VALUE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_UINT) emit(c, OPC_INT64_TO_VALUE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_INT64_TO_VALUE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_INT) emit(c, OPC_INT64_TO_VALUE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_LONG) emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_FLOAT) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
                         /* 转换到 long double 的专用指令 */
-                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT_TO_LONG_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_UINT_TO_LONG_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_FLOAT_TO_LONG_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_DOUBLE_TO_LONG_DOUBLE, 0, 0);
-                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_LONG_LONG_TO_LONG_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_INT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_UINT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_FLOAT && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_DOUBLE && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                        else if(inner_expr_type == EXPR_TYPE_LONG_LONG && target_expr_type == EXPR_TYPE_LONG_DOUBLE) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
                         else {
                             /* 没有直接转换指令，先转换到 Value 栈，然后再转换 */
                             switch(inner_expr_type) {
-                                case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
-                                case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
-                                case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_INT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_UINT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_FLOAT: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
                                 case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
-                                case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                                case EXPR_TYPE_LONG_LONG: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
                                 default: break;
                             }
                         }
@@ -3671,11 +3671,11 @@ void c_expr(Ctx* c, AstNode* node)
                        注意：long double 没有 TO_VALUE 指令，因为 long double 比较特殊，
                        需要先转换为 double，然后再转换为 Value */
                     switch(target_expr_type) {
-                        case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_INT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
                         case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
                         case EXPR_TYPE_LONG_DOUBLE:
                             /* long double 比较特殊，保持在 long double 专用栈中
                                后续赋值给 long double 变量时直接从 long double 专用栈存储
@@ -3686,11 +3686,11 @@ void c_expr(Ctx* c, AstNode* node)
                 } else {
                     /* 目标类型不是已知类型，先转换到 Value 栈，然后再转换 */
                     switch(inner_expr_type) {
-                        case EXPR_TYPE_INT: emit(c, OPC_INT_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_UINT: emit(c, OPC_UINT_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_FLOAT: emit(c, OPC_FLOAT_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_INT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_UINT: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_FLOAT: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
                         case EXPR_TYPE_DOUBLE: emit(c, OPC_DOUBLE_TO_VALUE, 0, 0); break;
-                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_LONG_LONG_TO_VALUE, 0, 0); break;
+                        case EXPR_TYPE_LONG_LONG: emit(c, OPC_INT64_TO_VALUE, 0, 0); break;
                         default: break;
                     }
                 }
@@ -4000,7 +4000,7 @@ void c_expr(Ctx* c, AstNode* node)
             }
             /* 优化：int 类型化数组元素赋值（零转换开销）
                当数组是 int 类型化数组，且赋值的值是 int 类型（字面量或变量）时，
-               使用 OPC_INT_ARRAY_SET 专用指令，直接从 int 专用栈弹出值写入数组 */
+               使用 OPC_INT64_INDEX_SET 专用指令，直接从 int 专用栈弹出值写入数组 */
             if(arr && arr->type == AST_VAR) {
                 const char* arr_name = arr->u.varname;
                 int arr_idx = bf_sym(c->fn, arr_name);
@@ -4031,20 +4031,20 @@ void c_expr(Ctx* c, AstNode* node)
                         /* 编译赋值的值（压入 int 专用栈） */
                         if(val_node->type == AST_INT) {
                             /* int 字面量：直接压入 int 栈，零检查零转换 */
-                            emit(c, OPC_PUSH_INT_CONST, int_literal_val, 0);
+                            emit(c, OPC_PUSH_INT64_CONST, int_literal_val, 0);
                         } else {
                             /* int 变量：从栈帧的 int_vals 数组读取，压入 int 栈 */
-                            emit(c, OPC_LOAD_INT_VAR, int_var_idx, 0);
+                            emit(c, OPC_LOAD_INT64_VAR, int_var_idx, 0);
                         }
                         /* 生成 int 类型化数组元素赋值专用指令 */
-                        emit(c, OPC_INT_ARRAY_SET, 0, 0);
+                        emit(c, OPC_INT64_INDEX_SET, 0, 0);
                         break;
                     }
                 }
             }
             /* 优化：uint 类型化数组元素赋值（零转换开销）
                当数组是 uint 类型化数组，且赋值的值是 uint 类型（字面量或变量）时，
-               使用 OPC_UINT_ARRAY_SET 专用指令，直接从 uint 专用栈弹出值写入数组 */
+               使用 OPC_INT64_INDEX_SET 专用指令，直接从 uint 专用栈弹出值写入数组 */
             if(arr && arr->type == AST_VAR) {
                 const char* arr_name = arr->u.varname;
                 int arr_idx = bf_sym(c->fn, arr_name);
@@ -4075,13 +4075,13 @@ void c_expr(Ctx* c, AstNode* node)
                         /* 编译赋值的值（压入 uint 专用栈） */
                         if(val_node->type == AST_INT) {
                             /* uint 字面量：直接压入 uint 栈，零检查零转换 */
-                            emit(c, OPC_PUSH_UINT_CONST, (int)uint_literal_val, 0);
+                            emit(c, OPC_PUSH_INT64_CONST, (int)uint_literal_val, 0);
                         } else {
                             /* uint 变量：从栈帧的 uint_vals 数组读取，压入 uint 栈 */
-                            emit(c, OPC_LOAD_UINT_VAR, uint_var_idx, 0);
+                            emit(c, OPC_LOAD_INT64_VAR, uint_var_idx, 0);
                         }
                         /* 生成 uint 类型化数组元素赋值专用指令 */
-                        emit(c, OPC_UINT_ARRAY_SET, 0, 0);
+                        emit(c, OPC_INT64_INDEX_SET, 0, 0);
                         break;
                     }
                 }
@@ -4097,194 +4097,194 @@ void c_expr(Ctx* c, AstNode* node)
             if(!has_spread_node(node->u.array_lit.elems)) {
                 int n = 0;
                 if(elem_type == VAL_INT && all_int_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 int 类型的变量：使用 OPC_LOAD_INT_VAR 压入 int 栈，
-                       OPC_INT_ARRAY_LIT(a=1) 从 int 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 int 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 int 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 int 栈读取，实现零检查零转换 */
                     compile_int_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_INT_ARRAY_LIT, 1, n);  /* a=1: 从 int 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int 栈读取 */
                 } else if(elem_type == VAL_DOUBLE && all_double_vars(c, node->u.array_lit.elems)) {
                     /* 所有元素都是声明为 double 类型的变量：使用 OPC_LOAD_DOUBLE_VAR 压入 double 栈，
                        OPC_DOUBLE_ARRAY_LIT(a=1) 从 double 栈读取，实现零检查零转换 */
                     compile_double_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_DOUBLE_ARRAY_LIT, 1, n);  /* a=1: 从 double 栈读取 */
                 } else if(elem_type == VAL_FLOAT && all_float_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 float 类型的变量：使用 OPC_LOAD_FLOAT_VAR 压入 float 栈，
-                       OPC_FLOAT_ARRAY_LIT(a=1) 从 float 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 float 类型的变量：使用 OPC_LOAD_DOUBLE_VAR 压入 float 栈，
+                       OPC_DOUBLE_ARRAY_LIT(a=1) 从 float 栈读取，实现零检查零转换 */
                     compile_float_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_FLOAT_ARRAY_LIT, 1, n);  /* a=1: 从 float 栈读取 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 1, n);  /* a=1: 从 float 栈读取 */
                 } else if(elem_type == VAL_UINT32 && all_uint_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 uint 类型的变量：使用 OPC_LOAD_UINT_VAR 压入 uint 栈，
-                       OPC_UINT_ARRAY_LIT(a=1) 从 uint 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 uint 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 uint 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 uint 栈读取，实现零检查零转换 */
                     compile_uint_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_UINT_ARRAY_LIT, 1, n);  /* a=1: 从 uint 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint 栈读取 */
                 } else if(elem_type == VAL_BOOL && all_bool_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 bool 类型的变量：使用 OPC_LOAD_BOOL_VAR 压入 bool 栈，
-                       OPC_BOOL_ARRAY_LIT(a=1) 从 bool 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 bool 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 bool 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 bool 栈读取，实现零检查零转换 */
                     compile_bool_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_BOOL_ARRAY_LIT, 1, n);  /* a=1: 从 bool 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 bool 栈读取 */
                 } else if(elem_type == VAL_CHAR && all_char_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 char 类型的变量：使用 OPC_LOAD_CHAR_VAR 压入 char 栈，
-                       OPC_CHAR_ARRAY_LIT(a=1) 从 char 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 char 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 char 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 char 栈读取，实现零检查零转换 */
                     compile_char_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_CHAR_ARRAY_LIT, 1, n);  /* a=1: 从 char 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 char 栈读取 */
                 } else if(elem_type == VAL_BYTE && all_byte_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 byte 类型的变量：使用 OPC_LOAD_BYTE_VAR 压入 byte 栈，
-                       OPC_BYTE_ARRAY_LIT(a=1) 从 byte 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 byte 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 byte 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 byte 栈读取，实现零检查零转换 */
                     compile_byte_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_BYTE_ARRAY_LIT, 1, n);  /* a=1: 从 byte 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 byte 栈读取 */
                 } else if(elem_type == VAL_INT8 && all_int8_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 int8 类型的变量：使用 OPC_LOAD_INT8_VAR 压入 int8 栈，
-                       OPC_INT8_ARRAY_LIT(a=1) 从 int8 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 int8 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 int8 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 int8 栈读取，实现零检查零转换 */
                     compile_int8_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_INT8_ARRAY_LIT, 1, n);  /* a=1: 从 int8 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int8 栈读取 */
                 } else if(elem_type == VAL_INT16 && all_int16_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 int16 类型的变量：使用 OPC_LOAD_INT16_VAR 压入 int16 栈，
-                       OPC_INT16_ARRAY_LIT(a=1) 从 int16 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 int16 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 int16 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 int16 栈读取，实现零检查零转换 */
                     compile_int16_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_INT16_ARRAY_LIT, 1, n);  /* a=1: 从 int16 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int16 栈读取 */
                 } else if(elem_type == VAL_INT32 && all_int32_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 int32 类型的变量：使用 OPC_LOAD_INT32_VAR 压入 int32 栈，
-                       OPC_INT32_ARRAY_LIT(a=1) 从 int32 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 int32 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 int32 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 int32 栈读取，实现零检查零转换 */
                     compile_int32_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_INT32_ARRAY_LIT, 1, n);  /* a=1: 从 int32 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int32 栈读取 */
                 } else if(elem_type == VAL_INT64 && all_int64_vars(c, node->u.array_lit.elems)) {
                     /* 所有元素都是声明为 int64 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 int64 栈，
                        OPC_INT64_ARRAY_LIT(a=1) 从 int64 栈读取，实现零检查零转换 */
                     compile_int64_array_elems(c, node->u.array_lit.elems, &n);
                     emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 int64 栈读取 */
                 } else if(elem_type == VAL_UINT8 && all_uint8_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 uint8 类型的变量：使用 OPC_LOAD_UINT8_VAR 压入 uint8 栈，
-                       OPC_UINT8_ARRAY_LIT(a=1) 从 uint8 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 uint8 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 uint8 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 uint8 栈读取，实现零检查零转换 */
                     compile_uint8_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_UINT8_ARRAY_LIT, 1, n);  /* a=1: 从 uint8 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint8 栈读取 */
                 } else if(elem_type == VAL_UINT16 && all_uint16_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 uint16 类型的变量：使用 OPC_LOAD_UINT16_VAR 压入 uint16 栈，
-                       OPC_UINT16_ARRAY_LIT(a=1) 从 uint16 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 uint16 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 uint16 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 uint16 栈读取，实现零检查零转换 */
                     compile_uint16_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_UINT16_ARRAY_LIT, 1, n);  /* a=1: 从 uint16 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint16 栈读取 */
                 } else if(elem_type == VAL_UINT32 && all_uint32_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 uint32 类型的变量：使用 OPC_LOAD_UINT32_VAR 压入 uint32 栈，
-                       OPC_UINT32_ARRAY_LIT(a=1) 从 uint32 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 uint32 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 uint32 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 uint32 栈读取，实现零检查零转换 */
                     compile_uint32_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_UINT32_ARRAY_LIT, 1, n);  /* a=1: 从 uint32 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint32 栈读取 */
                 } else if(elem_type == VAL_UINT64 && all_uint64_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 uint64 类型的变量：使用 OPC_LOAD_UINT64_VAR 压入 uint64 栈，
-                       OPC_UINT64_ARRAY_LIT(a=1) 从 uint64 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 uint64 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 uint64 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 uint64 栈读取，实现零检查零转换 */
                     compile_uint64_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_UINT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint64 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 uint64 栈读取 */
                 } else if(elem_type == VAL_LONG && all_long_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 long 类型的变量：使用 OPC_LOAD_LONG_VAR 压入 long 栈，
-                       OPC_LONG_ARRAY_LIT(a=1) 从 long 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 long 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 long 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 long 栈读取，实现零检查零转换 */
                     compile_long_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_LONG_ARRAY_LIT, 1, n);  /* a=1: 从 long 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 long 栈读取 */
                 } else if(elem_type == VAL_ULONG && all_ulong_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 unsigned long 类型的变量：使用 OPC_LOAD_ULONG_VAR 压入 unsigned long 栈，
-                       OPC_ULONG_ARRAY_LIT(a=1) 从 unsigned long 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 unsigned long 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 unsigned long 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 unsigned long 栈读取，实现零检查零转换 */
                     compile_ulong_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_ULONG_ARRAY_LIT, 1, n);  /* a=1: 从 unsigned long 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 unsigned long 栈读取 */
                 } else if(elem_type == VAL_SIZE_T && all_size_t_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 size_t 类型的变量：使用 OPC_LOAD_SIZE_T_VAR 压入 size_t 栈，
-                       OPC_SIZE_T_ARRAY_LIT(a=1) 从 size_t 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 size_t 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 size_t 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 size_t 栈读取，实现零检查零转换 */
                     compile_size_t_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_SIZE_T_ARRAY_LIT, 1, n);  /* a=1: 从 size_t 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 size_t 栈读取 */
                 } else if(elem_type == VAL_SSIZE_T && all_ssize_t_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 ssize_t 类型的变量：使用 OPC_LOAD_SSIZE_T_VAR 压入 ssize_t 栈，
-                       OPC_SSIZE_T_ARRAY_LIT(a=1) 从 ssize_t 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 ssize_t 类型的变量：使用 OPC_LOAD_INT64_VAR 压入 ssize_t 栈，
+                       OPC_INT64_ARRAY_LIT(a=1) 从 ssize_t 栈读取，实现零检查零转换 */
                     compile_ssize_t_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_SSIZE_T_ARRAY_LIT, 1, n);  /* a=1: 从 ssize_t 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 1, n);  /* a=1: 从 ssize_t 栈读取 */
                 } else if(elem_type == VAL_LONG_DOUBLE && all_long_double_vars(c, node->u.array_lit.elems)) {
-                    /* 所有元素都是声明为 long double 类型的变量：使用 OPC_LOAD_LONG_DOUBLE_VAR 压入 long double 栈，
-                       OPC_LONG_DOUBLE_ARRAY_LIT(a=1) 从 long double 栈读取，实现零检查零转换 */
+                    /* 所有元素都是声明为 long double 类型的变量：使用 OPC_LOAD_DOUBLE_VAR 压入 long double 栈，
+                       OPC_DOUBLE_ARRAY_LIT(a=1) 从 long double 栈读取，实现零检查零转换 */
                     compile_long_double_array_elems(c, node->u.array_lit.elems, &n);
-                    emit(c, OPC_LONG_DOUBLE_ARRAY_LIT, 1, n);  /* a=1: 从 long double 栈读取 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 1, n);  /* a=1: 从 long double 栈读取 */
                 } else {
                     /* 混合场景：使用普通 c_args 编译压入 Value 栈，
-                       OPC_INT_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_FLOAT_ARRAY_LIT(a=0)/OPC_UINT_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
+                       OPC_INT64_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_DOUBLE_ARRAY_LIT(a=0)/OPC_INT64_ARRAY_LIT(a=0) 从 Value 栈读取，内联类型转换 */
                     c_args(c, node->u.array_lit.elems, &n);
                     if(elem_type == VAL_INT) {
-                        emit(c, OPC_INT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_DOUBLE) {
                         emit(c, OPC_DOUBLE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_FLOAT) {
-                        emit(c, OPC_FLOAT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT32) {
-                        emit(c, OPC_UINT_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_BOOL) {
-                        emit(c, OPC_BOOL_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_CHAR) {
-                        emit(c, OPC_CHAR_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_BYTE) {
-                        emit(c, OPC_BYTE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_INT8) {
-                        emit(c, OPC_INT8_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_INT16) {
-                        emit(c, OPC_INT16_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_INT32) {
-                        emit(c, OPC_INT32_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_INT64) {
                         emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT8) {
-                        emit(c, OPC_UINT8_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT16) {
-                        emit(c, OPC_UINT16_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT32) {
-                        emit(c, OPC_UINT32_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_UINT64) {
-                        emit(c, OPC_UINT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_LONG) {
-                        emit(c, OPC_LONG_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_ULONG) {
-                        emit(c, OPC_ULONG_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_SIZE_T) {
-                        emit(c, OPC_SIZE_T_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_SSIZE_T) {
-                        emit(c, OPC_SSIZE_T_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_INT64_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else if(elem_type == VAL_LONG_DOUBLE) {
-                        emit(c, OPC_LONG_DOUBLE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
+                        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, n);  /* a=0: 从 Value 栈读取 */
                     } else {
                         emit(c, OPC_ARRAY_LIT, elem_type, n);
                     }
                 }
             } else {
                 if(elem_type == VAL_INT) {
-                    emit(c, OPC_INT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_DOUBLE) {
                     emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_FLOAT) {
-                    emit(c, OPC_FLOAT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT32) {
-                    emit(c, OPC_UINT_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_BOOL) {
-                    emit(c, OPC_BOOL_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_CHAR) {
-                    emit(c, OPC_CHAR_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_BYTE) {
-                    emit(c, OPC_BYTE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_INT8) {
-                    emit(c, OPC_INT8_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_INT16) {
-                    emit(c, OPC_INT16_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_INT32) {
-                    emit(c, OPC_INT32_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_INT64) {
                     emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT8) {
-                    emit(c, OPC_UINT8_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT16) {
-                    emit(c, OPC_UINT16_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT32) {
-                    emit(c, OPC_UINT32_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_UINT64) {
-                    emit(c, OPC_UINT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_LONG) {
-                    emit(c, OPC_LONG_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_ULONG) {
-                    emit(c, OPC_ULONG_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_SIZE_T) {
-                    emit(c, OPC_SIZE_T_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_SSIZE_T) {
-                    emit(c, OPC_SSIZE_T_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_INT64_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else if(elem_type == VAL_LONG_DOUBLE) {
-                    emit(c, OPC_LONG_DOUBLE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
+                    emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);  /* a=0: 从 Value 栈读取 */
                 } else {
                     emit(c, OPC_ARRAY_LIT, elem_type, 0);
                 }
@@ -4323,96 +4323,96 @@ void c_expr(Ctx* c, AstNode* node)
                 if(c->fn->var_type_tags && var_idx >= 0 && var_idx < c->fn->sym_cnt) {
                     int tag = c->fn->var_type_tags[var_idx];
                     if(tag == CAST_INT) {
-                        emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_FLOAT) {
-                        emit(c, OPC_LOAD_FLOAT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_UINT32) {
-                        emit(c, OPC_LOAD_UINT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONGLONG) {
-                        emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_LONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
-                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_BOOL) {
-                        emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_BOOL, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_CHAR) {
-                        emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_CHAR, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_BYTE) {
-                        emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_BYTE, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT8) {
-                        emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT8, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT16) {
-                        emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT16, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SHORT) {
-                        emit(c, OPC_LOAD_SHORT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SHORT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT32) {
-                        emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT32, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT64) {
                         emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT8) {
-                        emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT8, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT16) {
-                        emit(c, OPC_LOAD_UINT16_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT16, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT32) {
-                        emit(c, OPC_LOAD_UINT32_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT32, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT64) {
-                        emit(c, OPC_LOAD_UINT64_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT64, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG) {
-                        emit(c, OPC_LOAD_LONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_ULONG) {
-                        emit(c, OPC_LOAD_ULONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_ULONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SIZE_T) {
-                        emit(c, OPC_LOAD_SIZE_T_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SIZE_T, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SSIZE_T) {
-                        emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SSIZE_T, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
-                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
                         break;
                     }
                 }
@@ -4523,14 +4523,14 @@ static void c_stmt(Ctx* c, AstNode* node)
                     if(is_double_typed_array_var(c, arr->u.varname)) {
                         c_expr(c, arr);
                         c_expr(c, idx);
-                        emit(c, OPC_DOUBLE_ARRAY_GET, 0, 0);
+                        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
                         emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(is_float_typed_array_var(c, arr->u.varname)) {
                         c_expr(c, arr);
                         c_expr(c, idx);
-                        emit(c, OPC_FLOAT_ARRAY_GET, 0, 0);
-                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        emit(c, OPC_DOUBLE_ARRAY_LIT, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     }
                 }
@@ -4564,45 +4564,45 @@ static void c_stmt(Ctx* c, AstNode* node)
                     }
                     if(result_type == EXPR_TYPE_INT) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_INT, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_UINT) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_FLOAT) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_DOUBLE) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_LONG_LONG) {
-                        /* long long 类型算术运算结果：直接生成 OPC_PRINT_LONG_LONG */
+                        /* long long 类型算术运算结果：直接生成 OPC_PRINT_INT64 */
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_LONG_LONG, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
-                        /* long double 类型算术运算结果：直接生成 OPC_PRINT_LONG_DOUBLE */
+                        /* long double 类型算术运算结果：直接生成 OPC_PRINT_INT64_DOUBLE */
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_SHORT) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_SHORT, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT8) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_INT8, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT16) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_INT16, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT32) {
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_INT32, 0, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT64) {
                         c_expr(c, single_arg);
@@ -4624,92 +4624,92 @@ static void c_stmt(Ctx* c, AstNode* node)
                 if(c->fn->var_type_tags && var_idx >= 0 && var_idx < c->fn->sym_cnt) {
                     int tag = c->fn->var_type_tags[var_idx];
                     if(tag == CAST_INT) {
-                        emit(c, OPC_LOAD_INT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_FLOAT) {
-                        emit(c, OPC_LOAD_FLOAT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_FLOAT, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_UINT32) {
-                        emit(c, OPC_LOAD_UINT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONGLONG) {
-                        emit(c, OPC_LOAD_LONG_LONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_LONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
-                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_BOOL) {
-                        emit(c, OPC_LOAD_BOOL_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_BOOL, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_CHAR) {
-                        emit(c, OPC_LOAD_CHAR_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_CHAR, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_BYTE) {
-                        emit(c, OPC_LOAD_BYTE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_BYTE, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT8) {
-                        emit(c, OPC_LOAD_INT8_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT8, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT16) {
-                        emit(c, OPC_LOAD_INT16_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT16, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SHORT) {
-                        emit(c, OPC_LOAD_SHORT_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SHORT, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT32) {
-                        emit(c, OPC_LOAD_INT32_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT32, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_INT64) {
                         emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
                         emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT8) {
-                        emit(c, OPC_LOAD_UINT8_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT8, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT16) {
-                        emit(c, OPC_LOAD_UINT16_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT16, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_UINT64) {
-                        emit(c, OPC_LOAD_UINT64_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_UINT64, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG) {
-                        emit(c, OPC_LOAD_LONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_ULONG) {
-                        emit(c, OPC_LOAD_ULONG_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_ULONG, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SIZE_T) {
-                        emit(c, OPC_LOAD_SIZE_T_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SIZE_T, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_SSIZE_T) {
-                        emit(c, OPC_LOAD_SSIZE_T_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_SSIZE_T, 0, 0);
+                        emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
-                        emit(c, OPC_LOAD_LONG_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
+                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
                         break;
                     }
                 }
