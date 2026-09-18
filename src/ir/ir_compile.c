@@ -130,9 +130,23 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_CAST: {
-        /* 类型标注 <type>expr：编译子表达式，标记类型 */
+        /* 类型强转 (type)expr：编译子表达式，根据目标类型 emit 转换指令 */
         ExprType child_type = c_expr(c, node->u.cast.child);
         CastKind ct = node->u.cast.cast_type;
+        CastKind child_ct = c_expr_cast_type(c, node->u.cast.child);
+        /* 转成 string：根据源类型选择转换指令 */
+        if(ct == CAST_STRING) {
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
+                emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
+                emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+            }
+            return EXPR_TYPE_PTR;
+        }
         /* 根据 CastKind 返回表达式类型 */
         if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
            ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_UINT8 || ct == CAST_UINT16 ||
@@ -140,8 +154,6 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_INT;
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
             return EXPR_TYPE_DOUBLE;
-        } else if(ct == CAST_STRING) {
-            return EXPR_TYPE_PTR;
         }
         return child_type;
     }
@@ -295,6 +307,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
                 } else if(lt == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             }
@@ -306,6 +320,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
                 } else if(rt == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             }
@@ -328,6 +344,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
                 } else if(lt == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             }
@@ -339,6 +357,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
                 } else if(rt == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             }
@@ -527,8 +547,11 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt = c_expr_cast_type(c, node->u.bin.right);
         /* 高精度类型优先级最高：decimal/bigint 会把 double 提升 */
-        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
+        /* 注意：bigint 检查在 decimal 之前（与 c_expr 中的分支顺序一致） */
         if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
+        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
+        /* 字符串运算：+ 拼接，任何类型 + string 结果都是 string */
+        if(node->u.bin.op == OP_ADD && (lt == CAST_STRING || rt == CAST_STRING)) return CAST_STRING;
         /* 其次是浮点类型 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
