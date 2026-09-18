@@ -652,9 +652,13 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
     
     case AST_SEQ: {
-        /* 语句序列 */
-        c_stmt(c, node->u.seq.first);
-        c_stmt(c, node->u.seq.second);
+        /* 语句序列：迭代遍历，避免长链表导致栈溢出 */
+        AstNode* cur = node;
+        while(cur && cur->type == AST_SEQ) {
+            c_stmt(c, cur->u.seq.first);
+            cur = cur->u.seq.second;
+        }
+        if(cur) c_stmt(c, cur);
         break;
     }
     

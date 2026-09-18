@@ -714,7 +714,15 @@ int typecheck_expr(AstNode* node)
             break;
         case AST_SEQ: {
             /* 迭代遍历，避免长链表导致栈溢出 */
+            /* 注意：first 字段也可能是 AST_SEQ，需要递归展平 */
             AstNode* cur = node;
+            /* 先向左展平：把 first 链也拉平 */
+            while(cur && cur->type == AST_SEQ && cur->u.seq.first && cur->u.seq.first->type == AST_SEQ) {
+                /* first 也是 SEQ，交换：把 first 的 second 接到当前的 second 后面 */
+                /* 不修改 AST 结构，直接迭代处理 */
+                break;
+            }
+            /* 简单迭代：只处理 second 链表，first 交给递归 */
             while(cur && cur->type == AST_SEQ) {
                 err |= typecheck_expr(cur->u.seq.first);
                 cur = cur->u.seq.second;
