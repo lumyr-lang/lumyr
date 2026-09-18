@@ -9,38 +9,53 @@
 #include <string.h>
 
 /* ============================================================
- * 全局函数表（简化版：用数组存储）
+ * 全局函数表（红黑树存储，无硬上限）
+ * 支持：普通函数、类方法、静态方法、构造函数
+ * 键：(class_name, method_name) 复合键
  * ============================================================ */
 
-#define FUNC_TABLE_CAP 1024
-static BytecodeFunc* g_func_table[FUNC_TABLE_CAP];
-static int g_func_cnt = 0;
+#include "rbtree.h"
+
+static RBTree* g_func_tree = NULL;
+
+/* 初始化函数表 */
+static void func_table_init(void) {
+    if(!g_func_tree) {
+        g_func_tree = rbtree_create();
+    }
+}
 
 void ir_func_table_reset(void) {
-    g_func_cnt = 0;
-    memset(g_func_table, 0, sizeof(g_func_table));
+    if(g_func_tree) {
+        rbtree_destroy(g_func_tree);
+        g_func_tree = NULL;
+    }
+    func_table_init();
 }
 
 BytecodeFunc* ir_func_table_lookup(const char* name) {
-    for(int i = 0; i < g_func_cnt; i++) {
-        if(g_func_table[i] && g_func_table[i]->name && strcmp(g_func_table[i]->name, name) == 0) {
-            return g_func_table[i];
-        }
-    }
-    return NULL;
+    func_table_init();
+    return (BytecodeFunc*)rbtree_find(g_func_tree, NULL, name);
 }
 
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name) {
-    (void)class_name; (void)method_name;
-    return NULL;
+    func_table_init();
+    return (BytecodeFunc*)rbtree_find(g_func_tree, class_name, method_name);
 }
 
 BytecodeFunc* ir_func_table_lookup_any(const char* name) {
-    return ir_func_table_lookup(name);
+    func_table_init();
+    /* 先查找普通函数 */
+    BytecodeFunc* fn = (BytecodeFunc*)rbtree_find(g_func_tree, NULL, name);
+    if(fn) return fn;
+    /* 再查找任意类的方法（简化：只查第一个匹配） */
+    /* TODO: 红黑树支持前缀查找 */
+    return NULL;
 }
 
 void ir_func_table_foreach(void (*callback)(const char*, const char*, void*, void*), void* user_data) {
-    (void)callback; (void)user_data;
+    func_table_init();
+    rbtree_foreach(g_func_tree, callback, user_data);
 }
 
 /* ============================================================
@@ -83,14 +98,15 @@ void c_expr(Ctx* c, AstNode* node) {
  * ============================================================ */
 
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name) {
-    (void)params; (void)body; (void)is_generator; (void)class_name;
+    (void)params; (void)body; (void)is_generator;
+    
+    func_table_init();
     
     BytecodeFunc* fn = calloc(1, sizeof(BytecodeFunc));
     fn->name = strdup(name);
     
-    if(g_func_cnt < FUNC_TABLE_CAP) {
-        g_func_table[g_func_cnt++] = fn;
-    }
+    /* 插入红黑树：class_name 为 NULL 表示普通函数 */
+    rbtree_insert(g_func_tree, class_name, name, fn);
     
     return fn;
 }
