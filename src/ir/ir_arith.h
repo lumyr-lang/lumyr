@@ -89,3 +89,6 @@ void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, ExprType re
 int arith_handle_print_result(Ctx* c, AstNode* single_arg, ExprType result_type);
 
 #endif /* LUMYR_IR_ARITH_H */
+
+/* 获取变量类型标记（定义在 ir_arith.c） */
+CastKind get_var_cast_type(Ctx* c, const char* name);
