@@ -19,6 +19,11 @@ Value vm_execute(VMExecCtx* ctx);
 Value vm_run(BytecodeFunc* fn) {
     if(!fn) return val_none();
 
+    /* 初始化栈管理器（程序启动时就初始化） */
+    if (!g_stack_mgr) {
+        stack_global_init(1024);
+    }
+
     VMExecCtx ctx = {0};
     ctx.fn = fn;
     ctx.code = fn->code;
