@@ -1,6 +1,0 @@
-a = <uint8>200;
-b = <uint8>250;
-c = a;
-print(a);
-print(b);
-print(c);

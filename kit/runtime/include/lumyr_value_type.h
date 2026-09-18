@@ -1,6 +1,7 @@
 #ifndef LUMYR_VALUE_TYPE_H
 #define LUMYR_VALUE_TYPE_H
 
+#include <string.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/types.h>   /* ssize_t（POSIX，macOS/Linux 需要） */
@@ -9,11 +10,11 @@ typedef struct Value Value;
 typedef struct EvalCtx EvalCtx;
 typedef struct MapEntry MapEntry;
 typedef struct ValueMap ValueMap;
-// ✅ 新增前置声明：FuncEntry 参数需要 StackFrame*，此时还没完整定义 StackFrame
+// 新增前置声明：FuncEntry 参数需要 StackFrame*，此时还没完整定义 StackFrame
 typedef struct StackFrame StackFrame;
 typedef struct FFIFunc FFIFunc;
 
-// ✅ 修改：函数入口回调类型，新增 StackFrame* frame 参数
+// 修改：函数入口回调类型，新增 StackFrame* frame 参数
 // 函数原型类型，RuntimeFunc.entry 使用 FuncEntry*
 typedef Value (FuncEntry)(int arg_cnt, const Value* args, EvalCtx* ctx, StackFrame* frame);
 
@@ -246,41 +247,16 @@ struct EvalCtx {
 typedef struct StackFrame {
     char** names;    // 动态：按需扩容，无硬上限
     Value* vals;
-    /* 类型化变量存储（与 names/vals 平行数组）
-       声明为对应类型的变量同时存储在 vals（作为 Value）和类型化数组（作为原始值）
-       OPC_LOAD_*_VAR 直接从类型化数组读取，实现零提取、零类型检查
-       覆盖所有 C 标准类型，与 CastKind 枚举对齐 */
-    /* 基础整数类型 */
-    int* int_vals;                 /* int 类型变量 */
-    long long* longlong_vals;      /* long long 类型变量（64位有符号） */
-    long* long_vals;               /* long 类型变量（平台相关） */
-    short* short_vals;             /* short 类型变量（16位有符号） */
-    /* 固定宽度有符号整数 */
-    int8_t* int8_vals;             /* int8_t / signed char */
-    int16_t* int16_vals;           /* int16_t / short */
-    int32_t* int32_vals;           /* int32_t / int */
-    int64_t* int64_vals;           /* int64_t / long long */
-    /* 固定宽度无符号整数 */
-    uint8_t* uint8_vals;           /* uint8_t / unsigned char / byte */
-    uint16_t* uint16_vals;         /* uint16_t / unsigned short */
-    uint32_t* uint32_vals;         /* uint32_t / unsigned int */
-    uint64_t* uint64_vals;         /* uint64_t / unsigned long long */
-    /* 其他无符号整数 */
-    unsigned char* uchar_vals;     /* unsigned char */
-    unsigned short* ushort_vals;   /* unsigned short */
-    unsigned long* ulong_vals;     /* unsigned long */
-    size_t* size_t_vals;           /* size_t（无符号整数，平台相关） */
-    ssize_t* ssize_t_vals;         /* ssize_t（有符号整数，平台相关） */
-    /* 浮点类型 */
-    float* float_vals;              /* float（32位单精度） */
-    double* double_vals;            /* double（64位双精度） */
-    long double* longdouble_vals;   /* long double（扩展精度） */
-    /* 其他基础类型 */
-    _Bool* bool_vals;               /* bool 类型变量 */
-    char* char_vals;                /* char 类型变量 */
-    unsigned char* byte_vals;       /* byte 类型变量（uint8_t，与 uint8_vals 同义） */
-    char** string_vals;             /* string 类型变量（char* 指针，引用语义） */
-    void** ptr_vals;                /* 指针/句柄类型变量（void* 指针） */
+    /* 宽槽变量存储（工业级合并风格）
+       不再为每个 C 类型开独立数组，而是合并为 3 个统一槽：
+       - int_slots：所有整数类型（bool/char/byte/int8~int64/uint8~uint64/
+         long/ulong/size_t/ssize_t/short）统一存为 int64_t，读时按 type_tags 截断
+       - flt_slots：所有浮点类型（float/double/long double）统一存为 double
+       - ptr_slots：所有指针类型（char star / void star）统一存为 void*
+       栈帧创建/扩容从 20+ 次 malloc 降为 3 次，高并发下内存与分配开销大幅降低 */
+    int64_t* int_slots;    /* 整数槽（所有整数/布尔/字符类型） */
+    double*  flt_slots;    /* 浮点槽（float/double/long double） */
+    void**   ptr_slots;    /* 指针槽（char star / void star / 句柄） */
     int cnt;
     int cap;
     struct StackFrame* parent;
@@ -296,7 +272,7 @@ typedef struct StackFrame {
     CastKind* type_tags;   /* 变量类型标记（CastKind 枚举，-1 表示无精确类型），与 names/vals 平行数组 */
 } StackFrame;
 
-#include <string.h>
+
 
 // 获取字符串的C指针（内联返回sso.data，堆返回v.s），非字符串返回NULL
 static inline const char* lumyr_str_cstr(const Value* v) {

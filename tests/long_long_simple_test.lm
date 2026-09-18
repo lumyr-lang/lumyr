@@ -1,7 +1,0 @@
-// long long 简单测试
-func main() {
-    a = <long long>100;
-    print(a);
-    b = <long long>200;
-    print(b);
-}

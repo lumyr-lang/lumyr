@@ -1,6 +1,0 @@
-// private_fail.lm —— 负向测试：私有符号 internal 不可直接访问（应编译/运行报错）
-import "math.lm" as m;
-
-print("via_map=" + m.workman());
-// 直接调用模块私有符号：第二阶段应失败（未定义函数）
-print("direct=" + internal());

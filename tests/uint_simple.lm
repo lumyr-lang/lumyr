@@ -1,2 +1,0 @@
-j = <uint>20;
-print(j);

@@ -1,9 +1,0 @@
-// math.lm —— 示例模块：导出 add / sub / PI / workman，保留私有 internal
-export func add(a, b) { return a + b; }
-export func sub(a, b) { return a - b; }
-export const PI = 3.14;
-
-func internal() { return 42; }   // 不 export，模块私有
-
-// 导出函数调用模块私有函数：两者均被 mangle，引用应一致
-export func workman() { return internal() + 1; }

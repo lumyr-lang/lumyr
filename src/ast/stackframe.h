@@ -33,37 +33,37 @@ int stackframe_get_int(StackFrame* f, const char* name, _Bool* found);
 
 // 获取 int 类型变量的原始指针，用于自增自减等直接操作
 // 返回 NULL 表示未找到或不是 int 类型
-int* stackframe_get_int_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_int_ptr(StackFrame* f, const char* name);
 
 // 获取 int8 类型变量的原始指针
-int8_t* stackframe_get_int8_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_int8_ptr(StackFrame* f, const char* name);
 
 // 获取 int16 类型变量的原始指针
-int16_t* stackframe_get_int16_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_int16_ptr(StackFrame* f, const char* name);
 
 // 获取 short 类型变量的原始指针
-short* stackframe_get_short_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_short_ptr(StackFrame* f, const char* name);
 
 // 获取 int32 类型变量的原始指针
-int32_t* stackframe_get_int32_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_int32_ptr(StackFrame* f, const char* name);
 
 // 获取 int64 类型变量的原始指针
 int64_t* stackframe_get_int64_ptr(StackFrame* f, const char* name);
 
 // 获取 uint 类型变量的原始指针
-unsigned int* stackframe_get_uint_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_uint_ptr(StackFrame* f, const char* name);
 
 // 获取 uint8 类型变量的原始指针
-uint8_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name);
 
 // 获取 uint16 类型变量的原始指针
-uint16_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name);
 
 // 获取 uint32 类型变量的原始指针
-uint32_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name);
 
 // 获取 uint64 类型变量的原始指针
-uint64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name);
+int64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name);
 
 // 绑定语义（参数绑定用）：只在当前帧查找/创建，不向上查找，遮蔽父帧同名变量
 void stackframe_bind(StackFrame* f, const char* name, Value v);

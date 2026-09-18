@@ -1,6 +1,0 @@
-a = <ssize_t>-100000;
-b = <ssize_t>200000;
-c = a;
-print(a);
-print(b);
-print(c);

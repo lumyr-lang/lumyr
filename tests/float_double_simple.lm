@@ -1,4 +1,0 @@
-g = <float>1.5;
-h = <double>2.5;
-i = g + h;
-print(i);

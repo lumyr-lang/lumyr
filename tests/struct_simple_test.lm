@@ -1,8 +1,0 @@
-// 简单的 struct 测试
-struct Point { x: int; y: int; }
-
-print("start");
-p = Point(10, 20);
-print("p.x:", p.x);
-print("p.y:", p.y);
-print("done");

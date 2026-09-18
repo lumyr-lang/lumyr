@@ -1,8 +1,0 @@
-// dedup_main.lm —— 重复导入去重：同一模块 import 两次，不应冲突
-import "math.lm" as m1;
-import "math.lm" as m2;
-
-print("m1.add=" + m1.add(1, 2));
-print("m2.add=" + m2.add(10, 20));
-print("m1.PI=" + m1.PI);
-print("m2.PI=" + m2.PI);

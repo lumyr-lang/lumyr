@@ -1,6 +1,0 @@
-// int32 简单测试
-e = <int32>1000;
-f = <int32>300;
-print(e);
-print(f);
-print(e + f);

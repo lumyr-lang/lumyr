@@ -123,20 +123,20 @@ long long range_to_ll(Value v);       // range 参数转 long long
 
 // ===== 类型化自增自减（直接操作原始指针，零转换开销） =====
 /* 有符号整数 */
-void int_inc(int* v);
-void int8_inc(int8_t* v);
-void int16_inc(int16_t* v);
-void int32_inc(int32_t* v);
+void int_inc(int64_t* v);
+void int8_inc(int64_t* v);
+void int16_inc(int64_t* v);
+void int32_inc(int64_t* v);
 void int64_inc(int64_t* v);
 void long_inc(long* v);
 void short_inc(short* v);
 
 /* 无符号整数 */
-void uint_inc(unsigned int* v);
-void uint8_inc(uint8_t* v);
-void uint16_inc(uint16_t* v);
-void uint32_inc(uint32_t* v);
-void uint64_inc(uint64_t* v);
+void uint_inc(int64_t* v);
+void uint8_inc(int64_t* v);
+void uint16_inc(int64_t* v);
+void uint32_inc(int64_t* v);
+void uint64_inc(int64_t* v);
 void ulong_inc(unsigned long* v);
 void ushort_inc(unsigned short* v);
 void byte_inc(unsigned char* v);

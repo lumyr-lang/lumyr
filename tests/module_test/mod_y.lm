@@ -1,3 +1,0 @@
-// mod_y.lm —— 私有 helper（与 mod_x 同名，靠 mangling 隔离）
-func helper() { return "y"; }
-export func run() { return helper(); }

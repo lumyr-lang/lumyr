@@ -1,6 +1,0 @@
-a = <byte>65;
-b = <byte>66;
-c = a;
-print(a);
-print(b);
-print(c);

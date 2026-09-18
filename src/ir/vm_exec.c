@@ -12,6 +12,7 @@
 #include "vm_types.h"
 #include "lumyr_log.h"
 #include "ir_compile.h"
+#include "bytecode.h"
 #include "lumyr_ffi.h"
 #include "ast/stackframe.h"
 #include "ast/func_compile.h"
@@ -183,12 +184,13 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                         break;
         }
         Instruction in = bf->code[pc++];
-        fprintf(stderr, "[VM] pc=%d, op=%d, a=%d, b=%d, sp=%d, value_sp=%d, int_sp=%d, double_sp=%d, ld_sp=%d\n", 
-                pc-1, (int)in.op, in.a, in.b, sp,
+		LOG_DEBUG("[VM] pc=%d, op=%s, a=%d, b=%d, sp=%d, value_sp=%d, int_sp=%d, double_sp=%d, ld_sp=%d\n", 
+                pc-1, opc_name(in.op), in.a, in.b, sp,
                 (g_stack_mgr ? *stack_global_get_sp(STACK_VALUE) : -1),
                 (g_stack_mgr ? *stack_global_get_sp(STACK_INT) : -1),
                 (g_stack_mgr ? *stack_global_get_sp(STACK_DOUBLE) : -1),
                 (g_stack_mgr ? *stack_global_get_sp(STACK_LONG_DOUBLE) : -1));
+        
                 switch(in.op) {
             case OPC_NOP:
                 break;
@@ -1236,21 +1238,21 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                  Value __nv;
                                  switch(ttag) {
                                      case CAST_INT: {
-                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int_ptr(frame, n);
                                          if(!p) { /* 回退到 Value 路径 */ goto inc_val_pre; }
                                          int_inc(p);
                                          __nv = lumyr_make_int(*p);
                                          break;
                                      }
                                      case CAST_INT8: {
-                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int8_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          int8_inc(p);
                                          __nv = lumyr_make_int8(*p);
                                          break;
                                      }
                                      case CAST_INT16: {
-                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int16_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          int16_inc(p);
                                          __nv = lumyr_make_int16(*p);
@@ -1258,7 +1260,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                      }
                                      /* CAST_SHORT 与 CAST_INT16 共用 int16_vals */
                                      case CAST_INT32: {
-                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int32_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          int32_inc(p);
                                          __nv = lumyr_make_int32(*p);
@@ -1272,35 +1274,35 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT: {
-                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          uint_inc(p);
                                          __nv = lumyr_make_uint(*p);
                                          break;
                                      }
                                      case CAST_UINT8: {
-                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint8_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          uint8_inc(p);
                                          __nv = lumyr_make_uint8(*p);
                                          break;
                                      }
                                      case CAST_UINT16: {
-                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint16_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          uint16_inc(p);
                                          __nv = lumyr_make_uint16(*p);
                                          break;
                                      }
                                      case CAST_UINT32: {
-                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint32_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          uint32_inc(p);
                                          __nv = lumyr_make_uint32(*p);
                                          break;
                                      }
                                      case CAST_UINT64: {
-                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint64_ptr(frame, n);
                                          if(!p) goto inc_val_pre;
                                          uint64_inc(p);
                                          __nv = lumyr_make_uint64(*p);
@@ -1322,7 +1324,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                  Value __old_v;
                                  switch(ttag) {
                                      case CAST_INT: {
-                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          int v = *p;
                                          int_inc(p);
@@ -1330,7 +1332,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT8: {
-                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int8_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          int8_t v = *p;
                                          int8_inc(p);
@@ -1338,7 +1340,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT16: {
-                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int16_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          int16_t v = *p;
                                          int16_inc(p);
@@ -1346,7 +1348,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT32: {
-                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int32_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          int32_t v = *p;
                                          int32_inc(p);
@@ -1362,7 +1364,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT: {
-                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          unsigned int v = *p;
                                          uint_inc(p);
@@ -1370,7 +1372,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT8: {
-                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint8_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          uint8_t v = *p;
                                          uint8_inc(p);
@@ -1378,7 +1380,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT16: {
-                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint16_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          uint16_t v = *p;
                                          uint16_inc(p);
@@ -1386,7 +1388,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT32: {
-                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint32_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          uint32_t v = *p;
                                          uint32_inc(p);
@@ -1394,7 +1396,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT64: {
-                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint64_ptr(frame, n);
                                          if(!p) goto inc_val_post;
                                          uint64_t v = *p;
                                          uint64_inc(p);
@@ -1417,28 +1419,28 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                  Value __nv;
                                  switch(ttag) {
                                      case CAST_INT: {
-                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          int_dec(p);
                                          __nv = lumyr_make_int(*p);
                                          break;
                                      }
                                      case CAST_INT8: {
-                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int8_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          int8_dec(p);
                                          __nv = lumyr_make_int8(*p);
                                          break;
                                      }
                                      case CAST_INT16: {
-                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int16_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          int16_dec(p);
                                          __nv = lumyr_make_int16(*p);
                                          break;
                                      }
                                      case CAST_INT32: {
-                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int32_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          int32_dec(p);
                                          __nv = lumyr_make_int32(*p);
@@ -1452,35 +1454,35 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT: {
-                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          uint_dec(p);
                                          __nv = lumyr_make_uint(*p);
                                          break;
                                      }
                                      case CAST_UINT8: {
-                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint8_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          uint8_dec(p);
                                          __nv = lumyr_make_uint8(*p);
                                          break;
                                      }
                                      case CAST_UINT16: {
-                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint16_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          uint16_dec(p);
                                          __nv = lumyr_make_uint16(*p);
                                          break;
                                      }
                                      case CAST_UINT32: {
-                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint32_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          uint32_dec(p);
                                          __nv = lumyr_make_uint32(*p);
                                          break;
                                      }
                                      case CAST_UINT64: {
-                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint64_ptr(frame, n);
                                          if(!p) goto dec_val_pre;
                                          uint64_dec(p);
                                          __nv = lumyr_make_uint64(*p);
@@ -1502,7 +1504,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                  Value __old_v;
                                  switch(ttag) {
                                      case CAST_INT: {
-                                         int* p = stackframe_get_int_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          int v = *p;
                                          int_dec(p);
@@ -1510,7 +1512,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT8: {
-                                         int8_t* p = stackframe_get_int8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int8_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          int8_t v = *p;
                                          int8_dec(p);
@@ -1518,7 +1520,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT16: {
-                                         int16_t* p = stackframe_get_int16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int16_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          int16_t v = *p;
                                          int16_dec(p);
@@ -1526,7 +1528,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_INT32: {
-                                         int32_t* p = stackframe_get_int32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_int32_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          int32_t v = *p;
                                          int32_dec(p);
@@ -1542,7 +1544,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT: {
-                                         unsigned int* p = stackframe_get_uint_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          unsigned int v = *p;
                                          uint_dec(p);
@@ -1550,7 +1552,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT8: {
-                                         uint8_t* p = stackframe_get_uint8_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint8_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          uint8_t v = *p;
                                          uint8_dec(p);
@@ -1558,7 +1560,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT16: {
-                                         uint16_t* p = stackframe_get_uint16_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint16_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          uint16_t v = *p;
                                          uint16_dec(p);
@@ -1566,7 +1568,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT32: {
-                                         uint32_t* p = stackframe_get_uint32_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint32_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          uint32_t v = *p;
                                          uint32_dec(p);
@@ -1574,7 +1576,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                                          break;
                                      }
                                      case CAST_UINT64: {
-                                         uint64_t* p = stackframe_get_uint64_ptr(frame, n);
+                                         int64_t* p = stackframe_get_uint64_ptr(frame, n);
                                          if(!p) goto dec_val_post;
                                          uint64_t v = *p;
                                          uint64_dec(p);

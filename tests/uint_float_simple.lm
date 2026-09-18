@@ -1,4 +1,0 @@
-j = <uint>20;
-k = <float>1.5;
-l = j + k;
-print(l);

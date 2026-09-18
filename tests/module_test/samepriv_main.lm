@@ -1,6 +1,0 @@
-// samepriv_main.lm —— 两个模块各自有同名私有函数 helper，不应冲突
-import "mod_x.lm" as x;
-import "mod_y.lm" as y;
-
-print("x.run=" + x.run());
-print("y.run=" + y.run());

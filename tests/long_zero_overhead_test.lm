@@ -1,6 +1,0 @@
-a = <long>100000;
-b = <long>200000;
-c = a;
-print(a);
-print(b);
-print(c);

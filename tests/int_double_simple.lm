@@ -1,4 +1,0 @@
-d = <int>10;
-e = <double>3.14;
-f = d + e;
-print(f);

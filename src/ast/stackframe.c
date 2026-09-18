@@ -16,30 +16,49 @@ static void slot_release(Value* v) {
     val_destroy(v);
 }
 
+/* 线程本地帧空闲链表：stackframe_new/destroy 不再 malloc/free，
+ * 而是从 TLS 空闲链表取出/放回。帧内数组（names/vals/int_slots 等）也保留复用，
+ * 高并发下每次函数调用省 6+ 次 malloc。 */
+static _Thread_local StackFrame* g_frame_freelist = NULL;
+
 StackFrame* stackframe_new(StackFrame* parent)
 {
-    StackFrame* f = (StackFrame*)calloc(1, sizeof(StackFrame));
-    if(!f) {
-        perror("stackframe_new");
-        exit(EXIT_FAILURE);
+    StackFrame* f;
+    if(g_frame_freelist) {
+        /* 从空闲链表取出，清零使用状态但保留已分配数组 */
+        f = g_frame_freelist;
+        g_frame_freelist = *(StackFrame**)f;  /* next 指针存在 parent 字段 */
+        f->cnt = 0;
+        f->parent = parent;
+        f->shared = 0;
+        f->cell_cnt = 0;
+        f->cell_cap = 0;
+        /* names/vals/int_slots/flt_slots/ptr_slots/type_tags 保留，cap 保留，直接复用 */
+    } else {
+        f = (StackFrame*)calloc(1, sizeof(StackFrame));
+        if(!f) { perror("stackframe_new"); exit(EXIT_FAILURE); }
+        f->cnt = 0;
+        f->cap = 0;
+        f->names = NULL;
+        f->vals = NULL;
+        f->int_slots = NULL;
+        f->flt_slots = NULL;
+        f->ptr_slots = NULL;
+        f->type_tags = NULL;
+        f->parent = parent;
+        f->shared = 0;
+        f->cell_names = NULL;
+        f->cells = NULL;
+        f->cell_cnt = 0;
+        f->cell_cap = 0;
     }
-    f->cnt = 0;
-    f->cap = 0;
-    f->names = NULL;
-    f->vals = NULL;
-    f->parent = parent;
-    f->shared = 0;
-    f->cell_names = NULL;
-    f->cells = NULL;
-    f->cell_cnt = 0;
-    f->cell_cap = 0;
-    pthread_rwlock_init(&f->rw, NULL);
+    /* 私有帧不初始化读写锁（零开销）；共享帧在 set_shared 时才初始化 */
     return f;
 }
 
 void stackframe_set_shared(StackFrame* f)
 {
-    if(f) f->shared = 1;
+    if(f) { f->shared = 1; pthread_rwlock_init(&f->rw, NULL); }
 }
 
 /* 帧内变量槽扩容：翻倍，无硬上限。调用方必须已持有该帧的写锁（若 shared）
@@ -93,206 +112,32 @@ static void frame_ensure(StackFrame* f, int need)
     f->type_tags = nt;
     free(old_tags);
 
-    /* 扩容 int_vals */
-    int* nint_vals = (int*)malloc((size_t)newcap * sizeof(int));
-    if(!nint_vals) { perror("stackframe expand int_vals"); exit(EXIT_FAILURE); }
-    if(f->int_vals) memcpy(nint_vals, f->int_vals, (size_t)f->cap * sizeof(int));
-    for(int i = f->cap; i < newcap; i++) nint_vals[i] = (int)0;
-    int* old_int_vals = f->int_vals;
-    f->int_vals = nint_vals;
-    free(old_int_vals);
-    /* 扩容 longlong_vals */
-    long long* nlonglong_vals = (long long*)malloc((size_t)newcap * sizeof(long long));
-    if(!nlonglong_vals) { perror("stackframe expand longlong_vals"); exit(EXIT_FAILURE); }
-    if(f->longlong_vals) memcpy(nlonglong_vals, f->longlong_vals, (size_t)f->cap * sizeof(long long));
-    for(int i = f->cap; i < newcap; i++) nlonglong_vals[i] = (long long)0;
-    long long* old_longlong_vals = f->longlong_vals;
-    f->longlong_vals = nlonglong_vals;
-    free(old_longlong_vals);
-    /* 扩容 long_vals */
-    long* nlong_vals = (long*)malloc((size_t)newcap * sizeof(long));
-    if(!nlong_vals) { perror("stackframe expand long_vals"); exit(EXIT_FAILURE); }
-    if(f->long_vals) memcpy(nlong_vals, f->long_vals, (size_t)f->cap * sizeof(long));
-    for(int i = f->cap; i < newcap; i++) nlong_vals[i] = (long)0;
-    long* old_long_vals = f->long_vals;
-    f->long_vals = nlong_vals;
-    free(old_long_vals);
-    /* 扩容 short_vals */
-    short* nshort_vals = (short*)malloc((size_t)newcap * sizeof(short));
-    if(!nshort_vals) { perror("stackframe expand short_vals"); exit(EXIT_FAILURE); }
-    if(f->short_vals) memcpy(nshort_vals, f->short_vals, (size_t)f->cap * sizeof(short));
-    for(int i = f->cap; i < newcap; i++) nshort_vals[i] = (short)0;
-    short* old_short_vals = f->short_vals;
-    f->short_vals = nshort_vals;
-    free(old_short_vals);
-    /* 扩容 int8_vals */
-    int8_t* nint8_vals = (int8_t*)malloc((size_t)newcap * sizeof(int8_t));
-    if(!nint8_vals) { perror("stackframe expand int8_vals"); exit(EXIT_FAILURE); }
-    if(f->int8_vals) memcpy(nint8_vals, f->int8_vals, (size_t)f->cap * sizeof(int8_t));
-    for(int i = f->cap; i < newcap; i++) nint8_vals[i] = (int8_t)0;
-    int8_t* old_int8_vals = f->int8_vals;
-    f->int8_vals = nint8_vals;
-    free(old_int8_vals);
-    /* 扩容 int16_vals */
-    int16_t* nint16_vals = (int16_t*)malloc((size_t)newcap * sizeof(int16_t));
-    if(!nint16_vals) { perror("stackframe expand int16_vals"); exit(EXIT_FAILURE); }
-    if(f->int16_vals) memcpy(nint16_vals, f->int16_vals, (size_t)f->cap * sizeof(int16_t));
-    for(int i = f->cap; i < newcap; i++) nint16_vals[i] = (int16_t)0;
-    int16_t* old_int16_vals = f->int16_vals;
-    f->int16_vals = nint16_vals;
-    free(old_int16_vals);
-    /* 扩容 int32_vals */
-    int32_t* nint32_vals = (int32_t*)malloc((size_t)newcap * sizeof(int32_t));
-    if(!nint32_vals) { perror("stackframe expand int32_vals"); exit(EXIT_FAILURE); }
-    if(f->int32_vals) memcpy(nint32_vals, f->int32_vals, (size_t)f->cap * sizeof(int32_t));
-    for(int i = f->cap; i < newcap; i++) nint32_vals[i] = (int32_t)0;
-    int32_t* old_int32_vals = f->int32_vals;
-    f->int32_vals = nint32_vals;
-    free(old_int32_vals);
-    /* 扩容 int64_vals */
-    int64_t* nint64_vals = (int64_t*)malloc((size_t)newcap * sizeof(int64_t));
-    if(!nint64_vals) { perror("stackframe expand int64_vals"); exit(EXIT_FAILURE); }
-    if(f->int64_vals) memcpy(nint64_vals, f->int64_vals, (size_t)f->cap * sizeof(int64_t));
-    for(int i = f->cap; i < newcap; i++) nint64_vals[i] = (int64_t)0;
-    int64_t* old_int64_vals = f->int64_vals;
-    f->int64_vals = nint64_vals;
-    free(old_int64_vals);
-    /* 扩容 uint8_vals */
-    uint8_t* nuint8_vals = (uint8_t*)malloc((size_t)newcap * sizeof(uint8_t));
-    if(!nuint8_vals) { perror("stackframe expand uint8_vals"); exit(EXIT_FAILURE); }
-    if(f->uint8_vals) memcpy(nuint8_vals, f->uint8_vals, (size_t)f->cap * sizeof(uint8_t));
-    for(int i = f->cap; i < newcap; i++) nuint8_vals[i] = (uint8_t)0;
-    uint8_t* old_uint8_vals = f->uint8_vals;
-    f->uint8_vals = nuint8_vals;
-    free(old_uint8_vals);
-    /* 扩容 uint16_vals */
-    uint16_t* nuint16_vals = (uint16_t*)malloc((size_t)newcap * sizeof(uint16_t));
-    if(!nuint16_vals) { perror("stackframe expand uint16_vals"); exit(EXIT_FAILURE); }
-    if(f->uint16_vals) memcpy(nuint16_vals, f->uint16_vals, (size_t)f->cap * sizeof(uint16_t));
-    for(int i = f->cap; i < newcap; i++) nuint16_vals[i] = (uint16_t)0;
-    uint16_t* old_uint16_vals = f->uint16_vals;
-    f->uint16_vals = nuint16_vals;
-    free(old_uint16_vals);
-    /* 扩容 uint32_vals */
-    uint32_t* nuint32_vals = (uint32_t*)malloc((size_t)newcap * sizeof(uint32_t));
-    if(!nuint32_vals) { perror("stackframe expand uint32_vals"); exit(EXIT_FAILURE); }
-    if(f->uint32_vals) memcpy(nuint32_vals, f->uint32_vals, (size_t)f->cap * sizeof(uint32_t));
-    for(int i = f->cap; i < newcap; i++) nuint32_vals[i] = (uint32_t)0;
-    uint32_t* old_uint32_vals = f->uint32_vals;
-    f->uint32_vals = nuint32_vals;
-    free(old_uint32_vals);
-    /* 扩容 uint64_vals */
-    uint64_t* nuint64_vals = (uint64_t*)malloc((size_t)newcap * sizeof(uint64_t));
-    if(!nuint64_vals) { perror("stackframe expand uint64_vals"); exit(EXIT_FAILURE); }
-    if(f->uint64_vals) memcpy(nuint64_vals, f->uint64_vals, (size_t)f->cap * sizeof(uint64_t));
-    for(int i = f->cap; i < newcap; i++) nuint64_vals[i] = (uint64_t)0;
-    uint64_t* old_uint64_vals = f->uint64_vals;
-    f->uint64_vals = nuint64_vals;
-    free(old_uint64_vals);
-    /* 扩容 uchar_vals */
-    unsigned char* nuchar_vals = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
-    if(!nuchar_vals) { perror("stackframe expand uchar_vals"); exit(EXIT_FAILURE); }
-    if(f->uchar_vals) memcpy(nuchar_vals, f->uchar_vals, (size_t)f->cap * sizeof(unsigned char));
-    for(int i = f->cap; i < newcap; i++) nuchar_vals[i] = (unsigned char)0;
-    unsigned char* old_uchar_vals = f->uchar_vals;
-    f->uchar_vals = nuchar_vals;
-    free(old_uchar_vals);
-    /* 扩容 ushort_vals */
-    unsigned short* nushort_vals = (unsigned short*)malloc((size_t)newcap * sizeof(unsigned short));
-    if(!nushort_vals) { perror("stackframe expand ushort_vals"); exit(EXIT_FAILURE); }
-    if(f->ushort_vals) memcpy(nushort_vals, f->ushort_vals, (size_t)f->cap * sizeof(unsigned short));
-    for(int i = f->cap; i < newcap; i++) nushort_vals[i] = (unsigned short)0;
-    unsigned short* old_ushort_vals = f->ushort_vals;
-    f->ushort_vals = nushort_vals;
-    free(old_ushort_vals);
-    /* 扩容 ulong_vals */
-    unsigned long* nulong_vals = (unsigned long*)malloc((size_t)newcap * sizeof(unsigned long));
-    if(!nulong_vals) { perror("stackframe expand ulong_vals"); exit(EXIT_FAILURE); }
-    if(f->ulong_vals) memcpy(nulong_vals, f->ulong_vals, (size_t)f->cap * sizeof(unsigned long));
-    for(int i = f->cap; i < newcap; i++) nulong_vals[i] = (unsigned long)0;
-    unsigned long* old_ulong_vals = f->ulong_vals;
-    f->ulong_vals = nulong_vals;
-    free(old_ulong_vals);
-    /* 扩容 size_t_vals */
-    size_t* nsize_t_vals = (size_t*)malloc((size_t)newcap * sizeof(size_t));
-    if(!nsize_t_vals) { perror("stackframe expand size_t_vals"); exit(EXIT_FAILURE); }
-    if(f->size_t_vals) memcpy(nsize_t_vals, f->size_t_vals, (size_t)f->cap * sizeof(size_t));
-    for(int i = f->cap; i < newcap; i++) nsize_t_vals[i] = (size_t)0;
-    size_t* old_size_t_vals = f->size_t_vals;
-    f->size_t_vals = nsize_t_vals;
-    free(old_size_t_vals);
-    /* 扩容 ssize_t_vals */
-    ssize_t* nssize_t_vals = (ssize_t*)malloc((size_t)newcap * sizeof(ssize_t));
-    if(!nssize_t_vals) { perror("stackframe expand ssize_t_vals"); exit(EXIT_FAILURE); }
-    if(f->ssize_t_vals) memcpy(nssize_t_vals, f->ssize_t_vals, (size_t)f->cap * sizeof(ssize_t));
-    for(int i = f->cap; i < newcap; i++) nssize_t_vals[i] = (ssize_t)0;
-    ssize_t* old_ssize_t_vals = f->ssize_t_vals;
-    f->ssize_t_vals = nssize_t_vals;
-    free(old_ssize_t_vals);
-    /* 扩容 float_vals */
-    float* nfloat_vals = (float*)malloc((size_t)newcap * sizeof(float));
-    if(!nfloat_vals) { perror("stackframe expand float_vals"); exit(EXIT_FAILURE); }
-    if(f->float_vals) memcpy(nfloat_vals, f->float_vals, (size_t)f->cap * sizeof(float));
-    for(int i = f->cap; i < newcap; i++) nfloat_vals[i] = (float)0.0f;
-    float* old_float_vals = f->float_vals;
-    f->float_vals = nfloat_vals;
-    free(old_float_vals);
-    /* 扩容 double_vals */
-    double* ndouble_vals = (double*)malloc((size_t)newcap * sizeof(double));
-    if(!ndouble_vals) { perror("stackframe expand double_vals"); exit(EXIT_FAILURE); }
-    if(f->double_vals) memcpy(ndouble_vals, f->double_vals, (size_t)f->cap * sizeof(double));
-    for(int i = f->cap; i < newcap; i++) ndouble_vals[i] = (double)0.0;
-    double* old_double_vals = f->double_vals;
-    f->double_vals = ndouble_vals;
-    free(old_double_vals);
-    /* 扩容 longdouble_vals */
-    long double* nlongdouble_vals = (long double*)malloc((size_t)newcap * sizeof(long double));
-    if(!nlongdouble_vals) { perror("stackframe expand longdouble_vals"); exit(EXIT_FAILURE); }
-    if(f->longdouble_vals) memcpy(nlongdouble_vals, f->longdouble_vals, (size_t)f->cap * sizeof(long double));
-    for(int i = f->cap; i < newcap; i++) nlongdouble_vals[i] = (long double)0.0L;
-    long double* old_longdouble_vals = f->longdouble_vals;
-    f->longdouble_vals = nlongdouble_vals;
-    free(old_longdouble_vals);
-    /* 扩容 bool_vals */
-    _Bool* nbool_vals = (_Bool*)malloc((size_t)newcap * sizeof(_Bool));
-    if(!nbool_vals) { perror("stackframe expand bool_vals"); exit(EXIT_FAILURE); }
-    if(f->bool_vals) memcpy(nbool_vals, f->bool_vals, (size_t)f->cap * sizeof(_Bool));
-    for(int i = f->cap; i < newcap; i++) nbool_vals[i] = (_Bool)0;
-    _Bool* old_bool_vals = f->bool_vals;
-    f->bool_vals = nbool_vals;
-    free(old_bool_vals);
-    /* 扩容 char_vals */
-    char* nchar_vals = (char*)malloc((size_t)newcap * sizeof(char));
-    if(!nchar_vals) { perror("stackframe expand char_vals"); exit(EXIT_FAILURE); }
-    if(f->char_vals) memcpy(nchar_vals, f->char_vals, (size_t)f->cap * sizeof(char));
-    for(int i = f->cap; i < newcap; i++) nchar_vals[i] = (char)0;
-    char* old_char_vals = f->char_vals;
-    f->char_vals = nchar_vals;
-    free(old_char_vals);
-    /* 扩容 byte_vals */
-    unsigned char* nbyte_vals = (unsigned char*)malloc((size_t)newcap * sizeof(unsigned char));
-    if(!nbyte_vals) { perror("stackframe expand byte_vals"); exit(EXIT_FAILURE); }
-    if(f->byte_vals) memcpy(nbyte_vals, f->byte_vals, (size_t)f->cap * sizeof(unsigned char));
-    for(int i = f->cap; i < newcap; i++) nbyte_vals[i] = (unsigned char)0;
-    unsigned char* old_byte_vals = f->byte_vals;
-    f->byte_vals = nbyte_vals;
-    free(old_byte_vals);
-    /* 扩容 string_vals */
-    char** nstring_vals = (char**)malloc((size_t)newcap * sizeof(char*));
-    if(!nstring_vals) { perror("stackframe expand string_vals"); exit(EXIT_FAILURE); }
-    if(f->string_vals) memcpy(nstring_vals, f->string_vals, (size_t)f->cap * sizeof(char*));
-    for(int i = f->cap; i < newcap; i++) nstring_vals[i] = NULL;
-    char** old_string_vals = f->string_vals;
-    f->string_vals = nstring_vals;
-    free(old_string_vals);
-    /* 扩容 ptr_vals */
-    void** nptr_vals = (void**)malloc((size_t)newcap * sizeof(void*));
-    if(!nptr_vals) { perror("stackframe expand ptr_vals"); exit(EXIT_FAILURE); }
-    if(f->ptr_vals) memcpy(nptr_vals, f->ptr_vals, (size_t)f->cap * sizeof(void*));
-    for(int i = f->cap; i < newcap; i++) nptr_vals[i] = NULL;
-    void** old_ptr_vals = f->ptr_vals;
-    f->ptr_vals = nptr_vals;
-    free(old_ptr_vals);
+    /* 扩容 int_slots（所有整数/布尔/字符类型统一存为 int64_t） */
+    int64_t* nint_slots = (int64_t*)malloc((size_t)newcap * sizeof(int64_t));
+    if(!nint_slots) { perror("stackframe expand int_slots"); exit(EXIT_FAILURE); }
+    if(f->int_slots) memcpy(nint_slots, f->int_slots, (size_t)f->cap * sizeof(int64_t));
+    for(int i = f->cap; i < newcap; i++) nint_slots[i] = (int64_t)0;
+    int64_t* old_int_slots = f->int_slots;
+    f->int_slots = nint_slots;
+    free(old_int_slots);
+
+    /* 扩容 flt_slots（所有浮点类型统一存为 double） */
+    double* nflt_slots = (double*)malloc((size_t)newcap * sizeof(double));
+    if(!nflt_slots) { perror("stackframe expand flt_slots"); exit(EXIT_FAILURE); }
+    if(f->flt_slots) memcpy(nflt_slots, f->flt_slots, (size_t)f->cap * sizeof(double));
+    for(int i = f->cap; i < newcap; i++) nflt_slots[i] = (double)0.0;
+    double* old_flt_slots = f->flt_slots;
+    f->flt_slots = nflt_slots;
+    free(old_flt_slots);
+
+    /* 扩容 ptr_slots（所有指针类型统一存为 void*） */
+    void** nptr_slots = (void**)malloc((size_t)newcap * sizeof(void*));
+    if(!nptr_slots) { perror("stackframe expand ptr_slots"); exit(EXIT_FAILURE); }
+    if(f->ptr_slots) memcpy(nptr_slots, f->ptr_slots, (size_t)f->cap * sizeof(void*));
+    for(int i = f->cap; i < newcap; i++) nptr_slots[i] = NULL;
+    void** old_ptr_slots = f->ptr_slots;
+    f->ptr_slots = nptr_slots;
+    free(old_ptr_slots);
 
     f->cap = newcap;
 }
@@ -300,52 +145,40 @@ static void frame_ensure(StackFrame* f, int need)
 void stackframe_destroy(StackFrame* f)
 {
     if(!f) return;
+
+    /* 共享帧：完整释放（其他线程可能仍在访问） */
+    if(f->shared) {
+        for(int i = 0; i < f->cnt; i++) {
+            free(f->names[i]);
+            slot_release(&f->vals[i]);
+        }
+        free(f->names);
+        free(f->vals);
+        free(f->int_slots);
+        free(f->flt_slots);
+        free(f->ptr_slots);
+        for(int i = 0; i < f->cell_cnt; i++) free(f->cell_names[i]);
+        free(f->cell_names);
+        free(f->cells);
+        free(f->type_tags);
+        pthread_rwlock_destroy(&f->rw);
+        free(f);
+        return;
+    }
+
+    /* 私有帧：释放名称字符串和 Value 内容，但保留数组本身复用 */
     for(int i = 0; i < f->cnt; i++) {
         free(f->names[i]);
         slot_release(&f->vals[i]);
     }
-    free(f->names);
-    free(f->vals);
-    /* 基础整数类型 */
-    free(f->int_vals);
-    free(f->longlong_vals);
-    free(f->long_vals);
-    free(f->short_vals);
-    /* 固定宽度有符号整数 */
-    free(f->int8_vals);
-    free(f->int16_vals);
-    free(f->int32_vals);
-    free(f->int64_vals);
-    /* 固定宽度无符号整数 */
-    free(f->uint8_vals);
-    free(f->uint16_vals);
-    free(f->uint32_vals);
-    free(f->uint64_vals);
-    /* 其他无符号整数 */
-    free(f->uchar_vals);
-    free(f->ushort_vals);
-    free(f->ulong_vals);
-    free(f->size_t_vals);
-    free(f->ssize_t_vals);
-    /* 浮点类型 */
-    free(f->float_vals);
-    free(f->double_vals);
-    free(f->longdouble_vals);
-    /* 其他基础类型 */
-    free(f->bool_vals);
-    free(f->char_vals);
-    free(f->byte_vals);
-    free(f->string_vals);
-    free(f->ptr_vals);
-    /* cell 表：cell 指针本身由闭包持有，这里只释放表项名与指针数组 */
-    for(int i = 0; i < f->cell_cnt; i++) {
-        free(f->cell_names[i]);
-    }
-    free(f->cell_names);
-    free(f->cells);
-    free(f->type_tags);
-    pthread_rwlock_destroy(&f->rw);
-    free(f);
+    /* 释放 cell 表（闭包 cell 指针由 RuntimeFunc 持有，不释放） */
+    for(int i = 0; i < f->cell_cnt; i++) free(f->cell_names[i]);
+    /* 清空名称指针（复用帧时 names 数组保留，名称重新分配） */
+    for(int i = 0; i < f->cnt; i++) f->names[i] = NULL;
+
+    /* 放回线程本地空闲链表（next 指针存在 parent 字段位置） */
+    *(StackFrame**)f = g_frame_freelist;
+    g_frame_freelist = f;
 }
 
 // 只查当前帧 cell 表（调用方须已持锁）
@@ -407,7 +240,7 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
             if(strcmp(p->names[i], name) == 0) {
                 if(p->type_tags) p->type_tags[i] = type_tag;
                 /* 当设置为 int 类型时，同时更新 int_vals */
-                if(type_tag == 2 /* CAST_INT */ && p->int_vals) {
+                if(type_tag == 2 /* CAST_INT */ && p->int_slots) {
                     Value v = p->vals[i];
                     int iv = 0;
                     switch(v.type) {
@@ -418,10 +251,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             iv = 0; break;
                     }
-                    p->int_vals[i] = iv;
+                    p->int_slots[i] = iv;
                 }
                 /* 当设置为 double 类型时，同时更新 double_vals */
-                if(type_tag == 1 /* CAST_DOUBLE */ && p->double_vals) {
+                if(type_tag == 1 /* CAST_DOUBLE */ && p->flt_slots) {
                     Value v = p->vals[i];
                     double dv = 0.0;
                     switch(v.type) {
@@ -432,10 +265,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             dv = 0.0; break;
                     }
-                    p->double_vals[i] = dv;
+                    p->flt_slots[i] = dv;
                 }
                 /* 当设置为 float 类型时，同时更新 float_vals */
-                if(type_tag == CAST_FLOAT && p->float_vals) {
+                if(type_tag == CAST_FLOAT && p->flt_slots) {
                     Value v = p->vals[i];
                     float fv = 0.0f;
                     switch(v.type) {
@@ -446,10 +279,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             fv = 0.0f; break;
                     }
-                    p->float_vals[i] = fv;
+                    p->flt_slots[i] = fv;
                 }
                 /* 当设置为 uint 类型时，同时更新 uint32_vals */
-                if(type_tag == CAST_UINT32 && p->uint32_vals) {
+                if(type_tag == CAST_UINT32 && p->int_slots) {
                     Value v = p->vals[i];
                     unsigned int uv = 0;
                     switch(v.type) {
@@ -460,10 +293,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             uv = 0; break;
                     }
-                    p->uint32_vals[i] = uv;
+                    p->int_slots[i] = uv;
                 }
                 /* 当设置为 bool 类型时，同时更新 bool_vals */
-                if(type_tag == CAST_BOOL && p->bool_vals) {
+                if(type_tag == CAST_BOOL && p->int_slots) {
                     Value v = p->vals[i];
                     _Bool bv = 0;
                     switch(v.type) {
@@ -478,10 +311,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             bv = 0; break;
                     }
-                    p->bool_vals[i] = bv;
+                    p->int_slots[i] = bv;
                 }
                 /* 当设置为 char 类型时，同时更新 char_vals */
-                if(type_tag == CAST_CHAR && p->char_vals) {
+                if(type_tag == CAST_CHAR && p->int_slots) {
                     Value v = p->vals[i];
                     char cv = 0;
                     switch(v.type) {
@@ -496,10 +329,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             cv = 0; break;
                     }
-                    p->char_vals[i] = cv;
+                    p->int_slots[i] = cv;
                 }
                 /* 当设置为 byte 类型时，同时更新 byte_vals */
-                if(type_tag == CAST_BYTE && p->byte_vals) {
+                if(type_tag == CAST_BYTE && p->int_slots) {
                     Value v = p->vals[i];
                     unsigned char bv = 0;
                     switch(v.type) {
@@ -514,10 +347,10 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             bv = 0; break;
                     }
-                    p->byte_vals[i] = bv;
+                    p->int_slots[i] = bv;
                 }
                 /* 当设置为 int8 类型时，同时更新 int8_vals */
-                if(type_tag == CAST_INT8 && p->int8_vals) {
+                if(type_tag == CAST_INT8 && p->int_slots) {
                     Value v = p->vals[i];
                     int8_t i8v = 0;
                     switch(v.type) {
@@ -534,7 +367,7 @@ void stackframe_set_type_tag(StackFrame* f, const char* name, int type_tag)
                         default:
                             i8v = 0; break;
                     }
-                    p->int8_vals[i] = i8v;
+                    p->int_slots[i] = i8v;
                 }
                 if(hl) pthread_rwlock_unlock(&p->rw);
                 return;
@@ -575,8 +408,8 @@ int stackframe_get_int(StackFrame* f, const char* name, _Bool* found)
             if(strcmp(p->names[i], name) == 0) {
                 /* 检查变量是否标记为 int 类型 */
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 2 /* CAST_INT */ && p->int_vals) {
-                    int iv = p->int_vals[i];  // 直接读取，零提取
+                if(tag == 2 /* CAST_INT */ && p->int_slots) {
+                    int iv = p->int_slots[i];  // 直接读取，零提取
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     if(found) *found = 1;
                     return iv;
@@ -604,7 +437,7 @@ int stackframe_get_int(StackFrame* f, const char* name, _Bool* found)
 
 // 获取 int 类型变量的原始指针，用于自增自减等直接操作
 // 返回 NULL 表示未找到或不是 int 类型
-int* stackframe_get_int_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_int_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -612,8 +445,8 @@ int* stackframe_get_int_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 2 /* CAST_INT */ && p->int_vals) {
-                    int* ptr = &p->int_vals[i];  // 返回原始指针
+                if(tag == 2 /* CAST_INT */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];  // 返回原始指针
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -627,7 +460,7 @@ int* stackframe_get_int_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 int8 类型变量的原始指针
-int8_t* stackframe_get_int8_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_int8_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -635,8 +468,8 @@ int8_t* stackframe_get_int8_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 16 /* CAST_INT8 */ && p->int8_vals) {
-                    int8_t* ptr = &p->int8_vals[i];
+                if(tag == 16 /* CAST_INT8 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -650,7 +483,7 @@ int8_t* stackframe_get_int8_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 int16 类型变量的原始指针
-int16_t* stackframe_get_int16_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_int16_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -658,8 +491,8 @@ int16_t* stackframe_get_int16_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 17 /* CAST_INT16 */ && p->int16_vals) {
-                    int16_t* ptr = &p->int16_vals[i];
+                if(tag == 17 /* CAST_INT16 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -673,7 +506,7 @@ int16_t* stackframe_get_int16_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 short 类型变量的原始指针
-short* stackframe_get_short_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_short_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -681,8 +514,8 @@ short* stackframe_get_short_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 65 /* CAST_SHORT */ && p->short_vals) {
-                    short* ptr = &p->short_vals[i];
+                if(tag == 65 /* CAST_SHORT */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -696,7 +529,7 @@ short* stackframe_get_short_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 int32 类型变量的原始指针
-int32_t* stackframe_get_int32_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_int32_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -704,8 +537,8 @@ int32_t* stackframe_get_int32_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 18 /* CAST_INT32 */ && p->int32_vals) {
-                    int32_t* ptr = &p->int32_vals[i];
+                if(tag == 18 /* CAST_INT32 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -727,8 +560,8 @@ int64_t* stackframe_get_int64_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 19 /* CAST_INT64 */ && p->int64_vals) {
-                    int64_t* ptr = &p->int64_vals[i];
+                if(tag == 19 /* CAST_INT64 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -742,7 +575,7 @@ int64_t* stackframe_get_int64_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 uint 类型变量的原始指针（uint 对应 uint32）
-unsigned int* stackframe_get_uint_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_uint_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -750,8 +583,8 @@ unsigned int* stackframe_get_uint_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 23 /* CAST_UINT */ && p->uint32_vals) {
-                    unsigned int* ptr = (unsigned int*)&p->uint32_vals[i];
+                if(tag == 23 /* CAST_UINT */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -765,7 +598,7 @@ unsigned int* stackframe_get_uint_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 uint8 类型变量的原始指针
-uint8_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -773,8 +606,8 @@ uint8_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 20 /* CAST_UINT8 */ && p->uint8_vals) {
-                    uint8_t* ptr = &p->uint8_vals[i];
+                if(tag == 20 /* CAST_UINT8 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -788,7 +621,7 @@ uint8_t* stackframe_get_uint8_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 uint16 类型变量的原始指针
-uint16_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -796,8 +629,8 @@ uint16_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 21 /* CAST_UINT16 */ && p->uint16_vals) {
-                    uint16_t* ptr = &p->uint16_vals[i];
+                if(tag == 21 /* CAST_UINT16 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -811,7 +644,7 @@ uint16_t* stackframe_get_uint16_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 uint32 类型变量的原始指针
-uint32_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -819,8 +652,8 @@ uint32_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 22 /* CAST_UINT32 */ && p->uint32_vals) {
-                    uint32_t* ptr = &p->uint32_vals[i];
+                if(tag == 22 /* CAST_UINT32 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -834,7 +667,7 @@ uint32_t* stackframe_get_uint32_ptr(StackFrame* f, const char* name)
 }
 
 // 获取 uint64 类型变量的原始指针
-uint64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name)
+int64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name)
 {
     if(!f || !name) return NULL;
     for(StackFrame* p = f; p; p = p->parent) {
@@ -842,8 +675,8 @@ uint64_t* stackframe_get_uint64_ptr(StackFrame* f, const char* name)
         for(int i = 0; i < p->cnt; i++) {
             if(strcmp(p->names[i], name) == 0) {
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 24 /* CAST_UINT64 */ && p->uint64_vals) {
-                    uint64_t* ptr = &p->uint64_vals[i];
+                if(tag == 24 /* CAST_UINT64 */ && p->int_slots) {
+                    int64_t* ptr = &p->int_slots[i];
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     return ptr;
                 }
@@ -880,7 +713,7 @@ void stackframe_set(StackFrame* f, const char* name, Value v)
                 owner->vals[idx] = v;
                 /* 同步更新 int_vals：如果变量标记为 int 类型，同时更新原始 int 值 */
                 int tag = (owner->type_tags) ? owner->type_tags[idx] : -1;
-                if(tag == 2 /* CAST_INT */ && owner->int_vals) {
+                if(tag == 2 /* CAST_INT */ && owner->int_slots) {
                     int iv = 0;
                     switch(v.type) {
                         case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
@@ -890,7 +723,7 @@ void stackframe_set(StackFrame* f, const char* name, Value v)
                         default:
                             iv = 0; break;
                     }
-                    owner->int_vals[idx] = iv;
+                    owner->int_slots[idx] = iv;
                 }
             }
         }
@@ -917,7 +750,7 @@ void stackframe_bind(StackFrame* f, const char* name, Value v)
         f->vals[idx] = v;
         /* 同步更新 int_vals：如果变量标记为 int 类型，同时更新原始 int 值 */
         int tag = (f->type_tags) ? f->type_tags[idx] : -1;
-        if(tag == 2 /* CAST_INT */ && f->int_vals) {
+        if(tag == 2 /* CAST_INT */ && f->int_slots) {
             int iv = 0;
             switch(v.type) {
                 case 1: case 10: case 4: case 3:  // VAL_INT, VAL_BYTE, VAL_CHAR, VAL_BOOL
@@ -927,7 +760,7 @@ void stackframe_bind(StackFrame* f, const char* name, Value v)
                 default:
                     iv = 0; break;
             }
-            f->int_vals[idx] = iv;
+            f->int_slots[idx] = iv;
         }
     } else {
         frame_ensure(f, f->cnt + 1);
@@ -952,7 +785,7 @@ void stackframe_bind_int(StackFrame* f, const char* name, int iv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = 1;  // VAL_INT
         f->vals[idx].v.i = iv;
-        if(f->int_vals) f->int_vals[idx] = iv;  // 直接更新 int_vals，零提取！
+        if(f->int_slots) f->int_slots[idx] = iv;  // 直接更新 int_vals，零提取！
         if(f->type_tags) f->type_tags[idx] = 2;  // CAST_INT
     } else {
         /* 变量不存在：新建 */
@@ -960,7 +793,7 @@ void stackframe_bind_int(StackFrame* f, const char* name, int iv)
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = 1;  // VAL_INT
         f->vals[f->cnt].v.i = iv;
-        if(f->int_vals) f->int_vals[f->cnt] = iv;  // 直接设置 int_vals，零提取！
+        if(f->int_slots) f->int_slots[f->cnt] = iv;  // 直接设置 int_vals，零提取！
         if(f->type_tags) f->type_tags[f->cnt] = 2;  // CAST_INT
         f->cnt++;
     }
@@ -980,8 +813,8 @@ double stackframe_get_double(StackFrame* f, const char* name, _Bool* found)
             if(strcmp(p->names[i], name) == 0) {
                 /* 检查变量是否标记为 double 类型（CAST_DOUBLE = 1） */
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == 1 /* CAST_DOUBLE */ && p->double_vals) {
-                    double dv = p->double_vals[i];  // 直接读取，零提取
+                if(tag == 1 /* CAST_DOUBLE */ && p->flt_slots) {
+                    double dv = p->flt_slots[i];  // 直接读取，零提取
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     if(found) *found = 1;
                     return dv;
@@ -1019,7 +852,7 @@ void stackframe_bind_double(StackFrame* f, const char* name, double dv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = 2;  // VAL_DOUBLE
         f->vals[idx].v.d = dv;
-        if(f->double_vals) f->double_vals[idx] = dv;  // 直接更新 double_vals，零提取！
+        if(f->flt_slots) f->flt_slots[idx] = dv;  // 直接更新 double_vals，零提取！
         if(f->type_tags) f->type_tags[idx] = 1;  // CAST_DOUBLE
     } else {
         /* 变量不存在：新建 */
@@ -1027,7 +860,7 @@ void stackframe_bind_double(StackFrame* f, const char* name, double dv)
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = 2;  // VAL_DOUBLE
         f->vals[f->cnt].v.d = dv;
-        if(f->double_vals) f->double_vals[f->cnt] = dv;  // 直接设置 double_vals，零提取！
+        if(f->flt_slots) f->flt_slots[f->cnt] = dv;  // 直接设置 double_vals，零提取！
         if(f->type_tags) f->type_tags[f->cnt] = 1;  // CAST_DOUBLE
         f->cnt++;
     }
@@ -1047,8 +880,8 @@ float stackframe_get_float(StackFrame* f, const char* name, _Bool* found)
             if(strcmp(p->names[i], name) == 0) {
                 /* 检查变量是否标记为 float 类型（CAST_FLOAT = 17） */
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == CAST_FLOAT && p->float_vals) {
-                    float fv = p->float_vals[i];  // 直接读取，零提取
+                if(tag == CAST_FLOAT && p->flt_slots) {
+                    float fv = p->flt_slots[i];  // 直接读取，零提取
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     if(found) *found = 1;
                     return fv;
@@ -1086,7 +919,7 @@ void stackframe_bind_float(StackFrame* f, const char* name, float fv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = 2;  // VAL_DOUBLE（float 用 VAL_DOUBLE 存储）
         f->vals[idx].v.d = (double)fv;
-        if(f->float_vals) f->float_vals[idx] = fv;  // 直接更新 float_vals，零提取！
+        if(f->flt_slots) f->flt_slots[idx] = fv;  // 直接更新 float_vals，零提取！
         if(f->type_tags) f->type_tags[idx] = 17;  // CAST_FLOAT
     } else {
         /* 变量不存在：新建 */
@@ -1094,7 +927,7 @@ void stackframe_bind_float(StackFrame* f, const char* name, float fv)
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = 2;  // VAL_DOUBLE（float 用 VAL_DOUBLE 存储）
         f->vals[f->cnt].v.d = (double)fv;
-        if(f->float_vals) f->float_vals[f->cnt] = fv;  // 直接设置 float_vals，零提取！
+        if(f->flt_slots) f->flt_slots[f->cnt] = fv;  // 直接设置 float_vals，零提取！
         if(f->type_tags) f->type_tags[f->cnt] = 17;  // CAST_FLOAT
         f->cnt++;
     }
@@ -1114,8 +947,8 @@ unsigned int stackframe_get_uint(StackFrame* f, const char* name, _Bool* found)
             if(strcmp(p->names[i], name) == 0) {
                 /* 检查变量是否标记为 uint 类型（CAST_UINT32） */
                 int tag = (p->type_tags) ? p->type_tags[i] : -1;
-                if(tag == CAST_UINT32 && p->uint32_vals) {
-                    unsigned int uv = p->uint32_vals[i];  // 直接读取，零提取
+                if(tag == CAST_UINT32 && p->int_slots) {
+                    unsigned int uv = p->int_slots[i];  // 直接读取，零提取
                     if(hl) pthread_rwlock_unlock(&p->rw);
                     if(found) *found = 1;
                     return uv;
@@ -1153,7 +986,7 @@ void stackframe_bind_uint(StackFrame* f, const char* name, unsigned int uv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_INT;  // uint 用 VAL_INT 存储（long long 可以存储 uint32_t）
         f->vals[idx].v.i = (long long)uv;
-        if(f->uint32_vals) f->uint32_vals[idx] = uv;  // 直接更新 uint32_vals，零提取！
+        if(f->int_slots) f->int_slots[idx] = uv;  // 直接更新 uint32_vals，零提取！
         if(f->type_tags) f->type_tags[idx] = CAST_UINT32;
     } else {
         /* 变量不存在：新建 */
@@ -1161,7 +994,7 @@ void stackframe_bind_uint(StackFrame* f, const char* name, unsigned int uv)
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_INT;  // uint 用 VAL_INT 存储
         f->vals[f->cnt].v.i = (long long)uv;
-        if(f->uint32_vals) f->uint32_vals[f->cnt] = uv;  // 直接设置 uint32_vals，零提取！
+        if(f->int_slots) f->int_slots[f->cnt] = uv;  // 直接设置 uint32_vals，零提取！
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT32;
         f->cnt++;
     }
@@ -1176,7 +1009,7 @@ _Bool stackframe_get_bool(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            _Bool bv = fr->bool_vals ? fr->bool_vals[idx] : (fr->vals[idx].v.i ? 1 : 0);
+            _Bool bv = fr->int_slots ? fr->int_slots[idx] : (fr->vals[idx].v.i ? 1 : 0);
             if(hl) pthread_rwlock_unlock(&f->rw);
             return bv;
         }
@@ -1195,14 +1028,14 @@ void stackframe_bind_bool(StackFrame* f, const char* name, _Bool bv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_BOOL;
         f->vals[idx].v.i = bv ? 1 : 0;
-        if(f->bool_vals) f->bool_vals[idx] = bv;
+        if(f->int_slots) f->int_slots[idx] = bv;
         if(f->type_tags) f->type_tags[idx] = CAST_BOOL;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_BOOL;
         f->vals[f->cnt].v.i = bv ? 1 : 0;
-        if(f->bool_vals) f->bool_vals[f->cnt] = bv;
+        if(f->int_slots) f->int_slots[f->cnt] = bv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_BOOL;
         f->cnt++;
     }
@@ -1217,7 +1050,7 @@ char stackframe_get_char(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            char cv = fr->char_vals ? fr->char_vals[idx] : (char)fr->vals[idx].v.i;
+            char cv = fr->int_slots ? fr->int_slots[idx] : (char)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return cv;
         }
@@ -1236,14 +1069,14 @@ void stackframe_bind_char(StackFrame* f, const char* name, char cv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_CHAR;
         f->vals[idx].v.i = (long long)cv;
-        if(f->char_vals) f->char_vals[idx] = cv;
+        if(f->int_slots) f->int_slots[idx] = cv;
         if(f->type_tags) f->type_tags[idx] = CAST_CHAR;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_CHAR;
         f->vals[f->cnt].v.i = (long long)cv;
-        if(f->char_vals) f->char_vals[f->cnt] = cv;
+        if(f->int_slots) f->int_slots[f->cnt] = cv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_CHAR;
         f->cnt++;
     }
@@ -1258,7 +1091,7 @@ unsigned char stackframe_get_byte(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            unsigned char bv = fr->byte_vals ? fr->byte_vals[idx] : (unsigned char)fr->vals[idx].v.i;
+            unsigned char bv = fr->int_slots ? fr->int_slots[idx] : (unsigned char)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return bv;
         }
@@ -1277,14 +1110,14 @@ void stackframe_bind_byte(StackFrame* f, const char* name, unsigned char bv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_BYTE;
         f->vals[idx].v.i = (long long)bv;
-        if(f->byte_vals) f->byte_vals[idx] = bv;
+        if(f->int_slots) f->int_slots[idx] = bv;
         if(f->type_tags) f->type_tags[idx] = CAST_BYTE;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_BYTE;
         f->vals[f->cnt].v.i = (long long)bv;
-        if(f->byte_vals) f->byte_vals[f->cnt] = bv;
+        if(f->int_slots) f->int_slots[f->cnt] = bv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_BYTE;
         f->cnt++;
     }
@@ -1299,7 +1132,7 @@ int8_t stackframe_get_int8(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            int8_t i8v = fr->int8_vals ? fr->int8_vals[idx] : (int8_t)fr->vals[idx].v.i;
+            int8_t i8v = fr->int_slots ? fr->int_slots[idx] : (int8_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return i8v;
         }
@@ -1318,14 +1151,14 @@ void stackframe_bind_int8(StackFrame* f, const char* name, int8_t i8v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_INT8;
         f->vals[idx].v.i = (long long)i8v;
-        if(f->int8_vals) f->int8_vals[idx] = i8v;
+        if(f->int_slots) f->int_slots[idx] = i8v;
         if(f->type_tags) f->type_tags[idx] = CAST_INT8;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_INT8;
         f->vals[f->cnt].v.i = (long long)i8v;
-        if(f->int8_vals) f->int8_vals[f->cnt] = i8v;
+        if(f->int_slots) f->int_slots[f->cnt] = i8v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_INT8;
         f->cnt++;
     }
@@ -1340,7 +1173,7 @@ int16_t stackframe_get_int16(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            int16_t i16v = fr->int16_vals ? fr->int16_vals[idx] : (int16_t)fr->vals[idx].v.i;
+            int16_t i16v = fr->int_slots ? fr->int_slots[idx] : (int16_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return i16v;
         }
@@ -1358,7 +1191,7 @@ short stackframe_get_short(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            short sv = fr->short_vals ? fr->short_vals[idx] : fr->vals[idx].v.sh;
+            short sv = fr->int_slots ? fr->int_slots[idx] : fr->vals[idx].v.sh;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return sv;
         }
@@ -1377,14 +1210,14 @@ void stackframe_bind_int16(StackFrame* f, const char* name, int16_t i16v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_INT16;
         f->vals[idx].v.i = (long long)i16v;
-        if(f->int16_vals) f->int16_vals[idx] = i16v;
+        if(f->int_slots) f->int_slots[idx] = i16v;
         if(f->type_tags) f->type_tags[idx] = CAST_INT16;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_INT16;
         f->vals[f->cnt].v.i = (long long)i16v;
-        if(f->int16_vals) f->int16_vals[f->cnt] = i16v;
+        if(f->int_slots) f->int_slots[f->cnt] = i16v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_INT16;
         f->cnt++;
     }
@@ -1400,14 +1233,14 @@ void stackframe_bind_short(StackFrame* f, const char* name, short sv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_SHORT;
         f->vals[idx].v.sh = sv;
-        if(f->short_vals) f->short_vals[idx] = sv;
+        if(f->int_slots) f->int_slots[idx] = sv;
         if(f->type_tags) f->type_tags[idx] = CAST_SHORT;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_SHORT;
         f->vals[f->cnt].v.sh = sv;
-        if(f->short_vals) f->short_vals[f->cnt] = sv;
+        if(f->int_slots) f->int_slots[f->cnt] = sv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_SHORT;
         f->cnt++;
     }
@@ -1422,7 +1255,7 @@ int32_t stackframe_get_int32(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            int32_t i32v = fr->int32_vals ? fr->int32_vals[idx] : (int32_t)fr->vals[idx].v.i;
+            int32_t i32v = fr->int_slots ? fr->int_slots[idx] : (int32_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return i32v;
         }
@@ -1441,14 +1274,14 @@ void stackframe_bind_int32(StackFrame* f, const char* name, int32_t i32v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_INT32;
         f->vals[idx].v.i = (long long)i32v;
-        if(f->int32_vals) f->int32_vals[idx] = i32v;
+        if(f->int_slots) f->int_slots[idx] = i32v;
         if(f->type_tags) f->type_tags[idx] = CAST_INT32;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_INT32;
         f->vals[f->cnt].v.i = (long long)i32v;
-        if(f->int32_vals) f->int32_vals[f->cnt] = i32v;
+        if(f->int_slots) f->int_slots[f->cnt] = i32v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_INT32;
         f->cnt++;
     }
@@ -1463,7 +1296,7 @@ int64_t stackframe_get_int64(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            int64_t i64v = fr->int64_vals ? fr->int64_vals[idx] : (int64_t)fr->vals[idx].v.i;
+            int64_t i64v = fr->int_slots ? fr->int_slots[idx] : (int64_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return i64v;
         }
@@ -1482,14 +1315,14 @@ void stackframe_bind_int64(StackFrame* f, const char* name, int64_t i64v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_INT64;
         f->vals[idx].v.i = (long long)i64v;
-        if(f->int64_vals) f->int64_vals[idx] = i64v;
+        if(f->int_slots) f->int_slots[idx] = i64v;
         if(f->type_tags) f->type_tags[idx] = CAST_INT64;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_INT64;
         f->vals[f->cnt].v.i = (long long)i64v;
-        if(f->int64_vals) f->int64_vals[f->cnt] = i64v;
+        if(f->int_slots) f->int_slots[f->cnt] = i64v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_INT64;
         f->cnt++;
     }
@@ -1504,7 +1337,7 @@ long long stackframe_get_long_long(StackFrame* f, const char* name, _Bool* found
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            long long llv = fr->longlong_vals ? fr->longlong_vals[idx] : fr->vals[idx].v.ll;
+            long long llv = fr->int_slots ? fr->int_slots[idx] : fr->vals[idx].v.ll;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return llv;
         }
@@ -1523,14 +1356,14 @@ void stackframe_bind_long_long(StackFrame* f, const char* name, long long llv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_LONG_LONG;
         f->vals[idx].v.ll = llv;
-        if(f->longlong_vals) f->longlong_vals[idx] = llv;
+        if(f->int_slots) f->int_slots[idx] = llv;
         if(f->type_tags) f->type_tags[idx] = CAST_LONGLONG;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_LONG_LONG;
         f->vals[f->cnt].v.ll = llv;
-        if(f->longlong_vals) f->longlong_vals[f->cnt] = llv;
+        if(f->int_slots) f->int_slots[f->cnt] = llv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_LONGLONG;
         f->cnt++;
     }
@@ -1545,7 +1378,7 @@ uint8_t stackframe_get_uint8(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            uint8_t u8v = fr->uint8_vals ? fr->uint8_vals[idx] : (uint8_t)fr->vals[idx].v.i;
+            uint8_t u8v = fr->int_slots ? fr->int_slots[idx] : (uint8_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return u8v;
         }
@@ -1564,14 +1397,14 @@ void stackframe_bind_uint8(StackFrame* f, const char* name, uint8_t u8v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_UINT8;
         f->vals[idx].v.i = (long long)u8v;
-        if(f->uint8_vals) f->uint8_vals[idx] = u8v;
+        if(f->int_slots) f->int_slots[idx] = u8v;
         if(f->type_tags) f->type_tags[idx] = CAST_UINT8;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_UINT8;
         f->vals[f->cnt].v.i = (long long)u8v;
-        if(f->uint8_vals) f->uint8_vals[f->cnt] = u8v;
+        if(f->int_slots) f->int_slots[f->cnt] = u8v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT8;
         f->cnt++;
     }
@@ -1586,7 +1419,7 @@ uint16_t stackframe_get_uint16(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            uint16_t u16v = fr->uint16_vals ? fr->uint16_vals[idx] : (uint16_t)fr->vals[idx].v.i;
+            uint16_t u16v = fr->int_slots ? fr->int_slots[idx] : (uint16_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return u16v;
         }
@@ -1605,14 +1438,14 @@ void stackframe_bind_uint16(StackFrame* f, const char* name, uint16_t u16v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_UINT16;
         f->vals[idx].v.i = (long long)u16v;
-        if(f->uint16_vals) f->uint16_vals[idx] = u16v;
+        if(f->int_slots) f->int_slots[idx] = u16v;
         if(f->type_tags) f->type_tags[idx] = CAST_UINT16;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_UINT16;
         f->vals[f->cnt].v.i = (long long)u16v;
-        if(f->uint16_vals) f->uint16_vals[f->cnt] = u16v;
+        if(f->int_slots) f->int_slots[f->cnt] = u16v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT16;
         f->cnt++;
     }
@@ -1627,7 +1460,7 @@ uint32_t stackframe_get_uint32(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            uint32_t u32v = fr->uint32_vals ? fr->uint32_vals[idx] : (uint32_t)fr->vals[idx].v.i;
+            uint32_t u32v = fr->int_slots ? fr->int_slots[idx] : (uint32_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return u32v;
         }
@@ -1646,14 +1479,14 @@ void stackframe_bind_uint32(StackFrame* f, const char* name, uint32_t u32v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_UINT32;
         f->vals[idx].v.i = (long long)u32v;
-        if(f->uint32_vals) f->uint32_vals[idx] = u32v;
+        if(f->int_slots) f->int_slots[idx] = u32v;
         if(f->type_tags) f->type_tags[idx] = CAST_UINT32;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_UINT32;
         f->vals[f->cnt].v.i = (long long)u32v;
-        if(f->uint32_vals) f->uint32_vals[f->cnt] = u32v;
+        if(f->int_slots) f->int_slots[f->cnt] = u32v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT32;
         f->cnt++;
     }
@@ -1668,7 +1501,7 @@ uint64_t stackframe_get_uint64(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            uint64_t u64v = fr->uint64_vals ? fr->uint64_vals[idx] : (uint64_t)fr->vals[idx].v.i;
+            uint64_t u64v = fr->int_slots ? fr->int_slots[idx] : (uint64_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return u64v;
         }
@@ -1687,14 +1520,14 @@ void stackframe_bind_uint64(StackFrame* f, const char* name, uint64_t u64v)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_UINT64;
         f->vals[idx].v.i = (long long)u64v;
-        if(f->uint64_vals) f->uint64_vals[idx] = u64v;
+        if(f->int_slots) f->int_slots[idx] = u64v;
         if(f->type_tags) f->type_tags[idx] = CAST_UINT64;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_UINT64;
         f->vals[f->cnt].v.i = (long long)u64v;
-        if(f->uint64_vals) f->uint64_vals[f->cnt] = u64v;
+        if(f->int_slots) f->int_slots[f->cnt] = u64v;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UINT64;
         f->cnt++;
     }
@@ -1709,7 +1542,7 @@ long stackframe_get_long(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            long lv = fr->long_vals ? fr->long_vals[idx] : (long)fr->vals[idx].v.i;
+            long lv = fr->int_slots ? fr->int_slots[idx] : (long)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return lv;
         }
@@ -1728,14 +1561,14 @@ void stackframe_bind_long(StackFrame* f, const char* name, long lv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_LONG;
         f->vals[idx].v.i = (long long)lv;
-        if(f->long_vals) f->long_vals[idx] = lv;
+        if(f->int_slots) f->int_slots[idx] = lv;
         if(f->type_tags) f->type_tags[idx] = CAST_LONG;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_LONG;
         f->vals[f->cnt].v.i = (long long)lv;
-        if(f->long_vals) f->long_vals[f->cnt] = lv;
+        if(f->int_slots) f->int_slots[f->cnt] = lv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_LONG;
         f->cnt++;
     }
@@ -1750,7 +1583,7 @@ unsigned long stackframe_get_ulong(StackFrame* f, const char* name, _Bool* found
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            unsigned long ulv = fr->ulong_vals ? fr->ulong_vals[idx] : (unsigned long)fr->vals[idx].v.i;
+            unsigned long ulv = fr->int_slots ? fr->int_slots[idx] : (unsigned long)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return ulv;
         }
@@ -1769,14 +1602,14 @@ void stackframe_bind_ulong(StackFrame* f, const char* name, unsigned long ulv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_ULONG;
         f->vals[idx].v.i = (long long)ulv;
-        if(f->ulong_vals) f->ulong_vals[idx] = ulv;
+        if(f->int_slots) f->int_slots[idx] = ulv;
         if(f->type_tags) f->type_tags[idx] = CAST_ULONG;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_ULONG;
         f->vals[f->cnt].v.i = (long long)ulv;
-        if(f->ulong_vals) f->ulong_vals[f->cnt] = ulv;
+        if(f->int_slots) f->int_slots[f->cnt] = ulv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_ULONG;
         f->cnt++;
     }
@@ -1791,7 +1624,7 @@ size_t stackframe_get_size_t(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            size_t stv = fr->size_t_vals ? fr->size_t_vals[idx] : (size_t)fr->vals[idx].v.i;
+            size_t stv = fr->int_slots ? fr->int_slots[idx] : (size_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return stv;
         }
@@ -1810,14 +1643,14 @@ void stackframe_bind_size_t(StackFrame* f, const char* name, size_t stv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_SIZE_T;
         f->vals[idx].v.i = (long long)stv;
-        if(f->size_t_vals) f->size_t_vals[idx] = stv;
+        if(f->int_slots) f->int_slots[idx] = stv;
         if(f->type_tags) f->type_tags[idx] = CAST_SIZE_T;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_SIZE_T;
         f->vals[f->cnt].v.i = (long long)stv;
-        if(f->size_t_vals) f->size_t_vals[f->cnt] = stv;
+        if(f->int_slots) f->int_slots[f->cnt] = stv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_SIZE_T;
         f->cnt++;
     }
@@ -1832,7 +1665,7 @@ ssize_t stackframe_get_ssize_t(StackFrame* f, const char* name, _Bool* found)
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            ssize_t sstv = fr->ssize_t_vals ? fr->ssize_t_vals[idx] : (ssize_t)fr->vals[idx].v.i;
+            ssize_t sstv = fr->int_slots ? fr->int_slots[idx] : (ssize_t)fr->vals[idx].v.i;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return sstv;
         }
@@ -1851,14 +1684,14 @@ void stackframe_bind_ssize_t(StackFrame* f, const char* name, ssize_t sstv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_SSIZE_T;
         f->vals[idx].v.i = (long long)sstv;
-        if(f->ssize_t_vals) f->ssize_t_vals[idx] = sstv;
+        if(f->int_slots) f->int_slots[idx] = sstv;
         if(f->type_tags) f->type_tags[idx] = CAST_SSIZE_T;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_SSIZE_T;
         f->vals[f->cnt].v.i = (long long)sstv;
-        if(f->ssize_t_vals) f->ssize_t_vals[f->cnt] = sstv;
+        if(f->int_slots) f->int_slots[f->cnt] = sstv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_SSIZE_T;
         f->cnt++;
     }
@@ -1873,7 +1706,7 @@ long double stackframe_get_long_double(StackFrame* f, const char* name, _Bool* f
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            long double ldv = fr->longdouble_vals ? fr->longdouble_vals[idx] : (long double)fr->vals[idx].v.d;
+            long double ldv = fr->flt_slots ? fr->flt_slots[idx] : (long double)fr->vals[idx].v.d;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return ldv;
         }
@@ -1892,14 +1725,14 @@ void stackframe_bind_long_double(StackFrame* f, const char* name, long double ld
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_LONG_DOUBLE;
         f->vals[idx].v.d = (double)ldv;
-        if(f->longdouble_vals) f->longdouble_vals[idx] = ldv;
+        if(f->flt_slots) f->flt_slots[idx] = ldv;
         if(f->type_tags) f->type_tags[idx] = CAST_LONG_DOUBLE;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_LONG_DOUBLE;
         f->vals[f->cnt].v.d = (double)ldv;
-        if(f->longdouble_vals) f->longdouble_vals[f->cnt] = ldv;
+        if(f->flt_slots) f->flt_slots[f->cnt] = ldv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_LONG_DOUBLE;
         f->cnt++;
     }
@@ -1914,7 +1747,7 @@ unsigned char stackframe_get_uchar(StackFrame* f, const char* name, _Bool* found
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            unsigned char ucv = fr->uchar_vals ? fr->uchar_vals[idx] : fr->vals[idx].v.uc;
+            unsigned char ucv = fr->int_slots ? fr->int_slots[idx] : fr->vals[idx].v.uc;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return ucv;
         }
@@ -1933,14 +1766,14 @@ void stackframe_bind_uchar(StackFrame* f, const char* name, unsigned char ucv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_UCHAR;
         f->vals[idx].v.uc = ucv;
-        if(f->uchar_vals) f->uchar_vals[idx] = ucv;
+        if(f->int_slots) f->int_slots[idx] = ucv;
         if(f->type_tags) f->type_tags[idx] = CAST_UCHAR;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_UCHAR;
         f->vals[f->cnt].v.uc = ucv;
-        if(f->uchar_vals) f->uchar_vals[f->cnt] = ucv;
+        if(f->int_slots) f->int_slots[f->cnt] = ucv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_UCHAR;
         f->cnt++;
     }
@@ -1955,7 +1788,7 @@ unsigned short stackframe_get_ushort(StackFrame* f, const char* name, _Bool* fou
         int idx = find_in_frame(fr, name);
         if(idx >= 0) {
             if(found) *found = 1;
-            unsigned short usv = fr->ushort_vals ? fr->ushort_vals[idx] : fr->vals[idx].v.us;
+            unsigned short usv = fr->int_slots ? fr->int_slots[idx] : fr->vals[idx].v.us;
             if(hl) pthread_rwlock_unlock(&f->rw);
             return usv;
         }
@@ -1974,14 +1807,14 @@ void stackframe_bind_ushort(StackFrame* f, const char* name, unsigned short usv)
         slot_release(&f->vals[idx]);
         f->vals[idx].type = VAL_USHORT;
         f->vals[idx].v.us = usv;
-        if(f->ushort_vals) f->ushort_vals[idx] = usv;
+        if(f->int_slots) f->int_slots[idx] = usv;
         if(f->type_tags) f->type_tags[idx] = CAST_USHORT;
     } else {
         frame_ensure(f, f->cnt + 1);
         f->names[f->cnt] = strdup(name);
         f->vals[f->cnt].type = VAL_USHORT;
         f->vals[f->cnt].v.us = usv;
-        if(f->ushort_vals) f->ushort_vals[f->cnt] = usv;
+        if(f->int_slots) f->int_slots[f->cnt] = usv;
         if(f->type_tags) f->type_tags[f->cnt] = CAST_USHORT;
         f->cnt++;
     }

@@ -6,7 +6,7 @@
 #include <stdarg.h>
 
 /* 全局日志级别（默认 INFO） */
-LogLevel g_log_level = LOG_INFO;
+LogLevel g_log_level = LOG_DEBUG;
 
 /* 全局调用栈 */
 LogCallStackEntry g_log_callstack[LOG_CALLSTACK_MAX_DEPTH];

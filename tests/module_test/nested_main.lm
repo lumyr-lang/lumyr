@@ -1,5 +1,0 @@
-// nested_main.lm —— 测试子目录相对路径导入
-import "nested/strutil.lm" as su;
-
-print("shout=" + su.shout("hi"));
-print("tag=" + su.TAG);

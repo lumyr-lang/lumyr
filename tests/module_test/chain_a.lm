@@ -1,3 +1,0 @@
-// chain_a.lm —— 链首：导入 chain_b
-import "chain_b.lm" as b;
-export func from_a() { return "A->" + b.from_b(); }

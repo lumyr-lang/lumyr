@@ -1,2 +1,0 @@
-// chain_c.lm —— 链末端模块
-export func from_c() { return "C"; }

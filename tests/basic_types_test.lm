@@ -1,0 +1,114 @@
+// ============================================================
+// 基础数据类型运算测试
+// 覆盖：声明、打印、同类型运算、跨类型运算、变量传播、比较
+// ============================================================
+
+print("=== 1. 基础类型声明与打印 ===");
+
+a = <int>10;
+print(a);
+
+b = <double>20;
+print(b);
+
+c = <float>3.14;
+print(c);
+
+d = <bool>true;
+print(d);
+
+e = <char>'A';
+print(e);
+
+f = <byte>255;
+print(f);
+
+print("=== 2. int 算术 ===");
+
+x = <int>100;
+y = <int>23;
+print(x + y);
+print(x - y);
+print(x * y);
+print(x / y);
+print(x % y);
+
+print("=== 3. double 算术 ===");
+
+dx = <double>10.5;
+dy = <double>2.5;
+print(dx + dy);
+print(dx - dy);
+print(dx * dy);
+print(dx / dy);
+
+print("=== 4. float 算术 ===");
+
+fx = <float>6.25;
+fy = <float>2.5;
+print(fx + fy);
+print(fx * fy);
+
+print("=== 5. int + double 混合运算 ===");
+
+ix = <int>10;
+dv = <double>0.5;
+print(ix + dv);
+print(dv + ix);
+print(ix * dv);
+
+print("=== 6. int + float 混合运算 ===");
+
+fv = <float>0.25;
+print(ix + fv);
+print(fv * ix);
+
+print("=== 7. 变量类型传播 ===");
+
+src = <int>777;
+cp = src;
+print(cp);
+
+cp2 = cp;
+print(cp2);
+
+print("=== 8. 传播后参与运算 ===");
+
+pi = <int>10;
+pc = pi;
+print(pc + <int>5);
+
+print("=== 9. 字面量提升（专用类型 + 字面量） ===");
+
+li = <int>10;
+print(li + 5);
+print(li - 3);
+print(li * 4);
+print(li / 2);
+
+ld = <double>1.5;
+print(ld + 2);
+print(ld * 3);
+
+print("=== 10. 比较运算 ===");
+
+c1 = <int>10;
+c2 = <int>20;
+print(c1 < c2);
+print(c1 > c2);
+print(c1 == c1);
+print(c1 != c2);
+
+cd1 = <double>1.1;
+cd2 = <double>2.2;
+print(cd1 < cd2);
+print(cd1 == cd1);
+
+print("=== 11. 嵌套表达式 ===");
+
+ni = <int>3;
+nj = <int>4;
+print(ni * nj + 5);
+print(ni + nj * 2);
+
+print("=== 全部测试完成 ===");

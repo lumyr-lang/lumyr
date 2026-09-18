@@ -1,3 +1,0 @@
-// cycle_a.lm —— 与 cycle_b 互相导入，用于循环导入检测
-import "cycle_b.lm" as b;
-export func fa() { return 1; }

@@ -1,6 +1,0 @@
-a = <uint16>50000;
-b = <uint16>60000;
-c = a;
-print(a);
-print(b);
-print(c);

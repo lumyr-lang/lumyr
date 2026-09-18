@@ -14,6 +14,7 @@ int bf_sym(BytecodeFunc* fn, const char* name);
 int bf_const(BytecodeFunc* fn, Value v);
 void bf_emit(BytecodeFunc* fn, OpCode op, int a, int b);
 int bf_emit_here(BytecodeFunc* fn, OpCode op, int a, int b);
+const char* opc_name(OpCode op);
 void bf_patch(BytecodeFunc* fn, int pos, int target);
 void bf_patch_b(BytecodeFunc* fn, int pos, int target);
 

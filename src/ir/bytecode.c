@@ -266,7 +266,7 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
 
 // ---------------- 反汇编（-S） ----------------
 
-static const char* opc_name(OpCode op)
+const char* opc_name(OpCode op)
 {
     switch(op) {
         case OPC_NOP: return "NOP";

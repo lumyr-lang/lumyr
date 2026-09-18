@@ -905,20 +905,20 @@ void val_print(const Value* v) {
 
 // ==================== 类型化自增自减（直接操作原始指针，零转换开销） ====================
 /* 有符号整数 */
-void int_inc(int* v) { (*v)++; }
-void int8_inc(int8_t* v) { (*v)++; }
-void int16_inc(int16_t* v) { (*v)++; }
-void int32_inc(int32_t* v) { (*v)++; }
+void int_inc(int64_t* v) { (*v) = (int64_t)((int)(*v) + 1); }
+void int8_inc(int64_t* v) { (*v) = (int64_t)((int8_t)(*v) + 1); }
+void int16_inc(int64_t* v) { (*v) = (int64_t)((int16_t)(*v) + 1); }
+void int32_inc(int64_t* v) { (*v) = (int64_t)((int32_t)(*v) + 1); }
 void int64_inc(int64_t* v) { (*v)++; }
 void long_inc(long* v) { (*v)++; }
 void short_inc(short* v) { (*v)++; }
 
 /* 无符号整数 */
-void uint_inc(unsigned int* v) { (*v)++; }
-void uint8_inc(uint8_t* v) { (*v)++; }
-void uint16_inc(uint16_t* v) { (*v)++; }
-void uint32_inc(uint32_t* v) { (*v)++; }
-void uint64_inc(uint64_t* v) { (*v)++; }
+void uint_inc(int64_t* v) { (*v) = (int64_t)((unsigned int)(*v) + 1); }
+void uint8_inc(int64_t* v) { (*v) = (int64_t)((uint8_t)(*v) + 1); }
+void uint16_inc(int64_t* v) { (*v) = (int64_t)((uint16_t)(*v) + 1); }
+void uint32_inc(int64_t* v) { (*v) = (int64_t)((uint32_t)(*v) + 1); }
+void uint64_inc(int64_t* v) { (*v)++; }
 void ulong_inc(unsigned long* v) { (*v)++; }
 void ushort_inc(unsigned short* v) { (*v)++; }
 void byte_inc(unsigned char* v) { (*v)++; }

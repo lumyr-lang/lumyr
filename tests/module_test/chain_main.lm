@@ -1,3 +1,0 @@
-// chain_main.lm —— 多模块链式导入 A -> B -> C
-import "chain_a.lm" as a;
-print("chain=" + a.from_a());

@@ -1,3 +1,0 @@
-// cycle_b.lm —— 与 cycle_a 互相导入
-import "cycle_a.lm" as a;
-export func fb() { return 2; }
