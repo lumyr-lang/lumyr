@@ -53,7 +53,10 @@ int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_store(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     Value val;
-    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    if (stack_vm_pop(g_stack_mgr, STACK_VALUE, &val) < 0) {
+        fprintf(stderr, "VM Error: VALUE stack underflow at STORE_VAR (idx=%d)\n", idx);
+        return -1;
+    }
     ctx->frame->vals[idx] = val;
     return 1;
 }
