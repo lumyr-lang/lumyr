@@ -2204,8 +2204,38 @@ void c_expr(Ctx* c, AstNode* node)
                 }
                 c->fn->var_type_tags[var_idx] = -1;
             } else {
-                /* 无类型标注的赋值：清除之前的类型标记，回退到动态 Value 类型 */
-                c->fn->var_type_tags[var_idx] = -1;
+                /* 无类型标注的赋值：自动类型推断
+                 * 1. 字面量推断：10 → int，3.14 → double，true → bool，'a' → char
+                 * 2. 类型继承：b = a → 继承 a 的类型标记 */
+                int inferred_tag = -1;
+                
+                /* 检测表达式类型，自动推断 */
+                if(node->u.assign.expr) {
+                    AstNode* expr = node->u.assign.expr;
+                    
+                    /* 字面量自动推断 */
+                    if(expr->type == AST_INT) {
+                        inferred_tag = CAST_INT;  /* 整数字面量 → int */
+                    } else if(expr->type == AST_NUM) {
+                        inferred_tag = CAST_DOUBLE;  /* 浮点字面量 → double */
+                    } else if(expr->type == AST_BOOL) {
+                        inferred_tag = CAST_BOOL;  /* 布尔字面量 → bool */
+                    } else if(expr->type == AST_CHAR) {
+                        inferred_tag = CAST_CHAR;  /* 字符字面量 → char */
+                    } else if(expr->type == AST_STRING) {
+                        inferred_tag = CAST_STRING;  /* 字符串字面量 → string */
+                    }
+                    /* 变量类型继承：b = a → 继承 a 的类型标记 */
+                    else if(expr->type == AST_VAR) {
+                        const char* src_name = expr->u.varname;
+                        int src_idx = bf_sym(c->fn, src_name);
+                        if(src_idx >= 0 && c->fn->var_type_tags[src_idx] >= 0) {
+                            inferred_tag = c->fn->var_type_tags[src_idx];
+                        }
+                    }
+                }
+                
+                c->fn->var_type_tags[var_idx] = inferred_tag;
                 /* 检测 struct 构造调用：Point(10, 20) → 变量是 Point 类型 */
                 if(node->u.assign.expr && node->u.assign.expr->type == AST_CALL) {
                     const char* fname = node->u.assign.expr->u.call.name;
