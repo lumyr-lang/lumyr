@@ -68,6 +68,31 @@ endif
 # ========== 链接库（跨平台） ==========
 LDLIBS := -lcurl -liconv
 
+# ========== GMP 高精度数学库（动态链接，LGPL v3 合规） ==========
+GMP_DIR := $(CURDIR)/deps/gmp
+ARCH := $(shell uname -m)
+ifeq ($(OS_NAME),macos)
+    ifeq ($(ARCH),arm64)
+        GMP_LIB_DIR := $(GMP_DIR)/lib/macos-arm64
+    else
+        GMP_LIB_DIR := $(GMP_DIR)/lib/macos-x86_64
+    endif
+else ifeq ($(OS_NAME),linux)
+    ifeq ($(ARCH),aarch64)
+        GMP_LIB_DIR := $(GMP_DIR)/lib/linux-aarch64
+    else ifeq ($(ARCH),x86_64)
+        GMP_LIB_DIR := $(GMP_DIR)/lib/linux-x86_64
+    endif
+else ifeq ($(OS_NAME),windows)
+    ifeq ($(ARCH),x86_64)
+        GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x64
+    else
+        GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x86
+    endif
+endif
+CFLAGS += -I$(GMP_DIR)/include
+LDFLAGS += -L$(GMP_LIB_DIR) -Wl,-rpath,$(GMP_LIB_DIR)
+LDLIBS += -lgmp
 ifneq ($(CURL_DIR),)
     CFLAGS += -I$(CURL_DIR)/include
     LDFLAGS += -L$(CURL_DIR)/lib
@@ -76,7 +101,6 @@ ifneq ($(ICONV_DIR),)
     CFLAGS += -I$(ICONV_DIR)/include
     LDFLAGS += -L$(ICONV_DIR)/lib
 endif
-
 # ========== Runtime 静态库源文件 ==========
 # lm_runtime.c 已 include 了 gc_runtime.c / lm_string.c / lm_array.c / lm_math.c / lm_io.c
 # 这些文件不再单独编译，避免重复定义
@@ -177,11 +201,14 @@ $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 	flex -o $@ $<
 
 # ========== 编译器本体链接 ==========
+# ========== 编译器本体链接 ==========
 $(BIN_LOCAL): $(OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
 	@echo "    Built: $@"
-
+	@echo "==> Copying GMP dynamic library to $(BIN_DIR)/"
+	cp $(GMP_LIB_DIR)/libgmp.10.dylib $(BIN_DIR)/
+	cp $(GMP_LIB_DIR)/libgmp.dylib $(BIN_DIR)/ 2>/dev/null || true
 # ========== 单元测试 ==========
 TEST_STACKFRAME := $(TEST_DIR)/stackframe_test$(EXE_EXT)
 
