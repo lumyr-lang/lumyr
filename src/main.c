@@ -44,6 +44,9 @@ static void disasm_cb(const char* class_name, const char* method_name, void* dat
 }
 
 int main(int argc, char** argv) {
+    /* 设置 stdout 为无缓冲模式，确保 print 输出立即刷新 */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    
     int codegen_mode = 0;
     int only_emit_c = 0;
 
