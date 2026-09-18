@@ -93,3 +93,18 @@ typedef struct {
 } VmThreadArg;
 
 #endif /* LUMYR_VM_TYPES_H */
+
+/* ========== VM 执行上下文（4 核心栈设计） ========== */
+typedef struct {
+    BytecodeFunc* fn;       /* 当前函数字节码 */
+    Instruction* code;      /* 指令数组 */
+    int pc;                 /* 指令指针 */
+    StackFrame* frame;      /* 当前栈帧 */
+    Value* consts;          /* 常量池 */
+    const char** syms;      /* 符号表 */
+    int const_cnt;
+    int sym_cnt;
+} VMExecCtx;
+
+/* 指令处理函数类型 */
+typedef void (*VMInstrHandler)(VMExecCtx* ctx, Instruction* in);
