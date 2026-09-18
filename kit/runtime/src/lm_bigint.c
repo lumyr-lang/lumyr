@@ -304,26 +304,56 @@ BigInt* lumyr_bigint_mul(BigInt* a, BigInt* b) {
     return result;
 }
 
+/* ===== Knuth 试商法辅助函数（参考 Python 的 longobject.c） ===== */
+
+/* 左移：把 digits 左移 d 位（乘以 2^d），返回进位 */
+static uint32_t bigint_v_lshift(uint32_t* a, uint32_t* b, int n, int d) {
+    uint64_t carry = 0;
+    for (int i = 0; i < n; i++) {
+        uint64_t lval = ((uint64_t)b[i] << d) | carry;
+        a[i] = (uint32_t)(lval & BIGINT_MASK);
+        carry = lval >> 30;
+    }
+    return (uint32_t)carry;
+}
+
+/* 右移：把 digits 右移 d 位（除以 2^d），返回进位 */
+static uint32_t bigint_v_rshift(uint32_t* a, uint32_t* b, int n, int d) {
+    uint64_t carry = 0;
+    for (int i = n - 1; i >= 0; i--) {
+        uint64_t lval = ((uint64_t)carry << 30) | b[i];
+        a[i] = (uint32_t)((lval >> d) & BIGINT_MASK);
+        carry = lval & ((1ULL << d) - 1);
+    }
+    return (uint32_t)carry;
+}
+
+/* 计算 digit 的二进制位数 */
+static int bigint_bit_length_digit(uint32_t d) {
+    int bits = 0;
+    while (d > 0) {
+        bits++;
+        d >>= 1;
+    }
+    return bits;
+}
+
 BigInt* lumyr_bigint_div(BigInt* a, BigInt* b) {
     if (!a || !b || b->sign == 0) return NULL;  /* 除零错误 */
     if (a->sign == 0) {
         return lumyr_bigint_from_int64(0);
     }
 
-    /* 简化：先用减法实现（后续可以优化为试商法） */
-    BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
-    result->sign = a->sign * b->sign;
-    result->cap = 8;
-    result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
-    result->len = 1;
+    /* Knuth 试商法（完整参考 Python 的 longobject.c x_divrem 函数） */
+    /* digits 数组是逆序存储的（低位在前），所以最高位是 digits[len-1] */
 
-    /* 直接用绝对值，不调用 lumyr_bigint_from_string(lumyr_bigint_to_string(a))，避免无限递归 */
-    BigInt* remainder = (BigInt*)calloc(1, sizeof(BigInt));
-    remainder->sign = 1;
-    remainder->cap = a->cap;
-    remainder->len = a->len;
-    remainder->digits = (uint32_t*)calloc(remainder->cap, sizeof(uint32_t));
-    memcpy(remainder->digits, a->digits, a->len * sizeof(uint32_t));
+    /* 把 a 和 b 都转成绝对值 */
+    BigInt* abs_a = (BigInt*)calloc(1, sizeof(BigInt));
+    abs_a->sign = 1;
+    abs_a->cap = a->cap;
+    abs_a->len = a->len;
+    abs_a->digits = (uint32_t*)calloc(abs_a->cap, sizeof(uint32_t));
+    memcpy(abs_a->digits, a->digits, a->len * sizeof(uint32_t));
 
     BigInt* abs_b = (BigInt*)calloc(1, sizeof(BigInt));
     abs_b->sign = 1;
@@ -332,22 +362,137 @@ BigInt* lumyr_bigint_div(BigInt* a, BigInt* b) {
     abs_b->digits = (uint32_t*)calloc(abs_b->cap, sizeof(uint32_t));
     memcpy(abs_b->digits, b->digits, b->len * sizeof(uint32_t));
 
-    int quotient = 0;
-    while (abs_cmp(remainder, abs_b) >= 0) {
-        BigInt* new_rem = (BigInt*)calloc(1, sizeof(BigInt));
-        abs_sub(remainder, abs_b, new_rem);
-        lumyr_bigint_free(remainder);
-        remainder = new_rem;
-        quotient++;
+    /* 如果 abs_a < abs_b，商为 0 */
+    if (abs_cmp(abs_a, abs_b) < 0) {
+        lumyr_bigint_free(abs_a);
+        lumyr_bigint_free(abs_b);
+        return lumyr_bigint_from_int64(0);
     }
 
-    /* 把商转成 BigInt */
-    lumyr_bigint_free(remainder);
+    /* 如果除数只有一位，用简化版 */
+    if (abs_b->len == 1) {
+        /* 单精度除法 */
+        BigInt* quotient = (BigInt*)calloc(1, sizeof(BigInt));
+        quotient->sign = a->sign * b->sign;
+        quotient->cap = abs_a->len + 8;
+        quotient->digits = (uint32_t*)calloc(quotient->cap, sizeof(uint32_t));
+        quotient->len = abs_a->len;
+
+        uint64_t rem = 0;
+        for (int i = abs_a->len - 1; i >= 0; i--) {
+            uint64_t val = (rem << 30) | abs_a->digits[i];
+            quotient->digits[i] = (uint32_t)(val / abs_b->digits[0]);
+            rem = val % abs_b->digits[0];
+        }
+
+        strip_leading_zeros(quotient);
+        lumyr_bigint_free(abs_a);
+        lumyr_bigint_free(abs_b);
+        return quotient;
+    }
+
+    /* 完整的 Knuth 试商法 */
+    int size_v = abs_a->len;
+    int size_w = abs_b->len;
+
+    /* 分配空间 */
+    BigInt* v = (BigInt*)calloc(1, sizeof(BigInt));
+    v->cap = size_v + 8;
+    v->digits = (uint32_t*)calloc(v->cap, sizeof(uint32_t));
+    v->len = size_v;
+    memcpy(v->digits, abs_a->digits, size_v * sizeof(uint32_t));
+
+    BigInt* w = (BigInt*)calloc(1, sizeof(BigInt));
+    w->cap = size_w + 8;
+    w->digits = (uint32_t*)calloc(w->cap, sizeof(uint32_t));
+    w->len = size_w;
+    memcpy(w->digits, abs_b->digits, size_w * sizeof(uint32_t));
+
+    /* normalize: shift w1 left so that its top digit is >= PyLong_BASE/2.
+       shift v1 left by the same amount. */
+    int d = 30 - bigint_bit_length_digit(w->digits[size_w - 1]);
+    uint32_t carry = bigint_v_lshift(w->digits, w->digits, size_w, d);
+    if (carry != 0) {
+        w->digits[size_w] = carry;
+        w->len = size_w + 1;
+        size_w = w->len;
+    }
+
+    carry = bigint_v_lshift(v->digits, v->digits, size_v, d);
+    if (carry != 0 || v->digits[size_v - 1] >= w->digits[size_w - 1]) {
+        v->digits[size_v] = carry;
+        size_v++;
+        v->len = size_v;
+    }
+
+    /* quotient has k = size_v - size_w digits */
+    int k = size_v - size_w;
+    if (k < 1) k = 1;
+
+    BigInt* quotient = (BigInt*)calloc(1, sizeof(BigInt));
+    quotient->sign = a->sign * b->sign;
+    quotient->cap = k + 8;
+    quotient->digits = (uint32_t*)calloc(quotient->cap, sizeof(uint32_t));
+    quotient->len = k;
+
+    uint32_t* v0 = v->digits;
+    uint32_t* w0 = w->digits;
+    uint32_t wm1 = w0[size_w - 1];
+    uint32_t wm2 = w0[size_w - 2];
+
+    uint32_t* vk = v0 + k;
+    uint32_t* ak = quotient->digits + k;
+
+    while (vk-- > v0) {
+        /* estimate quotient digit q; may overestimate by 1 (rare) */
+        uint32_t vtop = vk[size_w];
+        uint64_t vv = ((uint64_t)vtop << 30) | vk[size_w - 1];
+        uint32_t q = (uint32_t)(vv / wm1);
+        uint32_t r = (uint32_t)(vv - (uint64_t)wm1 * q); /* r = vv % wm1 */
+
+        /* adjust q if too large */
+        while ((uint64_t)wm2 * q > (((uint64_t)r << 30) | vk[size_w - 2])) {
+            q--;
+            r += wm1;
+            if (r >= BIGINT_BASE)
+                break;
+        }
+
+        /* subtract q*w0[0:size_w] from vk[0:size_w+1] */
+        int64_t zhi = 0;
+        for (int i = 0; i < size_w; i++) {
+            /* invariants: -BIGINT_BASE <= -q <= zhi <= 0;
+               -BIGINT_BASE * q <= z < BIGINT_BASE */
+            int64_t z = (int64_t)vk[i] + zhi - (int64_t)q * (int64_t)w0[i];
+            vk[i] = (uint32_t)z & BIGINT_MASK;
+            zhi = (int64_t)z >> 30;
+        }
+
+        /* add w back if q was too large (this branch taken rarely) */
+        if ((int64_t)vtop + zhi < 0) {
+            uint32_t carry2 = 0;
+            for (int i = 0; i < size_w; i++) {
+                carry2 += vk[i] + w0[i];
+                vk[i] = carry2 & BIGINT_MASK;
+                carry2 >>= 30;
+            }
+            q--;
+        }
+
+        /* store quotient digit */
+        ak--;
+        *ak = q;
+    }
+
+    /* 去掉前导零 */
+    strip_leading_zeros(quotient);
+
+    lumyr_bigint_free(v);
+    lumyr_bigint_free(w);
+    lumyr_bigint_free(abs_a);
     lumyr_bigint_free(abs_b);
-    lumyr_bigint_free(result);
-    result = lumyr_bigint_from_int64(quotient);
-    result->sign = a->sign * b->sign;
-    return result;
+
+    return quotient;
 }
 
 /* ===== 比较 ===== */
