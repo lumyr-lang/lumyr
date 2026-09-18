@@ -1486,7 +1486,6 @@ primary
        <string,V>{k:v} map 值强转（键固定 string） */
     | TOK_TYPE_ANNOT unary_expr
         {
-            fprintf(stderr, "[DEBUG] TOK_TYPE_ANNOT unary_expr: cast_type=%d, $2->type=%d\n", $1, $2 ? $2->type : -1);
             $$ = ast_type_annotation($1, $2);
         }
     | LT ID GT unary_expr {

@@ -3475,6 +3475,7 @@ Value vm_run(BytecodeFunc* bf, StackFrame* frame, EvalCtx* ctx)
                     lumyr_print_inline(stack[base + i]);
                 }
                 printf("\n");
+                fflush(stdout);
                 sp -= cnt;  /* 弹出所有参数 */
                 break;
             }

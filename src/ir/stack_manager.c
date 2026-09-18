@@ -8,7 +8,11 @@
 #include "stack_manager.h"
 #include "lumyr_value_type.h"  /* Value类型定义 */
 
-/* 栈信息表 */
+/* 栈信息表 —— 合并为 4 个核心栈
+ * STACK_VALUE: 通用 Value 栈
+ * STACK_INT64: 统一整数栈（所有整数类型共享，int64_t 存储）
+ * STACK_DOUBLE: 统一浮点栈（所有浮点类型共享，double 存储）
+ * STACK_PTR: 统一指针/字符串栈 */
 static const StackInfo stack_info_table[STACK_TYPE_COUNT] = {
     [STACK_VALUE] = {
         .type = STACK_VALUE,
@@ -17,11 +21,11 @@ static const StackInfo stack_info_table[STACK_TYPE_COUNT] = {
         .elem_size = sizeof(Value),
         .has_dedicated_stack = 1,
     },
-    [STACK_INT] = {
-        .type = STACK_INT,
+    [STACK_INT64] = {
+        .type = STACK_INT64,
         .name = "__int_stack",
-        .c_type = "int",
-        .elem_size = sizeof(int),
+        .c_type = "int64_t",
+        .elem_size = sizeof(int64_t),
         .has_dedicated_stack = 1,
     },
     [STACK_DOUBLE] = {
@@ -31,144 +35,11 @@ static const StackInfo stack_info_table[STACK_TYPE_COUNT] = {
         .elem_size = sizeof(double),
         .has_dedicated_stack = 1,
     },
-    [STACK_FLOAT] = {
-        .type = STACK_FLOAT,
-        .name = "__float_stack",
-        .c_type = "float",
-        .elem_size = sizeof(float),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_UINT] = {
-        .type = STACK_UINT,
-        .name = "__uint_stack",
-        .c_type = "unsigned int",
-        .elem_size = sizeof(unsigned int),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_BOOL] = {
-        .type = STACK_BOOL,
-        .name = "__bool_stack",
-        .c_type = "_Bool",
-        .elem_size = sizeof(_Bool),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_CHAR] = {
-        .type = STACK_CHAR,
-        .name = "__char_stack",
-        .c_type = "char",
-        .elem_size = sizeof(char),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_BYTE] = {
-        .type = STACK_BYTE,
-        .name = "__byte_stack",
-        .c_type = "unsigned char",
-        .elem_size = sizeof(unsigned char),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_INT8] = {
-        .type = STACK_INT8,
-        .name = "__int8_stack",
-        .c_type = "int8_t",
-        .elem_size = sizeof(int8_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_INT16] = {
-        .type = STACK_INT16,
-        .name = "__int16_stack",
-        .c_type = "int16_t",
-        .elem_size = sizeof(int16_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_SHORT] = {
-        .type = STACK_SHORT,
-        .name = "__short_stack",
-        .c_type = "short",
-        .elem_size = sizeof(short),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_INT32] = {
-        .type = STACK_INT32,
-        .name = "__int32_stack",
-        .c_type = "int32_t",
-        .elem_size = sizeof(int32_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_INT64] = {
-        .type = STACK_INT64,
-        .name = "__int64_stack",
-        .c_type = "int64_t",
-        .elem_size = sizeof(int64_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_UINT8] = {
-        .type = STACK_UINT8,
-        .name = "__uint8_stack",
-        .c_type = "uint8_t",
-        .elem_size = sizeof(uint8_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_UINT16] = {
-        .type = STACK_UINT16,
-        .name = "__uint16_stack",
-        .c_type = "uint16_t",
-        .elem_size = sizeof(uint16_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_UINT32] = {
-        .type = STACK_UINT32,
-        .name = "__uint32_stack",
-        .c_type = "uint32_t",
-        .elem_size = sizeof(uint32_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_UINT64] = {
-        .type = STACK_UINT64,
-        .name = "__uint64_stack",
-        .c_type = "uint64_t",
-        .elem_size = sizeof(uint64_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_LONG] = {
-        .type = STACK_LONG,
-        .name = "__long_stack",
-        .c_type = "long",
-        .elem_size = sizeof(long),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_ULONG] = {
-        .type = STACK_ULONG,
-        .name = "__ulong_stack",
-        .c_type = "unsigned long",
-        .elem_size = sizeof(unsigned long),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_SIZE_T] = {
-        .type = STACK_SIZE_T,
-        .name = "__size_t_stack",
-        .c_type = "size_t",
-        .elem_size = sizeof(size_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_SSIZE_T] = {
-        .type = STACK_SSIZE_T,
-        .name = "__ssize_t_stack",
-        .c_type = "ssize_t",
-        .elem_size = sizeof(ssize_t),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_LONG_DOUBLE] = {
-        .type = STACK_LONG_DOUBLE,
-        .name = "__long_double_stack",
-        .c_type = "long double",
-        .elem_size = sizeof(long double),
-        .has_dedicated_stack = 1,
-    },
-    [STACK_LONG_LONG] = {
-        .type = STACK_LONG_LONG,
-        .name = "__long_long_stack",
-        .c_type = "long long",
-        .elem_size = sizeof(long long),
+    [STACK_PTR] = {
+        .type = STACK_PTR,
+        .name = "__ptr_stack",
+        .c_type = "void*",
+        .elem_size = sizeof(void*),
         .has_dedicated_stack = 1,
     },
 };

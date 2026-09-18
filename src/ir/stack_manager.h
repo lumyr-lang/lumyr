@@ -19,32 +19,36 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* 栈类型枚举 */
+/* 栈类型枚举
+ * 合并设计：所有整数类型共享 INT64 栈（统一 int64_t 存储），
+ * 所有浮点类型共享 DOUBLE 栈（统一 double 存储），
+ * 指针类型共享 PTR 栈。保留旧枚举名作为别名，避免大规模改动。 */
 typedef enum {
     STACK_VALUE = 0,      /* Value栈（通用栈） */
-    STACK_INT,             /* int栈 */
-    STACK_DOUBLE,          /* double栈 */
-    STACK_FLOAT,           /* float栈 */
-    STACK_UINT,            /* uint栈 */
-    STACK_BOOL,            /* bool栈 */
-    STACK_CHAR,            /* char栈 */
-    STACK_BYTE,            /* byte栈 */
-    STACK_INT8,            /* int8栈 */
-    STACK_INT16,           /* int16栈 */
-    STACK_SHORT,           /* short栈 */
-    STACK_INT32,           /* int32栈 */
-    STACK_INT64,           /* int64栈 */
-    STACK_UINT8,           /* uint8栈 */
-    STACK_UINT16,          /* uint16栈 */
-    STACK_UINT32,          /* uint32栈 */
-    STACK_UINT64,          /* uint64栈 */
-    STACK_LONG,            /* long栈 */
-    STACK_ULONG,           /* ulong栈 */
-    STACK_SIZE_T,          /* size_t栈 */
-    STACK_SSIZE_T,         /* ssize_t栈 */
-    STACK_LONG_DOUBLE,     /* long double栈 */
-    STACK_LONG_LONG,        /* long long栈 */
-    STACK_TYPE_COUNT       /* 栈类型数量 */
+    STACK_INT = 1,        /* int栈 → 映射到 INT64 栈 */
+    STACK_INT8 = 1,       /* int8栈 → 映射到 INT64 栈 */
+    STACK_INT16 = 1,      /* int16栈 → 映射到 INT64 栈 */
+    STACK_SHORT = 1,      /* short栈 → 映射到 INT64 栈 */
+    STACK_INT32 = 1,      /* int32栈 → 映射到 INT64 栈 */
+    STACK_INT64 = 1,      /* int64栈（核心整数栈） */
+    STACK_UINT = 1,       /* uint栈 → 映射到 INT64 栈 */
+    STACK_UINT8 = 1,      /* uint8栈 → 映射到 INT64 栈 */
+    STACK_UINT16 = 1,     /* uint16栈 → 映射到 INT64 栈 */
+    STACK_UINT32 = 1,     /* uint32栈 → 映射到 INT64 栈 */
+    STACK_UINT64 = 1,     /* uint64栈 → 映射到 INT64 栈 */
+    STACK_LONG = 1,       /* long栈 → 映射到 INT64 栈 */
+    STACK_ULONG = 1,      /* ulong栈 → 映射到 INT64 栈 */
+    STACK_SIZE_T = 1,     /* size_t栈 → 映射到 INT64 栈 */
+    STACK_SSIZE_T = 1,    /* ssize_t栈 → 映射到 INT64 栈 */
+    STACK_BOOL = 1,       /* bool栈 → 映射到 INT64 栈 */
+    STACK_CHAR = 1,       /* char栈 → 映射到 INT64 栈 */
+    STACK_BYTE = 1,       /* byte栈 → 映射到 INT64 栈 */
+    STACK_LONG_LONG = 1,  /* long long栈 → 映射到 INT64 栈 */
+    STACK_DOUBLE = 2,     /* double栈（核心浮点栈） */
+    STACK_FLOAT = 2,      /* float栈 → 映射到 DOUBLE 栈 */
+    STACK_LONG_DOUBLE = 2,/* long double栈 → 映射到 DOUBLE 栈 */
+    STACK_PTR = 3,        /* 指针/字符串栈（核心指针栈） */
+    STACK_TYPE_COUNT = 4  /* 实际核心栈数量 */
 } StackType;
 
 /* 栈信息结构体 */
