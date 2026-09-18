@@ -257,8 +257,6 @@ int vm_exec_decimal_add(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
 
-    fprintf(stderr, "DEBUG: decimal_add a=%p, b=%p, a->str=%s, b->str=%s\n",
-            (void*)a, (void*)b, a ? a->str : "(null)", b ? b->str : "(null)");
 
     Decimal* result = lumyr_decimal_add(a, b);
 
