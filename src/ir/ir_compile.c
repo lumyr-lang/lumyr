@@ -156,7 +156,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_INT;
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
             return EXPR_TYPE_DOUBLE;
-        } else if(ct == CAST_STRING) {
+        } else if(ct == CAST_STRING || ct == CAST_BIGINT || ct == CAST_DECIMAL) {
+            /* bigint/decimal 是堆分配对象，走 PTR 栈 */
             return EXPR_TYPE_PTR;
         }
         return child_type;

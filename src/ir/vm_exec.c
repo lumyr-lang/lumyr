@@ -52,6 +52,14 @@ int vm_exec_arith_ptr_add(VMExecCtx* ctx, Instruction* in);
 int vm_exec_conv_int64_to_string(VMExecCtx* ctx, Instruction* in);
 int vm_exec_conv_double_to_string(VMExecCtx* ctx, Instruction* in);
 
+/* bigint 任意精度整数 */
+int vm_exec_bigint_from_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bigint_to_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bigint_add(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bigint_sub(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bigint_mul(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bigint_div(VMExecCtx* ctx, Instruction* in);
+
 /* 比较运算 */
 int vm_exec_compare_int64_eq(VMExecCtx* ctx, Instruction* in);
 int vm_exec_compare_int64_ne(VMExecCtx* ctx, Instruction* in);
@@ -147,6 +155,14 @@ Value vm_execute(VMExecCtx* ctx) {
         /* ===== 栈间转换 ===== */
         case OPC_INT64_TO_STRING: handled = vm_exec_conv_int64_to_string(ctx, &in); break;
         case OPC_DOUBLE_TO_STRING: handled = vm_exec_conv_double_to_string(ctx, &in); break;
+
+        /* ===== bigint 任意精度整数 ===== */
+        case OPC_BIGINT_FROM_STRING: handled = vm_exec_bigint_from_string(ctx, &in); break;
+        case OPC_BIGINT_ADD: handled = vm_exec_bigint_add(ctx, &in); break;
+        case OPC_BIGINT_SUB: handled = vm_exec_bigint_sub(ctx, &in); break;
+        case OPC_BIGINT_MUL: handled = vm_exec_bigint_mul(ctx, &in); break;
+        case OPC_BIGINT_DIV: handled = vm_exec_bigint_div(ctx, &in); break;
+        case OPC_BIGINT_TO_STRING: handled = vm_exec_bigint_to_string(ctx, &in); break;
 
         /* ===== 比较运算（INT64 栈） ===== */
         case OPC_INT64_EQ: handled = vm_exec_compare_int64_eq(ctx, &in); break;

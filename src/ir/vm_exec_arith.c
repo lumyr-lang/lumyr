@@ -5,6 +5,7 @@
 #include "vm_types.h"
 #include "stack_manager.h"
 #include "lm_value.h"
+#include "lm_bigint.h"
 
 /* ========== 算术运算（INT64 栈专用） ========== */
 
@@ -142,6 +143,79 @@ int vm_exec_conv_double_to_string(VMExecCtx* ctx, Instruction* in) {
 
     char* result = (char*)malloc(64);
     snprintf(result, 64, "%g", val);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* ========== bigint 任意精度整数 ========== */
+
+/* 从字符串创建 bigint */
+int vm_exec_bigint_from_string(VMExecCtx* ctx, Instruction* in) {
+    char* s;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &s);
+
+    BigInt* bi = lumyr_bigint_from_string(s);
+    free(s);  /* 释放原字符串 */
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &bi);
+    return 1;
+}
+
+/* bigint → string */
+int vm_exec_bigint_to_string(VMExecCtx* ctx, Instruction* in) {
+    BigInt* bi;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &bi);
+
+    char* s = lumyr_bigint_to_string(bi);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &s);
+    return 1;
+}
+
+/* bigint 加法 */
+int vm_exec_bigint_add(VMExecCtx* ctx, Instruction* in) {
+    BigInt *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BigInt* result = lumyr_bigint_add(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bigint 减法 */
+int vm_exec_bigint_sub(VMExecCtx* ctx, Instruction* in) {
+    BigInt *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BigInt* result = lumyr_bigint_sub(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bigint 乘法 */
+int vm_exec_bigint_mul(VMExecCtx* ctx, Instruction* in) {
+    BigInt *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BigInt* result = lumyr_bigint_mul(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bigint 除法 */
+int vm_exec_bigint_div(VMExecCtx* ctx, Instruction* in) {
+    BigInt *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BigInt* result = lumyr_bigint_div(a, b);
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;

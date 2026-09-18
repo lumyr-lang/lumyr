@@ -100,6 +100,14 @@ typedef enum {
     OPC_CAST_UINT8, OPC_CAST_UINT16, OPC_CAST_UINT32, OPC_CAST_UINT64,
     OPC_CAST_LONG, OPC_CAST_LONGLONG, OPC_CAST_FLOAT,
 
+    /* ===== bigint 任意精度整数 ===== */
+    OPC_BIGINT_FROM_STRING,  // 从 PTR 栈弹字符串指针，转 bigint 对象，压回 PTR 栈
+    OPC_BIGINT_ADD,          // 从 PTR 栈弹 2 个 bigint 指针，相加，结果压回 PTR 栈
+    OPC_BIGINT_SUB,          // 从 PTR 栈弹 2 个 bigint 指针，相减，结果压回 PTR 栈
+    OPC_BIGINT_MUL,          // 从 PTR 栈弹 2 个 bigint 指针，相乘，结果压回 PTR 栈
+    OPC_BIGINT_DIV,          // 从 PTR 栈弹 2 个 bigint 指针，相除，结果压回 PTR 栈
+    OPC_BIGINT_TO_STRING,    // 从 PTR 栈弹 bigint 指针，转字符串，压回 PTR 栈
+
     /* ===== 数组/字典字面量 ===== */
     OPC_ARRAY_LIT,      // b=元素个数；弹 b 个 Value 元素，压数组
     OPC_INT64_ARRAY_LIT,   // b=元素个数；弹 b 个 int64 元素，压入 int64 类型化数组
