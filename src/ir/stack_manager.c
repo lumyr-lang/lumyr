@@ -184,6 +184,16 @@ int stack_vm_push(VMStackManager* mgr, StackType type, const void* value) {
         return -1;
     }
 
+    /* 自动扩容：如果栈快满了，扩容 */
+    if (mgr->sp[type] >= mgr->max_depth - 4) {
+        int new_depth = mgr->max_depth * 2;
+        void* new_stack = realloc(mgr->stacks[type], (size_t)new_depth * info->elem_size);
+        if (new_stack) {
+            mgr->stacks[type] = new_stack;
+            mgr->max_depth = new_depth;
+        }
+    }
+
     if (mgr->sp[type] >= mgr->max_depth) {
         return -1;  /* 栈溢出 */
     }
