@@ -45,9 +45,7 @@ static void frame_ensure_slots(StackFrame* f, int need) {
 /* LOAD_VAR：从帧槽位加载 Value 到 VALUE 栈 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
-    int sp = g_stack_mgr->sp[STACK_VALUE]++;
-    stk[sp] = ctx->frame->vals[idx];
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &ctx->frame->vals[idx]);
     return 1;
 }
 
@@ -64,8 +62,7 @@ int vm_exec_var_store(VMExecCtx* ctx, Instruction* in) {
 /* LOAD_INT64_VAR：从帧 int_slots 加载到 INT64 栈 */
 int vm_exec_var_load_int64(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    int sp = g_stack_mgr->sp[STACK_INT64]++;
-    ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp] = ctx->frame->int_slots[idx];
+    stack_vm_push(g_stack_mgr, STACK_INT64, &ctx->frame->int_slots[idx]);
     return 1;
 }
 
@@ -83,8 +80,7 @@ int vm_exec_var_store_int64(VMExecCtx* ctx, Instruction* in) {
 /* LOAD_DOUBLE_VAR：从帧 flt_slots 加载到 DOUBLE 栈 */
 int vm_exec_var_load_double(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    int sp = g_stack_mgr->sp[STACK_DOUBLE]++;
-    ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp] = ctx->frame->flt_slots[idx];
+    stack_vm_push(g_stack_mgr, STACK_DOUBLE, &ctx->frame->flt_slots[idx]);
     return 1;
 }
 
@@ -102,8 +98,7 @@ int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in) {
 /* LOAD_PTR_VAR：从帧 ptr_slots 加载到 PTR 栈 */
 int vm_exec_var_load_ptr(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    int sp = g_stack_mgr->sp[STACK_PTR]++;
-    ((void**)g_stack_mgr->stacks[STACK_PTR])[sp] = ctx->frame->ptr_slots[idx];
+    stack_vm_push(g_stack_mgr, STACK_PTR, &ctx->frame->ptr_slots[idx]);
     return 1;
 }
 
