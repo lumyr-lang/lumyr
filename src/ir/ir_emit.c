@@ -8,6 +8,8 @@
 
 /* 发射一条字节码指令 */
 void emit(Ctx* c, OpCode op, int a, int b) {
+    if(op == OPC_PRINT_BIGINT || op == OPC_PRINT_PTR) {
+    }
     bf_emit(c->fn, op, a, b);
 }
 

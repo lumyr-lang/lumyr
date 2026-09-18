@@ -144,7 +144,7 @@ int vm_exec_conv_double_to_string(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
 
     char* result = (char*)malloc(64);
-    snprintf(result, 64, "%g", val);
+    snprintf(result, 64, "%f", val);
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;
@@ -158,7 +158,8 @@ int vm_exec_bigint_from_string(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_PTR, &s);
 
     BigInt* bi = lumyr_bigint_from_string(s);
-    free(s);  /* 释放原字符串 */
+    /* 不要释放 s，因为 s 可能是常量池中的字符串，不应该被释放 */
+    /* 如果 s 是动态分配的，由 GC 管理 */
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &bi);
     return 1;
@@ -192,6 +193,7 @@ int vm_exec_bigint_sub(VMExecCtx* ctx, Instruction* in) {
     BigInt *a, *b;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
 
     BigInt* result = lumyr_bigint_sub(a, b);
 
@@ -231,7 +233,8 @@ int vm_exec_decimal_from_string(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_PTR, &s);
 
     Decimal* d = lumyr_decimal_from_string(s);
-    free(s);  /* 释放原字符串 */
+    /* 不要释放 s，因为 s 可能是常量池中的字符串，不应该被释放 */
+    /* 如果 s 是动态分配的，由 GC 管理 */
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &d);
     return 1;
@@ -253,6 +256,9 @@ int vm_exec_decimal_add(VMExecCtx* ctx, Instruction* in) {
     Decimal *a, *b;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    fprintf(stderr, "DEBUG: decimal_add a=%p, b=%p, a->str=%s, b->str=%s\n",
+            (void*)a, (void*)b, a ? a->str : "(null)", b ? b->str : "(null)");
 
     Decimal* result = lumyr_decimal_add(a, b);
 

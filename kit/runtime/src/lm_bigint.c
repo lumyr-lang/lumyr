@@ -127,33 +127,39 @@ BigInt* lumyr_bigint_from_string(const char* s) {
         s++;
     }
 
-    BigInt* result = lumyr_bigint_from_int64(0);
-    result->sign = sign;
+    /* 直接从字符串构建 bigint，避免使用 mul/add 导致的 sign=0 问题 */
+    BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
+    result->sign = 0;
+    result->cap = 32;
+    result->len = 0;
+    result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
 
-    /* 从左到右，每次 result = result * 10 + digit */
-    BigInt* ten = lumyr_bigint_from_int64(10);
-
+    /* 从左到右，每次 result = result * 10 + digit
+       直接操作 digits 数组，避免调用 mul/add 导致的 sign=0 问题 */
     while (*s != '\0' && isdigit((unsigned char)*s)) {
-        int digit = *s - '0';
+        uint32_t digit = (uint32_t)(*s - '0');
 
         /* result = result * 10 */
-        BigInt* temp = lumyr_bigint_mul(result, ten);
-        lumyr_bigint_free(result);
-        result = temp;
-
-        /* result = result + digit */
-        BigInt* d = lumyr_bigint_from_int64(digit);
-        temp = lumyr_bigint_add(result, d);
-        lumyr_bigint_free(result);
-        lumyr_bigint_free(d);
-        result = temp;
+        uint64_t carry = digit;  /* 先乘 10，再加 digit */
+        for (int i = 0; i < result->len; i++) {
+            uint64_t prod = (uint64_t)result->digits[i] * 10 + carry;
+            result->digits[i] = (uint32_t)(prod & BIGINT_MASK);
+            carry = prod >> 30;
+        }
+        while (carry > 0) {
+            ensure_cap(result, result->len + 1);
+            result->digits[result->len] = (uint32_t)(carry & BIGINT_MASK);
+            carry >>= 30;
+            result->len++;
+        }
 
         s++;
     }
 
-    lumyr_bigint_free(ten);
-
-    if (result->len == 1 && result->digits[0] == 0) {
+    /* 如果结果不是 0，设置 sign */
+    if (result->len > 1 || (result->len == 1 && result->digits[0] != 0)) {
+        result->sign = sign;
+    } else {
         result->sign = 0;
     }
 

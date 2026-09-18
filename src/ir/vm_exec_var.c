@@ -112,6 +112,7 @@ int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     frame_ensure_slots(ctx->frame, idx + 1);
     int sp = --g_stack_mgr->sp[STACK_PTR];
-    ctx->frame->ptr_slots[idx] = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    void* val = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    ctx->frame->ptr_slots[idx] = val;
     return 1;
 }

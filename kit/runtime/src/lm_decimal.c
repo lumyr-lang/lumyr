@@ -71,6 +71,7 @@ static BigInt* decimal_to_bigint(Decimal* d) {
 static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
     /* 把 bigint 转成字符串 */
     char* bi_str = lumyr_bigint_to_string(bi);
+    fprintf(stderr, "DEBUG: bigint_to_decimal bi_str=%s, precision=%d\n", bi_str, precision);
     
     /* 如果 precision 为 0，直接返回 */
     if(precision == 0) {
@@ -108,6 +109,8 @@ static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
     if(result[0] == '-') {
         d->sign = -1;
     }
+
+    fprintf(stderr, "DEBUG: bigint_to_decimal result=%s\n", result);
 
     free(bi_str);
 

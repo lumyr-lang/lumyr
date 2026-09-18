@@ -159,9 +159,34 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_BIGINT) {
             /* <bigint>expr：从字符串创建 bigint 对象
-             * 如果子表达式是 int，先转成字符串 */
-            if(child_type == EXPR_TYPE_INT) {
-                emit(c, OPC_INT64_TO_STRING, 0, 0);
+             * 方案 B：如果子表达式是字面量，直接把字面量转成字符串，零转换开销
+             * 如果不是字面量，还是先识别成原来的类型，再转换 */
+            AstNode* child = node->u.type_annotation.expr;
+            if(child->type == AST_INT) {
+                /* 整数字面量：直接把整数转成字符串，零转换开销 */
+                int64_t val = child->u.inum;
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%lld", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_NUM) {
+                /* 浮点数字面量：直接把浮点数转成字符串，零转换开销 */
+                double val = child->u.num;
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%.15g", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_STRING) {
+                /* 字符串字面量：直接压入字符串常量，零转换开销 */
+                int idx = bf_add_str_const(c->fn, child->u.sval);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else {
+                /* 非字面量：先识别成原来的类型，再转换 */
+                if(child_type == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                }
             }
             emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
@@ -183,6 +208,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 char buf[64];
                 snprintf(buf, sizeof(buf), "%.15g", val);
                 int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_STRING) {
+                /* 字符串字面量：直接压入字符串常量，零转换开销 */
+                int idx = bf_add_str_const(c->fn, child->u.sval);
                 emit(c, OPC_PUSH_CONST_IDX, idx, 0);
             } else {
                 /* 其他表达式：先识别成原来的类型，再转换 */
@@ -256,10 +285,30 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         CastKind lt_cast = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt_cast = c_expr_cast_type(c, node->u.bin.right);
 
-        /* bigint 运算：两个操作数都是 bigint */
-        if(lt_cast == CAST_BIGINT && rt_cast == CAST_BIGINT) {
+        /* bigint 运算：至少一个操作数是 bigint */
+        if(lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) {
+            /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
+            /* 如果左操作数不是 bigint，转成 bigint */
+            if(lt_cast != CAST_BIGINT) {
+                if(lt == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                }
+                emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
+            }
+            /* 编译右操作数 */
             ExprType rt = c_expr(c, node->u.bin.right);
+            /* 如果右操作数不是 bigint，转成 bigint */
+            if(rt_cast != CAST_BIGINT) {
+                if(rt == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                }
+                emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
+            }
             switch(node->u.bin.op) {
             case OP_ADD: emit(c, OPC_BIGINT_ADD, 0, 0); break;
             case OP_SUB: emit(c, OPC_BIGINT_SUB, 0, 0); break;
@@ -269,10 +318,30 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
 
-        /* decimal 运算：两个操作数都是 decimal */
-        if(lt_cast == CAST_DECIMAL && rt_cast == CAST_DECIMAL) {
+        /* decimal 运算：至少一个操作数是 decimal */
+        if(lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) {
+            /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
+            /* 如果左操作数不是 decimal，转成 decimal */
+            if(lt_cast != CAST_DECIMAL) {
+                if(lt == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                }
+                emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
+            }
+            /* 编译右操作数 */
             ExprType rt = c_expr(c, node->u.bin.right);
+            /* 如果右操作数不是 decimal，转成 decimal */
+            if(rt_cast != CAST_DECIMAL) {
+                if(rt == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                }
+                emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
+            }
             switch(node->u.bin.op) {
             case OP_ADD: emit(c, OPC_DECIMAL_ADD, 0, 0); break;
             case OP_SUB: emit(c, OPC_DECIMAL_SUB, 0, 0); break;
@@ -457,13 +526,12 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(node->type == AST_BINOP) {
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt = c_expr_cast_type(c, node->u.bin.right);
-        /* double 优先级最高 */
+        /* 高精度类型优先级最高：decimal/bigint 会把 double 提升 */
+        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
+        if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
+        /* 其次是浮点类型 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
-        /* decimal 运算：结果是 decimal */
-        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
-        /* bigint 运算：结果是 bigint */
-        if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
         /* 整数运算：结果统一返回 CAST_INT（不要保留 CHAR/BOOL，否则打印会按字符/布尔） */
         return CAST_INT;
     }

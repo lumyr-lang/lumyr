@@ -118,8 +118,12 @@ Value vm_execute(VMExecCtx* ctx) {
     while (pc < ctx->fn->code_len) {
         Instruction in = code[pc++];
         int handled = 0;
+        if((int)in.op >= 115 && (int)in.op <= 120) {
+        }
 
         switch (in.op) {
+        if(in.op == OPC_PRINT_BIGINT || in.op == OPC_PRINT_PTR) {
+        }
         case OPC_NOP:
             handled = 1;
             break;

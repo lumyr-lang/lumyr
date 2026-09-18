@@ -1,0 +1,465 @@
+/* 高精度混合运算测试：bigint + decimal + 二十种数据类型 + 多链路 */
+
+/* ========== 第一部分：高精度基础运算 ========== */
+
+/* 测试 1：bigint + int */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = a + b;
+print("1. bigint + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 2：bigint - int */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = a - b;
+print("2. bigint - int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 3：bigint * int */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = a * b;
+print("3. bigint * int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 4：bigint / int */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = a / b;
+print("4. bigint / int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 5：decimal + double */
+a = <decimal>"123.45678901234567890";
+b = <double>20.5;
+c = a + b;
+print("5. decimal + double:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 6：decimal - double */
+a = <decimal>"123.45678901234567890";
+b = <double>20.5;
+c = a - b;
+print("6. decimal - double:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 7：decimal * double */
+a = <decimal>"123.45678901234567890";
+b = <double>20.5;
+c = a * b;
+print("7. decimal * double:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 8：decimal / double */
+a = <decimal>"123.45678901234567890";
+b = <double>20.5;
+c = a / b;
+print("8. decimal / double:");
+print(a);
+print(b);
+print(c);
+
+/* ========== 第二部分：高精度 + 二十种数据类型混合运算 ========== */
+
+/* 测试 9：bigint + int + double */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = a + b + c;
+print("9. bigint + int + double:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* 测试 10：bigint * int - double */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = a * b - c;
+print("10. bigint * int - double:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* 测试 11：decimal + int + double */
+a = <decimal>"123.45678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = a + b + c;
+print("11. decimal + int + double:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* 测试 12：decimal * int - double */
+a = <decimal>"123.45678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = a * b - c;
+print("12. decimal * int - double:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* ========== 第三部分：高精度 + 字符 + 布尔 + 字节 + 短整型等 ========== */
+
+/* 测试 13：bigint + char */
+a = <bigint>"12345678901234567890";
+b = <char>'A';
+c = a + b;
+print("13. bigint + char:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 14：bigint + bool */
+a = <bigint>"12345678901234567890";
+b = <bool>true;
+c = a + b;
+print("14. bigint + bool:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 15：bigint + byte */
+a = <bigint>"12345678901234567890";
+b = <byte>255;
+c = a + b;
+print("15. bigint + byte:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 16：bigint + short */
+a = <bigint>"12345678901234567890";
+b = <short>32767;
+c = a + b;
+print("16. bigint + short:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 17：decimal + char */
+a = <decimal>"123.45678901234567890";
+b = <char>'A';
+c = a + b;
+print("17. decimal + char:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 18：decimal + bool */
+a = <decimal>"123.45678901234567890";
+b = <bool>true;
+c = a + b;
+print("18. decimal + bool:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 19：decimal + byte */
+a = <decimal>"123.45678901234567890";
+b = <byte>255;
+c = a + b;
+print("19. decimal + byte:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 20：decimal + short */
+a = <decimal>"123.45678901234567890";
+b = <short>32767;
+c = a + b;
+print("20. decimal + short:");
+print(a);
+print(b);
+print(c);
+
+/* ========== 第四部分：多链路混合运算 ========== */
+
+/* 测试 21：bigint + int + double + char + bool + byte + short */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = a + b + c + d + e + f + g;
+print("21. bigint + int + double + char + bool + byte + short:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+
+/* 测试 22：decimal + int + double + char + bool + byte + short */
+a = <decimal>"123.45678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = a + b + c + d + e + f + g;
+print("22. decimal + int + double + char + bool + byte + short:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+
+/* 测试 23：bigint * int + double * char - bool + byte / short */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = a * b + c * d - e + f / g;
+print("23. bigint * int + double * char - bool + byte / short:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+
+/* 测试 24：decimal * int + double * char - bool + byte / short */
+a = <decimal>"123.45678901234567890";
+b = <int>100;
+c = <double>20.5;
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = a * b + c * d - e + f / g;
+print("24. decimal * int + double * char - bool + byte / short:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+
+/* ========== 第五部分：高精度 + 长整型 + 无符号整型 ========== */
+
+/* 测试 25：bigint + long */
+a = <bigint>"12345678901234567890";
+b = <long>1234567890;
+c = a + b;
+print("25. bigint + long:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 26：bigint + long long */
+a = <bigint>"12345678901234567890";
+b = <long long>1234567890123456789;
+c = a + b;
+print("26. bigint + long long:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 27：bigint + uint */
+a = <bigint>"12345678901234567890";
+b = <uint>4294967295;
+c = a + b;
+print("27. bigint + uint:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 28：decimal + long */
+a = <decimal>"123.45678901234567890";
+b = <long>1234567890;
+c = a + b;
+print("28. decimal + long:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 29：decimal + long long */
+a = <decimal>"123.45678901234567890";
+b = <long long>1234567890123456789;
+c = a + b;
+print("29. decimal + long long:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 30：decimal + uint */
+a = <decimal>"123.45678901234567890";
+b = <uint>4294967295;
+c = a + b;
+print("30. decimal + uint:");
+print(a);
+print(b);
+print(c);
+
+/* ========== 第六部分：高精度 + 字符串混合运算 ========== */
+
+/* 测试 31：bigint + string */
+a = <bigint>"12345678901234567890";
+b = <string>"hello";
+c = a + b;
+print("31. bigint + string:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 32：decimal + string */
+a = <decimal>"123.45678901234567890";
+b = <string>"hello";
+c = a + b;
+print("32. decimal + string:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 33：bigint * string */
+a = <bigint>"12345678901234567890";
+b = <string>"hello";
+c = a * 3;
+print("33. bigint * 3:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 34：decimal * string */
+a = <decimal>"123.45678901234567890";
+b = <string>"hello";
+c = a * 3;
+print("34. decimal * 3:");
+print(a);
+print(b);
+print(c);
+
+/* ========== 第七部分：超长度高精度运算 ========== */
+
+/* 测试 35：超大 bigint 加法 */
+a = <bigint>"9999999999999999999999999999999999999999";
+b = <bigint>1;
+c = a + b;
+print("35. 超大 bigint 加法:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 36：超大 bigint 乘法 */
+a = <bigint>"9999999999999999999999999999999999999999";
+b = <bigint>"9999999999999999999999999999999999999999";
+c = a * b;
+print("36. 超大 bigint 乘法:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 37：超大 decimal 加法 */
+a = <decimal>"9999999999999999999999999999999999999999.9999999999999999999999999999999999999999";
+b = <decimal>0.0000000000000000000000000000000000000001;
+c = a + b;
+print("37. 超大 decimal 加法:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 38：超大 decimal 乘法 */
+a = <decimal>"1234567890123456789012345678901234567890.1234567890123456789012345678901234567890";
+b = <decimal>"9876543210987654321098765432109876543210.9876543210987654321098765432109876543210";
+c = a * b;
+print("38. 超大 decimal 乘法:");
+print(a);
+print(b);
+print(c);
+
+/* ========== 第八部分：全类型多链路混合运算 ========== */
+
+/* 测试 39：所有类型混合运算 */
+a = <int>10;
+b = <double>20.5;
+c = <string>"hello";
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = <long>1234567890;
+i = <long long>1234567890123456789;
+j = <uint>4294967295;
+k = <bigint>"12345678901234567890";
+l = <decimal>"123.45678901234567890";
+m = a + b + c + d + e + f + g + h + i + j + k + l;
+print("39. 所有类型混合运算:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+print(i);
+print(j);
+print(k);
+print(l);
+print(m);
+
+/* 测试 40：所有类型多链路运算 */
+a = <int>10;
+b = <double>20.5;
+c = <string>"hello";
+d = <char>'A';
+e = <bool>true;
+f = <byte>255;
+g = <short>32767;
+h = <long>1234567890;
+i = <long long>1234567890123456789;
+j = <uint>4294967295;
+k = <bigint>"12345678901234567890";
+l = <decimal>"123.45678901234567890";
+m = a * b + c * d - e + f / g + h * i - j + k * l;
+print("40. 所有类型多链路运算:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+print(h);
+print(i);
+print(j);
+print(k);
+print(l);
+print(m);

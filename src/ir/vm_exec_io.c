@@ -92,6 +92,7 @@ int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in) {
     Decimal* d = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
     if(d) {
         char* s = lumyr_decimal_to_string(d);
+        fprintf(stderr, "DEBUG: print_decimal d->str=%s, s=%s\n", d->str, s);
         printf("%s\n", s);
         free(s);
     } else {
