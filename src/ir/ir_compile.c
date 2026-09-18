@@ -523,8 +523,9 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
         if(strcmp(lt, "bigint") == 0 || strcmp(rt, "bigint") == 0) return "bigint";
         /* 3. decimal 再次之 */
         if(strcmp(lt, "decimal") == 0 || strcmp(rt, "decimal") == 0) return "decimal";
-        /* 4. double */
+        /* 4. 浮点类型（float 自动提升为 double） */
         if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
+        if(strcmp(lt, "float") == 0 || strcmp(rt, "float") == 0) return "double";
         /* 5. 其他都是 int */
         return "int";
     }
@@ -582,10 +583,10 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         /* 3. decimal 再次之：decimal 吸收所有类型（除 string/bigint） */
         if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
         
-        /* 4. 浮点类型提升（C/C++ 规则：long double > double > float） */
+        /* 4. 浮点类型提升（C/C++ 规则：float 自动提升为 double） */
         if(lt == CAST_LONG_DOUBLE || rt == CAST_LONG_DOUBLE) return CAST_LONG_DOUBLE;
         if(lt == CAST_DOUBLE || rt == CAST_DOUBLE) return CAST_DOUBLE;
-        if(lt == CAST_FLOAT || rt == CAST_FLOAT) return CAST_FLOAT;
+        if(lt == CAST_FLOAT || rt == CAST_FLOAT) return CAST_DOUBLE;  /* float 提升为 double */
         
         /* 5. 整数类型提升（C/C++ 规则：窄类型自动扩到 int） */
         /* 这里统一返回 CAST_INT，因为所有窄类型都映射到 INT64 栈 */
