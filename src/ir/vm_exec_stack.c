@@ -9,15 +9,16 @@
 
 /* POP：弹出 VALUE 栈顶 */
 int vm_exec_stack_pop(VMExecCtx* ctx, Instruction* in) {
-    g_stack_mgr->sp[STACK_VALUE]--;
+    Value val;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
     return 1;
 }
 
 /* DUP：复制 VALUE 栈顶 */
 int vm_exec_stack_dup(VMExecCtx* ctx, Instruction* in) {
-    int sp = g_stack_mgr->sp[STACK_VALUE];
-    Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
-    stk[sp] = stk[sp - 1];
-    g_stack_mgr->sp[STACK_VALUE]++;
+    Value val;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &val);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &val);
     return 1;
 }

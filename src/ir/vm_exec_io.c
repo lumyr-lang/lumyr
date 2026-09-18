@@ -15,16 +15,16 @@
 
 /* PRINT：从 VALUE 栈弹值打印 */
 int vm_exec_io_print(VMExecCtx* ctx, Instruction* in) {
-    Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
-    int sp = --g_stack_mgr->sp[STACK_VALUE];
-    lumyr_print(stk[sp]);
+    Value val;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    lumyr_print(val);
     return 1;
 }
 
 /* PRINT_INT64：从 INT64 栈弹值打印（a 字段存 CastKind） */
 int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_INT64];
-    int64_t val = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
+    int64_t val;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
     CastKind ct = (CastKind)in->a;
     switch(ct) {
         case CAST_UINT8:
@@ -54,16 +54,16 @@ int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_DOUBLE：从 DOUBLE 栈弹值打印 */
 int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_DOUBLE];
-    double val = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
+    double val;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
     printf("%g\n", val);
     return 1;
 }
 
 /* PRINT_PTR：从 PTR 栈弹值打印（字符串指针） */
 int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_PTR];
-    void* val = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    void* val;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
     if(val) {
         printf("%s\n", (char*)val);
     } else {
@@ -74,8 +74,9 @@ int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_BIGINT：从 PTR 栈弹 bigint 对象打印 */
 int vm_exec_io_print_bigint(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_PTR];
-    BigInt* bi = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    void* val;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
+    BigInt* bi = (BigInt*)val;
     if(bi) {
         char* s = lumyr_bigint_to_string(bi);
         printf("%s\n", s);
@@ -88,8 +89,9 @@ int vm_exec_io_print_bigint(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_DECIMAL：从 PTR 栈弹 decimal 对象打印 */
 int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_PTR];
-    Decimal* d = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    void* val;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
+    Decimal* d = (Decimal*)val;
     if(d) {
         char* s = lumyr_decimal_to_string(d);
         printf("%s\n", s);

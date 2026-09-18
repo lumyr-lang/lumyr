@@ -25,10 +25,9 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
 /* ========== 函数返回 ========== */
 int vm_exec_return(VMExecCtx* ctx, Instruction* in) {
     /* 从栈顶获取返回值 */
-    if (g_stack_mgr->sp[STACK_VALUE] > 0) {
-        int sp = --g_stack_mgr->sp[STACK_VALUE];
-        Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
-    }
+    Value val;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    /* TODO: 把返回值存到调用者的帧 */
     return 1;
 }
 

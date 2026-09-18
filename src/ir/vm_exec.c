@@ -226,10 +226,7 @@ Value vm_execute(VMExecCtx* ctx) {
 
         /* ===== 返回 ===== */
         case OPC_RETURN: {
-            if (g_stack_mgr->sp[STACK_VALUE] > 0) {
-                int sp = --g_stack_mgr->sp[STACK_VALUE];
-                result = ((Value*)g_stack_mgr->stacks[STACK_VALUE])[sp];
-            }
+            stack_vm_pop(g_stack_mgr, STACK_VALUE, &result);
             goto done;
         }
 
