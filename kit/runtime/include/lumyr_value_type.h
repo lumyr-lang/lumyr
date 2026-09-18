@@ -71,6 +71,9 @@ typedef enum {
     CAST_LONG_DOUBLE,// long double（扩展精度浮点）
     CAST_PTR,        // 指针/句柄（用 int 存储指针值）
     CAST_CALLBACK,   // 回调函数（函数指针）
+    /* 高精度类型（任意精度/十进制浮点） */
+    CAST_BIGINT,     // bigint：任意精度整数（堆分配，PTR 栈存储）
+    CAST_DECIMAL,    // decimal：高精度十进制浮点（堆分配，PTR 栈存储）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -114,7 +117,9 @@ typedef enum {
     VAL_FLOAT,        // float（单精度）
     VAL_LONG_DOUBLE,  // long double（扩展精度）
     VAL_PTR,          // void* / 任意指针 / 句柄
-    VAL_CALLBACK      // 回调函数（函数指针）
+    VAL_CALLBACK,     // 回调函数
+    VAL_BIGINT,       // bigint：任意精度整数（堆分配对象，PTR 栈存储指针）
+    VAL_DECIMAL       // decimal：高精度十进制浮点（堆分配对象，PTR 栈存储指针）
 } ValueType;
 
 // 数组运行时对象，VAL_ARRAY 使用（原地修改语义，cap 预分配容量）

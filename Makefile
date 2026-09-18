@@ -100,6 +100,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_log.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_typed_arrays.c
 # Value 类型定义已迁移到 kit/runtime/
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_value.c
+# bigint 任意精度整数
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_bigint.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 
