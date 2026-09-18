@@ -7,6 +7,7 @@
 #include "lumyr_value_type.h"
 #include "lm_value.h"
 #include "lm_bigint.h"
+#include "lm_decimal.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -77,6 +78,20 @@ int vm_exec_io_print_bigint(VMExecCtx* ctx, Instruction* in) {
     BigInt* bi = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
     if(bi) {
         char* s = lumyr_bigint_to_string(bi);
+        printf("%s\n", s);
+        free(s);
+    } else {
+        printf("(null)\n");
+    }
+    return 1;
+}
+
+/* PRINT_DECIMAL：从 PTR 栈弹 decimal 对象打印 */
+int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in) {
+    int sp = --g_stack_mgr->sp[STACK_PTR];
+    Decimal* d = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    if(d) {
+        char* s = lumyr_decimal_to_string(d);
         printf("%s\n", s);
         free(s);
     } else {

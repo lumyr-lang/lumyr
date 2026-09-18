@@ -95,6 +95,7 @@ int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in);
 int vm_exec_io_print_bigint(VMExecCtx* ctx, Instruction* in);
+int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in);
 
 /* 类型转换 */
 int vm_exec_type_int64_to_double(VMExecCtx* ctx, Instruction* in);
@@ -209,6 +210,7 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_PRINT_DOUBLE: handled = vm_exec_io_print_double(ctx, &in); break;
         case OPC_PRINT_PTR: handled = vm_exec_io_print_ptr(ctx, &in); break;
         case OPC_PRINT_BIGINT: handled = vm_exec_io_print_bigint(ctx, &in); break;
+        case OPC_PRINT_DECIMAL: handled = vm_exec_io_print_decimal(ctx, &in); break;
 
         /* ===== 返回 ===== */
         case OPC_RETURN: {
