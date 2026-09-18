@@ -8,8 +8,8 @@
 
 /* ========== 函数声明 ========== */
 
-/* 编译表达式（递归） */
-void c_expr(Ctx* c, AstNode* node);
+/* 编译表达式（递归），返回表达式类型 */
+ExprType c_expr(Ctx* c, AstNode* node);
 
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name);

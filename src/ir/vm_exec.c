@@ -6,6 +6,7 @@
 #include "vm_types.h"
 #include "vm.h"
 #include "stack_manager.h"
+#include "ast/stackframe.h"
 #include "lumyr_value_type.h"
 #include "lumyr_value.h"
 #include "lm_value.h"
@@ -13,6 +14,40 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* 确保帧的槽位数组已分配到至少 need 个元素 */
+static void frame_ensure_slots(StackFrame* f, int need) {
+    if(!f) return;
+    if(need <= f->cap) return;
+    int newcap = f->cap > 0 ? f->cap : 16;
+    while(newcap < need) newcap *= 2;
+
+    /* 分配 names */
+    if(!f->names) f->names = calloc(newcap, sizeof(char*));
+    else f->names = realloc(f->names, newcap * sizeof(char*));
+
+    /* 分配 vals */
+    if(!f->vals) f->vals = calloc(newcap, sizeof(Value));
+    else f->vals = realloc(f->vals, newcap * sizeof(Value));
+
+    /* 分配 int_slots */
+    if(!f->int_slots) f->int_slots = calloc(newcap, sizeof(int64_t));
+    else f->int_slots = realloc(f->int_slots, newcap * sizeof(int64_t));
+
+    /* 分配 flt_slots */
+    if(!f->flt_slots) f->flt_slots = calloc(newcap, sizeof(double));
+    else f->flt_slots = realloc(f->flt_slots, newcap * sizeof(double));
+
+    /* 分配 ptr_slots */
+    if(!f->ptr_slots) f->ptr_slots = calloc(newcap, sizeof(void*));
+    else f->ptr_slots = realloc(f->ptr_slots, newcap * sizeof(void*));
+
+    /* 分配 type_tags */
+    if(!f->type_tags) f->type_tags = calloc(newcap, sizeof(int));
+    else f->type_tags = realloc(f->type_tags, newcap * sizeof(int));
+
+    f->cap = newcap;
+}
 
 /* ========== 模块函数声明 ========== */
 
@@ -149,6 +184,7 @@ Value vm_execute(VMExecCtx* ctx) {
 
         case OPC_STORE_INT64_VAR: {
             int idx = in.a;
+            frame_ensure_slots(ctx->frame, idx + 1);
             int sp = --g_stack_mgr->sp[STACK_INT64];
             ctx->frame->int_slots[idx] = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
             handled = 1;
@@ -227,6 +263,35 @@ Value vm_execute(VMExecCtx* ctx) {
             Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
             int sp = --g_stack_mgr->sp[STACK_VALUE];
             lumyr_print(stk[sp]);
+            handled = 1;
+            break;
+        }
+
+        case OPC_PRINT_INT64: {
+            int sp = --g_stack_mgr->sp[STACK_INT64];
+            int64_t val = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
+            printf("%lld\n", (long long)val);
+            handled = 1;
+            break;
+        }
+
+        case OPC_PRINT_DOUBLE: {
+            int sp = --g_stack_mgr->sp[STACK_DOUBLE];
+            double val = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
+            printf("%g\n", val);
+            handled = 1;
+            break;
+        }
+
+        case OPC_PRINT_PTR: {
+            int sp = --g_stack_mgr->sp[STACK_PTR];
+            void* val = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+            /* 字符串指针 */
+            if(val) {
+                printf("%s\n", (char*)val);
+            } else {
+                printf("(null)\n");
+            }
             handled = 1;
             break;
         }

@@ -59,6 +59,11 @@ typedef struct {
     int* fin_jmp_cap;
     int fin_depth;
     int fin_cap;
+    /* 简单符号表：变量名 → 索引 + 类型 */
+    char** var_names;
+    ExprType* var_types;
+    int var_cnt;
+    int var_cap;
 } Ctx;
 
 #endif /* LUMYR_IR_TYPES_H */
