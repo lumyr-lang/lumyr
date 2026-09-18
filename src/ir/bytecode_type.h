@@ -135,6 +135,7 @@ typedef enum {
     OPC_PRINT_INT64,    // 从 int64 栈弹出并打印（零开销）
     OPC_PRINT_DOUBLE,   // 从 double 栈弹出并打印（零开销）
     OPC_PRINT_PTR,      // 从指针栈弹出并打印（零开销）
+    OPC_PRINT_BIGINT,   // 从指针栈弹出 bigint 对象并打印
 
     /* ===== 错误处理（try/catch/finally） ===== */
     OPC_TRY,            // a=catch 起始pc(0=无catch)，b=finally 起始pc(0=无finally)；setjmp 注册错误处理器

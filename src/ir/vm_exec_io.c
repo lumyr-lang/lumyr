@@ -6,7 +6,9 @@
 #include "stack_manager.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
+#include "lm_bigint.h"
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ===== 打印 ===== */
 
@@ -63,6 +65,20 @@ int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
     void* val = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
     if(val) {
         printf("%s\n", (char*)val);
+    } else {
+        printf("(null)\n");
+    }
+    return 1;
+}
+
+/* PRINT_BIGINT：从 PTR 栈弹 bigint 对象打印 */
+int vm_exec_io_print_bigint(VMExecCtx* ctx, Instruction* in) {
+    int sp = --g_stack_mgr->sp[STACK_PTR];
+    BigInt* bi = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
+    if(bi) {
+        char* s = lumyr_bigint_to_string(bi);
+        printf("%s\n", s);
+        free(s);
     } else {
         printf("(null)\n");
     }
