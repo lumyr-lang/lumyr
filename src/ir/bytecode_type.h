@@ -83,11 +83,16 @@ typedef enum {
     OPC_DOUBLE_NE,      // 不等于
     OPC_DOUBLE_TO_VALUE, // 从 double 栈弹出，包装成 Value，压入 Value 栈
 
+    /* ===== ptr 栈算术运算（字符串拼接等） ===== */
+    OPC_PTR_ADD,        // 弹2个指针（字符串），拼接，结果压回 ptr 栈
+
     /* ===== 栈间转换（零包装零 Value 开销） ===== */
     OPC_INT64_TO_DOUBLE,    // int64 → double
     OPC_DOUBLE_TO_INT64,    // double → int64（截断）
     OPC_INT64_TO_PTR,       // int64 → ptr（指针运算）
     OPC_PTR_TO_INT64,       // ptr → int64（指针比较）
+    OPC_INT64_TO_STRING,    // int64 → string（int64 栈弹出，转字符串，压入 PTR 栈）
+    OPC_DOUBLE_TO_STRING,   // double → string（double 栈弹出，转字符串，压入 PTR 栈）
 
     /* ===== 类型转换（Value 栈内，通用） ===== */
     OPC_CAST_INT, OPC_CAST_DOUBLE, OPC_CAST_CHAR, OPC_CAST_BOOL, OPC_CAST_STRING, OPC_CAST_ASCII, OPC_CAST_BYTE,

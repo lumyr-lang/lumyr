@@ -1,184 +1,539 @@
-// 全量数据类型混合运算测试
-// 覆盖所有 20+ 数据类型的加减乘除
+// 全量数据类型混合运算测试 - 覆盖所有运算符的所有组合
+// 运算符：+、-、*、/
+// 数据类型：int, short, int8, int16, int32, int64, uint, ushort, uint8, uint16, uint32, uint64, float, double, bool, char, string
 
-print("=== 1. 有符号整数混合运算 ===");
-a = <int>100;
-b = <short>20;
-c = <int8>5;
-d = <int16>50;
-e = <int32>1000;
-f = <int64>1000000;
+// ===== 准备变量 =====
+i_int = <int>100;
+i_short = <short>20;
+i_int8 = <int8>5;
+i_int16 = <int16>50;
+i_int32 = <int32>1000;
+i_int64 = <int64>1000000;
 
+u_uint = <uint>100;
+u_ushort = <ushort>20;
+u_uint8 = <uint8>5;
+u_uint16 = <uint16>50;
+u_uint32 = <uint32>1000;
+u_uint64 = <uint64>1000000;
+
+f_float = <float>3.14;
+f_double = <double>2.71828;
+
+b_true = <bool>true;
+b_false = <bool>false;
+
+ch_A = <char>'A';
+ch_a = <char>'a';
+
+s_hello = <string>"hello";
+s_world = <string>"world";
+
+// ===== 1. 有符号整数类型之间的 +、-、*、/ =====
+print("=== 1. 有符号整数类型混合运算 ===");
+
+// int 与所有有符号类型
 print("int + short:");
-r = a + b;
+r = i_int + i_short;
 print(r);
-print(type(r));
+print("int - short:");
+r = i_int - i_short;
+print(r);
+print("int * short:");
+r = i_int * i_short;
+print(r);
+print("int / short:");
+r = i_int / i_short;
+print(r);
 
 print("int + int8:");
-r = a + c;
+r = i_int + i_int8;
+print(r);
+print("int - int8:");
+r = i_int - i_int8;
+print(r);
+print("int * int8:");
+r = i_int * i_int8;
+print(r);
+print("int / int8:");
+r = i_int / i_int8;
+print(r);
+
+print("int + int16:");
+r = i_int + i_int16;
+print(r);
+print("int - int16:");
+r = i_int - i_int16;
+print(r);
+print("int * int16:");
+r = i_int * i_int16;
+print(r);
+print("int / int16:");
+r = i_int / i_int16;
+print(r);
+
+print("int + int32:");
+r = i_int + i_int32;
+print(r);
+print("int - int32:");
+r = i_int - i_int32;
+print(r);
+print("int * int32:");
+r = i_int * i_int32;
+print(r);
+print("int / int32:");
+r = i_int / i_int32;
+print(r);
+
+print("int + int64:");
+r = i_int + i_int64;
+print(r);
+print("int - int64:");
+r = i_int - i_int64;
+print(r);
+print("int * int64:");
+r = i_int * i_int64;
+print(r);
+print("int / int64:");
+r = i_int / i_int64;
+print(r);
+
+// short 与其他有符号类型
+print("short + int8:");
+r = i_short + i_int8;
+print(r);
+print("short - int8:");
+r = i_short - i_int8;
+print(r);
+print("short * int8:");
+r = i_short * i_int8;
+print(r);
+print("short / int8:");
+r = i_short / i_int8;
 print(r);
 
 print("int16 + int32:");
-r = d + e;
+r = i_int16 + i_int32;
+print(r);
+print("int16 - int32:");
+r = i_int16 - i_int32;
+print(r);
+print("int16 * int32:");
+r = i_int16 * i_int32;
+print(r);
+print("int16 / int32:");
+r = i_int16 / i_int32;
 print(r);
 
-print("int64 - int:");
-r = f - a;
+print("int64 + int32:");
+r = i_int64 + i_int32;
+print(r);
+print("int64 - int32:");
+r = i_int64 - i_int32;
+print(r);
+print("int64 * int32:");
+r = i_int64 * i_int32;
+print(r);
+print("int64 / int32:");
+r = i_int64 / i_int32;
 print(r);
 
-print("short * int8:");
-r = b * c;
-print(r);
-
-print("int32 / int16:");
-r = e / d;
-print(r);
-
-print("int64 % int:");
-r = f % a;
-print(r);
-
-print("=== 2. 无符号整数混合运算 ===");
-u1 = <uint>100;
-u2 = <ushort>20;
-u3 = <uint8>5;
-u4 = <uint16>50;
-u5 = <uint32>1000;
-u6 = <uint64>1000000;
+// ===== 2. 无符号整数类型之间的 +、-、*、/ =====
+print("=== 2. 无符号整数类型混合运算 ===");
 
 print("uint + ushort:");
-r = u1 + u2;
+r = u_uint + u_ushort;
+print(r);
+print("uint - ushort:");
+r = u_uint - u_ushort;
+print(r);
+print("uint * ushort:");
+r = u_uint * u_ushort;
+print(r);
+print("uint / ushort:");
+r = u_uint / u_ushort;
 print(r);
 
+print("uint8 + uint16:");
+r = u_uint8 + u_uint16;
+print(r);
+print("uint8 - uint16:");
+r = u_uint8 - u_uint16;
+print(r);
 print("uint8 * uint16:");
-r = u3 * u4;
+r = u_uint8 * u_uint16;
+print(r);
+print("uint8 / uint16:");
+r = u_uint8 / u_uint16;
+print(r);
+
+print("uint32 + uint64:");
+r = u_uint32 + u_uint64;
+print(r);
+print("uint32 - uint64:");
+r = u_uint32 - u_uint64;
+print(r);
+print("uint32 * uint64:");
+r = u_uint32 * u_uint64;
+print(r);
+print("uint32 / uint64:");
+r = u_uint32 / u_uint64;
 print(r);
 
 print("uint64 - uint:");
-r = u6 - u1;
+r = u_uint64 - u_uint;
+print(r);
+print("uint64 / uint:");
+r = u_uint64 / u_uint;
 print(r);
 
-print("uint32 / uint8:");
-r = u5 / u3;
-print(r);
-
+// ===== 3. 有符号 + 无符号混合运算 =====
 print("=== 3. 有符号 + 无符号混合运算 ===");
+
 print("int + uint:");
-r = a + u1;
+r = i_int + u_uint;
+print(r);
+print("int - uint:");
+r = i_int - u_uint;
+print(r);
+print("int * uint:");
+r = i_int * u_uint;
+print(r);
+print("int / uint:");
+r = i_int / u_uint;
 print(r);
 
 print("int8 + uint8:");
-r = c + u3;
+r = i_int8 + u_uint8;
+print(r);
+print("int8 - uint8:");
+r = i_int8 - u_uint8;
+print(r);
+print("int8 * uint8:");
+r = i_int8 * u_uint8;
+print(r);
+print("int8 / uint8:");
+r = i_int8 / u_uint8;
 print(r);
 
 print("int16 + uint16:");
-r = d + u4;
+r = i_int16 + u_uint16;
+print(r);
+print("int16 - uint16:");
+r = i_int16 - u_uint16;
+print(r);
+print("int16 * uint16:");
+r = i_int16 * u_uint16;
+print(r);
+print("int16 / uint16:");
+r = i_int16 / u_uint16;
+print(r);
+
+print("int32 + uint32:");
+r = i_int32 + u_uint32;
+print(r);
+print("int32 - uint32:");
+r = i_int32 - u_uint32;
+print(r);
+print("int32 * uint32:");
+r = i_int32 * u_uint32;
+print(r);
+print("int32 / uint32:");
+r = i_int32 / u_uint32;
 print(r);
 
 print("int64 + uint64:");
-r = f + u6;
+r = i_int64 + u_uint64;
+print(r);
+print("int64 - uint64:");
+r = i_int64 - u_uint64;
+print(r);
+print("int64 * uint64:");
+r = i_int64 * u_uint64;
+print(r);
+print("int64 / uint64:");
+r = i_int64 / u_uint64;
 print(r);
 
-print("=== 4. 浮点混合运算 ===");
-f1 = <float>3.14;
-f2 = <double>2.71828;
-f3 = <double>1.0;
+print("short + ushort:");
+r = i_short + u_ushort;
+print(r);
+print("short - ushort:");
+r = i_short - u_ushort;
+print(r);
+print("short * ushort:");
+r = i_short * u_ushort;
+print(r);
+print("short / ushort:");
+r = i_short / u_ushort;
+print(r);
+
+// ===== 4. 浮点类型混合运算 =====
+print("=== 4. 浮点类型混合运算 ===");
 
 print("float + double:");
-r = f1 + f2;
+r = f_float + f_double;
 print(r);
 print(type(r));
-
-print("double * double:");
-r = f2 * f3;
+print("float - double:");
+r = f_float - f_double;
 print(r);
-
-print("double - float:");
-r = f2 - f1;
+print("float * double:");
+r = f_float * f_double;
 print(r);
-
 print("float / double:");
-r = f1 / f2;
+r = f_float / f_double;
 print(r);
 
+print("double + float:");
+r = f_double + f_float;
+print(r);
+print("double - float:");
+r = f_double - f_float;
+print(r);
+print("double * float:");
+r = f_double * f_float;
+print(r);
+print("double / float:");
+r = f_double / f_float;
+print(r);
+
+// ===== 5. 整数 + 浮点混合运算 =====
 print("=== 5. 整数 + 浮点混合运算 ===");
+
 print("int + double:");
-r = a + f2;
+r = i_int + f_double;
 print(r);
 print(type(r));
-
-print("double - int:");
-r = f2 - a;
+print("int - double:");
+r = i_int - f_double;
 print(r);
-
 print("int * double:");
-r = a * f1;
+r = i_int * f_double;
+print(r);
+print("int / double:");
+r = i_int / f_double;
 print(r);
 
+print("double + int:");
+r = f_double + i_int;
+print(r);
+print("double - int:");
+r = f_double - i_int;
+print(r);
+print("double * int:");
+r = f_double * i_int;
+print(r);
 print("double / int:");
-r = f2 / a;
+r = f_double / i_int;
 print(r);
 
+print("int + float:");
+r = i_int + f_float;
+print(r);
+print("int - float:");
+r = i_int - f_float;
+print(r);
+print("int * float:");
+r = i_int * f_float;
+print(r);
+print("int / float:");
+r = i_int / f_float;
+print(r);
+
+print("float + int:");
+r = f_float + i_int;
+print(r);
+print("float - int:");
+r = f_float - i_int;
+print(r);
+print("float * int:");
+r = f_float * i_int;
+print(r);
+print("float / int:");
+r = f_float / i_int;
+print(r);
+
+print("short + double:");
+r = i_short + f_double;
+print(r);
+print("short - double:");
+r = i_short - f_double;
+print(r);
+print("short * double:");
+r = i_short * f_double;
+print(r);
+print("short / double:");
+r = i_short / f_double;
+print(r);
+
+print("int64 + double:");
+r = i_int64 + f_double;
+print(r);
+print("int64 - double:");
+r = i_int64 - f_double;
+print(r);
+print("int64 * double:");
+r = i_int64 * f_double;
+print(r);
+print("int64 / double:");
+r = i_int64 / f_double;
+print(r);
+
+print("uint + double:");
+r = u_uint + f_double;
+print(r);
+print("uint - double:");
+r = u_uint - f_double;
+print(r);
+print("uint * double:");
+r = u_uint * f_double;
+print(r);
+print("uint / double:");
+r = u_uint / f_double;
+print(r);
+
+// ===== 6. bool 和 char 运算 =====
 print("=== 6. bool 和 char 运算 ===");
-b1 = <bool>true;
-b2 = <bool>false;
-ch1 = <char>'A';
-ch2 = <char>'a';
 
 print("bool + bool:");
-r = b1 + b2;
+r = b_true + b_false;
+print(r);
+print("bool - bool:");
+r = b_true - b_false;
+print(r);
+print("bool * bool:");
+r = b_true * b_false;
+print(r);
+print("bool / bool:");
+r = b_true / b_true;
 print(r);
 
 print("char + char:");
-r = ch1 + ch2;
+r = ch_A + ch_a;
+print(r);
+print("char - char:");
+r = ch_a - ch_A;
+print(r);
+print("char * char:");
+r = ch_A * ch_a;
+print(r);
+print("char / char:");
+r = ch_a / ch_A;
 print(r);
 
 print("char + int:");
-r = ch1 + a;
+r = ch_A + i_int;
+print(r);
+print("char - int:");
+r = ch_A - i_int;
+print(r);
+print("char * int:");
+r = ch_A * i_int;
+print(r);
+print("char / int:");
+r = ch_A / i_int;
 print(r);
 
 print("int + char:");
-r = a + ch1;
+r = i_int + ch_A;
+print(r);
+print("int - char:");
+r = i_int - ch_A;
+print(r);
+print("int * char:");
+r = i_int * ch_A;
+print(r);
+print("int / char:");
+r = i_int / ch_A;
 print(r);
 
+print("bool + int:");
+r = b_true + i_int;
+print(r);
+print("bool - int:");
+r = b_true - i_int;
+print(r);
+print("bool * int:");
+r = b_true * i_int;
+print(r);
+print("bool / int:");
+r = b_true / i_int;
+print(r);
+
+// ===== 7. 字符串运算（只有 +）=====
 print("=== 7. 字符串运算 ===");
-s1 = <string>"hello";
-s2 = <string>"world";
 
 print("string + string:");
-r = s1 + s2;
+r = s_hello + s_world;
 print(r);
 
 print("string + int:");
-r = s1 + a;
+r = s_hello + i_int;
 print(r);
 
 print("int + string:");
-r = a + s1;
+r = i_int + s_hello;
 print(r);
 
 print("string + double:");
-r = s1 + f2;
+r = s_hello + f_double;
 print(r);
 
+print("double + string:");
+r = f_double + s_hello;
+print(r);
+
+print("string + bool:");
+r = s_hello + b_true;
+print(r);
+
+print("string + char:");
+r = s_hello + ch_A;
+print(r);
+
+// ===== 8. 链式运算（所有运算符）=====
 print("=== 8. 链式运算 ===");
+
 print("int + int + int:");
-r = a + b + c;
+r = i_int + i_short + i_int8;
 print(r);
 
 print("int * int + int:");
-r = a * b + c;
+r = i_int * i_short + i_int8;
 print(r);
 
 print("(int + int) * int:");
-r = (a + b) * c;
+r = (i_int + i_short) * i_int8;
+print(r);
+
+print("int * (int + int):");
+r = i_int * (i_short + i_int8);
+print(r);
+
+print("int + int * int:");
+r = i_int + i_short * i_int8;
+print(r);
+
+print("int - int - int:");
+r = i_int - i_short - i_int8;
+print(r);
+
+print("int / int * int:");
+r = i_int / i_short * i_int8;
 print(r);
 
 print("double * int + double:");
-r = f2 * a + f1;
+r = f_double * i_int + f_float;
 print(r);
 
+print("double + double * int:");
+r = f_double + f_float * i_int;
+print(r);
+
+// ===== 9. 类型继承运算 =====
 print("=== 9. 类型继承运算 ===");
+
 x1 = <int>10;
 x2 = x1;  // 继承 int
 x3 = x1 + x2;  // int + int = int
@@ -194,7 +549,16 @@ print("x5 类型:");
 print(type(x5));
 print(x5);
 
+x6 = <short>5;
+x7 = x6 * x1;  // short * int = int
+
+print("x7 类型:");
+print(type(x7));
+print(x7);
+
+// ===== 10. 默认类型运算 =====
 print("=== 10. 默认类型运算 ===");
+
 y1 = 10;     // 默认 int
 y2 = 3.14;   // 默认 double
 y3 = "hi";   // 默认 string
@@ -204,8 +568,32 @@ r = y1 + y2;
 print(r);
 print(type(r));
 
+print("y1 - y2:");
+r = y1 - y2;
+print(r);
+
+print("y1 * y2:");
+r = y1 * y2;
+print(r);
+
+print("y1 / y2:");
+r = y1 / y2;
+print(r);
+
+print("y2 + y1:");
+r = y2 + y1;
+print(r);
+
+print("y2 - y1:");
+r = y2 - y1;
+print(r);
+
 print("y3 + y1:");
 r = y3 + y1;
+print(r);
+
+print("y3 + y2:");
+r = y3 + y2;
 print(r);
 
 print("=== 全量混合运算测试完成 ===");

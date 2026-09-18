@@ -99,3 +99,50 @@ int vm_exec_arith_double_div(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_DOUBLE, &a);
     return 1;
 }
+
+/* ========== 算术运算（PTR 栈专用：字符串拼接） ========== */
+
+/* PTR 栈加法：字符串拼接 */
+int vm_exec_arith_ptr_add(VMExecCtx* ctx, Instruction* in) {
+    char *b, *a;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    /* 拼接字符串：a + b */
+    int len_a = strlen(a);
+    int len_b = strlen(b);
+    char* result = (char*)malloc(len_a + len_b + 1);
+    memcpy(result, a, len_a);
+    memcpy(result + len_a, b, len_b);
+    result[len_a + len_b] = '\0';
+
+    /* 结果压回 PTR 栈 */
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* ========== 栈间转换 ========== */
+
+/* int64 → string：从 INT64 栈弹出，转字符串，压入 PTR 栈 */
+int vm_exec_conv_int64_to_string(VMExecCtx* ctx, Instruction* in) {
+    int64_t val;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
+
+    char* result = (char*)malloc(32);
+    snprintf(result, 32, "%lld", (long long)val);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* double → string：从 DOUBLE 栈弹出，转字符串，压入 PTR 栈 */
+int vm_exec_conv_double_to_string(VMExecCtx* ctx, Instruction* in) {
+    double val;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
+
+    char* result = (char*)malloc(64);
+    snprintf(result, 64, "%g", val);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}

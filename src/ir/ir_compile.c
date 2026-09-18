@@ -212,12 +212,32 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 
     case AST_BINOP: {
         /* 二元运算 */
+        /* 特殊处理：字符串拼接（PTR 栈）需要按顺序转换操作数 */
+        ExprType result = arith_get_expr_type(c, node);
+
+        if(result == EXPR_TYPE_PTR && node->u.bin.op == OP_ADD) {
+            /* 字符串拼接：先编译左操作数，立即转换；再编译右操作数，立即转换 */
+            ExprType lt = c_expr(c, node->u.bin.left);
+            if(lt == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            } else if(lt == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            }
+            ExprType rt = c_expr(c, node->u.bin.right);
+            if(rt == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            } else if(rt == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            }
+            emit(c, OPC_PTR_ADD, 0, 0);
+            return EXPR_TYPE_PTR;
+        }
+
+        /* 普通二元运算：先编译左右，再统一处理 */
         ExprType lt = c_expr(c, node->u.bin.left);
         ExprType rt = c_expr(c, node->u.bin.right);
 
         /* 类型提升：int + double → double */
-        ExprType result = arith_get_expr_type(c, node);
-
         /* 如果结果是 double，但左操作数是 int，需要转换 */
         if(result == EXPR_TYPE_DOUBLE && lt == EXPR_TYPE_INT) {
             emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
@@ -362,8 +382,8 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         /* double 优先级最高 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
-        /* int 优先级 */
-        return lt;
+        /* 整数运算：结果统一返回 CAST_INT（不要保留 CHAR/BOOL，否则打印会按字符/布尔） */
+        return CAST_INT;
     }
 
     return CAST_NONE;
