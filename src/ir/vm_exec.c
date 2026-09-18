@@ -171,3 +171,6 @@ Value vm_execute(VMExecCtx* ctx) {
 done:
     return result;
 }
+/* src/ir/vm_exec_builtin.c - 已清空，待重构 */
+/* src/ir/vm_generator.c - 已清空，待重构 */
+/* src/ir/vm_try_context.c - 已清空，待重构 */

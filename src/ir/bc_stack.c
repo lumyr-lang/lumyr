@@ -1,6 +1,6 @@
 // lumyr-lang 字节码栈深度分析实现
 // 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
-#include "bytecode_stack.h"
+#include "bc_stack.h"
 #include <stdio.h>
 #include <stdlib.h>
 

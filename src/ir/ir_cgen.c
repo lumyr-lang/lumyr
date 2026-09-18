@@ -23,3 +23,7 @@ void ffi_decl_add(const char* name, const char* libname, int ret_type, int* para
 }
 int ffi_decl_count(void) { return 0; }
 FFIDecl* ffi_decl_get(int idx) { (void)idx; return NULL; }
+/* src/ir/ir_cgen_closure.c - 已清空，待重构 */
+/* src/ir/ir_cgen_emit.c - 已清空，待重构 */
+/* src/ir/ir_cgen_escape.c - 已清空，待重构 */
+/* src/ir/ir_cgen_generator.c - 已清空，待重构 */
