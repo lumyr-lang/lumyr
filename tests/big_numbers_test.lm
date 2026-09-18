@@ -1,0 +1,148 @@
+// 超大整型、超大浮点运算测试
+
+print("=== 1. 超大整型运算 ===");
+
+// int64 范围测试
+a = <int>1000000000;  // 10亿
+b = <int>2000000000;  // 20亿
+
+print("10亿 + 20亿:");
+r = a + b;
+print(r);
+
+print("10亿 * 20亿:");
+r = a * b;
+print(r);
+
+// 更大的整数
+c = <long long>9000000000000000000;
+d = <long long>1000000000000000000;
+
+print("9e18 + 1e18:");
+r = c + d;
+print(r);
+
+print("9e18 - 1e18:");
+r = c - d;
+print(r);
+
+// int32 范围测试
+e = <int32>2147483647;  // int32 上限
+f = <int32>1;
+
+print("int32 上限 + 1:");
+r = e + f;
+print(r);
+
+// 无符号大数
+g = <uint64>18446744073709551615;
+h = <uint64>1;
+
+print("uint64 上限 + 1（溢出测试）:");
+r = g + h;
+print(r);
+
+print("=== 2. 超大浮点运算 ===");
+
+// double 范围测试
+x = <double>1000000000000000.0;
+y = <double>2000000000000000.0;
+
+print("1e15 + 2e15:");
+r = x + y;
+print(r);
+
+print("1e15 * 2e15:");
+r = x * y;
+print(r);
+
+// 更大的浮点数
+p = <double>1000000000000000000000000000000.0;
+q = <double>2000000000000000000000000000000.0;
+
+print("1e30 + 2e30:");
+r = p + q;
+print(r);
+
+print("1e30 * 2e30:");
+r = p * q;
+print(r);
+
+// 极小浮点数
+m = <double>0.0000000001;
+n = <double>0.0000000002;
+
+print("1e-10 + 2e-10:");
+r = m + n;
+print(r);
+
+print("1e-10 * 2e-10:");
+r = m * n;
+print(r);
+
+// float 精度测试
+f1 = <float>123456.789;
+f2 = <float>0.123456;
+
+print("float 精度:");
+r = f1 + f2;
+print(r);
+
+print("=== 3. 超大数混合运算 ===");
+
+// 大整数 + 大浮点
+big_int = <long long>1000000000000000000;
+big_double = <double>1000000000000000.0;
+
+print("1e18 + 1e15:");
+r = big_int + big_double;
+print(r);
+
+print("1e18 * 1e15:");
+r = big_int * big_double;
+print(r);
+
+// 大整数链式
+i1 = <int>1000000000;
+i2 = <int>2000000000;
+i3 = <int>3000000000;
+i4 = <int>4000000000;
+
+print("10亿 + 20亿 + 30亿 + 40亿:");
+r = i1 + i2 + i3 + i4;
+print(r);
+
+print("10亿 * 20亿 * 30亿 / 40亿:");
+r = i1 * i2 * i3 / i4;
+print(r);
+
+// 大浮点链式
+d1 = <double>10000000000.0;
+d2 = <double>20000000000.0;
+d3 = <double>30000000000.0;
+d4 = <double>40000000000.0;
+
+print("1e10 + 2e10 + 3e10 + 4e10:");
+r = d1 + d2 + d3 + d4;
+print(r);
+
+print("1e10 * 2e10 * 3e10 / 4e10:");
+r = d1 * d2 * d3 / d4;
+print(r);
+
+// 混合链式：大整数 + 大浮点 + 普通整数 + 普通浮点
+print("混合链式: 1e18 + 1e15 + 100 + 3.14:");
+r = big_int + big_double + i1 + f1;
+print(r);
+
+// 超长链式：10 个大整数
+print("10 个大整数链式:");
+r = i1 + i2 + i3 + i4 + i1 + i2 + i3 + i4 + i1 + i2;
+print(r);
+
+// 超长链式：10 个大浮点
+print("10 个大浮点链式:");
+r = d1 + d2 + d3 + d4 + d1 + d2 + d3 + d4 + d1 + d2;
+print(r);
+
+print("=== 超大数测试完成 ===");
