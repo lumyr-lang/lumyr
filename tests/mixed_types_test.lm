@@ -1,0 +1,211 @@
+// 全量数据类型混合运算测试
+// 覆盖所有 20+ 数据类型的加减乘除
+
+print("=== 1. 有符号整数混合运算 ===");
+a = <int>100;
+b = <short>20;
+c = <int8>5;
+d = <int16>50;
+e = <int32>1000;
+f = <int64>1000000;
+
+print("int + short:");
+r = a + b;
+print(r);
+print(type(r));
+
+print("int + int8:");
+r = a + c;
+print(r);
+
+print("int16 + int32:");
+r = d + e;
+print(r);
+
+print("int64 - int:");
+r = f - a;
+print(r);
+
+print("short * int8:");
+r = b * c;
+print(r);
+
+print("int32 / int16:");
+r = e / d;
+print(r);
+
+print("int64 % int:");
+r = f % a;
+print(r);
+
+print("=== 2. 无符号整数混合运算 ===");
+u1 = <uint>100;
+u2 = <ushort>20;
+u3 = <uint8>5;
+u4 = <uint16>50;
+u5 = <uint32>1000;
+u6 = <uint64>1000000;
+
+print("uint + ushort:");
+r = u1 + u2;
+print(r);
+
+print("uint8 * uint16:");
+r = u3 * u4;
+print(r);
+
+print("uint64 - uint:");
+r = u6 - u1;
+print(r);
+
+print("uint32 / uint8:");
+r = u5 / u3;
+print(r);
+
+print("=== 3. 有符号 + 无符号混合运算 ===");
+print("int + uint:");
+r = a + u1;
+print(r);
+
+print("int8 + uint8:");
+r = c + u3;
+print(r);
+
+print("int16 + uint16:");
+r = d + u4;
+print(r);
+
+print("int64 + uint64:");
+r = f + u6;
+print(r);
+
+print("=== 4. 浮点混合运算 ===");
+f1 = <float>3.14;
+f2 = <double>2.71828;
+f3 = <double>1.0;
+
+print("float + double:");
+r = f1 + f2;
+print(r);
+print(type(r));
+
+print("double * double:");
+r = f2 * f3;
+print(r);
+
+print("double - float:");
+r = f2 - f1;
+print(r);
+
+print("float / double:");
+r = f1 / f2;
+print(r);
+
+print("=== 5. 整数 + 浮点混合运算 ===");
+print("int + double:");
+r = a + f2;
+print(r);
+print(type(r));
+
+print("double - int:");
+r = f2 - a;
+print(r);
+
+print("int * double:");
+r = a * f1;
+print(r);
+
+print("double / int:");
+r = f2 / a;
+print(r);
+
+print("=== 6. bool 和 char 运算 ===");
+b1 = <bool>true;
+b2 = <bool>false;
+ch1 = <char>'A';
+ch2 = <char>'a';
+
+print("bool + bool:");
+r = b1 + b2;
+print(r);
+
+print("char + char:");
+r = ch1 + ch2;
+print(r);
+
+print("char + int:");
+r = ch1 + a;
+print(r);
+
+print("int + char:");
+r = a + ch1;
+print(r);
+
+print("=== 7. 字符串运算 ===");
+s1 = <string>"hello";
+s2 = <string>"world";
+
+print("string + string:");
+r = s1 + s2;
+print(r);
+
+print("string + int:");
+r = s1 + a;
+print(r);
+
+print("int + string:");
+r = a + s1;
+print(r);
+
+print("string + double:");
+r = s1 + f2;
+print(r);
+
+print("=== 8. 链式运算 ===");
+print("int + int + int:");
+r = a + b + c;
+print(r);
+
+print("int * int + int:");
+r = a * b + c;
+print(r);
+
+print("(int + int) * int:");
+r = (a + b) * c;
+print(r);
+
+print("double * int + double:");
+r = f2 * a + f1;
+print(r);
+
+print("=== 9. 类型继承运算 ===");
+x1 = <int>10;
+x2 = x1;  // 继承 int
+x3 = x1 + x2;  // int + int = int
+
+print("x3 类型:");
+print(type(x3));
+print(x3);
+
+x4 = <double>3.14;
+x5 = x1 + x4;  // int + double = double
+
+print("x5 类型:");
+print(type(x5));
+print(x5);
+
+print("=== 10. 默认类型运算 ===");
+y1 = 10;     // 默认 int
+y2 = 3.14;   // 默认 double
+y3 = "hi";   // 默认 string
+
+print("y1 + y2:");
+r = y1 + y2;
+print(r);
+print(type(r));
+
+print("y3 + y1:");
+r = y3 + y1;
+print(r);
+
+print("=== 全量混合运算测试完成 ===");

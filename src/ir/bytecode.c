@@ -137,8 +137,7 @@ int bf_add_str_const(BytecodeFunc* fn, const char* s) {
     }
     fn->const_pool[fn->const_cnt].type = CONST_STRING;
     fn->const_pool[fn->const_cnt].s = strdup(s);  /* 拷贝字符串，防止 AST 释放后指针失效 */
-    /* 钉住字符串 */
-    gc_pin((void*)fn->const_pool[fn->const_cnt].s);
+    /* strdup 分配的内存不在 GC 管理范围内，不会被 GC 回收，不需要 gc_pin */
     return fn->const_cnt++;
 }
 
