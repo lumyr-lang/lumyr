@@ -112,3 +112,287 @@ print(ni * nj + 5);
 print(ni + nj * 2);
 
 print("=== 全部测试完成 ===");
+
+// ============================================================
+// 12. 固定宽度有符号整数
+// ============================================================
+print("=== 12. 固定宽度有符号整数 ===");
+
+i8 = <int8>100;
+print(i8);
+i16 = <int16>30000;
+print(i16);
+i32 = <int32>2000000000;
+print(i32);
+i64 = <int64>9000000000000000000;
+print(i64);
+
+i8a = <int8>50;
+i8b = <int8>30;
+print(i8a + i8b);
+print(i8a - i8b);
+
+i16a = <int16>1000;
+i16b = <int16>2000;
+print(i16a + i16b);
+print(i16a * i16b);
+
+i32a = <int32>100000;
+i32b = <int32>300000;
+print(i32a + i32b);
+print(i32b - i32a);
+
+i64a = <int64>1000000000000;
+i64b = <int64>2000000000000;
+print(i64a + i64b);
+
+// ============================================================
+// 13. 固定宽度无符号整数
+// ============================================================
+print("=== 13. 固定宽度无符号整数 ===");
+
+u8 = <uint8>200;
+print(u8);
+u16 = <uint16>50000;
+print(u16);
+u32 = <uint32>3000000000;
+print(u32);
+u64 = <uint64>18000000000000000000;
+print(u64);
+
+u8a = <uint8>100;
+u8b = <uint8>80;
+print(u8a + u8b);
+print(u8a - u8b);
+
+u16a = <uint16>10000;
+u16b = <uint16>20000;
+print(u16a + u16b);
+
+u32a = <uint32>1000000;
+u32b = <uint32>2000000;
+print(u32a + u32b);
+print(u32b / u32a);
+
+// ============================================================
+// 14. short / long / long long
+// ============================================================
+print("=== 14. short / long / long long ===");
+
+sh = <short>32000;
+print(sh);
+la = <long>1000000;
+print(la);
+ll = <long long>5000000000;
+print(ll);
+
+sha = <short>100;
+shb = <short>200;
+print(sha + shb);
+print(sha * shb);
+
+lla = <long long>1000000000;
+llb = <long long>2000000000;
+print(lla + llb);
+
+// ============================================================
+// 15. unsigned char / unsigned short / unsigned long
+// ============================================================
+print("=== 15. unsigned char / short / long ===");
+
+uc = <uchar>200;
+print(uc);
+us = <ushort>40000;
+print(us);
+ul = <ulong>4000000000;
+print(ul);
+
+uca = <uchar>100;
+ucb = <uchar>90;
+print(uca + ucb);
+
+usa = <ushort>10000;
+usb = <ushort>20000;
+print(usa + usb);
+
+// ============================================================
+// 16. size_t / ssize_t
+// ============================================================
+print("=== 16. size_t / ssize_t ===");
+
+sz = <size_t>123456789;
+print(sz);
+ssz = <ssize_t>-987654321;
+print(ssz);
+
+// ============================================================
+// 17. long double
+// ============================================================
+print("=== 17. long double ===");
+
+ld = <long double>1.23456789;
+print(ld);
+
+lda = <long double>3.5;
+ldb = <long double>2.5;
+print(lda + ldb);
+print(lda * ldb);
+
+// ============================================================
+// 18. 字符串类型
+// ============================================================
+print("=== 18. 字符串类型 ===");
+
+str = <string>"hello lumin";
+print(str);
+
+str2 = <string>" world";
+print(str + str2);
+
+sa = <string>"abc";
+sb = <string>"def";
+print(sa + sb);
+
+// ============================================================
+// 19. 各类型与 int 混合
+// ============================================================
+print("=== 19. 各类型与 int 混合 ===");
+
+mi = <int>100;
+mi8 = <int8>20;
+print(mi + mi8);
+print(mi8 + mi);
+
+mu8 = <uint8>50;
+print(mi + mu8);
+
+msh = <short>1000;
+print(mi + msh);
+
+// int + double/float
+md = <double>0.5;
+print(mi + md);
+
+mf = <float>0.25;
+print(mi + mf);
+
+// ============================================================
+// 20. 各类型变量传播
+// ============================================================
+print("=== 20. 各类型变量传播 ===");
+
+src8 = <int8>77;
+cp8 = src8;
+print(cp8);
+cp8b = cp8;
+print(cp8b);
+
+src16 = <int16>12345;
+cp16 = src16;
+print(cp16);
+
+srcu8 = <uint8>200;
+cpu8 = srcu8;
+print(cpu8);
+
+srcstr = <string>"propagated";
+cpstr = srcstr;
+print(cpstr);
+
+srcd = <double>3.14159;
+cpd = srcd;
+print(cpd);
+
+// ============================================================
+// 21. 各类型比较运算
+// ============================================================
+print("=== 21. 各类型比较运算 ===");
+
+ci8a = <int8>10;
+ci8b = <int8>20;
+print(ci8a < ci8b);
+print(ci8a > ci8b);
+print(ci8a == ci8a);
+
+cu8a = <uint8>100;
+cu8b = <uint8>200;
+print(cu8a < cu8b);
+print(cu8a == cu8a);
+
+csh1 = <short>1000;
+csh2 = <short>2000;
+print(csh1 < csh2);
+print(csh1 == csh2);
+
+cd1 = <double>1.5;
+cd2 = <double>2.5;
+print(cd1 < cd2);
+print(cd1 != cd2);
+
+// ============================================================
+// 22. 自增自减
+// ============================================================
+print("=== 22. 自增自减 ===");
+
+ia = <int>10;
+ia = ia + 1;
+print(ia);
+ia = ia - 1;
+print(ia);
+
+i8z = <int8>10;
+i8z = i8z + 1;
+print(i8z);
+i8z = i8z - 1;
+print(i8z);
+
+u8z = <uint8>200;
+u8z = u8z + 1;
+print(u8z);
+
+shz = <short>30000;
+shz = shz + 1;
+print(shz);
+
+// ============================================================
+// 23. 混合类型运算（int + uint8 + int16）
+// ============================================================
+print("=== 23. 多类型交叉混合 ===");
+
+a1 = <int>100;
+b1 = <int8>50;
+c1 = <int16>200;
+d1 = <double>0.5;
+e1 = <float>0.25;
+
+print(a1 + b1);
+print(b1 + c1);
+print(a1 + c1);
+print(a1 + d1);
+print(a1 + e1);
+print(b1 + d1);
+print(c1 + e1);
+print(a1 + b1 + c1);
+print(a1 + d1 + e1);
+
+// ============================================================
+// 24. 默认类型（无泛型标注）与专用类型混合
+// ============================================================
+print("=== 24. 默认类型与专用类型混合 ===");
+
+da = 10;
+db = <int>20;
+print(da + db);
+print(db + da);
+
+dc = 10.5;
+dd = <double>0.5;
+print(dc + dd);
+print(dd + dc);
+
+de = "hello ";
+df = <string>"world";
+print(de + df);
+print(df + de);
+
+print("=== 全部测试完成 ===");

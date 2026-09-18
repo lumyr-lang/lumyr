@@ -751,14 +751,8 @@ void emit_func_def(BytecodeFunc* fn)
                 fprintf(out, "    lmloc_%s__s.__structname__ = \"%s\";\n", fn_locals.names[i], sname);
                 fprintf(out, "    Value lmloc_%s = lumyr_make_struct_ptr(&lmloc_%s__s);\n", fn_locals.names[i], fn_locals.names[i]);
             } else {
-                /* 接口类型或普通类型：生成普通的 Value 变量 */
-                int tt = get_var_type_tag(fn, fn_locals.names[i]);
-                const char* ctype = (tt >= 0) ? castkind_to_c_type(tt) : NULL;
-                if(ctype) {
-                    fprintf(out, "    %s lmloc_%s = 0;\n", ctype, fn_locals.names[i]);
-                } else {
-                    fprintf(out, "    Value lmloc_%s = val_none();\n", fn_locals.names[i]);
-                }
+                /* 接口类型或普通类型：统一声明为 Value，避免类型不匹配 */
+                fprintf(out, "    Value lmloc_%s = val_none();\n", fn_locals.names[i]);
             }
         }
     }
@@ -1466,14 +1460,8 @@ void emit_main(BytecodeFunc* main_fn)
             }
             fprintf(out, "static Value lmvar_%s;\n", g_globals.names[i]);
         } else {
-            /* 接口类型或普通类型：生成普通的 Value 变量 */
-            int tt = get_var_type_tag(main_fn, g_globals.names[i]);
-            const char* ctype = (tt >= 0) ? castkind_to_c_type(tt) : NULL;
-            if(ctype) {
-                fprintf(out, "static %s lmvar_%s = 0;\n", ctype, g_globals.names[i]);
-            } else {
-                fprintf(out, "static Value lmvar_%s = {0};\n", g_globals.names[i]);
-            }
+            /* 接口类型或普通类型：统一声明为 Value，避免类型不匹配 */
+            fprintf(out, "static Value lmvar_%s = {0};\n", g_globals.names[i]);
         }
     }
     fprintf(out, "\n");

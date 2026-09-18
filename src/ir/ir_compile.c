@@ -1742,9 +1742,8 @@ static int c_print_args_recursive(Ctx* c, AstNode* args)
            注意比较/逻辑运算（OP_GT..OP_LOGIC_OR）结果是 bool，由专用比较指令直接压入
            通用 Value 栈，不能再插 *_TO_VALUE，否则会从空的专用栈误弹。 */
         int tov = -1;
-        int is_cmp_logic = (args->type == AST_BINOP) &&
-                           (args->u.bin.op >= OP_GT && args->u.bin.op <= OP_LOGIC_OR);
-        if(!is_cmp_logic) {
+        /* AST_BINOP 由 c_expr 内部处理栈位置（专用或通用路径），不重复插 TO_VALUE */
+        if(args->type != AST_BINOP) {
             ExprType et = arith_get_expr_type(c, args);
             tov = expr_type_to_value_op(et);
         }
@@ -3384,6 +3383,17 @@ void c_expr(Ctx* c, AstNode* node)
                         emit(c, map[bop], 0, 0);
                         break;
                     }
+                    /* 不同类型混合时走通用 Value 栈路径（避免专用栈转换不完整） */
+                    if(left_type != right_type) {
+                        c_expr(c, node->u.bin.left);
+                        c_expr(c, node->u.bin.right);
+                        static const OpCode map[] = {
+                            [OP_ADD] = OPC_ADD, [OP_SUB] = OPC_SUB, [OP_MUL] = OPC_MUL, [OP_DIV] = OPC_DIV,
+                            [OP_MOD] = OPC_MOD,
+                        };
+                        emit(c, map[bop], 0, 0);
+                        break;
+                    }
                     /* 类型提升规则：参考C语言标准的常用算术转换
                        1. long double 优先级最高
                        2. double 次之
@@ -4540,6 +4550,18 @@ static void c_stmt(Ctx* c, AstNode* node)
                     int left_is_float = is_float_var(c, single_arg->u.bin.left);
                     int right_is_float = is_float_var(c, single_arg->u.bin.right);
                     ExprType result_type = arith_get_expr_type(c, single_arg);
+                    ExprType left_type = arith_get_expr_type(c, single_arg->u.bin.left);
+                    ExprType right_type = arith_get_expr_type(c, single_arg->u.bin.right);
+                    if(right_type == 0 && single_arg->u.bin.right->type == AST_INT && left_type > 0)
+                        right_type = left_type;
+                    if(left_type == 0 && single_arg->u.bin.left->type == AST_INT && right_type > 0)
+                        left_type = right_type;
+                    /* 不同类型混合走通用 Value 栈路径 */
+                    if(left_type != right_type) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT, 1, 0);
+                        break;
+                    }
                     if(result_type == EXPR_TYPE_INT) {
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_INT, 0, 0);
@@ -4565,6 +4587,10 @@ static void c_stmt(Ctx* c, AstNode* node)
                         /* long double 类型算术运算结果：直接生成 OPC_PRINT_LONG_DOUBLE */
                         c_expr(c, single_arg);
                         emit(c, OPC_PRINT_LONG_DOUBLE, 0, 0);
+                        break;
+                    } else if(result_type == EXPR_TYPE_SHORT) {
+                        c_expr(c, single_arg);
+                        emit(c, OPC_PRINT_SHORT, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_INT8) {
                         c_expr(c, single_arg);
