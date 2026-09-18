@@ -1,0 +1,2524 @@
+/* 全量数据类型交叉测试：自动生成 */
+
+/* ========== 变量定义 ========== */
+v0 = <int>100;  /* int */
+v1 = <short>32767;  /* short */
+v2 = <int8>127;  /* int8 */
+v3 = <int16>32767;  /* int16 */
+v4 = <int32>2147483647;  /* int32 */
+v5 = <int64>9223372036854775807;  /* int64 */
+v6 = <long>100;  /* long */
+v7 = <byte>255;  /* byte */
+v8 = <uint>4294967295;  /* uint */
+v9 = <ushort>65535;  /* ushort */
+v10 = <uint8>255;  /* uint8 */
+v11 = <uint16>65535;  /* uint16 */
+v12 = <uint32>4294967295;  /* uint32 */
+v13 = <uint64>18446744073709551615;  /* uint64 */
+v14 = <ulong>100;  /* ulong */
+v15 = <char>'A';  /* char */
+v16 = <bool>true;  /* bool */
+v17 = <float>3.14;  /* float */
+v18 = <double>3.141592653589793;  /* double */
+v19 = <string>"hello";  /* string */
+v20 = <bigint>"12345678901234567890";  /* bigint */
+v21 = <decimal>"123.456789";  /* decimal */
+
+/* ========== 第一组：两两组合（22 x 22 = 484 种） ========== */
+/* 1: int + int */
+r = v0 + v0;
+print("1. int+int:");
+print(type(r));
+
+/* 2: int + short */
+r = v0 + v1;
+print("2. int+short:");
+print(type(r));
+
+/* 3: int + int8 */
+r = v0 + v2;
+print("3. int+int8:");
+print(type(r));
+
+/* 4: int + int16 */
+r = v0 + v3;
+print("4. int+int16:");
+print(type(r));
+
+/* 5: int + int32 */
+r = v0 + v4;
+print("5. int+int32:");
+print(type(r));
+
+/* 6: int + int64 */
+r = v0 + v5;
+print("6. int+int64:");
+print(type(r));
+
+/* 7: int + long */
+r = v0 + v6;
+print("7. int+long:");
+print(type(r));
+
+/* 8: int + byte */
+r = v0 + v7;
+print("8. int+byte:");
+print(type(r));
+
+/* 9: int + uint */
+r = v0 + v8;
+print("9. int+uint:");
+print(type(r));
+
+/* 10: int + ushort */
+r = v0 + v9;
+print("10. int+ushort:");
+print(type(r));
+
+/* 11: int + uint8 */
+r = v0 + v10;
+print("11. int+uint8:");
+print(type(r));
+
+/* 12: int + uint16 */
+r = v0 + v11;
+print("12. int+uint16:");
+print(type(r));
+
+/* 13: int + uint32 */
+r = v0 + v12;
+print("13. int+uint32:");
+print(type(r));
+
+/* 14: int + uint64 */
+r = v0 + v13;
+print("14. int+uint64:");
+print(type(r));
+
+/* 15: int + ulong */
+r = v0 + v14;
+print("15. int+ulong:");
+print(type(r));
+
+/* 16: int + char */
+r = v0 + v15;
+print("16. int+char:");
+print(type(r));
+
+/* 17: int + bool */
+r = v0 + v16;
+print("17. int+bool:");
+print(type(r));
+
+/* 18: int + float */
+r = v0 + v17;
+print("18. int+float:");
+print(type(r));
+
+/* 19: int + double */
+r = v0 + v18;
+print("19. int+double:");
+print(type(r));
+
+/* 20: int + string */
+r = v0 + v19;
+print("20. int+string:");
+print(type(r));
+
+/* 21: int + bigint */
+r = v0 + v20;
+print("21. int+bigint:");
+print(type(r));
+
+/* 22: int + decimal */
+r = v0 + v21;
+print("22. int+decimal:");
+print(type(r));
+
+/* 23: short + int */
+r = v1 + v0;
+print("23. short+int:");
+print(type(r));
+
+/* 24: short + short */
+r = v1 + v1;
+print("24. short+short:");
+print(type(r));
+
+/* 25: short + int8 */
+r = v1 + v2;
+print("25. short+int8:");
+print(type(r));
+
+/* 26: short + int16 */
+r = v1 + v3;
+print("26. short+int16:");
+print(type(r));
+
+/* 27: short + int32 */
+r = v1 + v4;
+print("27. short+int32:");
+print(type(r));
+
+/* 28: short + int64 */
+r = v1 + v5;
+print("28. short+int64:");
+print(type(r));
+
+/* 29: short + long */
+r = v1 + v6;
+print("29. short+long:");
+print(type(r));
+
+/* 30: short + byte */
+r = v1 + v7;
+print("30. short+byte:");
+print(type(r));
+
+/* 31: short + uint */
+r = v1 + v8;
+print("31. short+uint:");
+print(type(r));
+
+/* 32: short + ushort */
+r = v1 + v9;
+print("32. short+ushort:");
+print(type(r));
+
+/* 33: short + uint8 */
+r = v1 + v10;
+print("33. short+uint8:");
+print(type(r));
+
+/* 34: short + uint16 */
+r = v1 + v11;
+print("34. short+uint16:");
+print(type(r));
+
+/* 35: short + uint32 */
+r = v1 + v12;
+print("35. short+uint32:");
+print(type(r));
+
+/* 36: short + uint64 */
+r = v1 + v13;
+print("36. short+uint64:");
+print(type(r));
+
+/* 37: short + ulong */
+r = v1 + v14;
+print("37. short+ulong:");
+print(type(r));
+
+/* 38: short + char */
+r = v1 + v15;
+print("38. short+char:");
+print(type(r));
+
+/* 39: short + bool */
+r = v1 + v16;
+print("39. short+bool:");
+print(type(r));
+
+/* 40: short + float */
+r = v1 + v17;
+print("40. short+float:");
+print(type(r));
+
+/* 41: short + double */
+r = v1 + v18;
+print("41. short+double:");
+print(type(r));
+
+/* 42: short + string */
+r = v1 + v19;
+print("42. short+string:");
+print(type(r));
+
+/* 43: short + bigint */
+r = v1 + v20;
+print("43. short+bigint:");
+print(type(r));
+
+/* 44: short + decimal */
+r = v1 + v21;
+print("44. short+decimal:");
+print(type(r));
+
+/* 45: int8 + int */
+r = v2 + v0;
+print("45. int8+int:");
+print(type(r));
+
+/* 46: int8 + short */
+r = v2 + v1;
+print("46. int8+short:");
+print(type(r));
+
+/* 47: int8 + int8 */
+r = v2 + v2;
+print("47. int8+int8:");
+print(type(r));
+
+/* 48: int8 + int16 */
+r = v2 + v3;
+print("48. int8+int16:");
+print(type(r));
+
+/* 49: int8 + int32 */
+r = v2 + v4;
+print("49. int8+int32:");
+print(type(r));
+
+/* 50: int8 + int64 */
+r = v2 + v5;
+print("50. int8+int64:");
+print(type(r));
+
+/* 51: int8 + long */
+r = v2 + v6;
+print("51. int8+long:");
+print(type(r));
+
+/* 52: int8 + byte */
+r = v2 + v7;
+print("52. int8+byte:");
+print(type(r));
+
+/* 53: int8 + uint */
+r = v2 + v8;
+print("53. int8+uint:");
+print(type(r));
+
+/* 54: int8 + ushort */
+r = v2 + v9;
+print("54. int8+ushort:");
+print(type(r));
+
+/* 55: int8 + uint8 */
+r = v2 + v10;
+print("55. int8+uint8:");
+print(type(r));
+
+/* 56: int8 + uint16 */
+r = v2 + v11;
+print("56. int8+uint16:");
+print(type(r));
+
+/* 57: int8 + uint32 */
+r = v2 + v12;
+print("57. int8+uint32:");
+print(type(r));
+
+/* 58: int8 + uint64 */
+r = v2 + v13;
+print("58. int8+uint64:");
+print(type(r));
+
+/* 59: int8 + ulong */
+r = v2 + v14;
+print("59. int8+ulong:");
+print(type(r));
+
+/* 60: int8 + char */
+r = v2 + v15;
+print("60. int8+char:");
+print(type(r));
+
+/* 61: int8 + bool */
+r = v2 + v16;
+print("61. int8+bool:");
+print(type(r));
+
+/* 62: int8 + float */
+r = v2 + v17;
+print("62. int8+float:");
+print(type(r));
+
+/* 63: int8 + double */
+r = v2 + v18;
+print("63. int8+double:");
+print(type(r));
+
+/* 64: int8 + string */
+r = v2 + v19;
+print("64. int8+string:");
+print(type(r));
+
+/* 65: int8 + bigint */
+r = v2 + v20;
+print("65. int8+bigint:");
+print(type(r));
+
+/* 66: int8 + decimal */
+r = v2 + v21;
+print("66. int8+decimal:");
+print(type(r));
+
+/* 67: int16 + int */
+r = v3 + v0;
+print("67. int16+int:");
+print(type(r));
+
+/* 68: int16 + short */
+r = v3 + v1;
+print("68. int16+short:");
+print(type(r));
+
+/* 69: int16 + int8 */
+r = v3 + v2;
+print("69. int16+int8:");
+print(type(r));
+
+/* 70: int16 + int16 */
+r = v3 + v3;
+print("70. int16+int16:");
+print(type(r));
+
+/* 71: int16 + int32 */
+r = v3 + v4;
+print("71. int16+int32:");
+print(type(r));
+
+/* 72: int16 + int64 */
+r = v3 + v5;
+print("72. int16+int64:");
+print(type(r));
+
+/* 73: int16 + long */
+r = v3 + v6;
+print("73. int16+long:");
+print(type(r));
+
+/* 74: int16 + byte */
+r = v3 + v7;
+print("74. int16+byte:");
+print(type(r));
+
+/* 75: int16 + uint */
+r = v3 + v8;
+print("75. int16+uint:");
+print(type(r));
+
+/* 76: int16 + ushort */
+r = v3 + v9;
+print("76. int16+ushort:");
+print(type(r));
+
+/* 77: int16 + uint8 */
+r = v3 + v10;
+print("77. int16+uint8:");
+print(type(r));
+
+/* 78: int16 + uint16 */
+r = v3 + v11;
+print("78. int16+uint16:");
+print(type(r));
+
+/* 79: int16 + uint32 */
+r = v3 + v12;
+print("79. int16+uint32:");
+print(type(r));
+
+/* 80: int16 + uint64 */
+r = v3 + v13;
+print("80. int16+uint64:");
+print(type(r));
+
+/* 81: int16 + ulong */
+r = v3 + v14;
+print("81. int16+ulong:");
+print(type(r));
+
+/* 82: int16 + char */
+r = v3 + v15;
+print("82. int16+char:");
+print(type(r));
+
+/* 83: int16 + bool */
+r = v3 + v16;
+print("83. int16+bool:");
+print(type(r));
+
+/* 84: int16 + float */
+r = v3 + v17;
+print("84. int16+float:");
+print(type(r));
+
+/* 85: int16 + double */
+r = v3 + v18;
+print("85. int16+double:");
+print(type(r));
+
+/* 86: int16 + string */
+r = v3 + v19;
+print("86. int16+string:");
+print(type(r));
+
+/* 87: int16 + bigint */
+r = v3 + v20;
+print("87. int16+bigint:");
+print(type(r));
+
+/* 88: int16 + decimal */
+r = v3 + v21;
+print("88. int16+decimal:");
+print(type(r));
+
+/* 89: int32 + int */
+r = v4 + v0;
+print("89. int32+int:");
+print(type(r));
+
+/* 90: int32 + short */
+r = v4 + v1;
+print("90. int32+short:");
+print(type(r));
+
+/* 91: int32 + int8 */
+r = v4 + v2;
+print("91. int32+int8:");
+print(type(r));
+
+/* 92: int32 + int16 */
+r = v4 + v3;
+print("92. int32+int16:");
+print(type(r));
+
+/* 93: int32 + int32 */
+r = v4 + v4;
+print("93. int32+int32:");
+print(type(r));
+
+/* 94: int32 + int64 */
+r = v4 + v5;
+print("94. int32+int64:");
+print(type(r));
+
+/* 95: int32 + long */
+r = v4 + v6;
+print("95. int32+long:");
+print(type(r));
+
+/* 96: int32 + byte */
+r = v4 + v7;
+print("96. int32+byte:");
+print(type(r));
+
+/* 97: int32 + uint */
+r = v4 + v8;
+print("97. int32+uint:");
+print(type(r));
+
+/* 98: int32 + ushort */
+r = v4 + v9;
+print("98. int32+ushort:");
+print(type(r));
+
+/* 99: int32 + uint8 */
+r = v4 + v10;
+print("99. int32+uint8:");
+print(type(r));
+
+/* 100: int32 + uint16 */
+r = v4 + v11;
+print("100. int32+uint16:");
+print(type(r));
+
+/* 101: int32 + uint32 */
+r = v4 + v12;
+print("101. int32+uint32:");
+print(type(r));
+
+/* 102: int32 + uint64 */
+r = v4 + v13;
+print("102. int32+uint64:");
+print(type(r));
+
+/* 103: int32 + ulong */
+r = v4 + v14;
+print("103. int32+ulong:");
+print(type(r));
+
+/* 104: int32 + char */
+r = v4 + v15;
+print("104. int32+char:");
+print(type(r));
+
+/* 105: int32 + bool */
+r = v4 + v16;
+print("105. int32+bool:");
+print(type(r));
+
+/* 106: int32 + float */
+r = v4 + v17;
+print("106. int32+float:");
+print(type(r));
+
+/* 107: int32 + double */
+r = v4 + v18;
+print("107. int32+double:");
+print(type(r));
+
+/* 108: int32 + string */
+r = v4 + v19;
+print("108. int32+string:");
+print(type(r));
+
+/* 109: int32 + bigint */
+r = v4 + v20;
+print("109. int32+bigint:");
+print(type(r));
+
+/* 110: int32 + decimal */
+r = v4 + v21;
+print("110. int32+decimal:");
+print(type(r));
+
+/* 111: int64 + int */
+r = v5 + v0;
+print("111. int64+int:");
+print(type(r));
+
+/* 112: int64 + short */
+r = v5 + v1;
+print("112. int64+short:");
+print(type(r));
+
+/* 113: int64 + int8 */
+r = v5 + v2;
+print("113. int64+int8:");
+print(type(r));
+
+/* 114: int64 + int16 */
+r = v5 + v3;
+print("114. int64+int16:");
+print(type(r));
+
+/* 115: int64 + int32 */
+r = v5 + v4;
+print("115. int64+int32:");
+print(type(r));
+
+/* 116: int64 + int64 */
+r = v5 + v5;
+print("116. int64+int64:");
+print(type(r));
+
+/* 117: int64 + long */
+r = v5 + v6;
+print("117. int64+long:");
+print(type(r));
+
+/* 118: int64 + byte */
+r = v5 + v7;
+print("118. int64+byte:");
+print(type(r));
+
+/* 119: int64 + uint */
+r = v5 + v8;
+print("119. int64+uint:");
+print(type(r));
+
+/* 120: int64 + ushort */
+r = v5 + v9;
+print("120. int64+ushort:");
+print(type(r));
+
+/* 121: int64 + uint8 */
+r = v5 + v10;
+print("121. int64+uint8:");
+print(type(r));
+
+/* 122: int64 + uint16 */
+r = v5 + v11;
+print("122. int64+uint16:");
+print(type(r));
+
+/* 123: int64 + uint32 */
+r = v5 + v12;
+print("123. int64+uint32:");
+print(type(r));
+
+/* 124: int64 + uint64 */
+r = v5 + v13;
+print("124. int64+uint64:");
+print(type(r));
+
+/* 125: int64 + ulong */
+r = v5 + v14;
+print("125. int64+ulong:");
+print(type(r));
+
+/* 126: int64 + char */
+r = v5 + v15;
+print("126. int64+char:");
+print(type(r));
+
+/* 127: int64 + bool */
+r = v5 + v16;
+print("127. int64+bool:");
+print(type(r));
+
+/* 128: int64 + float */
+r = v5 + v17;
+print("128. int64+float:");
+print(type(r));
+
+/* 129: int64 + double */
+r = v5 + v18;
+print("129. int64+double:");
+print(type(r));
+
+/* 130: int64 + string */
+r = v5 + v19;
+print("130. int64+string:");
+print(type(r));
+
+/* 131: int64 + bigint */
+r = v5 + v20;
+print("131. int64+bigint:");
+print(type(r));
+
+/* 132: int64 + decimal */
+r = v5 + v21;
+print("132. int64+decimal:");
+print(type(r));
+
+/* 133: long + int */
+r = v6 + v0;
+print("133. long+int:");
+print(type(r));
+
+/* 134: long + short */
+r = v6 + v1;
+print("134. long+short:");
+print(type(r));
+
+/* 135: long + int8 */
+r = v6 + v2;
+print("135. long+int8:");
+print(type(r));
+
+/* 136: long + int16 */
+r = v6 + v3;
+print("136. long+int16:");
+print(type(r));
+
+/* 137: long + int32 */
+r = v6 + v4;
+print("137. long+int32:");
+print(type(r));
+
+/* 138: long + int64 */
+r = v6 + v5;
+print("138. long+int64:");
+print(type(r));
+
+/* 139: long + long */
+r = v6 + v6;
+print("139. long+long:");
+print(type(r));
+
+/* 140: long + byte */
+r = v6 + v7;
+print("140. long+byte:");
+print(type(r));
+
+/* 141: long + uint */
+r = v6 + v8;
+print("141. long+uint:");
+print(type(r));
+
+/* 142: long + ushort */
+r = v6 + v9;
+print("142. long+ushort:");
+print(type(r));
+
+/* 143: long + uint8 */
+r = v6 + v10;
+print("143. long+uint8:");
+print(type(r));
+
+/* 144: long + uint16 */
+r = v6 + v11;
+print("144. long+uint16:");
+print(type(r));
+
+/* 145: long + uint32 */
+r = v6 + v12;
+print("145. long+uint32:");
+print(type(r));
+
+/* 146: long + uint64 */
+r = v6 + v13;
+print("146. long+uint64:");
+print(type(r));
+
+/* 147: long + ulong */
+r = v6 + v14;
+print("147. long+ulong:");
+print(type(r));
+
+/* 148: long + char */
+r = v6 + v15;
+print("148. long+char:");
+print(type(r));
+
+/* 149: long + bool */
+r = v6 + v16;
+print("149. long+bool:");
+print(type(r));
+
+/* 150: long + float */
+r = v6 + v17;
+print("150. long+float:");
+print(type(r));
+
+/* 151: long + double */
+r = v6 + v18;
+print("151. long+double:");
+print(type(r));
+
+/* 152: long + string */
+r = v6 + v19;
+print("152. long+string:");
+print(type(r));
+
+/* 153: long + bigint */
+r = v6 + v20;
+print("153. long+bigint:");
+print(type(r));
+
+/* 154: long + decimal */
+r = v6 + v21;
+print("154. long+decimal:");
+print(type(r));
+
+/* 155: byte + int */
+r = v7 + v0;
+print("155. byte+int:");
+print(type(r));
+
+/* 156: byte + short */
+r = v7 + v1;
+print("156. byte+short:");
+print(type(r));
+
+/* 157: byte + int8 */
+r = v7 + v2;
+print("157. byte+int8:");
+print(type(r));
+
+/* 158: byte + int16 */
+r = v7 + v3;
+print("158. byte+int16:");
+print(type(r));
+
+/* 159: byte + int32 */
+r = v7 + v4;
+print("159. byte+int32:");
+print(type(r));
+
+/* 160: byte + int64 */
+r = v7 + v5;
+print("160. byte+int64:");
+print(type(r));
+
+/* 161: byte + long */
+r = v7 + v6;
+print("161. byte+long:");
+print(type(r));
+
+/* 162: byte + byte */
+r = v7 + v7;
+print("162. byte+byte:");
+print(type(r));
+
+/* 163: byte + uint */
+r = v7 + v8;
+print("163. byte+uint:");
+print(type(r));
+
+/* 164: byte + ushort */
+r = v7 + v9;
+print("164. byte+ushort:");
+print(type(r));
+
+/* 165: byte + uint8 */
+r = v7 + v10;
+print("165. byte+uint8:");
+print(type(r));
+
+/* 166: byte + uint16 */
+r = v7 + v11;
+print("166. byte+uint16:");
+print(type(r));
+
+/* 167: byte + uint32 */
+r = v7 + v12;
+print("167. byte+uint32:");
+print(type(r));
+
+/* 168: byte + uint64 */
+r = v7 + v13;
+print("168. byte+uint64:");
+print(type(r));
+
+/* 169: byte + ulong */
+r = v7 + v14;
+print("169. byte+ulong:");
+print(type(r));
+
+/* 170: byte + char */
+r = v7 + v15;
+print("170. byte+char:");
+print(type(r));
+
+/* 171: byte + bool */
+r = v7 + v16;
+print("171. byte+bool:");
+print(type(r));
+
+/* 172: byte + float */
+r = v7 + v17;
+print("172. byte+float:");
+print(type(r));
+
+/* 173: byte + double */
+r = v7 + v18;
+print("173. byte+double:");
+print(type(r));
+
+/* 174: byte + string */
+r = v7 + v19;
+print("174. byte+string:");
+print(type(r));
+
+/* 175: byte + bigint */
+r = v7 + v20;
+print("175. byte+bigint:");
+print(type(r));
+
+/* 176: byte + decimal */
+r = v7 + v21;
+print("176. byte+decimal:");
+print(type(r));
+
+/* 177: uint + int */
+r = v8 + v0;
+print("177. uint+int:");
+print(type(r));
+
+/* 178: uint + short */
+r = v8 + v1;
+print("178. uint+short:");
+print(type(r));
+
+/* 179: uint + int8 */
+r = v8 + v2;
+print("179. uint+int8:");
+print(type(r));
+
+/* 180: uint + int16 */
+r = v8 + v3;
+print("180. uint+int16:");
+print(type(r));
+
+/* 181: uint + int32 */
+r = v8 + v4;
+print("181. uint+int32:");
+print(type(r));
+
+/* 182: uint + int64 */
+r = v8 + v5;
+print("182. uint+int64:");
+print(type(r));
+
+/* 183: uint + long */
+r = v8 + v6;
+print("183. uint+long:");
+print(type(r));
+
+/* 184: uint + byte */
+r = v8 + v7;
+print("184. uint+byte:");
+print(type(r));
+
+/* 185: uint + uint */
+r = v8 + v8;
+print("185. uint+uint:");
+print(type(r));
+
+/* 186: uint + ushort */
+r = v8 + v9;
+print("186. uint+ushort:");
+print(type(r));
+
+/* 187: uint + uint8 */
+r = v8 + v10;
+print("187. uint+uint8:");
+print(type(r));
+
+/* 188: uint + uint16 */
+r = v8 + v11;
+print("188. uint+uint16:");
+print(type(r));
+
+/* 189: uint + uint32 */
+r = v8 + v12;
+print("189. uint+uint32:");
+print(type(r));
+
+/* 190: uint + uint64 */
+r = v8 + v13;
+print("190. uint+uint64:");
+print(type(r));
+
+/* 191: uint + ulong */
+r = v8 + v14;
+print("191. uint+ulong:");
+print(type(r));
+
+/* 192: uint + char */
+r = v8 + v15;
+print("192. uint+char:");
+print(type(r));
+
+/* 193: uint + bool */
+r = v8 + v16;
+print("193. uint+bool:");
+print(type(r));
+
+/* 194: uint + float */
+r = v8 + v17;
+print("194. uint+float:");
+print(type(r));
+
+/* 195: uint + double */
+r = v8 + v18;
+print("195. uint+double:");
+print(type(r));
+
+/* 196: uint + string */
+r = v8 + v19;
+print("196. uint+string:");
+print(type(r));
+
+/* 197: uint + bigint */
+r = v8 + v20;
+print("197. uint+bigint:");
+print(type(r));
+
+/* 198: uint + decimal */
+r = v8 + v21;
+print("198. uint+decimal:");
+print(type(r));
+
+/* 199: ushort + int */
+r = v9 + v0;
+print("199. ushort+int:");
+print(type(r));
+
+/* 200: ushort + short */
+r = v9 + v1;
+print("200. ushort+short:");
+print(type(r));
+
+/* 201: ushort + int8 */
+r = v9 + v2;
+print("201. ushort+int8:");
+print(type(r));
+
+/* 202: ushort + int16 */
+r = v9 + v3;
+print("202. ushort+int16:");
+print(type(r));
+
+/* 203: ushort + int32 */
+r = v9 + v4;
+print("203. ushort+int32:");
+print(type(r));
+
+/* 204: ushort + int64 */
+r = v9 + v5;
+print("204. ushort+int64:");
+print(type(r));
+
+/* 205: ushort + long */
+r = v9 + v6;
+print("205. ushort+long:");
+print(type(r));
+
+/* 206: ushort + byte */
+r = v9 + v7;
+print("206. ushort+byte:");
+print(type(r));
+
+/* 207: ushort + uint */
+r = v9 + v8;
+print("207. ushort+uint:");
+print(type(r));
+
+/* 208: ushort + ushort */
+r = v9 + v9;
+print("208. ushort+ushort:");
+print(type(r));
+
+/* 209: ushort + uint8 */
+r = v9 + v10;
+print("209. ushort+uint8:");
+print(type(r));
+
+/* 210: ushort + uint16 */
+r = v9 + v11;
+print("210. ushort+uint16:");
+print(type(r));
+
+/* 211: ushort + uint32 */
+r = v9 + v12;
+print("211. ushort+uint32:");
+print(type(r));
+
+/* 212: ushort + uint64 */
+r = v9 + v13;
+print("212. ushort+uint64:");
+print(type(r));
+
+/* 213: ushort + ulong */
+r = v9 + v14;
+print("213. ushort+ulong:");
+print(type(r));
+
+/* 214: ushort + char */
+r = v9 + v15;
+print("214. ushort+char:");
+print(type(r));
+
+/* 215: ushort + bool */
+r = v9 + v16;
+print("215. ushort+bool:");
+print(type(r));
+
+/* 216: ushort + float */
+r = v9 + v17;
+print("216. ushort+float:");
+print(type(r));
+
+/* 217: ushort + double */
+r = v9 + v18;
+print("217. ushort+double:");
+print(type(r));
+
+/* 218: ushort + string */
+r = v9 + v19;
+print("218. ushort+string:");
+print(type(r));
+
+/* 219: ushort + bigint */
+r = v9 + v20;
+print("219. ushort+bigint:");
+print(type(r));
+
+/* 220: ushort + decimal */
+r = v9 + v21;
+print("220. ushort+decimal:");
+print(type(r));
+
+/* 221: uint8 + int */
+r = v10 + v0;
+print("221. uint8+int:");
+print(type(r));
+
+/* 222: uint8 + short */
+r = v10 + v1;
+print("222. uint8+short:");
+print(type(r));
+
+/* 223: uint8 + int8 */
+r = v10 + v2;
+print("223. uint8+int8:");
+print(type(r));
+
+/* 224: uint8 + int16 */
+r = v10 + v3;
+print("224. uint8+int16:");
+print(type(r));
+
+/* 225: uint8 + int32 */
+r = v10 + v4;
+print("225. uint8+int32:");
+print(type(r));
+
+/* 226: uint8 + int64 */
+r = v10 + v5;
+print("226. uint8+int64:");
+print(type(r));
+
+/* 227: uint8 + long */
+r = v10 + v6;
+print("227. uint8+long:");
+print(type(r));
+
+/* 228: uint8 + byte */
+r = v10 + v7;
+print("228. uint8+byte:");
+print(type(r));
+
+/* 229: uint8 + uint */
+r = v10 + v8;
+print("229. uint8+uint:");
+print(type(r));
+
+/* 230: uint8 + ushort */
+r = v10 + v9;
+print("230. uint8+ushort:");
+print(type(r));
+
+/* 231: uint8 + uint8 */
+r = v10 + v10;
+print("231. uint8+uint8:");
+print(type(r));
+
+/* 232: uint8 + uint16 */
+r = v10 + v11;
+print("232. uint8+uint16:");
+print(type(r));
+
+/* 233: uint8 + uint32 */
+r = v10 + v12;
+print("233. uint8+uint32:");
+print(type(r));
+
+/* 234: uint8 + uint64 */
+r = v10 + v13;
+print("234. uint8+uint64:");
+print(type(r));
+
+/* 235: uint8 + ulong */
+r = v10 + v14;
+print("235. uint8+ulong:");
+print(type(r));
+
+/* 236: uint8 + char */
+r = v10 + v15;
+print("236. uint8+char:");
+print(type(r));
+
+/* 237: uint8 + bool */
+r = v10 + v16;
+print("237. uint8+bool:");
+print(type(r));
+
+/* 238: uint8 + float */
+r = v10 + v17;
+print("238. uint8+float:");
+print(type(r));
+
+/* 239: uint8 + double */
+r = v10 + v18;
+print("239. uint8+double:");
+print(type(r));
+
+/* 240: uint8 + string */
+r = v10 + v19;
+print("240. uint8+string:");
+print(type(r));
+
+/* 241: uint8 + bigint */
+r = v10 + v20;
+print("241. uint8+bigint:");
+print(type(r));
+
+/* 242: uint8 + decimal */
+r = v10 + v21;
+print("242. uint8+decimal:");
+print(type(r));
+
+/* 243: uint16 + int */
+r = v11 + v0;
+print("243. uint16+int:");
+print(type(r));
+
+/* 244: uint16 + short */
+r = v11 + v1;
+print("244. uint16+short:");
+print(type(r));
+
+/* 245: uint16 + int8 */
+r = v11 + v2;
+print("245. uint16+int8:");
+print(type(r));
+
+/* 246: uint16 + int16 */
+r = v11 + v3;
+print("246. uint16+int16:");
+print(type(r));
+
+/* 247: uint16 + int32 */
+r = v11 + v4;
+print("247. uint16+int32:");
+print(type(r));
+
+/* 248: uint16 + int64 */
+r = v11 + v5;
+print("248. uint16+int64:");
+print(type(r));
+
+/* 249: uint16 + long */
+r = v11 + v6;
+print("249. uint16+long:");
+print(type(r));
+
+/* 250: uint16 + byte */
+r = v11 + v7;
+print("250. uint16+byte:");
+print(type(r));
+
+/* 251: uint16 + uint */
+r = v11 + v8;
+print("251. uint16+uint:");
+print(type(r));
+
+/* 252: uint16 + ushort */
+r = v11 + v9;
+print("252. uint16+ushort:");
+print(type(r));
+
+/* 253: uint16 + uint8 */
+r = v11 + v10;
+print("253. uint16+uint8:");
+print(type(r));
+
+/* 254: uint16 + uint16 */
+r = v11 + v11;
+print("254. uint16+uint16:");
+print(type(r));
+
+/* 255: uint16 + uint32 */
+r = v11 + v12;
+print("255. uint16+uint32:");
+print(type(r));
+
+/* 256: uint16 + uint64 */
+r = v11 + v13;
+print("256. uint16+uint64:");
+print(type(r));
+
+/* 257: uint16 + ulong */
+r = v11 + v14;
+print("257. uint16+ulong:");
+print(type(r));
+
+/* 258: uint16 + char */
+r = v11 + v15;
+print("258. uint16+char:");
+print(type(r));
+
+/* 259: uint16 + bool */
+r = v11 + v16;
+print("259. uint16+bool:");
+print(type(r));
+
+/* 260: uint16 + float */
+r = v11 + v17;
+print("260. uint16+float:");
+print(type(r));
+
+/* 261: uint16 + double */
+r = v11 + v18;
+print("261. uint16+double:");
+print(type(r));
+
+/* 262: uint16 + string */
+r = v11 + v19;
+print("262. uint16+string:");
+print(type(r));
+
+/* 263: uint16 + bigint */
+r = v11 + v20;
+print("263. uint16+bigint:");
+print(type(r));
+
+/* 264: uint16 + decimal */
+r = v11 + v21;
+print("264. uint16+decimal:");
+print(type(r));
+
+/* 265: uint32 + int */
+r = v12 + v0;
+print("265. uint32+int:");
+print(type(r));
+
+/* 266: uint32 + short */
+r = v12 + v1;
+print("266. uint32+short:");
+print(type(r));
+
+/* 267: uint32 + int8 */
+r = v12 + v2;
+print("267. uint32+int8:");
+print(type(r));
+
+/* 268: uint32 + int16 */
+r = v12 + v3;
+print("268. uint32+int16:");
+print(type(r));
+
+/* 269: uint32 + int32 */
+r = v12 + v4;
+print("269. uint32+int32:");
+print(type(r));
+
+/* 270: uint32 + int64 */
+r = v12 + v5;
+print("270. uint32+int64:");
+print(type(r));
+
+/* 271: uint32 + long */
+r = v12 + v6;
+print("271. uint32+long:");
+print(type(r));
+
+/* 272: uint32 + byte */
+r = v12 + v7;
+print("272. uint32+byte:");
+print(type(r));
+
+/* 273: uint32 + uint */
+r = v12 + v8;
+print("273. uint32+uint:");
+print(type(r));
+
+/* 274: uint32 + ushort */
+r = v12 + v9;
+print("274. uint32+ushort:");
+print(type(r));
+
+/* 275: uint32 + uint8 */
+r = v12 + v10;
+print("275. uint32+uint8:");
+print(type(r));
+
+/* 276: uint32 + uint16 */
+r = v12 + v11;
+print("276. uint32+uint16:");
+print(type(r));
+
+/* 277: uint32 + uint32 */
+r = v12 + v12;
+print("277. uint32+uint32:");
+print(type(r));
+
+/* 278: uint32 + uint64 */
+r = v12 + v13;
+print("278. uint32+uint64:");
+print(type(r));
+
+/* 279: uint32 + ulong */
+r = v12 + v14;
+print("279. uint32+ulong:");
+print(type(r));
+
+/* 280: uint32 + char */
+r = v12 + v15;
+print("280. uint32+char:");
+print(type(r));
+
+/* 281: uint32 + bool */
+r = v12 + v16;
+print("281. uint32+bool:");
+print(type(r));
+
+/* 282: uint32 + float */
+r = v12 + v17;
+print("282. uint32+float:");
+print(type(r));
+
+/* 283: uint32 + double */
+r = v12 + v18;
+print("283. uint32+double:");
+print(type(r));
+
+/* 284: uint32 + string */
+r = v12 + v19;
+print("284. uint32+string:");
+print(type(r));
+
+/* 285: uint32 + bigint */
+r = v12 + v20;
+print("285. uint32+bigint:");
+print(type(r));
+
+/* 286: uint32 + decimal */
+r = v12 + v21;
+print("286. uint32+decimal:");
+print(type(r));
+
+/* 287: uint64 + int */
+r = v13 + v0;
+print("287. uint64+int:");
+print(type(r));
+
+/* 288: uint64 + short */
+r = v13 + v1;
+print("288. uint64+short:");
+print(type(r));
+
+/* 289: uint64 + int8 */
+r = v13 + v2;
+print("289. uint64+int8:");
+print(type(r));
+
+/* 290: uint64 + int16 */
+r = v13 + v3;
+print("290. uint64+int16:");
+print(type(r));
+
+/* 291: uint64 + int32 */
+r = v13 + v4;
+print("291. uint64+int32:");
+print(type(r));
+
+/* 292: uint64 + int64 */
+r = v13 + v5;
+print("292. uint64+int64:");
+print(type(r));
+
+/* 293: uint64 + long */
+r = v13 + v6;
+print("293. uint64+long:");
+print(type(r));
+
+/* 294: uint64 + byte */
+r = v13 + v7;
+print("294. uint64+byte:");
+print(type(r));
+
+/* 295: uint64 + uint */
+r = v13 + v8;
+print("295. uint64+uint:");
+print(type(r));
+
+/* 296: uint64 + ushort */
+r = v13 + v9;
+print("296. uint64+ushort:");
+print(type(r));
+
+/* 297: uint64 + uint8 */
+r = v13 + v10;
+print("297. uint64+uint8:");
+print(type(r));
+
+/* 298: uint64 + uint16 */
+r = v13 + v11;
+print("298. uint64+uint16:");
+print(type(r));
+
+/* 299: uint64 + uint32 */
+r = v13 + v12;
+print("299. uint64+uint32:");
+print(type(r));
+
+/* 300: uint64 + uint64 */
+r = v13 + v13;
+print("300. uint64+uint64:");
+print(type(r));
+
+/* 301: uint64 + ulong */
+r = v13 + v14;
+print("301. uint64+ulong:");
+print(type(r));
+
+/* 302: uint64 + char */
+r = v13 + v15;
+print("302. uint64+char:");
+print(type(r));
+
+/* 303: uint64 + bool */
+r = v13 + v16;
+print("303. uint64+bool:");
+print(type(r));
+
+/* 304: uint64 + float */
+r = v13 + v17;
+print("304. uint64+float:");
+print(type(r));
+
+/* 305: uint64 + double */
+r = v13 + v18;
+print("305. uint64+double:");
+print(type(r));
+
+/* 306: uint64 + string */
+r = v13 + v19;
+print("306. uint64+string:");
+print(type(r));
+
+/* 307: uint64 + bigint */
+r = v13 + v20;
+print("307. uint64+bigint:");
+print(type(r));
+
+/* 308: uint64 + decimal */
+r = v13 + v21;
+print("308. uint64+decimal:");
+print(type(r));
+
+/* 309: ulong + int */
+r = v14 + v0;
+print("309. ulong+int:");
+print(type(r));
+
+/* 310: ulong + short */
+r = v14 + v1;
+print("310. ulong+short:");
+print(type(r));
+
+/* 311: ulong + int8 */
+r = v14 + v2;
+print("311. ulong+int8:");
+print(type(r));
+
+/* 312: ulong + int16 */
+r = v14 + v3;
+print("312. ulong+int16:");
+print(type(r));
+
+/* 313: ulong + int32 */
+r = v14 + v4;
+print("313. ulong+int32:");
+print(type(r));
+
+/* 314: ulong + int64 */
+r = v14 + v5;
+print("314. ulong+int64:");
+print(type(r));
+
+/* 315: ulong + long */
+r = v14 + v6;
+print("315. ulong+long:");
+print(type(r));
+
+/* 316: ulong + byte */
+r = v14 + v7;
+print("316. ulong+byte:");
+print(type(r));
+
+/* 317: ulong + uint */
+r = v14 + v8;
+print("317. ulong+uint:");
+print(type(r));
+
+/* 318: ulong + ushort */
+r = v14 + v9;
+print("318. ulong+ushort:");
+print(type(r));
+
+/* 319: ulong + uint8 */
+r = v14 + v10;
+print("319. ulong+uint8:");
+print(type(r));
+
+/* 320: ulong + uint16 */
+r = v14 + v11;
+print("320. ulong+uint16:");
+print(type(r));
+
+/* 321: ulong + uint32 */
+r = v14 + v12;
+print("321. ulong+uint32:");
+print(type(r));
+
+/* 322: ulong + uint64 */
+r = v14 + v13;
+print("322. ulong+uint64:");
+print(type(r));
+
+/* 323: ulong + ulong */
+r = v14 + v14;
+print("323. ulong+ulong:");
+print(type(r));
+
+/* 324: ulong + char */
+r = v14 + v15;
+print("324. ulong+char:");
+print(type(r));
+
+/* 325: ulong + bool */
+r = v14 + v16;
+print("325. ulong+bool:");
+print(type(r));
+
+/* 326: ulong + float */
+r = v14 + v17;
+print("326. ulong+float:");
+print(type(r));
+
+/* 327: ulong + double */
+r = v14 + v18;
+print("327. ulong+double:");
+print(type(r));
+
+/* 328: ulong + string */
+r = v14 + v19;
+print("328. ulong+string:");
+print(type(r));
+
+/* 329: ulong + bigint */
+r = v14 + v20;
+print("329. ulong+bigint:");
+print(type(r));
+
+/* 330: ulong + decimal */
+r = v14 + v21;
+print("330. ulong+decimal:");
+print(type(r));
+
+/* 331: char + int */
+r = v15 + v0;
+print("331. char+int:");
+print(type(r));
+
+/* 332: char + short */
+r = v15 + v1;
+print("332. char+short:");
+print(type(r));
+
+/* 333: char + int8 */
+r = v15 + v2;
+print("333. char+int8:");
+print(type(r));
+
+/* 334: char + int16 */
+r = v15 + v3;
+print("334. char+int16:");
+print(type(r));
+
+/* 335: char + int32 */
+r = v15 + v4;
+print("335. char+int32:");
+print(type(r));
+
+/* 336: char + int64 */
+r = v15 + v5;
+print("336. char+int64:");
+print(type(r));
+
+/* 337: char + long */
+r = v15 + v6;
+print("337. char+long:");
+print(type(r));
+
+/* 338: char + byte */
+r = v15 + v7;
+print("338. char+byte:");
+print(type(r));
+
+/* 339: char + uint */
+r = v15 + v8;
+print("339. char+uint:");
+print(type(r));
+
+/* 340: char + ushort */
+r = v15 + v9;
+print("340. char+ushort:");
+print(type(r));
+
+/* 341: char + uint8 */
+r = v15 + v10;
+print("341. char+uint8:");
+print(type(r));
+
+/* 342: char + uint16 */
+r = v15 + v11;
+print("342. char+uint16:");
+print(type(r));
+
+/* 343: char + uint32 */
+r = v15 + v12;
+print("343. char+uint32:");
+print(type(r));
+
+/* 344: char + uint64 */
+r = v15 + v13;
+print("344. char+uint64:");
+print(type(r));
+
+/* 345: char + ulong */
+r = v15 + v14;
+print("345. char+ulong:");
+print(type(r));
+
+/* 346: char + char */
+r = v15 + v15;
+print("346. char+char:");
+print(type(r));
+
+/* 347: char + bool */
+r = v15 + v16;
+print("347. char+bool:");
+print(type(r));
+
+/* 348: char + float */
+r = v15 + v17;
+print("348. char+float:");
+print(type(r));
+
+/* 349: char + double */
+r = v15 + v18;
+print("349. char+double:");
+print(type(r));
+
+/* 350: char + string */
+r = v15 + v19;
+print("350. char+string:");
+print(type(r));
+
+/* 351: char + bigint */
+r = v15 + v20;
+print("351. char+bigint:");
+print(type(r));
+
+/* 352: char + decimal */
+r = v15 + v21;
+print("352. char+decimal:");
+print(type(r));
+
+/* 353: bool + int */
+r = v16 + v0;
+print("353. bool+int:");
+print(type(r));
+
+/* 354: bool + short */
+r = v16 + v1;
+print("354. bool+short:");
+print(type(r));
+
+/* 355: bool + int8 */
+r = v16 + v2;
+print("355. bool+int8:");
+print(type(r));
+
+/* 356: bool + int16 */
+r = v16 + v3;
+print("356. bool+int16:");
+print(type(r));
+
+/* 357: bool + int32 */
+r = v16 + v4;
+print("357. bool+int32:");
+print(type(r));
+
+/* 358: bool + int64 */
+r = v16 + v5;
+print("358. bool+int64:");
+print(type(r));
+
+/* 359: bool + long */
+r = v16 + v6;
+print("359. bool+long:");
+print(type(r));
+
+/* 360: bool + byte */
+r = v16 + v7;
+print("360. bool+byte:");
+print(type(r));
+
+/* 361: bool + uint */
+r = v16 + v8;
+print("361. bool+uint:");
+print(type(r));
+
+/* 362: bool + ushort */
+r = v16 + v9;
+print("362. bool+ushort:");
+print(type(r));
+
+/* 363: bool + uint8 */
+r = v16 + v10;
+print("363. bool+uint8:");
+print(type(r));
+
+/* 364: bool + uint16 */
+r = v16 + v11;
+print("364. bool+uint16:");
+print(type(r));
+
+/* 365: bool + uint32 */
+r = v16 + v12;
+print("365. bool+uint32:");
+print(type(r));
+
+/* 366: bool + uint64 */
+r = v16 + v13;
+print("366. bool+uint64:");
+print(type(r));
+
+/* 367: bool + ulong */
+r = v16 + v14;
+print("367. bool+ulong:");
+print(type(r));
+
+/* 368: bool + char */
+r = v16 + v15;
+print("368. bool+char:");
+print(type(r));
+
+/* 369: bool + bool */
+r = v16 + v16;
+print("369. bool+bool:");
+print(type(r));
+
+/* 370: bool + float */
+r = v16 + v17;
+print("370. bool+float:");
+print(type(r));
+
+/* 371: bool + double */
+r = v16 + v18;
+print("371. bool+double:");
+print(type(r));
+
+/* 372: bool + string */
+r = v16 + v19;
+print("372. bool+string:");
+print(type(r));
+
+/* 373: bool + bigint */
+r = v16 + v20;
+print("373. bool+bigint:");
+print(type(r));
+
+/* 374: bool + decimal */
+r = v16 + v21;
+print("374. bool+decimal:");
+print(type(r));
+
+/* 375: float + int */
+r = v17 + v0;
+print("375. float+int:");
+print(type(r));
+
+/* 376: float + short */
+r = v17 + v1;
+print("376. float+short:");
+print(type(r));
+
+/* 377: float + int8 */
+r = v17 + v2;
+print("377. float+int8:");
+print(type(r));
+
+/* 378: float + int16 */
+r = v17 + v3;
+print("378. float+int16:");
+print(type(r));
+
+/* 379: float + int32 */
+r = v17 + v4;
+print("379. float+int32:");
+print(type(r));
+
+/* 380: float + int64 */
+r = v17 + v5;
+print("380. float+int64:");
+print(type(r));
+
+/* 381: float + long */
+r = v17 + v6;
+print("381. float+long:");
+print(type(r));
+
+/* 382: float + byte */
+r = v17 + v7;
+print("382. float+byte:");
+print(type(r));
+
+/* 383: float + uint */
+r = v17 + v8;
+print("383. float+uint:");
+print(type(r));
+
+/* 384: float + ushort */
+r = v17 + v9;
+print("384. float+ushort:");
+print(type(r));
+
+/* 385: float + uint8 */
+r = v17 + v10;
+print("385. float+uint8:");
+print(type(r));
+
+/* 386: float + uint16 */
+r = v17 + v11;
+print("386. float+uint16:");
+print(type(r));
+
+/* 387: float + uint32 */
+r = v17 + v12;
+print("387. float+uint32:");
+print(type(r));
+
+/* 388: float + uint64 */
+r = v17 + v13;
+print("388. float+uint64:");
+print(type(r));
+
+/* 389: float + ulong */
+r = v17 + v14;
+print("389. float+ulong:");
+print(type(r));
+
+/* 390: float + char */
+r = v17 + v15;
+print("390. float+char:");
+print(type(r));
+
+/* 391: float + bool */
+r = v17 + v16;
+print("391. float+bool:");
+print(type(r));
+
+/* 392: float + float */
+r = v17 + v17;
+print("392. float+float:");
+print(type(r));
+
+/* 393: float + double */
+r = v17 + v18;
+print("393. float+double:");
+print(type(r));
+
+/* 394: float + string */
+r = v17 + v19;
+print("394. float+string:");
+print(type(r));
+
+/* 395: float + bigint */
+r = v17 + v20;
+print("395. float+bigint:");
+print(type(r));
+
+/* 396: float + decimal */
+r = v17 + v21;
+print("396. float+decimal:");
+print(type(r));
+
+/* 397: double + int */
+r = v18 + v0;
+print("397. double+int:");
+print(type(r));
+
+/* 398: double + short */
+r = v18 + v1;
+print("398. double+short:");
+print(type(r));
+
+/* 399: double + int8 */
+r = v18 + v2;
+print("399. double+int8:");
+print(type(r));
+
+/* 400: double + int16 */
+r = v18 + v3;
+print("400. double+int16:");
+print(type(r));
+
+/* 401: double + int32 */
+r = v18 + v4;
+print("401. double+int32:");
+print(type(r));
+
+/* 402: double + int64 */
+r = v18 + v5;
+print("402. double+int64:");
+print(type(r));
+
+/* 403: double + long */
+r = v18 + v6;
+print("403. double+long:");
+print(type(r));
+
+/* 404: double + byte */
+r = v18 + v7;
+print("404. double+byte:");
+print(type(r));
+
+/* 405: double + uint */
+r = v18 + v8;
+print("405. double+uint:");
+print(type(r));
+
+/* 406: double + ushort */
+r = v18 + v9;
+print("406. double+ushort:");
+print(type(r));
+
+/* 407: double + uint8 */
+r = v18 + v10;
+print("407. double+uint8:");
+print(type(r));
+
+/* 408: double + uint16 */
+r = v18 + v11;
+print("408. double+uint16:");
+print(type(r));
+
+/* 409: double + uint32 */
+r = v18 + v12;
+print("409. double+uint32:");
+print(type(r));
+
+/* 410: double + uint64 */
+r = v18 + v13;
+print("410. double+uint64:");
+print(type(r));
+
+/* 411: double + ulong */
+r = v18 + v14;
+print("411. double+ulong:");
+print(type(r));
+
+/* 412: double + char */
+r = v18 + v15;
+print("412. double+char:");
+print(type(r));
+
+/* 413: double + bool */
+r = v18 + v16;
+print("413. double+bool:");
+print(type(r));
+
+/* 414: double + float */
+r = v18 + v17;
+print("414. double+float:");
+print(type(r));
+
+/* 415: double + double */
+r = v18 + v18;
+print("415. double+double:");
+print(type(r));
+
+/* 416: double + string */
+r = v18 + v19;
+print("416. double+string:");
+print(type(r));
+
+/* 417: double + bigint */
+r = v18 + v20;
+print("417. double+bigint:");
+print(type(r));
+
+/* 418: double + decimal */
+r = v18 + v21;
+print("418. double+decimal:");
+print(type(r));
+
+/* 419: string + int */
+r = v19 + v0;
+print("419. string+int:");
+print(type(r));
+
+/* 420: string + short */
+r = v19 + v1;
+print("420. string+short:");
+print(type(r));
+
+/* 421: string + int8 */
+r = v19 + v2;
+print("421. string+int8:");
+print(type(r));
+
+/* 422: string + int16 */
+r = v19 + v3;
+print("422. string+int16:");
+print(type(r));
+
+/* 423: string + int32 */
+r = v19 + v4;
+print("423. string+int32:");
+print(type(r));
+
+/* 424: string + int64 */
+r = v19 + v5;
+print("424. string+int64:");
+print(type(r));
+
+/* 425: string + long */
+r = v19 + v6;
+print("425. string+long:");
+print(type(r));
+
+/* 426: string + byte */
+r = v19 + v7;
+print("426. string+byte:");
+print(type(r));
+
+/* 427: string + uint */
+r = v19 + v8;
+print("427. string+uint:");
+print(type(r));
+
+/* 428: string + ushort */
+r = v19 + v9;
+print("428. string+ushort:");
+print(type(r));
+
+/* 429: string + uint8 */
+r = v19 + v10;
+print("429. string+uint8:");
+print(type(r));
+
+/* 430: string + uint16 */
+r = v19 + v11;
+print("430. string+uint16:");
+print(type(r));
+
+/* 431: string + uint32 */
+r = v19 + v12;
+print("431. string+uint32:");
+print(type(r));
+
+/* 432: string + uint64 */
+r = v19 + v13;
+print("432. string+uint64:");
+print(type(r));
+
+/* 433: string + ulong */
+r = v19 + v14;
+print("433. string+ulong:");
+print(type(r));
+
+/* 434: string + char */
+r = v19 + v15;
+print("434. string+char:");
+print(type(r));
+
+/* 435: string + bool */
+r = v19 + v16;
+print("435. string+bool:");
+print(type(r));
+
+/* 436: string + float */
+r = v19 + v17;
+print("436. string+float:");
+print(type(r));
+
+/* 437: string + double */
+r = v19 + v18;
+print("437. string+double:");
+print(type(r));
+
+/* 438: string + string */
+r = v19 + v19;
+print("438. string+string:");
+print(type(r));
+
+/* 439: string + bigint */
+r = v19 + v20;
+print("439. string+bigint:");
+print(type(r));
+
+/* 440: string + decimal */
+r = v19 + v21;
+print("440. string+decimal:");
+print(type(r));
+
+/* 441: bigint + int */
+r = v20 + v0;
+print("441. bigint+int:");
+print(type(r));
+
+/* 442: bigint + short */
+r = v20 + v1;
+print("442. bigint+short:");
+print(type(r));
+
+/* 443: bigint + int8 */
+r = v20 + v2;
+print("443. bigint+int8:");
+print(type(r));
+
+/* 444: bigint + int16 */
+r = v20 + v3;
+print("444. bigint+int16:");
+print(type(r));
+
+/* 445: bigint + int32 */
+r = v20 + v4;
+print("445. bigint+int32:");
+print(type(r));
+
+/* 446: bigint + int64 */
+r = v20 + v5;
+print("446. bigint+int64:");
+print(type(r));
+
+/* 447: bigint + long */
+r = v20 + v6;
+print("447. bigint+long:");
+print(type(r));
+
+/* 448: bigint + byte */
+r = v20 + v7;
+print("448. bigint+byte:");
+print(type(r));
+
+/* 449: bigint + uint */
+r = v20 + v8;
+print("449. bigint+uint:");
+print(type(r));
+
+/* 450: bigint + ushort */
+r = v20 + v9;
+print("450. bigint+ushort:");
+print(type(r));
+
+/* 451: bigint + uint8 */
+r = v20 + v10;
+print("451. bigint+uint8:");
+print(type(r));
+
+/* 452: bigint + uint16 */
+r = v20 + v11;
+print("452. bigint+uint16:");
+print(type(r));
+
+/* 453: bigint + uint32 */
+r = v20 + v12;
+print("453. bigint+uint32:");
+print(type(r));
+
+/* 454: bigint + uint64 */
+r = v20 + v13;
+print("454. bigint+uint64:");
+print(type(r));
+
+/* 455: bigint + ulong */
+r = v20 + v14;
+print("455. bigint+ulong:");
+print(type(r));
+
+/* 456: bigint + char */
+r = v20 + v15;
+print("456. bigint+char:");
+print(type(r));
+
+/* 457: bigint + bool */
+r = v20 + v16;
+print("457. bigint+bool:");
+print(type(r));
+
+/* 458: bigint + float */
+r = v20 + v17;
+print("458. bigint+float:");
+print(type(r));
+
+/* 459: bigint + double */
+r = v20 + v18;
+print("459. bigint+double:");
+print(type(r));
+
+/* 460: bigint + string */
+r = v20 + v19;
+print("460. bigint+string:");
+print(type(r));
+
+/* 461: bigint + bigint */
+r = v20 + v20;
+print("461. bigint+bigint:");
+print(type(r));
+
+/* 462: bigint + decimal */
+r = v20 + v21;
+print("462. bigint+decimal:");
+print(type(r));
+
+/* 463: decimal + int */
+r = v21 + v0;
+print("463. decimal+int:");
+print(type(r));
+
+/* 464: decimal + short */
+r = v21 + v1;
+print("464. decimal+short:");
+print(type(r));
+
+/* 465: decimal + int8 */
+r = v21 + v2;
+print("465. decimal+int8:");
+print(type(r));
+
+/* 466: decimal + int16 */
+r = v21 + v3;
+print("466. decimal+int16:");
+print(type(r));
+
+/* 467: decimal + int32 */
+r = v21 + v4;
+print("467. decimal+int32:");
+print(type(r));
+
+/* 468: decimal + int64 */
+r = v21 + v5;
+print("468. decimal+int64:");
+print(type(r));
+
+/* 469: decimal + long */
+r = v21 + v6;
+print("469. decimal+long:");
+print(type(r));
+
+/* 470: decimal + byte */
+r = v21 + v7;
+print("470. decimal+byte:");
+print(type(r));
+
+/* 471: decimal + uint */
+r = v21 + v8;
+print("471. decimal+uint:");
+print(type(r));
+
+/* 472: decimal + ushort */
+r = v21 + v9;
+print("472. decimal+ushort:");
+print(type(r));
+
+/* 473: decimal + uint8 */
+r = v21 + v10;
+print("473. decimal+uint8:");
+print(type(r));
+
+/* 474: decimal + uint16 */
+r = v21 + v11;
+print("474. decimal+uint16:");
+print(type(r));
+
+/* 475: decimal + uint32 */
+r = v21 + v12;
+print("475. decimal+uint32:");
+print(type(r));
+
+/* 476: decimal + uint64 */
+r = v21 + v13;
+print("476. decimal+uint64:");
+print(type(r));
+
+/* 477: decimal + ulong */
+r = v21 + v14;
+print("477. decimal+ulong:");
+print(type(r));
+
+/* 478: decimal + char */
+r = v21 + v15;
+print("478. decimal+char:");
+print(type(r));
+
+/* 479: decimal + bool */
+r = v21 + v16;
+print("479. decimal+bool:");
+print(type(r));
+
+/* 480: decimal + float */
+r = v21 + v17;
+print("480. decimal+float:");
+print(type(r));
+
+/* 481: decimal + double */
+r = v21 + v18;
+print("481. decimal+double:");
+print(type(r));
+
+/* 482: decimal + string */
+r = v21 + v19;
+print("482. decimal+string:");
+print(type(r));
+
+/* 483: decimal + bigint */
+r = v21 + v20;
+print("483. decimal+bigint:");
+print(type(r));
+
+/* 484: decimal + decimal */
+r = v21 + v21;
+print("484. decimal+decimal:");
+print(type(r));
+
+/* ========== 第二组：三类型多链路组合 ========== */
+/* 多链路: int → double → string */
+r = v0 + v18 + v19;
+print("chain: int+double+string:");
+print(type(r));
+
+/* 多链路: double → string → int */
+r = v18 + v19 + v0;
+print("chain: double+string+int:");
+print(type(r));
+
+/* 多链路: string → double → int */
+r = v19 + v18 + v0;
+print("chain: string+double+int:");
+print(type(r));
+
+/* 多链路: bigint → double → int */
+r = v20 + v18 + v0;
+print("chain: bigint+double+int:");
+print(type(r));
+
+/* 多链路: bigint → string → int */
+r = v20 + v19 + v0;
+print("chain: bigint+string+int:");
+print(type(r));
+
+/* 多链路: decimal → int → double */
+r = v21 + v0 + v18;
+print("chain: decimal+int+double:");
+print(type(r));
+
+/* 多链路: decimal → double → string */
+r = v21 + v18 + v19;
+print("chain: decimal+double+string:");
+print(type(r));
+
+/* 多链路: bigint → decimal → string */
+r = v20 + v21 + v19;
+print("chain: bigint+decimal+string:");
+print(type(r));
+
+/* 多链路: int → bigint → decimal */
+r = v0 + v20 + v21;
+print("chain: int+bigint+decimal:");
+print(type(r));
+
+/* 多链路: double → bigint → string */
+r = v18 + v20 + v19;
+print("chain: double+bigint+string:");
+print(type(r));
+
+/* 多链路: string → bigint → decimal */
+r = v19 + v20 + v21;
+print("chain: string+bigint+decimal:");
+print(type(r));
+
+/* 多链路: bool → int → double */
+r = v16 + v0 + v18;
+print("chain: bool+int+double:");
+print(type(r));
+
+/* 多链路: char → int → string */
+r = v15 + v0 + v19;
+print("chain: char+int+string:");
+print(type(r));
+
+/* 多链路: byte → short → int */
+r = v7 + v1 + v0;
+print("chain: byte+short+int:");
+print(type(r));
+
+/* 多链路: uint → int → double */
+r = v8 + v0 + v18;
+print("chain: uint+int+double:");
+print(type(r));
+
+print("=== 全量交叉测试完成 ===");
