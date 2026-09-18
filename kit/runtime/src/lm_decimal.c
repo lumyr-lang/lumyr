@@ -210,26 +210,30 @@ Decimal* lumyr_decimal_sub(Decimal* a, Decimal* b) {
     char* a_dot = strchr(a_int, '.');
     if(a_dot) {
         memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
-        int pad = max_prec - a->precision;
-        if(pad > 0) {
-            int len = strlen(a_int);
-            a_int = (char*)realloc(a_int, len + pad + 1);
-            for(int i = 0; i < pad; i++) a_int[len + i] = '0';
-            a_int[len + pad] = '\0';
-        }
+    }
+    /* 无论有没有小数点（如 int 转来的 precision=0 decimal），都补齐到 max_prec 位 */
+    int a_frac_len = a_dot ? a->precision : 0;
+    int pad_a = max_prec - a_frac_len;
+    if(pad_a > 0) {
+        int len = strlen(a_int);
+        a_int = (char*)realloc(a_int, len + pad_a + 1);
+        for(int i = 0; i < pad_a; i++) a_int[len + i] = '0';
+        a_int[len + pad_a] = '\0';
     }
 
     char* b_int = strdup(b->str);
     char* b_dot = strchr(b_int, '.');
     if(b_dot) {
         memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
-        int pad = max_prec - b->precision;
-        if(pad > 0) {
-            int len = strlen(b_int);
-            b_int = (char*)realloc(b_int, len + pad + 1);
-            for(int i = 0; i < pad; i++) b_int[len + i] = '0';
-            b_int[len + pad] = '\0';
-        }
+    }
+    /* 无论有没有小数点，都补齐到 max_prec 位 */
+    int b_frac_len = b_dot ? b->precision : 0;
+    int pad_b = max_prec - b_frac_len;
+    if(pad_b > 0) {
+        int len = strlen(b_int);
+        b_int = (char*)realloc(b_int, len + pad_b + 1);
+        for(int i = 0; i < pad_b; i++) b_int[len + i] = '0';
+        b_int[len + pad_b] = '\0';
     }
 
     /* 用 bigint 做减法 */

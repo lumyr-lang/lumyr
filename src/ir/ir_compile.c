@@ -148,9 +148,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
         /* 转成 int：根据源类型 emit 转换指令 */
-        if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
-           ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_UINT8 || ct == CAST_UINT16 ||
-           ct == CAST_UINT32 || ct == CAST_UINT64 || ct == CAST_CHAR || ct == CAST_BOOL) {
+        if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_USHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
+           ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_LONG || ct == CAST_LONGLONG ||
+           ct == CAST_UINT8 || ct == CAST_UINT16 || ct == CAST_UINT32 || ct == CAST_UINT ||
+           ct == CAST_UINT64 || ct == CAST_ULONG || ct == CAST_UCHAR || ct == CAST_BYTE ||
+           ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
             /* double → int：截断 */
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
@@ -172,8 +174,21 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 
     case AST_TYPE_ANNOTATION: {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
-        ExprType child_type = c_expr(c, node->u.type_annotation.expr);
         CastKind ct = node->u.type_annotation.cast_type;
+        AstNode* ann_child = node->u.type_annotation.expr;
+        /* bigint/decimal 字面量快速路径：下面的标注分支会自己把字面量压成字符串常量。
+           若先调 c_expr，子表达式会先压一次值，标注又压一次 → PTR 栈残留原始指针；
+           后续二元运算会把该 char* 当成 BigInt*/
+        int ann_lit = ann_child && (ann_child->type == AST_INT ||
+                                    ann_child->type == AST_NUM ||
+                                    ann_child->type == AST_STRING);
+        ExprType child_type;
+        if((ct == CAST_BIGINT || ct == CAST_DECIMAL) && ann_lit) {
+            child_type = (ann_child->type == AST_NUM) ? EXPR_TYPE_DOUBLE :
+                         (ann_child->type == AST_STRING) ? EXPR_TYPE_PTR : EXPR_TYPE_INT;
+        } else {
+            child_type = c_expr(c, ann_child);
+        }
         const char* ct_name = "unknown";
         switch(ct) {
             case 0: ct_name = "CAST_NONE"; break;
@@ -189,9 +204,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
         fprintf(stderr, "DEBUG: TYPE_ANNOTATION: ct=%d (%s), child_type=%d\n", (int)ct, ct_name, (int)child_type);
         /* 根据 CastKind 返回表达式类型，必要时 emit 跨栈转换指令 */
-        if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
-           ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_UINT8 || ct == CAST_UINT16 ||
-           ct == CAST_UINT32 || ct == CAST_UINT64 || ct == CAST_CHAR || ct == CAST_BOOL) {
+        if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_USHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
+           ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_LONG || ct == CAST_LONGLONG ||
+           ct == CAST_UINT8 || ct == CAST_UINT16 || ct == CAST_UINT32 || ct == CAST_UINT ||
+           ct == CAST_UINT64 || ct == CAST_ULONG || ct == CAST_UCHAR || ct == CAST_BYTE ||
+           ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
             /* 如果子表达式是 DOUBLE，需要转成 INT */
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
@@ -685,15 +702,24 @@ void c_stmt(Ctx* c, AstNode* node) {
     
     case AST_SEQ: {
         /* 语句序列：迭代遍历，避免长链表导致栈溢出 */
-        /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归 */
-        AstNode* stack[256];
+        /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归。
+           栈动态扩容：固定容量会在长程序中静默丢弃 SEQ 节点，
+           导致超出深度的语句既不编译也不执行。 */
+        int stack_cap = 256;
+        AstNode** stack = (AstNode**)malloc(sizeof(AstNode*) * stack_cap);
+        if(!stack) { perror("c_stmt AST_SEQ"); exit(EXIT_FAILURE); }
         int sp = 0;
         AstNode* cur = node;
-        
+
         while(cur || sp > 0) {
             /* 向左遍历到底，把路径上的节点压栈 */
             while(cur && cur->type == AST_SEQ) {
-                if(sp < 256) stack[sp++] = cur;
+                if(sp >= stack_cap) {
+                    stack_cap *= 2;
+                    stack = (AstNode**)realloc(stack, sizeof(AstNode*) * stack_cap);
+                    if(!stack) { perror("c_stmt AST_SEQ realloc"); exit(EXIT_FAILURE); }
+                }
+                stack[sp++] = cur;
                 cur = cur->u.seq.first;
             }
             /* 处理叶子节点 */
@@ -708,9 +734,10 @@ void c_stmt(Ctx* c, AstNode* node) {
                 cur = NULL;
             }
         }
+        free(stack);
         break;
     }
-    
+
     default:
         fprintf(stderr, "IR: unknown stmt type %d\n", node->type);
         break;

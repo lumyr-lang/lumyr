@@ -593,16 +593,23 @@ int typecheck_expr(AstNode* node)
                 else
                     node->val_type = VAL_INT;
             } else {
-                if(!(left_unknown || right_unknown)) {
-                    if(!(left_is_num && right_is_num)) {
-                        LOG_ERROR("语义错误：运算符只支持数值类型\n");
-                        err = 1;
-                    }
+                /* - * /：既支持数值运算，也支持字符串运算
+                   （"ab"*3 重复、"abcabc"/3 前缀截取、"abcabc"-3 尾部截取，
+                    由运行时 PTR_MUL/DIV/SUB 实现）。 */
+                if(left_unknown || right_unknown) {
+                    /* 含未解析类型（如 bigint/decimal 标注变量），无法判定 */
+                    node->val_type = VAL_NONE;
+                } else if(left_is_str || right_is_str) {
+                    node->val_type = VAL_STRING;
+                } else if(left_is_num && right_is_num) {
+                    if(tl == VAL_DOUBLE || tr == VAL_DOUBLE)
+                        node->val_type = VAL_DOUBLE;
+                    else
+                        node->val_type = VAL_INT;
+                } else {
+                    LOG_ERROR("语义错误：运算符只支持数值或字符串类型\n");
+                    err = 1;
                 }
-                if(tl == VAL_DOUBLE || tr == VAL_DOUBLE)
-                    node->val_type = VAL_DOUBLE;
-                else
-                    node->val_type = VAL_INT;
             }
             break;
         }
@@ -714,16 +721,25 @@ int typecheck_expr(AstNode* node)
             break;
         case AST_SEQ: {
             /* 迭代遍历，避免长链表导致栈溢出 */
-            /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归 */
-            AstNode* stack[256];
+            /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归。
+               栈动态扩容：固定容量会在长程序中静默丢弃 SEQ 节点，
+               导致超出深度的语句被跳过语义检查。 */
+            int stack_cap = 256;
+            AstNode** stack = (AstNode**)malloc(sizeof(AstNode*) * stack_cap);
+            if(!stack) { perror("typecheck AST_SEQ"); exit(EXIT_FAILURE); }
             int sp = 0;
             AstNode* cur = node;
             ValueType last_type = VAL_NONE;
-            
+
             while(cur || sp > 0) {
                 /* 向左遍历到底，把路径上的节点压栈 */
                 while(cur && cur->type == AST_SEQ) {
-                    if(sp < 256) stack[sp++] = cur;
+                    if(sp >= stack_cap) {
+                        stack_cap *= 2;
+                        stack = (AstNode**)realloc(stack, sizeof(AstNode*) * stack_cap);
+                        if(!stack) { perror("typecheck AST_SEQ realloc"); exit(EXIT_FAILURE); }
+                    }
+                    stack[sp++] = cur;
                     cur = cur->u.seq.first;
                 }
                 /* 处理叶子节点 */
@@ -739,6 +755,7 @@ int typecheck_expr(AstNode* node)
                     cur = NULL;
                 }
             }
+            free(stack);
             node->val_type = last_type;
             break;
         }

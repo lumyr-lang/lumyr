@@ -11,6 +11,48 @@ CastKind get_var_cast_type(Ctx* c, const char* name) {
     return (CastKind)c->fn->var_type_tags[var_idx];
 }
 
+/* CastKind → ExprType：4 核心栈映射（所有整数合并 INT64，浮点合并 DOUBLE） */
+static ExprType castkind_to_exprtype(CastKind ct) {
+    switch(ct) {
+        case CAST_INT:
+        case CAST_INT8:
+        case CAST_INT16:
+        case CAST_INT32:
+        case CAST_INT64:
+        case CAST_LONGLONG:
+        case CAST_LONG:
+        case CAST_SHORT:
+        case CAST_USHORT:
+        case CAST_BOOL:
+        case CAST_CHAR:
+        case CAST_UCHAR:
+        case CAST_BYTE:
+        case CAST_UINT8:
+        case CAST_UINT16:
+        case CAST_UINT32:
+        case CAST_UINT:
+        case CAST_UINT64:
+        case CAST_ULONG:
+        case CAST_SIZE_T:
+        case CAST_SSIZE_T:
+            return EXPR_TYPE_INT;  /* 所有整数 → INT64 栈 */
+
+        case CAST_FLOAT:
+        case CAST_DOUBLE:
+        case CAST_LONG_DOUBLE:
+            return EXPR_TYPE_DOUBLE;  /* 所有浮点 → DOUBLE 栈 */
+
+        case CAST_STRING:
+        case CAST_ASCII:
+        case CAST_BIGINT:
+        case CAST_DECIMAL:
+            return EXPR_TYPE_PTR;  /* 字符串/bigint/decimal → PTR 栈 */
+
+        default:
+            return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */
+    }
+}
+
 /* ============================================================
  * arith_get_expr_type：获取表达式的精确类型
  * 4 核心栈设计：所有整数合并到 INT64，所有浮点合并到 DOUBLE
@@ -18,45 +60,18 @@ CastKind get_var_cast_type(Ctx* c, const char* name) {
 ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
 
+    /* 类型标注 <type>expr / 强转 (type)expr：按标注的类型判断 */
+    if(node->type == AST_TYPE_ANNOTATION) {
+        return castkind_to_exprtype(node->u.type_annotation.cast_type);
+    }
+    if(node->type == AST_CAST) {
+        return castkind_to_exprtype(node->u.cast.cast_type);
+    }
+
     /* 变量引用：根据变量类型标记判断 */
     if(node->type == AST_VAR) {
         CastKind ct = get_var_cast_type(c, node->u.varname);
-        switch(ct) {
-            case CAST_INT:
-            case CAST_INT8:
-            case CAST_INT16:
-            case CAST_INT32:
-            case CAST_INT64:
-            case CAST_LONGLONG:
-            case CAST_LONG:
-            case CAST_SHORT:
-            case CAST_BOOL:
-            case CAST_CHAR:
-            case CAST_BYTE:
-            case CAST_UINT8:
-            case CAST_UINT16:
-            case CAST_UINT32:
-            case CAST_UINT64:
-            case CAST_ULONG:
-            case CAST_SIZE_T:
-            case CAST_SSIZE_T:
-                return EXPR_TYPE_INT;  /* 所有整数 → INT64 栈 */
-
-            case CAST_FLOAT:
-            case CAST_DOUBLE:
-            case CAST_LONG_DOUBLE:
-                return EXPR_TYPE_DOUBLE;  /* 所有浮点 → DOUBLE 栈 */
-
-            case CAST_STRING:
-            case CAST_ASCII:
-                return EXPR_TYPE_PTR;  /* 字符串 → PTR 栈 */
-            case CAST_BIGINT:
-            case CAST_DECIMAL:
-                return EXPR_TYPE_PTR;  /* bigint/decimal → PTR 栈 */
-
-            default:
-                return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */
-        }
+        return castkind_to_exprtype(ct);
     }
 
     /* 字面量自动推导类型 */

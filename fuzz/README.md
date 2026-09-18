@@ -4,10 +4,25 @@
 
 ```
 fuzz/
-├── fuzz_runner.py     # 模糊测试主脚本
-├── cases/             # 临时测试用例目录
-├── crashes/           # 崩溃/差异用例保存目录
-└── README.md          # 本文档
+├── fuzz_runner.py        # 模糊测试主脚本（随机程序，VM/编译双模式差分）
+├── gen_chain_test.py     # 链式混合运算生成器 + 独立 oracle（见下文）
+├── cases/                # 临时测试用例目录
+├── crashes/              # 崩溃/差异用例保存目录
+└── README.md             # 本文档
+```
+
+## 链式混合运算差分测试（gen_chain_test.py）
+
+从 `tests/random_type_test.lm` 的 1500 个二元运算案例提取操作数池，生成 304 个
+3~5 操作数链式/混合运算案例（左结合链、`a+b*c`、`(a+b)*(c-d)` 等优先级形状，
+以及除零、负数、字符串链、bigint 大整数、decimal 精度等边界用例），并用独立
+Python oracle 按 VM 语义计算每行期望的「类型+值」。固定随机种子，结果可复现。
+
+```bash
+python3 fuzz/gen_chain_test.py
+T="${TMPDIR:-/tmp}"
+./bin/lumyr tests/chain_mixed_test.lm 2>/dev/null | grep -E '^C[0-9]+:' > "$T/chain_actual.txt"
+diff "$T/chain_expected.txt" "$T/chain_actual.txt"   # 0 行即全部通过
 ```
 
 ## 使用方法
