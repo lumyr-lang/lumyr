@@ -6,57 +6,23 @@
 
 /*
  * IR 模块共用的结构体和枚举定义
- *
- * 本文件包含 IR 编译、代码生成、虚拟机等模块共用的结构体和枚举定义，
- * 避免在多个 .c 文件中重复定义，提高代码的可维护性。
+ * 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
  */
 
-/* ========== 表达式类型枚举 ========== */
+/* ========== 表达式类型枚举（4 核心栈设计） ========== */
 
 /*
- * 表达式类型枚举，用于算术运算结果的上下文感知和类型提升
- * 数值大小对应类型优先级，用于混合类型运算时的类型提升
- *
- * 注意：这个枚举不复用 ValueType，因为 ValueType 的数值大小不对应类型优先级，
- * 不能直接用于类型提升判断。
+ * 表达式类型枚举，用于类型推断和栈选择
+ * 所有细分整数类型合并到 INT，所有浮点类型合并到 DOUBLE
+ * 所有指针/字符串类型合并到 PTR
  */
 typedef enum {
-    EXPR_TYPE_NONE = 0,
-    EXPR_TYPE_BOOL = 1,
-    EXPR_TYPE_CHAR = 2,
-    EXPR_TYPE_INT8 = 3,
-    EXPR_TYPE_INT16 = 4,
-    EXPR_TYPE_SHORT = 5,
-    EXPR_TYPE_INT = 6,
-    EXPR_TYPE_INT64 = 7,
-    EXPR_TYPE_LONG_LONG = 8,
-    EXPR_TYPE_LONG = 9,
-    EXPR_TYPE_BYTE = 10,
-    EXPR_TYPE_UINT8 = 11,
-    EXPR_TYPE_UINT16 = 12,
-    EXPR_TYPE_UINT = 13,
-    EXPR_TYPE_UINT64 = 14,
-    EXPR_TYPE_ULONG = 15,
-    EXPR_TYPE_SIZE_T = 16,
-    EXPR_TYPE_SSIZE_T = 17,
-    EXPR_TYPE_FLOAT = 18,
-    EXPR_TYPE_DOUBLE = 19,
-    EXPR_TYPE_LONG_DOUBLE = 20,
-    EXPR_TYPE_INT32 = 21,   // 32位有符号定宽整数（独立 int32 专用栈）
+    EXPR_TYPE_NONE = 0,    /* 动态类型 → Value 栈 */
+    EXPR_TYPE_INT = 1,     /* 整数类型 → INT64 栈（所有整数/布尔/字符） */
+    EXPR_TYPE_DOUBLE = 2,  /* 浮点类型 → DOUBLE 栈（所有浮点） */
+    EXPR_TYPE_PTR = 3,     /* 指针类型 → PTR 栈（所有指针/字符串） */
     EXPR_TYPE_COUNT
 } ExprType;
-
-/* ========== 类型化数组变量标记（存于 var_type_tags，与 CastKind 同槽，故取 1000+ 避冲突） ==========
-   当变量被声明为某元素类型的类型化数组（如 a = <double>[...]）时，其 tag 取下列值，
-   供类型推导（arith_get_expr_type）在遇到下标表达式 a[i] 时还原元素的 ExprType。 */
-#define VAR_TYPE_INT_ARRAY    1000
-#define VAR_TYPE_DOUBLE_ARRAY 1001
-#define VAR_TYPE_FLOAT_ARRAY  1002
-#define VAR_TYPE_UINT_ARRAY   1003
-#define VAR_TYPE_BOOL_ARRAY   1004
-#define VAR_TYPE_CHAR_ARRAY   1005
-#define VAR_TYPE_BYTE_ARRAY   1006
-#define VAR_TYPE_INT8_ARRAY   1007
 
 /* ========== 控制层结构体 ========== */
 
@@ -84,13 +50,11 @@ typedef struct {
     Layer* layers;           /* 动态：循环/switch 嵌套无硬上限 */
     int layer_depth;
     int layers_cap;
-    /* finally 上下文：fin_depth>0 表示当前编译位置在 try-finally 内；
-       fin_pend[depth][*] = body/catch 中 PEND_RETURN(b=0) 的位置，fstart 确定后统一 patch b
-       行/列均动态扩容，try-finally 嵌套与每层挂起数无硬上限 */
+    /* finally 上下文：fin_depth>0 表示当前编译位置在 try-finally 内 */
     int** fin_pend;
     int* fin_pend_n;
     int* fin_pend_cap;
-    int** fin_jmp;            /* try-finally 内 break/continue 的 JMP 位置（patch a=fstart） */
+    int** fin_jmp;
     int* fin_jmp_n;
     int* fin_jmp_cap;
     int fin_depth;
