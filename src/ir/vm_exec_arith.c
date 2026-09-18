@@ -6,6 +6,7 @@
 #include "stack_manager.h"
 #include "lm_value.h"
 #include "lm_bigint.h"
+#include "lm_decimal.h"
 
 /* ========== 算术运算（INT64 栈专用） ========== */
 
@@ -216,6 +217,79 @@ int vm_exec_bigint_div(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
 
     BigInt* result = lumyr_bigint_div(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* ========== decimal 高精度十进制浮点 ========== */
+
+/* 从字符串创建 decimal */
+int vm_exec_decimal_from_string(VMExecCtx* ctx, Instruction* in) {
+    char* s;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &s);
+
+    Decimal* d = lumyr_decimal_from_string(s);
+    free(s);  /* 释放原字符串 */
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &d);
+    return 1;
+}
+
+/* decimal → string */
+int vm_exec_decimal_to_string(VMExecCtx* ctx, Instruction* in) {
+    Decimal* d;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &d);
+
+    char* s = lumyr_decimal_to_string(d);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &s);
+    return 1;
+}
+
+/* decimal 加法 */
+int vm_exec_decimal_add(VMExecCtx* ctx, Instruction* in) {
+    Decimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    Decimal* result = lumyr_decimal_add(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* decimal 减法 */
+int vm_exec_decimal_sub(VMExecCtx* ctx, Instruction* in) {
+    Decimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    Decimal* result = lumyr_decimal_sub(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* decimal 乘法 */
+int vm_exec_decimal_mul(VMExecCtx* ctx, Instruction* in) {
+    Decimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    Decimal* result = lumyr_decimal_mul(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* decimal 除法 */
+int vm_exec_decimal_div(VMExecCtx* ctx, Instruction* in) {
+    Decimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    Decimal* result = lumyr_decimal_div(a, b);
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;

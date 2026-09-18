@@ -60,6 +60,14 @@ int vm_exec_bigint_sub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_bigint_mul(VMExecCtx* ctx, Instruction* in);
 int vm_exec_bigint_div(VMExecCtx* ctx, Instruction* in);
 
+/* decimal 高精度十进制浮点 */
+int vm_exec_decimal_from_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_decimal_to_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_decimal_add(VMExecCtx* ctx, Instruction* in);
+int vm_exec_decimal_sub(VMExecCtx* ctx, Instruction* in);
+int vm_exec_decimal_mul(VMExecCtx* ctx, Instruction* in);
+int vm_exec_decimal_div(VMExecCtx* ctx, Instruction* in);
+
 /* 比较运算 */
 int vm_exec_compare_int64_eq(VMExecCtx* ctx, Instruction* in);
 int vm_exec_compare_int64_ne(VMExecCtx* ctx, Instruction* in);
@@ -164,6 +172,14 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_BIGINT_MUL: handled = vm_exec_bigint_mul(ctx, &in); break;
         case OPC_BIGINT_DIV: handled = vm_exec_bigint_div(ctx, &in); break;
         case OPC_BIGINT_TO_STRING: handled = vm_exec_bigint_to_string(ctx, &in); break;
+
+        /* ===== decimal 高精度十进制浮点 ===== */
+        case OPC_DECIMAL_FROM_STRING: handled = vm_exec_decimal_from_string(ctx, &in); break;
+        case OPC_DECIMAL_ADD: handled = vm_exec_decimal_add(ctx, &in); break;
+        case OPC_DECIMAL_SUB: handled = vm_exec_decimal_sub(ctx, &in); break;
+        case OPC_DECIMAL_MUL: handled = vm_exec_decimal_mul(ctx, &in); break;
+        case OPC_DECIMAL_DIV: handled = vm_exec_decimal_div(ctx, &in); break;
+        case OPC_DECIMAL_TO_STRING: handled = vm_exec_decimal_to_string(ctx, &in); break;
 
         /* ===== 比较运算（INT64 栈） ===== */
         case OPC_INT64_EQ: handled = vm_exec_compare_int64_eq(ctx, &in); break;
