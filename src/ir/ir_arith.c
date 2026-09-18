@@ -709,7 +709,7 @@ int arith_handle_print_result(Ctx* c, AstNode* single_arg, ExprType result_type)
             return 1;
         case EXPR_TYPE_LONG_DOUBLE:
             c_expr(c, single_arg);
-            emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+            emit(c, OPC_PRINT_DOUBLE, 0, 0);
             return 1;
         default:
             /* EXPR_TYPE_NONE 或未知类型，返回 0 表示需要走通用路径 */

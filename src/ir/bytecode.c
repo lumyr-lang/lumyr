@@ -153,51 +153,32 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
     int n = fn->code_len;
     StackDelta* d = (StackDelta*)malloc(sizeof(StackDelta) * n);
     if(!d) { perror("bc_analyze_stack"); exit(EXIT_FAILURE); }
-    /* value=-1 表示不可达；其他栈深度初始化为 0 */
     for(int i = 0; i < n; i++) {
         memset(&d[i], 0, sizeof(StackDelta));
         d[i].value = -1;
     }
     d[0].value = 0;
 
-    /* 深度合并：如果目标点任一栈深度比当前记录大，则更新 */
+    /* 深度合并：4 核心栈设计 */
     #define STACK_MERGE(target_idx, src) do { \
         StackDelta* _t = &d[target_idx]; \
         const StackDelta* _s = &(src); \
-        if(_t->value < _s->value || _t->int_stack < _s->int_stack || \
-           _t->double_stack < _s->double_stack || _t->float_stack < _s->float_stack || \
-           _t->uint_stack < _s->uint_stack || _t->bool_stack < _s->bool_stack || \
-           _t->char_stack < _s->char_stack || _t->byte_stack < _s->byte_stack || \
-           _t->short_stack < _s->short_stack || _t->int8_stack < _s->int8_stack || \
-           _t->int16_stack < _s->int16_stack || _t->int32_stack < _s->int32_stack || \
-           _t->int64_stack < _s->int64_stack || _t->uint8_stack < _s->uint8_stack || \
-           _t->uint16_stack < _s->uint16_stack || _t->uint32_stack < _s->uint32_stack || \
-           _t->uint64_stack < _s->uint64_stack || _t->long_stack < _s->long_stack || \
-           _t->ulong_stack < _s->ulong_stack || _t->size_t_stack < _s->size_t_stack || \
-           _t->ssize_t_stack < _s->ssize_t_stack || \
-           _t->long_double_stack < _s->long_double_stack || \
-           _t->long_long_stack < _s->long_long_stack) { \
+        if(_t->value < _s->value || _t->int64 < _s->int64 || \
+           _t->double_stk < _s->double_stk || _t->ptr < _s->ptr) { \
             *_t = *_s; changed = 1; \
         } \
     } while(0)
 
     /* 检查所有栈是否下溢 */
     #define STACK_CHECK_UNDERFLOW(nd, pc) do { \
-        if((nd).value < 0 || (nd).int_stack < 0 || (nd).double_stack < 0 || \
-           (nd).float_stack < 0 || (nd).uint_stack < 0 || (nd).bool_stack < 0 || \
-           (nd).char_stack < 0 || (nd).byte_stack < 0 || (nd).short_stack < 0 || \
-           (nd).int8_stack < 0 || (nd).int16_stack < 0 || (nd).int32_stack < 0 || \
-           (nd).int64_stack < 0 || (nd).uint8_stack < 0 || (nd).uint16_stack < 0 || \
-           (nd).uint32_stack < 0 || (nd).uint64_stack < 0 || (nd).long_stack < 0 || \
-           (nd).ulong_stack < 0 || (nd).size_t_stack < 0 || (nd).ssize_t_stack < 0 || \
-           (nd).long_double_stack < 0 || (nd).long_long_stack < 0) { \
-            fprintf(stderr, "IR 栈深分析: 指令 %d 栈下溢（Value=%d int=%d double=%d float=%d uint=%d）——IR 生成错误\n", \
-                    (pc), (nd).value, (nd).int_stack, (nd).double_stack, (nd).float_stack, (nd).uint_stack); \
+        if((nd).value < 0 || (nd).int64 < 0 || \
+           (nd).double_stk < 0 || (nd).ptr < 0) { \
+            fprintf(stderr, "IR 栈深分析: 指令 %d 栈下溢（Value=%d int64=%d double=%d ptr=%d）——IR 生成错误\n", \
+                    (pc), (nd).value, (nd).int64, (nd).double_stk, (nd).ptr); \
             free(d); return -1; \
         } \
     } while(0)
 
-    // 数据流迭代：顺序后继 + 跳转后继，直到收敛
     int changed = 1;
     while(changed) {
         changed = 0;
@@ -206,36 +187,16 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
             Instruction in = fn->code[i];
             StackDelta delta = op_stack_delta(fn, in);
             StackDelta nd;
-            nd.value          = d[i].value + delta.value;
-            nd.int_stack      = d[i].int_stack + delta.int_stack;
-            nd.double_stack   = d[i].double_stack + delta.double_stack;
-            nd.float_stack    = d[i].float_stack + delta.float_stack;
-            nd.uint_stack     = d[i].uint_stack + delta.uint_stack;
-            nd.bool_stack     = d[i].bool_stack + delta.bool_stack;
-            nd.char_stack     = d[i].char_stack + delta.char_stack;
-            nd.byte_stack     = d[i].byte_stack + delta.byte_stack;
-            nd.short_stack    = d[i].short_stack + delta.short_stack;
-            nd.int8_stack     = d[i].int8_stack + delta.int8_stack;
-            nd.int16_stack    = d[i].int16_stack + delta.int16_stack;
-            nd.int32_stack    = d[i].int32_stack + delta.int32_stack;
-            nd.int64_stack    = d[i].int64_stack + delta.int64_stack;
-            nd.uint8_stack    = d[i].uint8_stack + delta.uint8_stack;
-            nd.uint16_stack   = d[i].uint16_stack + delta.uint16_stack;
-            nd.uint32_stack   = d[i].uint32_stack + delta.uint32_stack;
-            nd.uint64_stack   = d[i].uint64_stack + delta.uint64_stack;
-            nd.long_stack     = d[i].long_stack + delta.long_stack;
-            nd.ulong_stack    = d[i].ulong_stack + delta.ulong_stack;
-            nd.size_t_stack   = d[i].size_t_stack + delta.size_t_stack;
-            nd.ssize_t_stack  = d[i].ssize_t_stack + delta.ssize_t_stack;
-            nd.long_double_stack = d[i].long_double_stack + delta.long_double_stack;
-            nd.long_long_stack   = d[i].long_long_stack + delta.long_long_stack;
+            nd.value       = d[i].value + delta.value;
+            nd.int64       = d[i].int64 + delta.int64;
+            nd.double_stk  = d[i].double_stk + delta.double_stk;
+            nd.ptr         = d[i].ptr + delta.ptr;
 
             STACK_CHECK_UNDERFLOW(nd, i);
 
             if(in.op == OPC_JMP || in.op == OPC_JMP_IF_FALSE || in.op == OPC_JMP_IF_TRUE || in.op == OPC_JMP_IF_NULL) {
                 if(in.a >= 0 && in.a < n) STACK_MERGE(in.a, nd);
             }
-            /* try/catch/finally 的非跳转式目标 */
             if(in.op == OPC_TRY) {
                 if(in.a > 0 && in.a < n) STACK_MERGE(in.a, nd);
                 if(in.b > 0 && in.b < n) STACK_MERGE(in.b, nd);
@@ -255,7 +216,7 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
 
     int maxd = 0;
     for(int i = 0; i < n; i++) {
-        int depth = (d[i].value < 0) ? 0 : d[i].value;   // 不可达指令深度记 0
+        int depth = (d[i].value < 0) ? 0 : d[i].value;
         if(depth_out && i < depth_cap) depth_out[i] = depth;
         int peak = depth + op_stack_push(fn->code[i].op);
         if(peak > maxd) maxd = peak;
@@ -263,8 +224,6 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
     free(d);
     return maxd;
 }
-
-// ---------------- 反汇编（-S） ----------------
 
 const char* opc_name(OpCode op)
 {

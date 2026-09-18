@@ -1,5 +1,5 @@
 // lumyr-lang 字节码栈深度分析
-// 跟踪所有专用栈（Value/int/double/float/uint/bool/char/byte 等）的深度变化
+// 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
 #ifndef LUMYR_IR_BYTECODE_STACK_H
 #define LUMYR_IR_BYTECODE_STACK_H
 
@@ -7,31 +7,13 @@
 
 /* ============================================================
  * StackDelta 结构体：一条指令执行后各栈的深度变化
+ * 4 核心栈设计，所有细分类型合并到对应宽类型栈
  * ============================================================ */
 typedef struct {
-    int value;          /* Value 栈深度变化 */
-    int int_stack;      /* int 栈深度变化 */
-    int double_stack;   /* double 栈深度变化 */
-    int float_stack;    /* float 栈深度变化 */
-    int uint_stack;     /* uint 栈深度变化 */
-    int bool_stack;     /* bool 栈深度变化 */
-    int char_stack;     /* char 栈深度变化 */
-    int byte_stack;     /* byte 栈深度变化 */
-    int short_stack;    /* short 栈深度变化 */
-    int int8_stack;     /* int8 栈深度变化 */
-    int int16_stack;    /* int16 栈深度变化 */
-    int int32_stack;    /* int32 栈深度变化 */
-    int int64_stack;    /* int64 栈深度变化 */
-    int uint8_stack;    /* uint8 栈深度变化 */
-    int uint16_stack;   /* uint16 栈深度变化 */
-    int uint32_stack;   /* uint32 栈深度变化 */
-    int uint64_stack;   /* uint64 栈深度变化 */
-    int long_stack;     /* long 栈深度变化 */
-    int ulong_stack;    /* ulong 栈深度变化 */
-    int size_t_stack;   /* size_t 栈深度变化 */
-    int ssize_t_stack;  /* ssize_t 栈深度变化 */
-    int long_double_stack; /* long double 栈深度变化 */
-    int long_long_stack;   /* long long 栈深度变化 */
+    int value;       /* STACK_VALUE 深度变化 */
+    int int64;       /* STACK_INT64 深度变化（所有整数/布尔/字符） */
+    int double_stk;  /* STACK_DOUBLE 深度变化（所有浮点） */
+    int ptr;         /* STACK_PTR 深度变化（所有指针/字符串） */
 } StackDelta;
 
 /* ============================================================

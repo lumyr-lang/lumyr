@@ -4344,7 +4344,7 @@ void c_expr(Ctx* c, AstNode* node)
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_BOOL) {
                         emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
@@ -4412,7 +4412,7 @@ void c_expr(Ctx* c, AstNode* node)
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     }
                 }
@@ -4584,9 +4584,9 @@ static void c_stmt(Ctx* c, AstNode* node)
                         emit(c, OPC_PRINT_INT64, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_LONG_DOUBLE) {
-                        /* long double 类型算术运算结果：直接生成 OPC_PRINT_INT64_DOUBLE */
+                        /* long double 类型算术运算结果：直接生成 OPC_PRINT_DOUBLE */
                         c_expr(c, single_arg);
-                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(result_type == EXPR_TYPE_SHORT) {
                         c_expr(c, single_arg);
@@ -4645,7 +4645,7 @@ static void c_stmt(Ctx* c, AstNode* node)
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     } else if(tag == CAST_BOOL) {
                         emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
@@ -4709,7 +4709,7 @@ static void c_stmt(Ctx* c, AstNode* node)
                         break;
                     } else if(tag == CAST_LONG_DOUBLE) {
                         emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
-                        emit(c, OPC_PRINT_INT64_DOUBLE, 0, 0);
+                        emit(c, OPC_PRINT_DOUBLE, 0, 0);
                         break;
                     }
                 }
