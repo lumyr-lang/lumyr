@@ -125,42 +125,42 @@ Decimal* lumyr_decimal_add(Decimal* a, Decimal* b) {
     /* 把 decimal 转成 bigint（去掉小数点，补齐 0 对齐精度） */
     /* 例如：3.14 + 2.718 → 3140 + 2718 = 5858 → 5.8580 */
 
-    /* 构造 a 的整数形式字符串 */
+    /* 构造 a 的整数形式字符串（去掉小数点，补齐到 max_prec 位） */
     char* a_int = strdup(a->str);
     char* a_dot = strchr(a_int, '.');
     if(a_dot) {
         /* 去掉小数点 */
         memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
-        /* 补齐小数位数 */
-        int a_frac_len = a->precision;
-        int pad = max_prec - a_frac_len;
-        if(pad > 0) {
-            int len = strlen(a_int);
-            a_int = (char*)realloc(a_int, len + pad + 1);
-            for(int i = 0; i < pad; i++) {
-                a_int[len + i] = '0';
-            }
-            a_int[len + pad] = '\0';
+    }
+    /* 无论有没有小数点，都补齐到 max_prec 位 */
+    int a_frac_len = a_dot ? a->precision : 0;
+    int pad_a = max_prec - a_frac_len;
+    if(pad_a > 0) {
+        int len = strlen(a_int);
+        a_int = (char*)realloc(a_int, len + pad_a + 1);
+        for(int i = 0; i < pad_a; i++) {
+            a_int[len + i] = '0';
         }
+        a_int[len + pad_a] = '\0';
     }
 
-    /* 构造 b 的整数形式字符串 */
+    /* 构造 b 的整数形式字符串（去掉小数点，补齐到 max_prec 位） */
     char* b_int = strdup(b->str);
     char* b_dot = strchr(b_int, '.');
     if(b_dot) {
         /* 去掉小数点 */
         memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
-        /* 补齐小数位数 */
-        int b_frac_len = b->precision;
-        int pad = max_prec - b_frac_len;
-        if(pad > 0) {
-            int len = strlen(b_int);
-            b_int = (char*)realloc(b_int, len + pad + 1);
-            for(int i = 0; i < pad; i++) {
-                b_int[len + i] = '0';
-            }
-            b_int[len + pad] = '\0';
+    }
+    /* 无论有没有小数点，都补齐到 max_prec 位 */
+    int b_frac_len = b_dot ? b->precision : 0;
+    int pad_b = max_prec - b_frac_len;
+    if(pad_b > 0) {
+        int len = strlen(b_int);
+        b_int = (char*)realloc(b_int, len + pad_b + 1);
+        for(int i = 0; i < pad_b; i++) {
+            b_int[len + i] = '0';
         }
+        b_int[len + pad_b] = '\0';
     }
 
     /* 用 bigint 做加法 */

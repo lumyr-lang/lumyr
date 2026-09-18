@@ -310,7 +310,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         CastKind rt_cast = c_expr_cast_type(c, node->u.bin.right);
 
         /* bigint 运算：至少一个操作数是 bigint */
-        if(lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) {
+        if((lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 bigint，转成 bigint */
@@ -347,7 +347,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
 
         /* decimal 运算：至少一个操作数是 decimal */
-        if(lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) {
+        if((lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 decimal，转成 decimal */
@@ -390,12 +390,20 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_INT64_TO_STRING, 0, 0);
             } else if(lt == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BIGINT) {
+                emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+            } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
+                emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
             }
             ExprType rt = c_expr(c, node->u.bin.right);
             if(rt == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_STRING, 0, 0);
             } else if(rt == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BIGINT) {
+                emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+            } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
+                emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
             }
             switch(node->u.bin.op) {
             case OP_ADD:
@@ -564,12 +572,12 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(node->type == AST_BINOP) {
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt = c_expr_cast_type(c, node->u.bin.right);
-        /* 高精度类型优先级最高：decimal/bigint 会把 double 提升 */
-        /* 注意：bigint 检查在 decimal 之前（与 c_expr 中的分支顺序一致） */
+        /* 1. string 优先级最高：任何类型 + string 都是字符串拼接 */
+        if(lt == CAST_STRING || rt == CAST_STRING) return CAST_STRING;
+        /* 2. bigint 次之 */
         if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
+        /* 3. decimal 再次之 */
         if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
-        /* 字符串运算：+ 拼接，任何类型 + string 结果都是 string */
-        if(node->u.bin.op == OP_ADD && (lt == CAST_STRING || rt == CAST_STRING)) return CAST_STRING;
         /* 其次是浮点类型 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
