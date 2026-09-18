@@ -1,6 +1,6 @@
 /*
  * vm_exec_control.c - VM 控制流指令
- * JMP / JMP_IF / JMP_IF_FALSE
+ * 通过栈管理器统一操作
  */
 #include "vm_types.h"
 #include "stack_manager.h"
@@ -8,15 +8,14 @@
 
 /* ========== 无条件跳转 ========== */
 int vm_exec_control_jmp(VMExecCtx* ctx, Instruction* in) {
-    /* in->a = 目标 pc */
     ctx->pc = in->a;
     return 1;
 }
 
 /* ========== 条件跳转（INT64 栈非零则跳转） ========== */
-int vm_exec_control_jmp_if(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_INT64];
-    int64_t cond = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
+int vm_exec_control_jmp_if_true(VMExecCtx* ctx, Instruction* in) {
+    int64_t cond;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &cond);
     if (cond != 0) {
         ctx->pc = in->a;
     }
@@ -25,8 +24,8 @@ int vm_exec_control_jmp_if(VMExecCtx* ctx, Instruction* in) {
 
 /* ========== 条件跳转（INT64 栈为零则跳转） ========== */
 int vm_exec_control_jmp_if_false(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_INT64];
-    int64_t cond = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
+    int64_t cond;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &cond);
     if (cond == 0) {
         ctx->pc = in->a;
     }
@@ -34,9 +33,9 @@ int vm_exec_control_jmp_if_false(VMExecCtx* ctx, Instruction* in) {
 }
 
 /* ========== 条件跳转（VALUE 栈非零则跳转） ========== */
-int vm_exec_control_jmp_if_value(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_VALUE];
-    Value cond = ((Value*)g_stack_mgr->stacks[STACK_VALUE])[sp];
+int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in) {
+    Value cond;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &cond);
     int truthy = 0;
     switch (cond.type) {
         case VAL_INT: truthy = (cond.v.i != 0); break;
@@ -53,8 +52,8 @@ int vm_exec_control_jmp_if_value(VMExecCtx* ctx, Instruction* in) {
 
 /* ========== 条件跳转（VALUE 栈为零则跳转） ========== */
 int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in) {
-    int sp = --g_stack_mgr->sp[STACK_VALUE];
-    Value cond = ((Value*)g_stack_mgr->stacks[STACK_VALUE])[sp];
+    Value cond;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &cond);
     int truthy = 0;
     switch (cond.type) {
         case VAL_INT: truthy = (cond.v.i != 0); break;

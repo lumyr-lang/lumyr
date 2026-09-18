@@ -40,9 +40,9 @@ int vm_exec_compare_double_lt(VMExecCtx* ctx, Instruction* in);
 
 /* 控制流 */
 int vm_exec_control_jmp(VMExecCtx* ctx, Instruction* in);
-int vm_exec_control_jmp_if(VMExecCtx* ctx, Instruction* in);
+int vm_exec_control_jmp_if_true(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_false(VMExecCtx* ctx, Instruction* in);
-int vm_exec_control_jmp_if_value(VMExecCtx* ctx, Instruction* in);
+int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in);
 
 /* 函数调用 */
@@ -215,7 +215,7 @@ Value vm_execute(VMExecCtx* ctx) {
 
         /* ===== 控制流 ===== */
         case OPC_JMP: handled = vm_exec_control_jmp(ctx, &in); break;
-        case OPC_JMP_IF_TRUE: handled = vm_exec_control_jmp_if(ctx, &in); break;
+        case OPC_JMP_IF_TRUE: handled = vm_exec_control_jmp_if_true(ctx, &in); break;
         case OPC_JMP_IF_FALSE: handled = vm_exec_control_jmp_if_false(ctx, &in); break;
 
         /* ===== 函数调用 ===== */
