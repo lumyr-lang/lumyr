@@ -9,354 +9,145 @@
 /* ============================================================
  * OpCode 枚举：所有字节码指令
  * ============================================================ */
+/* ============================================================
+ * OpCode 枚举：所有字节码指令（4 核心栈设计）
+ * 
+ * 栈设计：
+ *   STACK_VALUE  - 通用 Value 栈（动态类型、对象、字符串堆指针）
+ *   STACK_INT64  - 统一整数栈（所有整数类型、bool、char 都存 int64_t）
+ *   STACK_DOUBLE - 统一浮点栈（float、double、long double 都存 double）
+ *   STACK_PTR    - 指针栈（字符串 SSO 内联、对象指针、FFI 指针）
+ *
+ * 设计原则：
+ *   - 类型识别完整（CastKind 枚举保留）
+ *   - 指令合并精简（4 核心栈对应 4 组指令）
+ *   - 类型截断/扩展由 C 编译器自动处理
+ * ============================================================ */
 typedef enum {
+    /* ===== 栈操作（通用） ===== */
     OPC_NOP,
-    OPC_LOAD_CONST,     // a=常量池下标
-    OPC_GETFUNC,        // a=函数名符号下标：压入函数值
-    OPC_LOAD_VAR,       // a=符号表下标
-    OPC_LOAD_INT_VAR,   // a=符号表下标；加载声明为 int 的变量，直接压入 int 栈（零检查零转换）
-    OPC_STORE_INT_VAR,  // a=符号表下标；从 int 栈弹出 int 值，直接存储到变量的 int_vals（零包装零转换）
-    OPC_PUSH_INT_CONST, // a=常量值；把 int 常量直接压入 int 栈（零检查零转换，用于 <int>42 字面量赋值）
-    OPC_PUSH_UINT_CONST, // a=常量值；把 uint 常量直接压入 uint 栈（零检查零转换，用于 <uint>42 字面量赋值）
-    OPC_INT_ADD,        // 从 int 栈弹出两个 int，相加，结果压回 int 栈（零检查零转换零 Value 开销）
-    OPC_INT_SUB,        // 从 int 栈弹出两个 int，相减，结果压回 int 栈（零检查零转换零 Value 开销）
-    OPC_INT_MUL,        // 从 int 栈弹出两个 int，相乘，结果压回 int 栈（零检查零转换零 Value 开销）
-    OPC_INT_DIV,        // 从 int 栈弹出两个 int，相除，结果压回 int 栈（零检查零转换零 Value 开销）
-    OPC_INT_MOD,        // 从 int 栈弹出两个 int，取模，结果压回 int 栈（零检查零转换零 Value 开销）
-    OPC_INT_TO_VALUE,   // 从 int 栈弹出一个 int，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
-    OPC_INT_GT,         // 从 int 栈弹出两个 int，大于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_LT,         // 从 int 栈弹出两个 int，小于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_GE,         // 从 int 栈弹出两个 int，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_LE,         // 从 int 栈弹出两个 int，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_EQ,         // 从 int 栈弹出两个 int，等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_NE,         // 从 int 栈弹出两个 int，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_INT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 int 栈弹出值，写入 int 类型化数组（零转换）
-    OPC_LOAD_VAR_REF,   // a=符号表下标；加载 ref 参数（struct 不转 Map，直接传递 VAL_STRUCT_PTR）
-    OPC_STORE_VAR,      // a=符号表下标；弹值写变量（深拷贝入帧），原值压回（表达式值）
+    OPC_POP,           // 丢弃栈顶
+    OPC_DUP,           // 复制栈顶
+    OPC_TO_BOOL,       // 弹1压1 bool（Value 栈）
+
+    /* ===== 常量加载 ===== */
+    OPC_LOAD_CONST,    // a=常量池下标：从常量池加载 Value，压入 Value 栈
+    OPC_PUSH_INT64_CONST,   // a=低32位, b=高32位：压入 int64 栈（所有整数类型统一）
+    OPC_PUSH_DOUBLE_CONST,  // a=低32位, b=高32位：压入 double 栈（所有浮点类型统一）
+    OPC_PUSH_PTR_CONST,     // a=指针常量值：压入指针栈（字符串、对象指针）
+
+    /* ===== 变量加载/存储（4 核心栈对应） ===== */
+    OPC_LOAD_VAR,          // a=符号表下标：加载 Value 变量，压入 Value 栈
+    OPC_STORE_VAR,         // a=符号表下标：从 Value 栈弹值，存储到变量
+    OPC_LOAD_INT64_VAR,    // a=符号表下标：加载 int64 变量，压入 int64 栈
+    OPC_STORE_INT64_VAR,   // a=符号表下标：从 int64 栈弹值，存储到变量
+    OPC_LOAD_DOUBLE_VAR,   // a=符号表下标：加载 double 变量，压入 double 栈
+    OPC_STORE_DOUBLE_VAR,  // a=符号表下标：从 double 栈弹值，存储到变量
+    OPC_LOAD_PTR_VAR,      // a=符号表下标：加载指针变量，压入指针栈
+    OPC_STORE_PTR_VAR,     // a=符号表下标：从指针栈弹值，存储到变量
+    OPC_LOAD_VAR_REF,      // a=符号表下标：加载 ref 参数（struct 不转 Map，直接传递指针）
+
+    /* ===== Value 栈算术运算（通用动态类型） ===== */
     OPC_ADD, OPC_SUB, OPC_MUL, OPC_DIV, OPC_MOD,
     OPC_GT, OPC_LT, OPC_GE, OPC_LE, OPC_EQ, OPC_NE, OPC_IMPLEMENTS,
     OPC_NEG, OPC_POS,
-    OPC_LOGIC_NOT,   // 弹1压1 bool 取反
+    OPC_LOGIC_NOT,       // 弹1压1 bool 取反
     OPC_PRE_INC, OPC_POST_INC, OPC_PRE_DEC, OPC_POST_DEC,  // a=符号表下标
+
+    /* ===== int64 栈算术运算（统一整数栈，零检查零转换） ===== */
+    OPC_INT64_ADD,       // 弹2个 int64，相加，结果压回 int64 栈
+    OPC_INT64_SUB,      // 弹2个 int64，相减
+    OPC_INT64_MUL,      // 弹2个 int64，相乘
+    OPC_INT64_DIV,      // 弹2个 int64，相除（检查除零）
+    OPC_INT64_MOD,      // 弹2个 int64，取模
+    OPC_INT64_GT,       // 弹2个 int64，大于比较，结果 bool 压入 Value 栈
+    OPC_INT64_LT,       // 小于
+    OPC_INT64_GE,       // 大于等于
+    OPC_INT64_LE,       // 小于等于
+    OPC_INT64_EQ,       // 等于
+    OPC_INT64_NE,       // 不等于
+    OPC_INT64_TO_VALUE, // 从 int64 栈弹出，包装成 Value，压入 Value 栈（兼容赋值等通用逻辑）
+
+    /* ===== double 栈算术运算（统一浮点栈，零检查零转换） ===== */
+    OPC_DOUBLE_ADD,     // 弹2个 double，相加，结果压回 double 栈
+    OPC_DOUBLE_SUB,     // 弹2个 double，相减
+    OPC_DOUBLE_MUL,     // 弹2个 double，相乘
+    OPC_DOUBLE_DIV,     // 弹2个 double，相除（检查除零）
+    OPC_DOUBLE_GT,      // 弹2个 double，大于比较，结果 bool 压入 Value 栈
+    OPC_DOUBLE_LT,      // 小于
+    OPC_DOUBLE_GE,      // 大于等于
+    OPC_DOUBLE_LE,      // 小于等于
+    OPC_DOUBLE_EQ,      // 等于
+    OPC_DOUBLE_NE,      // 不等于
+    OPC_DOUBLE_TO_VALUE, // 从 double 栈弹出，包装成 Value，压入 Value 栈
+
+    /* ===== 栈间转换（零包装零 Value 开销） ===== */
+    OPC_INT64_TO_DOUBLE,    // int64 → double
+    OPC_DOUBLE_TO_INT64,    // double → int64（截断）
+    OPC_INT64_TO_PTR,       // int64 → ptr（指针运算）
+    OPC_PTR_TO_INT64,       // ptr → int64（指针比较）
+
+    /* ===== 类型转换（Value 栈内，通用） ===== */
     OPC_CAST_INT, OPC_CAST_DOUBLE, OPC_CAST_CHAR, OPC_CAST_BOOL, OPC_CAST_STRING, OPC_CAST_ASCII, OPC_CAST_BYTE,
     OPC_CAST_INT8, OPC_CAST_INT16, OPC_CAST_INT32, OPC_CAST_INT64,
     OPC_CAST_UINT8, OPC_CAST_UINT16, OPC_CAST_UINT32, OPC_CAST_UINT64,
     OPC_CAST_LONG, OPC_CAST_LONGLONG, OPC_CAST_FLOAT,
-    OPC_ARRAY_LIT,    // b=元素个数；弹 b 个元素压数组
-    OPC_INT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int，创建 int 泛型数组
-    OPC_INT_ARRAY_GET, // 弹 arr,idx；直接从 int 类型化数组读取元素，压入 int 栈（零包装零 Value 开销）
-    OPC_LOAD_DOUBLE_VAR,   // a=符号表下标；加载声明为 double 的变量，直接压入 double 栈（零检查零转换）
-    OPC_STORE_DOUBLE_VAR,  // a=符号表下标；从 double 栈弹出 double 值，直接存储到变量的 double_vals（零包装零转换）
-    OPC_DOUBLE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 double，创建 double 泛型数组
-    OPC_DOUBLE_ARRAY_GET, // 弹 arr,idx；直接从 double 类型化数组读取元素，压入 double 栈（零包装零 Value 开销）
-    OPC_PUSH_DOUBLE_CONST, // a=常量值索引；把 double 常量直接压入 double 栈（零检查零转换，用于 <double>3.14 字面量赋值）
-    OPC_DOUBLE_ADD,        // 从 double 栈弹出两个 double，相加，结果压回 double 栈（零检查零转换零 Value 开销）
-    OPC_DOUBLE_SUB,        // 从 double 栈弹出两个 double，相减，结果压回 double 栈（零检查零转换零 Value 开销）
-    OPC_DOUBLE_MUL,        // 从 double 栈弹出两个 double，相乘，结果压回 double 栈（零检查零转换零 Value 开销）
-    OPC_DOUBLE_DIV,        // 从 double 栈弹出两个 double，相除，结果压回 double 栈（零检查零转换零 Value 开销）
-    OPC_DOUBLE_TO_VALUE,   // 从 double 栈弹出一个 double，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
-    OPC_DOUBLE_GT,         // 从 double 栈弹出两个 double，大于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_LT,         // 从 double 栈弹出两个 double，小于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_GE,         // 从 double 栈弹出两个 double，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_LE,         // 从 double 栈弹出两个 double，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_EQ,         // 从 double 栈弹出两个 double，等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_NE,         // 从 double 栈弹出两个 double，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_DOUBLE_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 double 栈弹出值，写入 double 类型化数组（零转换）
-    OPC_LOAD_FLOAT_VAR,   // a=符号表下标；加载声明为 float 的变量，直接压入 float 栈（零检查零转换）
-    OPC_STORE_FLOAT_VAR,  // a=符号表下标；从 float 栈弹出 float 值，直接存储到变量的 float_vals（零包装零转换）
-    OPC_FLOAT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 float，创建 float 泛型数组
-    OPC_FLOAT_ARRAY_GET, // 弹 arr,idx；直接从 float 类型化数组读取元素，压入 float 栈（零包装零 Value 开销）
-    OPC_PUSH_FLOAT_CONST, // a=常量池下标；float 常量零开销压栈，直接压入 float 栈（不创建Value）
-    OPC_FLOAT_ADD,        // 从 float 栈弹出两个 float，相加，结果压回 float 栈（零检查零转换零 Value 开销）
-    OPC_FLOAT_SUB,        // 从 float 栈弹出两个 float，相减，结果压回 float 栈（零检查零转换零 Value 开销）
-    OPC_FLOAT_MUL,        // 从 float 栈弹出两个 float，相乘，结果压回 float 栈（零检查零转换零 Value 开销）
-    OPC_FLOAT_DIV,        // 从 float 栈弹出两个 float，相除，结果压回 float 栈（零检查零转换零 Value 开销）
-    OPC_FLOAT_TO_VALUE,   // 从 float 栈弹出一个 float，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
-    OPC_FLOAT_GT,         // 从 float 栈弹出两个 float，大于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_LT,         // 从 float 栈弹出两个 float，小于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_GE,         // 从 float 栈弹出两个 float，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_LE,         // 从 float 栈弹出两个 float，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_EQ,         // 从 float 栈弹出两个 float，等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_NE,         // 从 float 栈弹出两个 float，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_FLOAT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 float 栈弹出值，写入 float 类型化数组（零转换）
-    OPC_LOAD_UINT_VAR,   // a=符号表下标；加载声明为 uint 的变量，直接压入 uint 栈（零检查零转换）
-    OPC_STORE_UINT_VAR,  // a=符号表下标；从 uint 栈弹出 uint 值，直接存储到变量的 uint_vals（零包装零转换）
-    OPC_UINT_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint，创建 uint 泛型数组
-    OPC_UINT_ARRAY_GET, // 弹 arr,idx；直接从 uint 类型化数组读取元素，压入 uint 栈（零包装零 Value 开销）
-    OPC_UINT_ADD,        // 从 uint 栈弹出两个 uint，相加，结果压回 uint 栈（零检查零转换零 Value 开销）
-    OPC_UINT_SUB,        // 从 uint 栈弹出两个 uint，相减，结果压回 uint 栈（零检查零转换零 Value 开销）
-    OPC_UINT_MUL,        // 从 uint 栈弹出两个 uint，相乘，结果压回 uint 栈（零检查零转换零 Value 开销）
-    OPC_UINT_DIV,        // 从 uint 栈弹出两个 uint，相除，结果压回 uint 栈（零检查零转换零 Value 开销）
-    OPC_UINT_MOD,        // 从 uint 栈弹出两个 uint，取模，结果压回 uint 栈（零检查零转换零 Value 开销）
-    OPC_UINT_TO_VALUE,   // 从 uint 栈弹出一个 uint，包装成 Value，压入 Value 栈（用于兼容赋值等通用逻辑）
-    OPC_UINT_GT,         // 从 uint 栈弹出两个 uint，大于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_LT,         // 从 uint 栈弹出两个 uint，小于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_GE,         // 从 uint 栈弹出两个 uint，大于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_LE,         // 从 uint 栈弹出两个 uint，小于等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_EQ,         // 从 uint 栈弹出两个 uint，等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_NE,         // 从 uint 栈弹出两个 uint，不等于比较，结果(bool)压入 Value 栈（零检查零转换）
-    OPC_UINT_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 uint 栈弹出值，写入 uint 类型化数组（零转换）
-    // 类型转换指令（专用栈之间的转换，零包装零Value开销）
-    OPC_INT_TO_UINT,     // 从 int 栈弹出一个 int，重新解释为 uint，压入 uint 栈（零包装零Value开销）
-    OPC_UINT_TO_INT,     // 从 uint 栈弹出一个 uint，重新解释为 int，压入 int 栈（零包装零Value开销）
-    OPC_INT_TO_FLOAT,    // 从 int 栈弹出一个 int，转换为 float，压入 float 栈（零包装零Value开销）
-    OPC_INT_TO_DOUBLE,   // 从 int 栈弹出一个 int，转换为 double，压入 double 栈（零包装零Value开销）
-    OPC_UINT_TO_FLOAT,   // 从 uint 栈弹出一个 uint，转换为 float，压入 float 栈（零包装零Value开销）
-    OPC_UINT_TO_DOUBLE,  // 从 uint 栈弹出一个 uint，转换为 double，压入 double 栈（零包装零Value开销）
-    OPC_FLOAT_TO_DOUBLE, // 从 float 栈弹出一个 float，转换为 double，压入 double 栈（零包装零Value开销）
-    OPC_INT_TO_LONG_LONG, // 从 int 栈弹出一个 int，转换为 long long，压入 long long 栈（零包装零Value开销）
-    OPC_UINT_TO_LONG_LONG, // 从 uint 栈弹出一个 uint，转换为 long long，压入 long long 栈（零包装零Value开销）
-    OPC_FLOAT_TO_LONG_LONG, // 从 float 栈弹出一个 float，转换为 long long，压入 long long 栈（零包装零Value开销）
-    OPC_DOUBLE_TO_LONG_LONG, // 从 double 栈弹出一个 double，转换为 long long，压入 long long 栈（零包装零Value开销）
-    OPC_LONG_LONG_TO_FLOAT, // 从 long long 栈弹出一个 long long，转换为 float，压入 float 栈（零包装零Value开销）
-    OPC_LONG_LONG_TO_DOUBLE, // 从 long long 栈弹出一个 long long，转换为 double，压入 double 栈（零包装零Value开销）
-    // 转换到 long double 的专用指令（零包装零Value开销）
-    OPC_INT_TO_LONG_DOUBLE,   // 从 int 栈弹出一个 int，转换为 long double，压入 long double 栈
-    OPC_UINT_TO_LONG_DOUBLE,  // 从 uint 栈弹出一个 uint，转换为 long double，压入 long double 栈
-    OPC_FLOAT_TO_LONG_DOUBLE, // 从 float 栈弹出一个 float，转换为 long double，压入 long double 栈
-    OPC_DOUBLE_TO_LONG_DOUBLE, // 从 double 栈弹出一个 double，转换为 long double，压入 long double 栈
-    OPC_LONG_LONG_TO_LONG_DOUBLE, // 从 long long 栈弹出一个 long long，转换为 long double，压入 long double 栈
-    // long long 类型专用指令（零检查零转换零 Value 开销）
-    OPC_PUSH_LONG_LONG_CONST, // a=常量值；压入 long long 栈（零包装零Value开销）
-    OPC_LOAD_LONG_LONG_VAR,   // a=符号表下标；加载声明为 long long 的变量，直接压入 long long 栈（零检查零转换）
-    OPC_STORE_LONG_LONG_VAR,  // a=符号表下标；从 long long 栈弹出 long long 值，直接存储到变量（零包装零转换）
-    OPC_LONG_LONG_ADD,        // 从 long long 栈弹出两个 long long，加法，结果压入 long long 栈（零检查零转换）
-    OPC_LONG_LONG_SUB,        // 从 long long 栈弹出两个 long long，减法，结果压入 long long 栈
-    OPC_LONG_LONG_MUL,        // 从 long long 栈弹出两个 long long，乘法，结果压入 long long 栈
-    OPC_LONG_LONG_DIV,        // 从 long long 栈弹出两个 long long，除法，结果压入 long long 栈
-    OPC_LONG_LONG_MOD,        // 从 long long 栈弹出两个 long long，取模，结果压入 long long 栈
-    OPC_LONG_LONG_TO_VALUE,   // 从 long long 栈弹出一个 long long，包装成 Value，压入 Value 栈（用于兼容）
-    OPC_LONG_LONG_GT,         // 从 long long 栈弹出两个 long long，大于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_LT,         // 从 long long 栈弹出两个 long long，小于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_GE,         // 从 long long 栈弹出两个 long long，大于等于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_LE,         // 从 long long 栈弹出两个 long long，小于等于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_EQ,         // 从 long long 栈弹出两个 long long，等于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_NE,         // 从 long long 栈弹出两个 long long，不等于比较，结果(bool)压入 Value 栈
-    OPC_LONG_LONG_ARRAY_SET,  // 从 Value 栈弹出数组和索引，从 long long 栈弹出值，写入 long long 类型化数组
-    OPC_LONG_LONG_ARRAY_LIT,  // b=元素个数；弹 b 个元素，创建 long long 类型化数组
-    OPC_LONG_LONG_ARRAY_GET,  // 弹 arr,idx；直接从 long long 类型化数组读取元素，压入 long long 栈
-    OPC_PRINT_LONG_LONG,      // 从 long long 栈弹出 long long 值并打印（零包装零Value开销）
-    OPC_PUSH_BOOL_CONST,  // a=0或1；直接把bool常量值压入bool栈（零检查零转换，用于<bool>true/false字面量）
-    OPC_LOAD_BOOL_VAR,   // a=符号表下标；加载声明为 bool 的变量，直接压入 bool 栈（零检查零转换）
-    OPC_STORE_BOOL_VAR,  // a=符号表下标；从 bool 栈弹出 bool 值，直接存储到变量的 bool_vals（零包装零转换）
-    OPC_BOOL_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 bool，创建 bool 泛型数组
-    OPC_BOOL_ARRAY_GET, // 弹 arr,idx；直接从 bool 类型化数组读取元素，压入 bool 栈（零包装零 Value 开销）
-    OPC_LOAD_CHAR_VAR,   // a=符号表下标；加载声明为 char 的变量，直接压入 char 栈（零检查零转换）
-    OPC_STORE_CHAR_VAR,  // a=符号表下标；从 char 栈弹出 char 值，直接存储到变量的 char_vals（零包装零转换）
-    OPC_CHAR_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 char，创建 char 泛型数组
-    OPC_CHAR_ARRAY_GET, // 弹 arr,idx；直接从 char 类型化数组读取元素，压入 char 栈（零包装零 Value 开销）
-    OPC_PUSH_CHAR_CONST, // a=char值（ASCII码）；直接压入 char 栈（零检查零转换）
-    OPC_LOAD_BYTE_VAR,   // a=符号表下标；加载声明为 byte 的变量，直接压入 byte 栈（零检查零转换）
-    OPC_STORE_BYTE_VAR,  // a=符号表下标；从 byte 栈弹出 byte 值，直接存储到变量的 byte_vals（零包装零转换）
-    OPC_BYTE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 byte，创建 byte 泛型数组
-    OPC_BYTE_ARRAY_GET, // 弹 arr,idx；直接从 byte 类型化数组读取元素，压入 byte 栈（零包装零 Value 开销）
-    OPC_PUSH_BYTE_CONST, // a=byte值（0-255）；直接压入 byte 栈（零检查零转换）
-    OPC_MAP_LIT,      // b=键值对个数；弹 2b 个值（键、值交替）压字典
-    OPC_INDEX_GET,    // 弹 arr,idx 压元素（数组元素 / 字符串字符）
-    OPC_INDEX_SET,    // 弹 arr,idx,val 写回；压回 val（表达式值）
-    OPC_LOAD_FIELD,   // a=变量符号下标，b=字段名常量下标；直接加载 struct 字段（零开销）
-    OPC_STORE_FIELD,  // a=变量符号下标，b=字段名常量下标；弹值写入 struct 字段，压回值（零开销）
-    OPC_STORE_NESTED_FIELD, // a=变量符号下标，b=组合字段名常量下标（如 "top_left.x"）；弹值写入嵌套 struct 字段
+
+    /* ===== 数组/字典字面量 ===== */
+    OPC_ARRAY_LIT,      // b=元素个数；弹 b 个 Value 元素，压数组
+    OPC_INT64_ARRAY_LIT,   // b=元素个数；弹 b 个 int64 元素，压入 int64 类型化数组
+    OPC_DOUBLE_ARRAY_LIT,  // b=元素个数；弹 b 个 double 元素，压入 double 类型化数组
+    OPC_PTR_ARRAY_LIT,    // b=元素个数；弹 b 个指针元素，压入指针类型化数组
+    OPC_MAP_LIT,        // b=键值对个数；弹 2b 个值（键、值交替）压字典
+
+    /* ===== 下标访问/赋值 ===== */
+    OPC_INDEX_GET,      // 弹 arr,idx 压元素（数组元素 / 字符串字符 / 字典键）
+    OPC_INDEX_SET,      // 弹 arr,idx,val 写回；压回 val（表达式值）
+    OPC_INT64_INDEX_SET,   // 从 Value 栈弹数组和索引，从 int64 栈弹值，写入 int64 类型化数组
+    OPC_DOUBLE_INDEX_SET,  // 从 Value 栈弹数组和索引，从 double 栈弹值，写入 double 类型化数组
+
+    /* ===== 结构体字段访问 ===== */
+    OPC_LOAD_FIELD,     // a=变量符号下标，b=字段名常量下标；直接加载 struct 字段（零开销）
+    OPC_STORE_FIELD,    // a=变量符号下标，b=字段名常量下标；弹值写入 struct 字段，压回值
+    OPC_STORE_NESTED_FIELD, // a=变量符号下标，b=组合字段名常量下标；弹值写入嵌套 struct 字段
     OPC_LOAD_STRUCT_PTR,   // a=变量索引；加载 struct 变量的指针（用于方法 self 参数）
-    OPC_BUILTIN,      // a=内置函数 ID，b=实参个数（见 BuiltinId）
-    OPC_PRINT,        // 打印栈顶，不弹出
-    OPC_PRINT_INT,    // 从 int 栈弹出并打印（零开销，用于声明为 int 的变量）
-    OPC_PRINT_DOUBLE, // 从 double 栈弹出并打印（零开销，用于声明为 double 的变量）
-    OPC_PRINT_FLOAT,  // 从 float 栈弹出并打印（零开销，用于声明为 float 的变量）
-    OPC_PRINT_UINT,   // 从 uint 栈弹出并打印（零开销，用于声明为 uint 的变量）
-    OPC_PRINT_BOOL,   // 从 bool 栈弹出并打印（零开销，用于声明为 bool 的变量）
-    OPC_PRINT_CHAR,   // 从 char 栈弹出并打印（零开销，用于声明为 char 的变量）
-    OPC_PRINT_BYTE,   // 从 byte 栈弹出并打印（零开销，用于声明为 byte 的变量）
-    OPC_LOAD_INT8_VAR,   // a=符号表下标；加载声明为 int8 的变量，直接压入 int8 栈（零检查零转换）
-    OPC_STORE_INT8_VAR,  // a=符号表下标；从 int8 栈弹出 int8 值，直接存储到变量的 int8_vals（零包装零转换）
-    OPC_INT8_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int8，创建 int8 泛型数组
-    OPC_INT8_ARRAY_GET, // 弹 arr,idx；直接从 int8 类型化数组读取元素，压入 int8 栈（零包装零 Value 开销）
-    OPC_PRINT_INT8,     // 从 int8 栈弹出并打印（零开销，用于声明为 int8 的变量）
-    OPC_LOAD_INT16_VAR,   // a=符号表下标；加载声明为 int16 的变量，直接压入 int16 栈（零检查零转换）
-    OPC_STORE_INT16_VAR,  // a=符号表下标；从 int16 栈弹出 int16 值，直接存储到变量的 int16_vals（零包装零转换）
-    OPC_LOAD_SHORT_VAR,   // a=符号表下标；加载声明为 short 的变量，直接压入 short 栈（零检查零转换）
-    OPC_STORE_SHORT_VAR,  // a=符号表下标；从 short 栈弹出 short 值，直接存储到变量的 short_vals（零包装零转换）
-    OPC_INT16_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int16，创建 int16 泛型数组
-    OPC_INT16_ARRAY_GET, // 弹 arr,idx；直接从 int16 类型化数组读取元素，压入 int16 栈（零包装零 Value 开销）
-    OPC_PRINT_INT16,     // 从 int16 栈弹出并打印（零开销，用于声明为 int16 的变量）
-    OPC_PRINT_SHORT,     // 从 short 栈弹出并打印（零开销，用于声明为 short 的变量）
-    OPC_LOAD_INT32_VAR,   // a=符号表下标；加载声明为 int32 的变量，直接压入 int32 栈（零检查零转换）
-    OPC_STORE_INT32_VAR,  // a=符号表下标；从 int32 栈弹出 int32 值，直接存储到变量的 int32_vals（零包装零转换）
-    OPC_INT32_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int32，创建 int32 泛型数组
-    OPC_INT32_ARRAY_GET, // 弹 arr,idx；直接从 int32 类型化数组读取元素，压入 int32 栈（零包装零 Value 开销）
-    OPC_PRINT_INT32,     // 从 int32 栈弹出并打印（零开销，用于声明为 int32 的变量）
-    OPC_LOAD_INT64_VAR,   // a=符号表下标；加载声明为 int64 的变量，直接压入 int64 栈（零检查零转换）
-    OPC_STORE_INT64_VAR,  // a=符号表下标；从 int64 栈弹出 int64 值，直接存储到变量的 int64_vals（零包装零转换）
-    OPC_INT64_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 int64，创建 int64 泛型数组
-    OPC_INT64_ARRAY_GET, // 弹 arr,idx；直接从 int64 类型化数组读取元素，压入 int64 栈（零包装零 Value 开销）
-    OPC_PRINT_INT64,     // 从 int64 栈弹出并打印（零开销，用于声明为 int64 的变量）
-    OPC_PUSH_INT8_CONST, // a=int8值；直接压入 int8 栈（零检查零转换）
-    OPC_PUSH_INT16_CONST, // a=int16值；直接压入 int16 栈（零检查零转换）
-    OPC_PUSH_SHORT_CONST, // a=short值；直接压入 short 栈（零检查零转换）
-    OPC_PUSH_INT32_CONST, // a=int32值；直接压入 int32 栈（零检查零转换）
-    OPC_PUSH_INT64_CONST, // a=低32位, b=高32位；直接压入 int64 栈（零检查零转换）
-    OPC_LOAD_UINT8_VAR,   // a=符号表下标；加载声明为 uint8 的变量，直接压入 uint8 栈（零检查零转换）
-    OPC_STORE_UINT8_VAR,  // a=符号表下标；从 uint8 栈弹出 uint8 值，直接存储到变量的 uint8_vals（零包装零转换）
-    OPC_UINT8_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint8，创建 uint8 泛型数组
-    OPC_UINT8_ARRAY_GET, // 弹 arr,idx；直接从 uint8 类型化数组读取元素，压入 uint8 栈（零包装零 Value 开销）
-    OPC_PRINT_UINT8,     // 从 uint8 栈弹出并打印（零开销，用于声明为 uint8 的变量）
-    OPC_LOAD_UINT16_VAR,   // a=符号表下标；加载声明为 uint16 的变量，直接压入 uint16 栈（零检查零转换）
-    OPC_STORE_UINT16_VAR,  // a=符号表下标；从 uint16 栈弹出 uint16 值，直接存储到变量的 uint16_vals（零包装零转换）
-    OPC_UINT16_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint16，创建 uint16 泛型数组
-    OPC_UINT16_ARRAY_GET, // 弹 arr,idx；直接从 uint16 类型化数组读取元素，压入 uint16 栈（零包装零 Value 开销）
-    OPC_PRINT_UINT16,     // 从 uint16 栈弹出并打印（零开销，用于声明为 uint16 的变量）
-    OPC_LOAD_UINT32_VAR,   // a=符号表下标；加载声明为 uint32 的变量，直接压入 uint32 栈（零检查零转换）
-    OPC_STORE_UINT32_VAR,  // a=符号表下标；从 uint32 栈弹出 uint32 值，直接存储到变量的 uint32_vals（零包装零转换）
-    OPC_UINT32_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint32，创建 uint32 泛型数组
-    OPC_UINT32_ARRAY_GET, // 弹 arr,idx；直接从 uint32 类型化数组读取元素，压入 uint32 栈（零包装零 Value 开销）
-    OPC_PRINT_UINT32,     // 从 uint32 栈弹出并打印（零开销，用于声明为 uint32 的变量）
-    OPC_LOAD_UINT64_VAR,   // a=符号表下标；加载声明为 uint64 的变量，直接压入 uint64 栈（零检查零转换）
-    OPC_STORE_UINT64_VAR,  // a=符号表下标；从 uint64 栈弹出 uint64 值，直接存储到变量的 uint64_vals（零包装零转换）
-    OPC_UINT64_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 uint64，创建 uint64 泛型数组
-    OPC_UINT64_ARRAY_GET, // 弹 arr,idx；直接从 uint64 类型化数组读取元素，压入 uint64 栈（零包装零 Value 开销）
-    OPC_PRINT_UINT64,     // 从 uint64 栈弹出并打印（零开销，用于声明为 uint64 的变量）
-    OPC_PUSH_UINT8_CONST, // a=uint8值；直接压入 uint8 栈（零检查零转换）
-    OPC_PUSH_UINT16_CONST, // a=uint16值；直接压入 uint16 栈（零检查零转换）
-    OPC_PUSH_UINT32_CONST, // a=uint32值；直接压入 uint32 栈（零检查零转换）
-    OPC_PUSH_UINT64_CONST, // a=低32位, b=高32位；直接压入 uint64 栈（零检查零转换）
-    OPC_LOAD_LONG_VAR,   // a=符号表下标；加载声明为 long 的变量，直接压入 long 栈（零检查零转换）
-    OPC_STORE_LONG_VAR,  // a=符号表下标；从 long 栈弹出 long 值，直接存储到变量的 long_vals（零包装零转换）
-    OPC_LONG_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 long，创建 long 泛型数组
-    OPC_LONG_ARRAY_GET, // 弹 arr,idx；直接从 long 类型化数组读取元素，压入 long 栈（零包装零 Value 开销）
-    OPC_PRINT_LONG,     // 从 long 栈弹出并打印（零开销，用于声明为 long 的变量）
-    OPC_LOAD_ULONG_VAR,   // a=符号表下标；加载声明为 ulong 的变量，直接压入 ulong 栈（零检查零转换）
-    OPC_STORE_ULONG_VAR,  // a=符号表下标；从 ulong 栈弹出 ulong 值，直接存储到变量的 ulong_vals（零包装零转换）
-    OPC_ULONG_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 ulong，创建 ulong 泛型数组
-    OPC_ULONG_ARRAY_GET, // 弹 arr,idx；直接从 ulong 类型化数组读取元素，压入 ulong 栈（零包装零 Value 开销）
-    OPC_PRINT_ULONG,     // 从 ulong 栈弹出并打印（零开销，用于声明为 ulong 的变量）
-    OPC_PUSH_LONG_CONST, // a=long值；直接压入 long 栈（零检查零转换）
-    OPC_PUSH_ULONG_CONST, // a=ulong值；直接压入 ulong 栈（零检查零转换）
-    OPC_LOAD_SIZE_T_VAR,   // a=符号表下标；加载声明为 size_t 的变量，直接压入 size_t 栈（零检查零转换）
-    OPC_STORE_SIZE_T_VAR,  // a=符号表下标；从 size_t 栈弹出 size_t 值，直接存储到变量的 size_t_vals（零包装零转换）
-    OPC_SIZE_T_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 size_t，创建 size_t 泛型数组
-    OPC_SIZE_T_ARRAY_GET, // 弹 arr,idx；直接从 size_t 类型化数组读取元素，压入 size_t 栈（零包装零 Value 开销）
-    OPC_PRINT_SIZE_T,     // 从 size_t 栈弹出并打印（零开销，用于声明为 size_t 的变量）
-    OPC_LOAD_SSIZE_T_VAR,   // a=符号表下标；加载声明为 ssize_t 的变量，直接压入 ssize_t 栈（零检查零转换）
-    OPC_STORE_SSIZE_T_VAR,  // a=符号表下标；从 ssize_t 栈弹出 ssize_t 值，直接存储到变量的 ssize_t_vals（零包装零转换）
-    OPC_SSIZE_T_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 ssize_t，创建 ssize_t 泛型数组
-    OPC_SSIZE_T_ARRAY_GET, // 弹 arr,idx；直接从 ssize_t 类型化数组读取元素，压入 ssize_t 栈（零包装零 Value 开销）
-    OPC_PRINT_SSIZE_T,     // 从 ssize_t 栈弹出并打印（零开销，用于声明为 ssize_t 的变量）
-    OPC_PUSH_SIZE_T_CONST, // a=size_t值；直接压入 size_t 栈（零检查零转换）
-    OPC_PUSH_SSIZE_T_CONST, // a=ssize_t值；直接压入 ssize_t 栈（零检查零转换）
-    OPC_LOAD_LONG_DOUBLE_VAR,   // a=符号表下标；加载声明为 long double 的变量，直接压入 long double 栈（零检查零转换）
-    OPC_STORE_LONG_DOUBLE_VAR,  // a=符号表下标；从 long double 栈弹出 long double 值，直接存储到变量的 long_double_vals（零包装零转换）
-    OPC_LONG_DOUBLE_ARRAY_LIT, // b=元素个数；弹 b 个 Value 元素，内联转换为 long double，创建 long double 泛型数组
-    OPC_LONG_DOUBLE_ARRAY_GET, // 弹 arr,idx；直接从 long double 类型化数组读取元素，压入 long double 栈（零包装零 Value 开销）
-    OPC_PRINT_LONG_DOUBLE,     // 从 long double 栈弹出并打印（零开销，用于声明为 long double 的变量）
-    OPC_PUSH_LONG_DOUBLE_CONST, // a=常量值（低32位）, b=常量值（高32位）；压入 long double 栈（零包装零Value开销）
-    OPC_LONG_DOUBLE_ADD,        // 弹2个 long double，相加，结果压入 long double 栈（零检查零转换零 Value 开销）
-    OPC_LONG_DOUBLE_SUB,        // 弹2个 long double，相减，结果压入 long double 栈
-    OPC_LONG_DOUBLE_MUL,        // 弹2个 long double，相乘，结果压入 long double 栈
-    OPC_LONG_DOUBLE_DIV,        // 弹2个 long double，相除，结果压入 long double 栈
-    OPC_LONG_DOUBLE_GT,         // 弹2个 long double，大于比较，结果 bool 压入 Value 栈
-    OPC_LONG_DOUBLE_LT,         // 弹2个 long double，小于比较
-    OPC_LONG_DOUBLE_GE,         // 弹2个 long double，大于等于比较
-    OPC_LONG_DOUBLE_LE,         // 弹2个 long double，小于等于比较
-    OPC_LONG_DOUBLE_EQ,         // 弹2个 long double，等于比较
-    OPC_LONG_DOUBLE_NE,         // 弹2个 long double，不等于比较
-    /* ===== int8 类型专用算术/比较运算指令（零开销优化） ===== */
-    OPC_INT8_ADD,       // 弹2个 int8，相加，结果压入 int8 专用栈
-    OPC_INT8_SUB,       // 弹2个 int8，相减
-    OPC_INT8_MUL,       // 弹2个 int8，相乘
-    OPC_INT8_DIV,       // 弹2个 int8，相除（检查除零）
-    OPC_INT8_MOD,       // 弹2个 int8，取模
-    OPC_INT8_GT,        // 弹2个 int8，大于比较，结果 bool 压入 Value 栈
-    OPC_INT8_LT,        // 弹2个 int8，小于比较
-    OPC_INT8_GE,        // 弹2个 int8，大于等于比较
-    OPC_INT8_LE,        // 弹2个 int8，小于等于比较
-    OPC_INT8_EQ,        // 弹2个 int8，等于比较
-    OPC_INT8_NE,        // 弹2个 int8，不等于比较
-    /* ===== int16 类型专用算术/比较运算指令（零开销优化） ===== */
-    OPC_INT16_ADD,      // 弹2个 int16，相加
-    OPC_INT16_SUB,      // 弹2个 int16，相减
-    OPC_INT16_MUL,      // 弹2个 int16，相乘
-    OPC_INT16_DIV,      // 弹2个 int16，相除
-    OPC_INT16_MOD,      // 弹2个 int16，取模
-    OPC_INT16_GT,       // 弹2个 int16，大于比较
-    OPC_INT16_LT,       // 弹2个 int16，小于比较
-    OPC_INT16_GE,       // 弹2个 int16，大于等于比较
-    OPC_INT16_LE,       // 弹2个 int16，小于等于比较
-    OPC_INT16_EQ,       // 弹2个 int16，等于比较
-    OPC_INT16_NE,       // 弹2个 int16，不等于比较
-    /* ===== short 类型专用算术/比较运算指令（零开销优化） ===== */
-    OPC_SHORT_ADD,      // 弹2个 short，相加
-    OPC_SHORT_SUB,      // 弹2个 short，相减
-    OPC_SHORT_MUL,      // 弹2个 short，相乘
-    OPC_SHORT_DIV,      // 弹2个 short，相除
-    OPC_SHORT_MOD,      // 弹2个 short，取模
-    OPC_SHORT_GT,       // 弹2个 short，大于比较
-    OPC_SHORT_LT,       // 弹2个 short，小于比较
-    OPC_SHORT_GE,       // 弹2个 short，大于等于比较
-    OPC_SHORT_LE,       // 弹2个 short，小于等于比较
-    OPC_SHORT_EQ,       // 弹2个 short，等于比较
-    OPC_SHORT_NE,       // 弹2个 short，不等于比较
-    /* ===== int32 类型专用算术/比较运算指令（零开销优化） ===== */
-    OPC_INT32_ADD,      // 弹2个 int32，相加
-    OPC_INT32_SUB,      // 弹2个 int32，相减
-    OPC_INT32_MUL,      // 弹2个 int32，相乘
-    OPC_INT32_DIV,      // 弹2个 int32，相除
-    OPC_INT32_MOD,      // 弹2个 int32，取模
-    OPC_INT32_GT,       // 弹2个 int32，大于比较
-    OPC_INT32_LT,       // 弹2个 int32，小于比较
-    OPC_INT32_GE,       // 弹2个 int32，大于等于比较
-    OPC_INT32_LE,       // 弹2个 int32，小于等于比较
-    OPC_INT32_EQ,       // 弹2个 int32，等于比较
-    OPC_INT32_NE,       // 弹2个 int32，不等于比较
-    /* ===== int64 类型专用算术/比较运算指令（零开销优化） ===== */
-    OPC_INT64_ADD,      // 弹2个 int64，相加
-    OPC_INT64_SUB,      // 弹2个 int64，相减
-    OPC_INT64_MUL,      // 弹2个 int64，相乘
-    OPC_INT64_DIV,      // 弹2个 int64，相除
-    OPC_INT64_MOD,      // 弹2个 int64，取模
-    OPC_INT64_GT,       // 弹2个 int64，大于比较
-    OPC_INT64_LT,       // 弹2个 int64，小于比较
-    OPC_INT64_GE,       // 弹2个 int64，大于等于比较
-    OPC_INT64_LE,       // 弹2个 int64，小于等于比较
-    OPC_INT64_EQ,       // 弹2个 int64，等于比较
-    OPC_INT64_NE,       // 弹2个 int64，不等于比较
-    OPC_TO_BOOL,      // 弹1压1 bool
-    OPC_DUP,          // 复制栈顶
-    OPC_POP,          // 丢弃栈顶
-    OPC_TRY,          // a=catch 起始pc(0=无catch)，b=finally 起始pc(0=无finally)；setjmp 注册错误处理器
-    OPC_ENDTRY,       // a=跳转目标pc；正常路径恢复外层处理器（无 finally 的旧布局用）
-    OPC_GET_ERR,      // 压入最近捕获的错误对象（type/message/stack）
-    OPC_THROW,        // 弹1；包装成错误对象并抛出（无处理器则打印退出）
-    OPC_FIN_PUSH,     // a=完成动作(1=JMP 2=RETHROW 3=BREAK 4=CONT)，b=目标pc；压入 finally 完成动作
-    OPC_FINISH,       // 弹 finally 完成动作并执行（JMP/RETHROW/RETURN 恢复）
-    OPC_PEND_RETURN,  // 弹1（返回值）→ 挂起返回动作，跳 b（finally 起始；0=直接返回）
-    OPC_JMP,          // a=目标pc
-    OPC_JMP_IF_FALSE, // a=目标pc；弹条件，假则跳
-    OPC_JMP_IF_TRUE,  // a=目标pc；弹条件，真则跳
-    OPC_JMP_IF_NULL,  // a=目标pc；弹值，为 VAL_NONE 则跳
-    OPC_CLASS_NEW,    // a=class名符号下标：创建 C 结构体实例并包装成 Value
-    OPC_CALL,         // a=函数名符号下标，b=实参个数
-    OPC_CALLV,        // 动态调用链：栈顶下一位=函数值（b=实参个数），栈顶 b 个为实参
-    OPC_MKCLOSURE,    // a=lambda 符号下标：沿当前帧装箱捕获变量，压入新闭包函数值
-    OPC_RETURN,       // 弹值返回（深拷贝）
-    OPC_RETURN_NIL,   // 无返回值返回
-    OPC_YIELD,        // 生成器 yield：弹值，保存执行状态，返回给调用者
-    /* 补充 TO_VALUE 指令：各专用栈 → Value 栈（用于兼容赋值等通用逻辑） */
-    OPC_BOOL_TO_VALUE,
-    OPC_CHAR_TO_VALUE,
-    OPC_INT8_TO_VALUE,
-    OPC_INT16_TO_VALUE,
-    OPC_INT32_TO_VALUE,
-    OPC_SHORT_TO_VALUE,
-    OPC_INT64_TO_VALUE,
-    OPC_LONG_TO_VALUE,
-    OPC_BYTE_TO_VALUE,
-    OPC_UINT8_TO_VALUE,
-    OPC_UINT16_TO_VALUE,
-    OPC_UINT64_TO_VALUE,
-    OPC_ULONG_TO_VALUE,
-    OPC_SIZE_T_TO_VALUE,
-    OPC_SSIZE_T_TO_VALUE,
-    OPC_LONG_DOUBLE_TO_VALUE,
+
+    /* ===== 内置函数调用 ===== */
+    OPC_BUILTIN,        // a=内置函数 ID，b=实参个数（见 BuiltinId）
+
+    /* ===== 打印（4 核心栈对应） ===== */
+    OPC_PRINT,          // 打印 Value 栈顶，不弹出
+    OPC_PRINT_INT64,    // 从 int64 栈弹出并打印（零开销）
+    OPC_PRINT_DOUBLE,   // 从 double 栈弹出并打印（零开销）
+    OPC_PRINT_PTR,      // 从指针栈弹出并打印（零开销）
+
+    /* ===== 错误处理（try/catch/finally） ===== */
+    OPC_TRY,            // a=catch 起始pc(0=无catch)，b=finally 起始pc(0=无finally)；setjmp 注册错误处理器
+    OPC_ENDTRY,         // a=跳转目标pc；正常路径恢复外层处理器
+    OPC_GET_ERR,        // 压入最近捕获的错误对象（type/message/stack）
+    OPC_THROW,          // 弹1；包装成错误对象并抛出（无处理器则打印退出）
+    OPC_FIN_PUSH,       // a=完成动作(1=JMP 2=RETHROW 3=BREAK 4=CONT)，b=目标pc；压入 finally 完成动作
+    OPC_FINISH,         // 弹 finally 完成动作并执行（JMP/RETHROW/RETURN 恢复）
+    OPC_PEND_RETURN,    // 弹1（返回值）→ 挂起返回动作，跳 b（finally 起始；0=直接返回）
+
+    /* ===== 控制流 ===== */
+    OPC_JMP,            // a=目标pc
+    OPC_JMP_IF_FALSE,   // a=目标pc；弹条件，假则跳
+    OPC_JMP_IF_TRUE,    // a=目标pc；弹条件，真则跳
+    OPC_JMP_IF_NULL,    // a=目标pc；弹值，为 VAL_NONE 则跳
+
+    /* ===== 函数调用/返回 ===== */
+    OPC_GETFUNC,        // a=函数名符号下标：压入函数值
+    OPC_CALL,           // a=函数名符号下标，b=实参个数
+    OPC_CALLV,          // 动态调用链：栈顶下一位=函数值（b=实参个数），栈顶 b 个为实参
+    OPC_MKCLOSURE,      // a=lambda 符号下标：沿当前帧装箱捕获变量，压入新闭包函数值
+    OPC_RETURN,         // 弹值返回（深拷贝）
+    OPC_RETURN_NIL,     // 无返回值返回
+    OPC_YIELD,          // 生成器 yield：弹值，保存执行状态，返回给调用者
+
+    /* ===== 类 ===== */
+    OPC_CLASS_NEW,      // a=class名符号下标：创建 C 结构体实例并包装成 Value
+
     OPC_HALT
 } OpCode;
 
