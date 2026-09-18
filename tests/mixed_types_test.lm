@@ -1,6 +1,6 @@
 // 全量数据类型混合运算测试 - 覆盖所有运算符的所有组合
 // 运算符：+、-、*、/
-// 数据类型：int, short, int8, int16, int32, int64, uint, ushort, uint8, uint16, uint32, uint64, float, double, bool, char, string
+// 数据类型：int, short, int8, int16, int32, int64, long, longlong, uint, ushort, uint8, uint16, uint32, uint64, ulong, uchar, byte, size_t, ssize_t, float, double, long_double, bool, char, string
 
 // ===== 准备变量 =====
 i_int = <int>100;
@@ -9,6 +9,8 @@ i_int8 = <int8>5;
 i_int16 = <int16>50;
 i_int32 = <int32>1000;
 i_int64 = <int64>1000000;
+i_long = <long>2000000;
+i_longlong = <long long>3000000;
 
 u_uint = <uint>100;
 u_ushort = <ushort>20;
@@ -16,9 +18,15 @@ u_uint8 = <uint8>5;
 u_uint16 = <uint16>50;
 u_uint32 = <uint32>1000;
 u_uint64 = <uint64>1000000;
+u_ulong = <ulong>2000000;
+u_uchar = <uchar>65;
+u_byte = <byte>200;
+u_sizet = <size_t>5000;
+u_ssizet = <ssize_t>-1000;
 
 f_float = <float>3.14;
 f_double = <double>2.71828;
+f_longdouble = <long double>3.14159265358979;
 
 b_true = <bool>true;
 b_false = <bool>false;
@@ -594,6 +602,181 @@ print(r);
 
 print("y3 + y2:");
 r = y3 + y2;
+print(r);
+
+// ===== 11. 扩展整数类型混合运算 =====
+print("=== 11. 扩展整数类型混合运算 ===");
+
+print("long + int:");
+r = i_long + i_int;
+print(r);
+print("long - int:");
+r = i_long - i_int;
+print(r);
+print("long * int:");
+r = i_long * i_int;
+print(r);
+print("long / int:");
+r = i_long / i_int;
+print(r);
+
+print("longlong + long:");
+r = i_longlong + i_long;
+print(r);
+print("longlong - long:");
+r = i_longlong - i_long;
+print(r);
+print("longlong * long:");
+r = i_longlong * i_long;
+print(r);
+print("longlong / long:");
+r = i_longlong / i_long;
+print(r);
+
+print("ulong + uint:");
+r = u_ulong + u_uint;
+print(r);
+print("ulong - uint:");
+r = u_ulong - u_uint;
+print(r);
+print("ulong * uint:");
+r = u_ulong * u_uint;
+print(r);
+print("ulong / uint:");
+r = u_ulong / u_uint;
+print(r);
+
+print("uchar + char:");
+r = u_uchar + ch_A;
+print(r);
+print("uchar - char:");
+r = u_uchar - ch_A;
+print(r);
+print("uchar * char:");
+r = u_uchar * ch_A;
+print(r);
+print("uchar / char:");
+r = u_uchar / ch_A;
+print(r);
+
+print("byte + int:");
+r = u_byte + i_int;
+print(r);
+print("byte - int:");
+r = u_byte - i_int;
+print(r);
+print("byte * int:");
+r = u_byte * i_int;
+print(r);
+print("byte / int:");
+r = u_byte / i_int;
+print(r);
+
+print("size_t + int:");
+r = u_sizet + i_int;
+print(r);
+print("size_t - int:");
+r = u_sizet - i_int;
+print(r);
+print("size_t * int:");
+r = u_sizet * i_int;
+print(r);
+print("size_t / int:");
+r = u_sizet / i_int;
+print(r);
+
+print("ssize_t + int:");
+r = u_ssizet + i_int;
+print(r);
+print("ssize_t - int:");
+r = u_ssizet - i_int;
+print(r);
+print("ssize_t * int:");
+r = u_ssizet * i_int;
+print(r);
+print("ssize_t / int:");
+r = u_ssizet / i_int;
+print(r);
+
+// ===== 12. long double 运算 =====
+print("=== 12. long double 运算 ===");
+
+print("longdouble + double:");
+r = f_longdouble + f_double;
+print(r);
+print("longdouble - double:");
+r = f_longdouble - f_double;
+print(r);
+print("longdouble * double:");
+r = f_longdouble * f_double;
+print(r);
+print("longdouble / double:");
+r = f_longdouble / f_double;
+print(r);
+
+print("longdouble + int:");
+r = f_longdouble + i_int;
+print(r);
+print("longdouble - int:");
+r = f_longdouble - i_int;
+print(r);
+print("longdouble * int:");
+r = f_longdouble * i_int;
+print(r);
+print("longdouble / int:");
+r = f_longdouble / i_int;
+print(r);
+
+// ===== 13. 所有类型交叉运算 =====
+print("=== 13. 所有类型交叉运算 ===");
+
+print("byte + long:");
+r = u_byte + i_long;
+print(r);
+print("byte * long:");
+r = u_byte * i_long;
+print(r);
+
+print("uchar + ulong:");
+r = u_uchar + u_ulong;
+print(r);
+print("uchar * ulong:");
+r = u_uchar * u_ulong;
+print(r);
+
+print("size_t + ulong:");
+r = u_sizet + u_ulong;
+print(r);
+print("size_t * ulong:");
+r = u_sizet * u_ulong;
+print(r);
+
+print("ssize_t + long:");
+r = u_ssizet + i_long;
+print(r);
+print("ssize_t * long:");
+r = u_ssizet * i_long;
+print(r);
+
+print("byte + float:");
+r = u_byte + f_float;
+print(r);
+print("byte * float:");
+r = u_byte * f_float;
+print(r);
+
+print("long + double:");
+r = i_long + f_double;
+print(r);
+print("long * double:");
+r = i_long * f_double;
+print(r);
+
+print("ulong + double:");
+r = u_ulong + f_double;
+print(r);
+print("ulong * double:");
+r = u_ulong * f_double;
 print(r);
 
 print("=== 全量混合运算测试完成 ===");
