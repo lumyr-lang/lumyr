@@ -294,7 +294,7 @@ _Thread_local VMStackManager* g_stack_mgr = NULL;
 /* 每个栈的容量（用于扩容，因为VMStackManager中没有cap字段） */
 _Thread_local int g_stack_caps[STACK_TYPE_COUNT] = {0};
 
-#define STACK_GLOBAL_INIT_CAP 64
+#define STACK_GLOBAL_INIT_CAP 1024
 
 /*
  * 初始化全局Thread-Local栈管理器

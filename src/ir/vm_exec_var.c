@@ -70,6 +70,10 @@ int vm_exec_var_load_int64(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_store_int64(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     frame_ensure_slots(ctx->frame, idx + 1);
+    if (g_stack_mgr->sp[STACK_INT64] <= 0) {
+        fprintf(stderr, "VM Error: INT64 stack underflow at STORE_INT64_VAR\n");
+        return -1;
+    }
     int sp = --g_stack_mgr->sp[STACK_INT64];
     ctx->frame->int_slots[idx] = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
     return 1;
