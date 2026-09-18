@@ -45,7 +45,8 @@ static void frame_ensure_slots(StackFrame* f, int need) {
 /* LOAD_VAR：从帧槽位加载 Value 到 VALUE 栈 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    stack_vm_push(g_stack_mgr, STACK_VALUE, &ctx->frame->vals[idx]);
+    frame_ensure_slots(ctx->frame, idx + 1);
+    int ret = stack_vm_push(g_stack_mgr, STACK_VALUE, &ctx->frame->vals[idx]);
     return 1;
 }
 

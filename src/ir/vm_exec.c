@@ -111,6 +111,7 @@ Value vm_execute(VMExecCtx* ctx) {
     int pc = 0;
     Value result = val_none();
 
+
     /* 初始化全局栈管理器 */
     if (!g_stack_mgr) {
         stack_global_init(256);
@@ -118,6 +119,8 @@ Value vm_execute(VMExecCtx* ctx) {
 
     while (pc < ctx->fn->code_len) {
         Instruction in = code[pc++];
+        if (pc <= 5) {
+        }
         int handled = 0;
         if((int)in.op >= 115 && (int)in.op <= 120) {
         }
