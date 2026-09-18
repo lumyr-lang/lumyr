@@ -254,4 +254,56 @@ typedef struct {
     0 \
 )
 
+/* ========== 统一栈操作宏定义（所有栈操作必须通过这些宏，禁止直接操作栈） ========== */
+
+/*
+ * 压栈操作宏定义
+ * 自动处理自动扩容，禁止直接使用 g_stack_mgr->sp[type]++
+ */
+
+/* 压入 int64 到 INT64 栈 */
+#define PUSH_INT64(val) stack_vm_push(g_stack_mgr, STACK_INT64, &(int64_t){(val)})
+
+/* 压入 double 到 DOUBLE 栈 */
+#define PUSH_DOUBLE(val) stack_vm_push(g_stack_mgr, STACK_DOUBLE, &(double){(val)})
+
+/* 压入指针到 PTR 栈 */
+#define PUSH_PTR(val) stack_vm_push(g_stack_mgr, STACK_PTR, &(void*){(val)})
+
+/* 压入 Value 到 VALUE 栈 */
+#define PUSH_VALUE(val) stack_vm_push(g_stack_mgr, STACK_VALUE, &(Value){(val)})
+
+/*
+ * 弹栈操作宏定义
+ * 自动处理栈下溢检查
+ */
+
+/* 从 INT64 栈弹出 int64 */
+#define POP_INT64() ({ int64_t _val; stack_vm_pop(g_stack_mgr, STACK_INT64, &_val); _val; })
+
+/* 从 DOUBLE 栈弹出 double */
+#define POP_DOUBLE() ({ double _val; stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &_val); _val; })
+
+/* 从 PTR 栈弹出指针 */
+#define POP_PTR() ({ void* _val; stack_vm_pop(g_stack_mgr, STACK_PTR, &_val); _val; })
+
+/* 从 VALUE 栈弹出 Value */
+#define POP_VALUE() ({ Value _val; stack_vm_pop(g_stack_mgr, STACK_VALUE, &_val); _val; })
+
+/*
+ * 查看栈顶元素宏定义（不弹出）
+ */
+
+/* 查看 INT64 栈栈顶元素 */
+#define PEEK_INT64() ({ int64_t _val; stack_vm_peek(g_stack_mgr, STACK_INT64, &_val); _val; })
+
+/* 查看 DOUBLE 栈栈顶元素 */
+#define PEEK_DOUBLE() ({ double _val; stack_vm_peek(g_stack_mgr, STACK_DOUBLE, &_val); _val; })
+
+/* 查看 PTR 栈栈顶元素 */
+#define PEEK_PTR() ({ void* _val; stack_vm_peek(g_stack_mgr, STACK_PTR, &_val); _val; })
+
+/* 查看 VALUE 栈栈顶元素 */
+#define PEEK_VALUE() ({ Value _val; stack_vm_peek(g_stack_mgr, STACK_VALUE, &_val); _val; })
+
 #endif /* STACK_MANAGER_H */
