@@ -513,16 +513,16 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
     }
 
     /* 二元运算：根据左右操作数类型推导 */
-    /* 注意：优先级顺序必须与 c_expr 中的分支顺序完全一致 */
+    /* 注意：优先级顺序必须与 c_expr_cast_type 和 c_expr 中的分支顺序完全一致 */
     if(node->type == AST_BINOP) {
         const char* lt = c_expr_type_name(c, node->u.bin.left);
         const char* rt = c_expr_type_name(c, node->u.bin.right);
-        /* 1. bigint 优先（bigint 分支在 decimal 之前） */
-        if(strcmp(lt, "bigint") == 0 || strcmp(rt, "bigint") == 0) return "bigint";
-        /* 2. decimal 次之 */
-        if(strcmp(lt, "decimal") == 0 || strcmp(rt, "decimal") == 0) return "decimal";
-        /* 3. string 拼接 */
+        /* 1. string 优先级最高（字符串拼接） */
         if(strcmp(lt, "string") == 0 || strcmp(rt, "string") == 0) return "string";
+        /* 2. bigint 次之 */
+        if(strcmp(lt, "bigint") == 0 || strcmp(rt, "bigint") == 0) return "bigint";
+        /* 3. decimal 再次之 */
+        if(strcmp(lt, "decimal") == 0 || strcmp(rt, "decimal") == 0) return "decimal";
         /* 4. double */
         if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
         /* 5. 其他都是 int */
