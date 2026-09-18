@@ -85,6 +85,9 @@ typedef enum {
 
     /* ===== ptr 栈算术运算（字符串拼接等） ===== */
     OPC_PTR_ADD,        // 弹2个指针（字符串），拼接，结果压回 ptr 栈
+    OPC_PTR_MUL,        // 字符串乘法："abc" * 3 = "abcabcabc"
+    OPC_PTR_DIV,        // 字符串除法："abcabcabc" / 3 = "abc"
+    OPC_PTR_SUB,        // 字符串减法："abcabc" - 3 = "abc"（尾部截取），3 - "abcabc" = "abc"（首部截取）
 
     /* ===== 栈间转换（零包装零 Value 开销） ===== */
     OPC_INT64_TO_DOUBLE,    // int64 → double

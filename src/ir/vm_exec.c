@@ -49,6 +49,9 @@ int vm_exec_arith_double_sub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_double_mul(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_double_div(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_ptr_add(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_ptr_mul(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_ptr_div(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_ptr_sub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_conv_int64_to_string(VMExecCtx* ctx, Instruction* in);
 int vm_exec_conv_double_to_string(VMExecCtx* ctx, Instruction* in);
 
@@ -159,8 +162,11 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_DOUBLE_MUL: handled = vm_exec_arith_double_mul(ctx, &in); break;
         case OPC_DOUBLE_DIV: handled = vm_exec_arith_double_div(ctx, &in); break;
 
-        /* ===== 算术运算（PTR 栈：字符串拼接） ===== */
+        /* ===== 算术运算（PTR 栈：字符串拼接等） ===== */
         case OPC_PTR_ADD: handled = vm_exec_arith_ptr_add(ctx, &in); break;
+        case OPC_PTR_MUL: handled = vm_exec_arith_ptr_mul(ctx, &in); break;
+        case OPC_PTR_DIV: handled = vm_exec_arith_ptr_div(ctx, &in); break;
+        case OPC_PTR_SUB: handled = vm_exec_arith_ptr_sub(ctx, &in); break;
 
         /* ===== 栈间转换 ===== */
         case OPC_INT64_TO_STRING: handled = vm_exec_conv_int64_to_string(ctx, &in); break;

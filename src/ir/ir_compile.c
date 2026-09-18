@@ -282,8 +282,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
 
-        if(result == EXPR_TYPE_PTR && node->u.bin.op == OP_ADD) {
-            /* 字符串拼接：先编译左操作数，立即转换；再编译右操作数，立即转换 */
+        if(result == EXPR_TYPE_PTR && (node->u.bin.op == OP_ADD || node->u.bin.op == OP_MUL || node->u.bin.op == OP_DIV || node->u.bin.op == OP_SUB)) {
+            /* 字符串运算：先编译左操作数，立即转换；再编译右操作数，立即转换 */
             ExprType lt = c_expr(c, node->u.bin.left);
             if(lt == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_STRING, 0, 0);
@@ -296,7 +296,20 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             } else if(rt == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
             }
-            emit(c, OPC_PTR_ADD, 0, 0);
+            switch(node->u.bin.op) {
+            case OP_ADD:
+                emit(c, OPC_PTR_ADD, 0, 0);
+                break;
+            case OP_MUL:
+                emit(c, OPC_PTR_MUL, 0, 0);
+                break;
+            case OP_DIV:
+                emit(c, OPC_PTR_DIV, 0, 0);
+                break;
+            case OP_SUB:
+                emit(c, OPC_PTR_SUB, 0, 0);
+                break;
+            }
             return EXPR_TYPE_PTR;
         }
 

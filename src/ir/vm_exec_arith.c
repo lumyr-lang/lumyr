@@ -7,6 +7,7 @@
 #include "lm_value.h"
 #include "lm_bigint.h"
 #include "lm_decimal.h"
+#include <ctype.h>
 
 /* ========== 算术运算（INT64 栈专用） ========== */
 
@@ -290,6 +291,167 @@ int vm_exec_decimal_div(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
 
     Decimal* result = lumyr_decimal_div(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+
+/* ========== 字符串运算 ========== */
+
+/* 字符串乘法："abc" * 3 = "abcabcabc" */
+int vm_exec_arith_ptr_mul(VMExecCtx* ctx, Instruction* in) {
+    char *b, *a;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    /* 判断哪个是字符串，哪个是数字 */
+    char* str;
+    int n;
+
+    /* 判断 a 是不是数字（允许小数点和负号） */
+    int a_is_num = 1;
+    for(char* p = a; *p; p++) {
+        if(!isdigit(*p) && *p != '-' && *p != '.') {
+            a_is_num = 0;
+            break;
+        }
+    }
+
+    /* 判断 b 是不是数字（允许小数点和负号） */
+    int b_is_num = 1;
+    for(char* p = b; *p; p++) {
+        if(!isdigit(*p) && *p != '-' && *p != '.') {
+            b_is_num = 0;
+            break;
+        }
+    }
+
+    if(a_is_num && !b_is_num) {
+        /* 左操作数是数字，右操作数是字符串：3 * "abc" = "abcabcabc" */
+        str = b;
+        n = atoi(a);
+    } else if(!a_is_num && b_is_num) {
+        /* 左操作数是字符串，右操作数是数字："abc" * 3 = "abcabcabc" */
+        str = a;
+        n = atoi(b);
+    } else {
+        /* 两个都是字符串或两个都是数字：按左操作数是字符串处理 */
+        str = a;
+        n = atoi(b);
+    }
+
+    if(n <= 0) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+        return 1;
+    }
+
+    int len_str = strlen(str);
+    char* result = (char*)malloc(len_str * n + 1);
+    for(int i = 0; i < n; i++) {
+        memcpy(result + i * len_str, str, len_str);
+    }
+    result[len_str * n] = '\0';
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* 字符串除法："abcabcabc" / 3 = "abc" */
+int vm_exec_arith_ptr_div(VMExecCtx* ctx, Instruction* in) {
+    char *b, *a;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    /* a 是字符串，b 是数字（字符串形式） */
+    int n = atoi(b);
+    if(n <= 0) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+        return 1;
+    }
+
+    int len_a = strlen(a);
+    int len_result = len_a / n;
+    char* result = (char*)malloc(len_result + 1);
+    memcpy(result, a, len_result);
+    result[len_result] = '\0';
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* 字符串减法："abcabc" - 3 = "abc"（尾部截取），3 - "abcabc" = "abc"（首部截取） */
+int vm_exec_arith_ptr_sub(VMExecCtx* ctx, Instruction* in) {
+    char *b, *a;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    /* 判断哪个是数字，哪个是字符串 */
+    char* str;
+    int n;
+    int is_left_str = 1;  // 默认左操作数是字符串
+
+    /* 判断 a 是不是数字（允许小数点和负号） */
+    int a_is_num = 1;
+    for(char* p = a; *p; p++) {
+        if(!isdigit(*p) && *p != '-' && *p != '.') {
+            a_is_num = 0;
+            break;
+        }
+    }
+
+    /* 判断 b 是不是数字（允许小数点和负号） */
+    int b_is_num = 1;
+    for(char* p = b; *p; p++) {
+        if(!isdigit(*p) && *p != '-' && *p != '.') {
+            b_is_num = 0;
+            break;
+        }
+    }
+
+    if(a_is_num && !b_is_num) {
+        /* 左操作数是数字，右操作数是字符串：3 - "abcabc" = "abc"（首部截取） */
+        str = b;
+        n = atoi(a);
+        is_left_str = 0;
+    } else if(!a_is_num && b_is_num) {
+        /* 左操作数是字符串，右操作数是数字："abcabc" - 3 = "abc"（尾部截取） */
+        str = a;
+        n = atoi(b);
+        is_left_str = 1;
+    } else {
+        /* 两个都是字符串或两个都是数字：按尾部截取处理 */
+        str = a;
+        n = atoi(b);
+        is_left_str = 1;
+    }
+
+    int len_str = strlen(str);
+    if(n <= 0 || n >= len_str) {
+        char* result = (char*)malloc(1);
+        result[0] = '\0';
+        stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+        return 1;
+    }
+
+    char* result;
+    if(is_left_str) {
+        /* 尾部截取："abcabc" - 3 = "abc" */
+        int len_result = len_str - n;
+        result = (char*)malloc(len_result + 1);
+        memcpy(result, str, len_result);
+        result[len_result] = '\0';
+    } else {
+        /* 首部截取：3 - "abcabc" = "abc" */
+        int len_result = len_str - n;
+        result = (char*)malloc(len_result + 1);
+        memcpy(result, str + n, len_result);
+        result[len_result] = '\0';
+    }
 
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;
