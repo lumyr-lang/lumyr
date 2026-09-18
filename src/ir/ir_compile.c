@@ -159,7 +159,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_BIGINT) {
             /* <bigint>expr：从字符串创建 bigint 对象
-             * 子表达式是字符串（PTR 栈），调用 OPC_BIGINT_FROM_STRING 转成 bigint 对象 */
+             * 如果子表达式是 int，先转成字符串 */
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            }
             emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_DECIMAL) {
