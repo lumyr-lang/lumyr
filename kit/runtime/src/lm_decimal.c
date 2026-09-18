@@ -169,32 +169,121 @@ Decimal* lumyr_decimal_add(Decimal* a, Decimal* b) {
 
 /* 减法 */
 Decimal* lumyr_decimal_sub(Decimal* a, Decimal* b) {
-    /* TODO: 用 bigint 实现真正的减法 */
+    /* 对齐小数位数 */
+    int max_prec = a->precision > b->precision ? a->precision : b->precision;
 
-    char buf[256];
-    snprintf(buf, sizeof(buf), "(%s - %s)", a->str, b->str);
+    /* 把 decimal 转成 bigint（去掉小数点，补齐 0 对齐精度） */
+    char* a_int = strdup(a->str);
+    char* a_dot = strchr(a_int, '.');
+    if(a_dot) {
+        memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
+        int pad = max_prec - a->precision;
+        if(pad > 0) {
+            int len = strlen(a_int);
+            a_int = (char*)realloc(a_int, len + pad + 1);
+            for(int i = 0; i < pad; i++) a_int[len + i] = '0';
+            a_int[len + pad] = '\0';
+        }
+    }
 
-    return lumyr_decimal_from_string(buf);
+    char* b_int = strdup(b->str);
+    char* b_dot = strchr(b_int, '.');
+    if(b_dot) {
+        memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
+        int pad = max_prec - b->precision;
+        if(pad > 0) {
+            int len = strlen(b_int);
+            b_int = (char*)realloc(b_int, len + pad + 1);
+            for(int i = 0; i < pad; i++) b_int[len + i] = '0';
+            b_int[len + pad] = '\0';
+        }
+    }
+
+    /* 用 bigint 做减法 */
+    BigInt* a_bi = lumyr_bigint_from_string(a_int);
+    BigInt* b_bi = lumyr_bigint_from_string(b_int);
+    BigInt* result_bi = lumyr_bigint_sub(a_bi, b_bi);
+
+    /* 把结果转成 decimal（插入小数点） */
+    Decimal* result = bigint_to_decimal(result_bi, max_prec);
+
+    free(a_int);
+    free(b_int);
+
+    return result;
 }
 
 /* 乘法 */
 Decimal* lumyr_decimal_mul(Decimal* a, Decimal* b) {
-    /* TODO: 用 bigint 实现真正的乘法 */
+    /* 把 decimal 转成 bigint（去掉小数点） */
+    char* a_int = strdup(a->str);
+    char* a_dot = strchr(a_int, '.');
+    if(a_dot) {
+        memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
+    }
 
-    char buf[256];
-    snprintf(buf, sizeof(buf), "(%s * %s)", a->str, b->str);
+    char* b_int = strdup(b->str);
+    char* b_dot = strchr(b_int, '.');
+    if(b_dot) {
+        memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
+    }
 
-    return lumyr_decimal_from_string(buf);
+    /* 用 bigint 做乘法 */
+    BigInt* a_bi = lumyr_bigint_from_string(a_int);
+    BigInt* b_bi = lumyr_bigint_from_string(b_int);
+    BigInt* result_bi = lumyr_bigint_mul(a_bi, b_bi);
+
+    /* 结果的精度 = a->precision + b->precision */
+    int result_prec = a->precision + b->precision;
+
+    /* 把结果转成 decimal（插入小数点） */
+    Decimal* result = bigint_to_decimal(result_bi, result_prec);
+
+    free(a_int);
+    free(b_int);
+
+    return result;
 }
 
 /* 除法 */
 Decimal* lumyr_decimal_div(Decimal* a, Decimal* b) {
-    /* TODO: 用 bigint 实现真正的除法 */
+    /* 保留 20 位小数 */
+    const int result_prec = 20;
 
-    char buf[256];
-    snprintf(buf, sizeof(buf), "(%s / %s)", a->str, b->str);
+    /* 把 decimal 转成 bigint（去掉小数点） */
+    char* a_int = strdup(a->str);
+    char* a_dot = strchr(a_int, '.');
+    if(a_dot) {
+        memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
+    }
 
-    return lumyr_decimal_from_string(buf);
+    char* b_int = strdup(b->str);
+    char* b_dot = strchr(b_int, '.');
+    if(b_dot) {
+        memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
+    }
+
+    /* a 需要乘以 10^(b_prec + result_prec)，对齐精度 */
+    int total_pad = b->precision + result_prec;
+    int a_len = strlen(a_int);
+    a_int = (char*)realloc(a_int, a_len + total_pad + 1);
+    for(int i = 0; i < total_pad; i++) {
+        a_int[a_len + i] = '0';
+    }
+    a_int[a_len + total_pad] = '\0';
+
+    /* 用 bigint 做除法 */
+    BigInt* a_bi = lumyr_bigint_from_string(a_int);
+    BigInt* b_bi = lumyr_bigint_from_string(b_int);
+    BigInt* result_bi = lumyr_bigint_div(a_bi, b_bi);
+
+    /* 把结果转成 decimal（插入小数点） */
+    Decimal* result = bigint_to_decimal(result_bi, result_prec);
+
+    free(a_int);
+    free(b_int);
+
+    return result;
 }
 
 /* 比较 */
