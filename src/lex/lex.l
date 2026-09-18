@@ -152,8 +152,19 @@ f\"([^"\\]|\\.)*\"   {
 }
 
 [0-9]+\.[0-9]+          {
-    yylval.d = atof(yytext);
-    LEX_RET(NUMBER);
+    /* 浮点数字面量：
+     * 如果小数部分超过 15 位有效数字（double 的精度），存成字符串（用于 <decimal> 类型）
+     * 否则，正常解析成 double */
+    const char* dot = strchr(yytext, '.');
+    int frac_len = dot ? strlen(dot + 1) : 0;
+    if(frac_len > 15) {
+        /* 高精度浮点，存成字符串（用于 <decimal> 类型） */
+        yylval.s = strdup(yytext);
+        LEX_RET(BIG_DECIMAL);
+    } else {
+        yylval.d = atof(yytext);
+        LEX_RET(NUMBER);
+    }
 }
 
 [0-9]+                  {
