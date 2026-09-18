@@ -167,9 +167,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_DECIMAL) {
             /* <decimal>expr：从字符串创建 decimal 对象
-             * 如果子表达式是 double，先转成字符串 */
+             * 如果子表达式是 double 或 int，先转成字符串 */
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
             }
             emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;

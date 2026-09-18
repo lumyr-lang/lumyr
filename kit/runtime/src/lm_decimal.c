@@ -71,7 +71,7 @@ static BigInt* decimal_to_bigint(Decimal* d) {
 static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
     /* 把 bigint 转成字符串 */
     char* bi_str = lumyr_bigint_to_string(bi);
-
+    
     /* 如果 precision 为 0，直接返回 */
     if(precision == 0) {
         Decimal* d = lumyr_decimal_from_string(bi_str);
@@ -82,9 +82,9 @@ static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
     /* 在合适位置插入小数点 */
     int len = strlen(bi_str);
     int int_len = len - precision;
-
+    
     char* result = (char*)malloc(len + 2);  /* 多一个小数点和结束符 */
-
+    
     if(int_len <= 0) {
         /* 整数部分为 0，如 0.00123 */
         strcpy(result, "0.");
@@ -99,6 +99,7 @@ static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
         strcpy(result + int_len + 1, bi_str + int_len);
     }
 
+    
     /* 直接创建 Decimal 对象，不调用 lumyr_decimal_from_string，避免重新计算 precision */
     Decimal* d = (Decimal*)malloc(sizeof(Decimal));
     d->str = result;
@@ -254,21 +255,22 @@ Decimal* lumyr_decimal_mul(Decimal* a, Decimal* b) {
 
 /* 除法 */
 Decimal* lumyr_decimal_div(Decimal* a, Decimal* b) {
+        
     /* 保留 20 位小数 */
     const int result_prec = 20;
 
     /* 把 decimal 转成 bigint（去掉小数点） */
     char* a_int = strdup(a->str);
-    char* a_dot = strchr(a_int, '.');
+        char* a_dot = strchr(a_int, '.');
     if(a_dot) {
         memmove(a_dot, a_dot + 1, strlen(a_dot + 1) + 1);
-    }
+            }
 
     char* b_int = strdup(b->str);
-    char* b_dot = strchr(b_int, '.');
+        char* b_dot = strchr(b_int, '.');
     if(b_dot) {
         memmove(b_dot, b_dot + 1, strlen(b_dot + 1) + 1);
-    }
+            }
 
     /* a / b = (a_int / 10^a_prec) / (b_int / 10^b_prec) = (a_int / b_int) * 10^(b_prec - a_prec) */
     /* 如果 a_prec = b_prec，那么 a / b = a_int / b_int */
@@ -277,22 +279,22 @@ Decimal* lumyr_decimal_div(Decimal* a, Decimal* b) {
     /* 所以 total_pad = result_prec + (b_prec - a_prec) */
     int total_pad = result_prec + (b->precision - a->precision);
     if(total_pad < 0) total_pad = 0;
-
+    
     int a_len = strlen(a_int);
     a_int = (char*)realloc(a_int, a_len + total_pad + 1);
     for(int i = 0; i < total_pad; i++) {
         a_int[a_len + i] = '0';
     }
     a_int[a_len + total_pad] = '\0';
-
+    
     /* 用 bigint 做除法 */
     BigInt* a_bi = lumyr_bigint_from_string(a_int);
-    BigInt* b_bi = lumyr_bigint_from_string(b_int);
-    BigInt* result_bi = lumyr_bigint_div(a_bi, b_bi);
-
+        BigInt* b_bi = lumyr_bigint_from_string(b_int);
+        BigInt* result_bi = lumyr_bigint_div(a_bi, b_bi);
+    
     /* 把结果转成 decimal（插入小数点） */
     Decimal* result = bigint_to_decimal(result_bi, result_prec);
-
+    
     free(a_int);
     free(b_int);
 
