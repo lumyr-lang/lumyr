@@ -110,6 +110,11 @@ int vm_exec_arith_ptr_add(VMExecCtx* ctx, Instruction* in) {
     char *b, *a;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
     stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+    static int ptr_add_count = 0;
+    ptr_add_count++;
+    if (ptr_add_count <= 10) {
+        fprintf(stderr, "DEBUG: PTR_ADD #%d: a=%s, b=%s\n", ptr_add_count, a ? a : "(null)", b ? b : "(null)");
+    }
 
     /* 拼接字符串：a + b */
     int len_a = strlen(a);

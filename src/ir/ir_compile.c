@@ -174,12 +174,39 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         ExprType child_type = c_expr(c, node->u.type_annotation.expr);
         CastKind ct = node->u.type_annotation.cast_type;
-        /* 根据 CastKind 返回表达式类型 */
+        const char* ct_name = "unknown";
+        switch(ct) {
+            case 0: ct_name = "CAST_NONE"; break;
+            case 1: ct_name = "CAST_INT"; break;
+            case 2: ct_name = "CAST_DOUBLE"; break;
+            case 3: ct_name = "CAST_INT16"; break;
+            case 4: ct_name = "CAST_STRING"; break;
+            case 5: ct_name = "CAST_CHAR"; break;
+            case 6: ct_name = "CAST_INT8"; break;
+            case 16: ct_name = "CAST_UINT"; break;
+            case 17: ct_name = "CAST_BIGINT"; break;
+            case 18: ct_name = "CAST_DECIMAL"; break;
+        }
+        fprintf(stderr, "DEBUG: TYPE_ANNOTATION: ct=%d (%s), child_type=%d\n", (int)ct, ct_name, (int)child_type);
+        /* 根据 CastKind 返回表达式类型，必要时 emit 跨栈转换指令 */
         if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
            ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_UINT8 || ct == CAST_UINT16 ||
            ct == CAST_UINT32 || ct == CAST_UINT64 || ct == CAST_CHAR || ct == CAST_BOOL) {
+            /* 如果子表达式是 DOUBLE，需要转成 INT */
+            if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+            }
+            fprintf(stderr, "DEBUG: TYPE_ANNOTATION returns INT (ct=%d)\n", (int)ct);
             return EXPR_TYPE_INT;
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
+            /* 如果子表达式是 INT，需要转成 DOUBLE */
+            fprintf(stderr, "DEBUG: CAST_DOUBLE branch, child_type=%d\n", (int)child_type);
+            if(child_type == EXPR_TYPE_INT) {
+                fprintf(stderr, "DEBUG: emitting INT64_TO_DOUBLE\n");
+                emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+            } else {
+                fprintf(stderr, "DEBUG: child_type != EXPR_TYPE_INT, got=%d, expected=%d\n", (int)child_type, (int)EXPR_TYPE_INT);
+            }
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_BIGINT) {
             /* <bigint>expr：从字符串创建 bigint 对象
@@ -248,7 +275,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_STRING) {
-            /* string 是堆分配对象，走 PTR 栈 */
+            /* string 是堆分配对象，走 PTR 栈；必要时从 INT/DOUBLE 转换 */
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            }
             return EXPR_TYPE_PTR;
         }
         return child_type;

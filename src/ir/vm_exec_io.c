@@ -15,14 +15,19 @@
 
 /* PRINT：从 VALUE 栈弹值打印 */
 int vm_exec_io_print(VMExecCtx* ctx, Instruction* in) {
+    static int print_count = 0;
+    print_count++;
     Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
     int sp = --g_stack_mgr->sp[STACK_VALUE];
+    fprintf(stderr, "DEBUG: print #%d, sp=%d\n", print_count, sp);
     lumyr_print(stk[sp]);
     return 1;
 }
 
 /* PRINT_INT64：从 INT64 栈弹值打印（a 字段存 CastKind） */
 int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in) {
+    static int print_int64_count = 0;
+    print_int64_count++;
     int sp = --g_stack_mgr->sp[STACK_INT64];
     int64_t val = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
     CastKind ct = (CastKind)in->a;
@@ -54,6 +59,8 @@ int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_DOUBLE：从 DOUBLE 栈弹值打印 */
 int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in) {
+    static int print_double_count = 0;
+    print_double_count++;
     int sp = --g_stack_mgr->sp[STACK_DOUBLE];
     double val = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
     printf("%g\n", val);
@@ -62,8 +69,11 @@ int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_PTR：从 PTR 栈弹值打印（字符串指针） */
 int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
+    static int print_ptr_count = 0;
+    print_ptr_count++;
     void* val;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
+    fprintf(stderr, "DEBUG: print_ptr #%d, val=%s\n", print_ptr_count, val ? (char*)val : "(null)");
     if(val) {
         printf("%s\n", (char*)val);
     } else {

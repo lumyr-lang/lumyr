@@ -21,7 +21,7 @@ Value vm_run(BytecodeFunc* fn) {
 
     /* 初始化栈管理器（程序启动时就初始化） */
     if (!g_stack_mgr) {
-        int ret = stack_global_init(1024);
+        int ret = stack_global_init(4096);
     }
 
     VMExecCtx ctx = {0};

@@ -117,8 +117,13 @@ Value vm_execute(VMExecCtx* ctx) {
         stack_global_init(256);
     }
 
+    int total_instr = 0;
     while (pc < ctx->fn->code_len) {
         Instruction in = code[pc++];
+        total_instr++;
+        if (total_instr <= 50) {
+            fprintf(stderr, "DEBUG: pc=%d, op=%d, total=%d\n", pc-1, (int)in.op, total_instr);
+        }
         if (pc <= 5) {
         }
         int handled = 0;
