@@ -280,6 +280,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             const char* type_name = c_expr_type_name(c, arg);
             /* 添加字符串常量，压入 PTR 栈 */
             int const_idx = bf_add_str_const(c->fn, type_name);
+            /* 释放 c_expr_type_name 可能分配的临时字符串（castkind_to_name 返回 strdup） */
+            if(arg && arg->type == AST_VAR) {
+                free((void*)type_name);
+            }
             emit(c, OPC_PUSH_CONST_IDX, const_idx, 0);
             /* type() 返回字符串 */
             return EXPR_TYPE_PTR;
