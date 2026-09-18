@@ -1,0 +1,292 @@
+/* 类型提升全量测试：对齐 C/C++ 算术转换规则 */
+
+/* ========== 第一组：基础类型两两组合 ========== */
+
+/* int + double → double */
+a = <int>10;
+b = <double>20.5;
+c = a + b;
+print("1. int+double:");
+print(c);
+print(type(c));
+
+/* double + int → double（顺序交换） */
+a = <double>20.5;
+b = <int>10;
+c = a + b;
+print("2. double+int:");
+print(c);
+print(type(c));
+
+/* int + string → string 拼接 */
+a = <int>10;
+b = <string>"hello";
+c = a + b;
+print("3. int+string:");
+print(c);
+print(type(c));
+
+/* string + int → string 拼接（顺序交换） */
+a = <string>"hello";
+b = <int>10;
+c = a + b;
+print("4. string+int:");
+print(c);
+print(type(c));
+
+/* double + string → string 拼接 */
+a = <double>20.5;
+b = <string>"hello";
+c = a + b;
+print("5. double+string:");
+print(c);
+print(type(c));
+
+/* string + double → string 拼接（顺序交换） */
+a = <string>"hello";
+b = <double>20.5;
+c = a + b;
+print("6. string+double:");
+print(c);
+print(type(c));
+
+/* char + int → int */
+a = <char>'A';
+b = <int>10;
+c = a + b;
+print("7. char+int:");
+print(c);
+print(type(c));
+
+/* bool + int → int */
+a = <bool>true;
+b = <int>10;
+c = a + b;
+print("8. bool+int:");
+print(c);
+print(type(c));
+
+/* byte + short → int（窄类型提升） */
+a = <byte>255;
+b = <short>32767;
+c = a + b;
+print("9. byte+short:");
+print(c);
+print(type(c));
+
+/* uint + int → uint（无符号优先级） */
+a = <uint>4294967295;
+b = <int>100;
+c = a + b;
+print("10. uint+int:");
+print(c);
+print(type(c));
+
+/* ========== 第二组：高精度类型混合 ========== */
+
+/* bigint + int → bigint */
+a = <bigint>"12345678901234567890";
+b = <int>100;
+c = a + b;
+print("11. bigint+int:");
+print(c);
+print(type(c));
+
+/* int + bigint → bigint（顺序交换） */
+a = <int>100;
+b = <bigint>"12345678901234567890";
+c = a + b;
+print("12. int+bigint:");
+print(c);
+print(type(c));
+
+/* bigint + double → bigint（double 提升为 bigint） */
+a = <bigint>"12345678901234567890";
+b = <double>20.5;
+c = a + b;
+print("13. bigint+double:");
+print(c);
+print(type(c));
+
+/* double + bigint → bigint（顺序交换） */
+a = <double>20.5;
+b = <bigint>"12345678901234567890";
+c = a + b;
+print("14. double+bigint:");
+print(c);
+print(type(c));
+
+/* bigint + string → bigint（string 转 bigint） */
+a = <bigint>"12345678901234567890";
+b = <string>"100";
+c = a + b;
+print("15. bigint+string:");
+print(c);
+print(type(c));
+
+/* string + bigint → bigint（顺序交换） */
+a = <string>"100";
+b = <bigint>"12345678901234567890";
+c = a + b;
+print("16. string+bigint:");
+print(c);
+print(type(c));
+
+/* decimal + int → decimal */
+a = <decimal>"123.456";
+b = <int>100;
+c = a + b;
+print("17. decimal+int:");
+print(c);
+print(type(c));
+
+/* int + decimal → decimal（顺序交换） */
+a = <int>100;
+b = <decimal>"123.456";
+c = a + b;
+print("18. int+decimal:");
+print(c);
+print(type(c));
+
+/* decimal + double → decimal */
+a = <decimal>"123.456";
+b = <double>20.5;
+c = a + b;
+print("19. decimal+double:");
+print(c);
+print(type(c));
+
+/* double + decimal → decimal（顺序交换） */
+a = <double>20.5;
+b = <decimal>"123.456";
+c = a + b;
+print("20. double+decimal:");
+print(c);
+print(type(c));
+
+/* decimal + string → decimal */
+a = <decimal>"123.456";
+b = <string>"100";
+c = a + b;
+print("21. decimal+string:");
+print(c);
+print(type(c));
+
+/* string + decimal → decimal（顺序交换） */
+a = <string>"100";
+b = <decimal>"123.456";
+c = a + b;
+print("22. string+decimal:");
+print(c);
+print(type(c));
+
+/* ========== 第三组：高精度类型之间 ========== */
+
+/* bigint + decimal → bigint（bigint 优先） */
+a = <bigint>"1234567890";
+b = <decimal>"123.456";
+c = a + b;
+print("23. bigint+decimal:");
+print(c);
+print(type(c));
+
+/* decimal + bigint → bigint（顺序交换，结果类型一致） */
+a = <decimal>"123.456";
+b = <bigint>"1234567890";
+c = a + b;
+print("24. decimal+bigint:");
+print(c);
+print(type(c));
+
+/* ========== 第四组：链式运算 ========== */
+
+/* int + double + string */
+a = <int>10;
+b = <double>20.5;
+c = <string>"hello";
+d = a + b + c;
+print("25. int+double+string:");
+print(d);
+print(type(d));
+
+/* string + double + int */
+a = <string>"hello";
+b = <double>20.5;
+c = <int>10;
+d = a + b + c;
+print("26. string+double+int:");
+print(d);
+print(type(d));
+
+/* bigint + double + int */
+a = <bigint>"12345678901234567890";
+b = <double>20.5;
+c = <int>100;
+d = a + b + c;
+print("27. bigint+double+int:");
+print(d);
+print(type(d));
+
+/* decimal + int + double */
+a = <decimal>"123.456";
+b = <int>100;
+c = <double>20.5;
+d = a + b + c;
+print("28. decimal+int+double:");
+print(d);
+print(type(d));
+
+/* bigint + decimal + string */
+a = <bigint>"1234567890";
+b = <decimal>"123.456";
+c = <string>"100";
+d = a + b + c;
+print("29. bigint+decimal+string:");
+print(d);
+print(type(d));
+
+/* ========== 第五组：强转类型 ========== */
+
+/* (string)int */
+a = <int>10;
+b = (string)a;
+print("30. (string)int:");
+print(b);
+print(type(b));
+
+/* (string)double */
+a = <double>20.5;
+b = (string)a;
+print("31. (string)double:");
+print(b);
+print(type(b));
+
+/* (string)bigint */
+a = <bigint>"12345678901234567890";
+b = (string)a;
+print("32. (string)bigint:");
+print(b);
+print(type(b));
+
+/* (string)decimal */
+a = <decimal>"123.456";
+b = (string)a;
+print("33. (string)decimal:");
+print(b);
+print(type(b));
+
+/* (int)double */
+a = <double>20.5;
+b = (int)a;
+print("34. (int)double:");
+print(b);
+print(type(b));
+
+/* (double)int */
+a = <int>10;
+b = (double)a;
+print("35. (double)int:");
+print(b);
+print(type(b));
+
+print("=== 全部类型提升测试完成 ===");

@@ -102,6 +102,7 @@ int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in);
 
 /* 类型转换 */
 int vm_exec_type_int64_to_double(VMExecCtx* ctx, Instruction* in);
+int vm_exec_type_double_to_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in);
 
 /* ========== 主执行循环 ========== */
@@ -158,6 +159,7 @@ Value vm_execute(VMExecCtx* ctx) {
 
         /* ===== 类型转换 ===== */
         case OPC_INT64_TO_DOUBLE: handled = vm_exec_type_int64_to_double(ctx, &in); break;
+        case OPC_DOUBLE_TO_INT64: handled = vm_exec_type_double_to_int64(ctx, &in); break;
         case OPC_NEG: handled = vm_exec_type_neg(ctx, &in); break;
 
         /* ===== 算术运算（DOUBLE 栈） ===== */

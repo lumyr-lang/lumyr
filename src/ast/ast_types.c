@@ -199,6 +199,8 @@ char* castkind_to_name(int ck) {
         case CAST_VOID: return strdup("void");
         case CAST_LONG_DOUBLE: return strdup("long double");
         case CAST_PTR: return strdup("ptr");
+        case CAST_BIGINT: return strdup("bigint");
+        case CAST_DECIMAL: return strdup("decimal");
         default: return strdup("int");
     }
 }

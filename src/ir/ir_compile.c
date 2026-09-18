@@ -147,12 +147,24 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             return EXPR_TYPE_PTR;
         }
-        /* 根据 CastKind 返回表达式类型 */
+        /* 转成 int：根据源类型 emit 转换指令 */
         if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
            ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_UINT8 || ct == CAST_UINT16 ||
            ct == CAST_UINT32 || ct == CAST_UINT64 || ct == CAST_CHAR || ct == CAST_BOOL) {
+            /* double → int：截断 */
+            if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+            }
+            /* bigint → int：截断（后续实现） */
+            /* decimal → int：截断（后续实现） */
             return EXPR_TYPE_INT;
-        } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
+        }
+        /* 转成 double：根据源类型 emit 转换指令 */
+        if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
+            /* int → double */
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+            }
             return EXPR_TYPE_DOUBLE;
         }
         return child_type;
@@ -493,13 +505,19 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
     }
 
     /* 二元运算：根据左右操作数类型推导 */
+    /* 注意：优先级顺序必须与 c_expr 中的分支顺序完全一致 */
     if(node->type == AST_BINOP) {
         const char* lt = c_expr_type_name(c, node->u.bin.left);
         const char* rt = c_expr_type_name(c, node->u.bin.right);
-        /* double 优先级最高 */
-        if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
-        /* string 拼接 */
+        /* 1. bigint 优先（bigint 分支在 decimal 之前） */
+        if(strcmp(lt, "bigint") == 0 || strcmp(rt, "bigint") == 0) return "bigint";
+        /* 2. decimal 次之 */
+        if(strcmp(lt, "decimal") == 0 || strcmp(rt, "decimal") == 0) return "decimal";
+        /* 3. string 拼接 */
         if(strcmp(lt, "string") == 0 || strcmp(rt, "string") == 0) return "string";
+        /* 4. double */
+        if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
+        /* 5. 其他都是 int */
         return "int";
     }
 
