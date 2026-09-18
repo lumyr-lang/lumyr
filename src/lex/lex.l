@@ -210,6 +210,8 @@ f\"([^"\\]|\\.)*\"   {
 "<ssize_t>"        { yylval.ll = CAST_SSIZE_T; LEX_RET(TOK_TYPE_ANNOT); }
 "<void>"           { yylval.ll = CAST_VOID; LEX_RET(TOK_TYPE_ANNOT); }
 "<long double>"    { yylval.ll = CAST_LONG_DOUBLE; LEX_RET(TOK_TYPE_ANNOT); }
+"<bigint>"         { yylval.ll = CAST_BIGINT; LEX_RET(TOK_TYPE_ANNOT); }
+"<decimal>"        { yylval.ll = CAST_DECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
 "<ptr>"            { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<pointer>"        { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<handle>"         { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
