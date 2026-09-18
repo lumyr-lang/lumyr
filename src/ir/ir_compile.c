@@ -300,16 +300,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
 
-        /* 普通二元运算：先编译左右，再统一处理 */
+        /* 普通二元运算：先编译左操作数，立即类型提升，再编译右操作数 */
         ExprType lt = c_expr(c, node->u.bin.left);
-        ExprType rt = c_expr(c, node->u.bin.right);
-
-        /* 类型提升：int + double → double */
-        /* 如果结果是 double，但左操作数是 int，需要转换 */
+        /* 类型提升：左操作数立即转换，保证栈顺序正确 */
         if(result == EXPR_TYPE_DOUBLE && lt == EXPR_TYPE_INT) {
             emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
         }
-        /* 如果结果是 double，但右操作数是 int，需要转换 */
+        ExprType rt = c_expr(c, node->u.bin.right);
+        /* 类型提升：右操作数立即转换，保证栈顺序正确 */
         if(result == EXPR_TYPE_DOUBLE && rt == EXPR_TYPE_INT) {
             emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
         }
