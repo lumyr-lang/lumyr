@@ -245,6 +245,19 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
 
+        /* decimal 运算：两个操作数都是 decimal */
+        if(lt_cast == CAST_DECIMAL && rt_cast == CAST_DECIMAL) {
+            ExprType lt = c_expr(c, node->u.bin.left);
+            ExprType rt = c_expr(c, node->u.bin.right);
+            switch(node->u.bin.op) {
+            case OP_ADD: emit(c, OPC_DECIMAL_ADD, 0, 0); break;
+            case OP_SUB: emit(c, OPC_DECIMAL_SUB, 0, 0); break;
+            case OP_MUL: emit(c, OPC_DECIMAL_MUL, 0, 0); break;
+            case OP_DIV: emit(c, OPC_DECIMAL_DIV, 0, 0); break;
+            }
+            return EXPR_TYPE_PTR;
+        }
+
         if(result == EXPR_TYPE_PTR && node->u.bin.op == OP_ADD) {
             /* 字符串拼接：先编译左操作数，立即转换；再编译右操作数，立即转换 */
             ExprType lt = c_expr(c, node->u.bin.left);
@@ -412,6 +425,8 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         /* double 优先级最高 */
         if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
         if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
+        /* decimal 运算：结果是 decimal */
+        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
         /* bigint 运算：结果是 bigint */
         if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
         /* 整数运算：结果统一返回 CAST_INT（不要保留 CHAR/BOOL，否则打印会按字符/布尔） */
