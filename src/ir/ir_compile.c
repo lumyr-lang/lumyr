@@ -167,11 +167,30 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_DECIMAL) {
             /* <decimal>expr：从字符串创建 decimal 对象
-             * 如果子表达式是 double 或 int，先转成字符串 */
-            if(child_type == EXPR_TYPE_DOUBLE) {
-                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
-            } else if(child_type == EXPR_TYPE_INT) {
-                emit(c, OPC_INT64_TO_STRING, 0, 0);
+             * 方案 B：如果子表达式是字面量，直接把字面量转成字符串，零转换开销
+             * 如果不是字面量，还是先识别成原来的类型，再转换 */
+            AstNode* child = node->u.type_annotation.expr;
+            if(child->type == AST_INT) {
+                /* 整数字面量：直接把整数转成字符串，零转换开销 */
+                int64_t val = child->u.inum;
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%lld", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else if(child->type == AST_NUM) {
+                /* 浮点数字面量：直接把浮点数转成字符串，零转换开销 */
+                double val = child->u.num;
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%.15g", val);
+                int idx = bf_add_str_const(c->fn, buf);
+                emit(c, OPC_PUSH_CONST_IDX, idx, 0);
+            } else {
+                /* 其他表达式：先识别成原来的类型，再转换 */
+                if(child_type == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_INT) {
+                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                }
             }
             emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
