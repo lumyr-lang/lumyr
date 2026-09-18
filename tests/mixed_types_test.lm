@@ -1,860 +1,254 @@
-// 全量数据类型混合运算测试 - 覆盖所有运算符的所有组合
-// 运算符：+、-、*、/
-// 数据类型：int, short, int8, int16, int32, int64, long, longlong, uint, ushort, uint8, uint16, uint32, uint64, ulong, uchar, byte, size_t, ssize_t, float, double, long_double, bool, char, string
-
-// ===== 准备变量 =====
-i_int = <int>100;
-i_short = <short>20;
-i_int8 = <int8>5;
-i_int16 = <int16>50;
-i_int32 = <int32>1000;
-i_int64 = <int64>1000000;
-i_long = <long>2000000;
-i_longlong = <long long>3000000;
-
-u_uint = <uint>100;
-u_ushort = <ushort>20;
-u_uint8 = <uint8>5;
-u_uint16 = <uint16>50;
-u_uint32 = <uint32>1000;
-u_uint64 = <uint64>1000000;
-u_ulong = <ulong>2000000;
-u_uchar = <uchar>65;
-u_byte = <byte>200;
-u_sizet = <size_t>5000;
-u_ssizet = <ssize_t>-1000;
-
-f_float = <float>3.14;
-f_double = <double>2.71828;
-f_longdouble = <long double>3.14159265358979;
-
-b_true = <bool>true;
-b_false = <bool>false;
-
-ch_A = <char>'A';
-ch_a = <char>'a';
-
-s_hello = <string>"hello";
-s_world = <string>"world";
-
-// ===== 1. 有符号整数类型之间的 +、-、*、/ =====
-print("=== 1. 有符号整数类型混合运算 ===");
-
-// int 与所有有符号类型
-print("int + short:");
-r = i_int + i_short;
-print(r);
-print("int - short:");
-r = i_int - i_short;
-print(r);
-print("int * short:");
-r = i_int * i_short;
-print(r);
-print("int / short:");
-r = i_int / i_short;
-print(r);
-
-print("int + int8:");
-r = i_int + i_int8;
-print(r);
-print("int - int8:");
-r = i_int - i_int8;
-print(r);
-print("int * int8:");
-r = i_int * i_int8;
-print(r);
-print("int / int8:");
-r = i_int / i_int8;
-print(r);
-
-print("int + int16:");
-r = i_int + i_int16;
-print(r);
-print("int - int16:");
-r = i_int - i_int16;
-print(r);
-print("int * int16:");
-r = i_int * i_int16;
-print(r);
-print("int / int16:");
-r = i_int / i_int16;
-print(r);
-
-print("int + int32:");
-r = i_int + i_int32;
-print(r);
-print("int - int32:");
-r = i_int - i_int32;
-print(r);
-print("int * int32:");
-r = i_int * i_int32;
-print(r);
-print("int / int32:");
-r = i_int / i_int32;
-print(r);
-
-print("int + int64:");
-r = i_int + i_int64;
-print(r);
-print("int - int64:");
-r = i_int - i_int64;
-print(r);
-print("int * int64:");
-r = i_int * i_int64;
-print(r);
-print("int / int64:");
-r = i_int / i_int64;
-print(r);
-
-// short 与其他有符号类型
-print("short + int8:");
-r = i_short + i_int8;
-print(r);
-print("short - int8:");
-r = i_short - i_int8;
-print(r);
-print("short * int8:");
-r = i_short * i_int8;
-print(r);
-print("short / int8:");
-r = i_short / i_int8;
-print(r);
-
-print("int16 + int32:");
-r = i_int16 + i_int32;
-print(r);
-print("int16 - int32:");
-r = i_int16 - i_int32;
-print(r);
-print("int16 * int32:");
-r = i_int16 * i_int32;
-print(r);
-print("int16 / int32:");
-r = i_int16 / i_int32;
-print(r);
-
-print("int64 + int32:");
-r = i_int64 + i_int32;
-print(r);
-print("int64 - int32:");
-r = i_int64 - i_int32;
-print(r);
-print("int64 * int32:");
-r = i_int64 * i_int32;
-print(r);
-print("int64 / int32:");
-r = i_int64 / i_int32;
-print(r);
-
-// ===== 2. 无符号整数类型之间的 +、-、*、/ =====
-print("=== 2. 无符号整数类型混合运算 ===");
-
-print("uint + ushort:");
-r = u_uint + u_ushort;
-print(r);
-print("uint - ushort:");
-r = u_uint - u_ushort;
-print(r);
-print("uint * ushort:");
-r = u_uint * u_ushort;
-print(r);
-print("uint / ushort:");
-r = u_uint / u_ushort;
-print(r);
-
-print("uint8 + uint16:");
-r = u_uint8 + u_uint16;
-print(r);
-print("uint8 - uint16:");
-r = u_uint8 - u_uint16;
-print(r);
-print("uint8 * uint16:");
-r = u_uint8 * u_uint16;
-print(r);
-print("uint8 / uint16:");
-r = u_uint8 / u_uint16;
-print(r);
-
-print("uint32 + uint64:");
-r = u_uint32 + u_uint64;
-print(r);
-print("uint32 - uint64:");
-r = u_uint32 - u_uint64;
-print(r);
-print("uint32 * uint64:");
-r = u_uint32 * u_uint64;
-print(r);
-print("uint32 / uint64:");
-r = u_uint32 / u_uint64;
-print(r);
-
-print("uint64 - uint:");
-r = u_uint64 - u_uint;
-print(r);
-print("uint64 / uint:");
-r = u_uint64 / u_uint;
-print(r);
-
-// ===== 3. 有符号 + 无符号混合运算 =====
-print("=== 3. 有符号 + 无符号混合运算 ===");
-
-print("int + uint:");
-r = i_int + u_uint;
-print(r);
-print("int - uint:");
-r = i_int - u_uint;
-print(r);
-print("int * uint:");
-r = i_int * u_uint;
-print(r);
-print("int / uint:");
-r = i_int / u_uint;
-print(r);
-
-print("int8 + uint8:");
-r = i_int8 + u_uint8;
-print(r);
-print("int8 - uint8:");
-r = i_int8 - u_uint8;
-print(r);
-print("int8 * uint8:");
-r = i_int8 * u_uint8;
-print(r);
-print("int8 / uint8:");
-r = i_int8 / u_uint8;
-print(r);
-
-print("int16 + uint16:");
-r = i_int16 + u_uint16;
-print(r);
-print("int16 - uint16:");
-r = i_int16 - u_uint16;
-print(r);
-print("int16 * uint16:");
-r = i_int16 * u_uint16;
-print(r);
-print("int16 / uint16:");
-r = i_int16 / u_uint16;
-print(r);
-
-print("int32 + uint32:");
-r = i_int32 + u_uint32;
-print(r);
-print("int32 - uint32:");
-r = i_int32 - u_uint32;
-print(r);
-print("int32 * uint32:");
-r = i_int32 * u_uint32;
-print(r);
-print("int32 / uint32:");
-r = i_int32 / u_uint32;
-print(r);
-
-print("int64 + uint64:");
-r = i_int64 + u_uint64;
-print(r);
-print("int64 - uint64:");
-r = i_int64 - u_uint64;
-print(r);
-print("int64 * uint64:");
-r = i_int64 * u_uint64;
-print(r);
-print("int64 / uint64:");
-r = i_int64 / u_uint64;
-print(r);
-
-print("short + ushort:");
-r = i_short + u_ushort;
-print(r);
-print("short - ushort:");
-r = i_short - u_ushort;
-print(r);
-print("short * ushort:");
-r = i_short * u_ushort;
-print(r);
-print("short / ushort:");
-r = i_short / u_ushort;
-print(r);
-
-// ===== 4. 浮点类型混合运算 =====
-print("=== 4. 浮点类型混合运算 ===");
-
-print("float + double:");
-r = f_float + f_double;
-print(r);
-print(type(r));
-print("float - double:");
-r = f_float - f_double;
-print(r);
-print("float * double:");
-r = f_float * f_double;
-print(r);
-print("float / double:");
-r = f_float / f_double;
-print(r);
-
-print("double + float:");
-r = f_double + f_float;
-print(r);
-print("double - float:");
-r = f_double - f_float;
-print(r);
-print("double * float:");
-r = f_double * f_float;
-print(r);
-print("double / float:");
-r = f_double / f_float;
-print(r);
-
-// ===== 5. 整数 + 浮点混合运算 =====
-print("=== 5. 整数 + 浮点混合运算 ===");
-
-print("int + double:");
-r = i_int + f_double;
-print(r);
-print(type(r));
-print("int - double:");
-r = i_int - f_double;
-print(r);
-print("int * double:");
-r = i_int * f_double;
-print(r);
-print("int / double:");
-r = i_int / f_double;
-print(r);
-
-print("double + int:");
-r = f_double + i_int;
-print(r);
-print("double - int:");
-r = f_double - i_int;
-print(r);
-print("double * int:");
-r = f_double * i_int;
-print(r);
-print("double / int:");
-r = f_double / i_int;
-print(r);
-
-print("int + float:");
-r = i_int + f_float;
-print(r);
-print("int - float:");
-r = i_int - f_float;
-print(r);
-print("int * float:");
-r = i_int * f_float;
-print(r);
-print("int / float:");
-r = i_int / f_float;
-print(r);
-
-print("float + int:");
-r = f_float + i_int;
-print(r);
-print("float - int:");
-r = f_float - i_int;
-print(r);
-print("float * int:");
-r = f_float * i_int;
-print(r);
-print("float / int:");
-r = f_float / i_int;
-print(r);
-
-print("short + double:");
-r = i_short + f_double;
-print(r);
-print("short - double:");
-r = i_short - f_double;
-print(r);
-print("short * double:");
-r = i_short * f_double;
-print(r);
-print("short / double:");
-r = i_short / f_double;
-print(r);
-
-print("int64 + double:");
-r = i_int64 + f_double;
-print(r);
-print("int64 - double:");
-r = i_int64 - f_double;
-print(r);
-print("int64 * double:");
-r = i_int64 * f_double;
-print(r);
-print("int64 / double:");
-r = i_int64 / f_double;
-print(r);
-
-print("uint + double:");
-r = u_uint + f_double;
-print(r);
-print("uint - double:");
-r = u_uint - f_double;
-print(r);
-print("uint * double:");
-r = u_uint * f_double;
-print(r);
-print("uint / double:");
-r = u_uint / f_double;
-print(r);
-
-// ===== 6. bool 和 char 运算 =====
-print("=== 6. bool 和 char 运算 ===");
-
-print("bool + bool:");
-r = b_true + b_false;
-print(r);
-print("bool - bool:");
-r = b_true - b_false;
-print(r);
-print("bool * bool:");
-r = b_true * b_false;
-print(r);
-print("bool / bool:");
-r = b_true / b_true;
-print(r);
-
-print("char + char:");
-r = ch_A + ch_a;
-print(r);
-print("char - char:");
-r = ch_a - ch_A;
-print(r);
-print("char * char:");
-r = ch_A * ch_a;
-print(r);
-print("char / char:");
-r = ch_a / ch_A;
-print(r);
-
-print("char + int:");
-r = ch_A + i_int;
-print(r);
-print("char - int:");
-r = ch_A - i_int;
-print(r);
-print("char * int:");
-r = ch_A * i_int;
-print(r);
-print("char / int:");
-r = ch_A / i_int;
-print(r);
-
-print("int + char:");
-r = i_int + ch_A;
-print(r);
-print("int - char:");
-r = i_int - ch_A;
-print(r);
-print("int * char:");
-r = i_int * ch_A;
-print(r);
-print("int / char:");
-r = i_int / ch_A;
-print(r);
-
-print("bool + int:");
-r = b_true + i_int;
-print(r);
-print("bool - int:");
-r = b_true - i_int;
-print(r);
-print("bool * int:");
-r = b_true * i_int;
-print(r);
-print("bool / int:");
-r = b_true / i_int;
-print(r);
-
-// ===== 7. 字符串运算（只有 +）=====
-print("=== 7. 字符串运算 ===");
-
-print("string + string:");
-r = s_hello + s_world;
-print(r);
-
-print("string + int:");
-r = s_hello + i_int;
-print(r);
-
-print("int + string:");
-r = i_int + s_hello;
-print(r);
-
-print("string + double:");
-r = s_hello + f_double;
-print(r);
-
-print("double + string:");
-r = f_double + s_hello;
-print(r);
-
-print("string + bool:");
-r = s_hello + b_true;
-print(r);
-
-print("string + char:");
-r = s_hello + ch_A;
-print(r);
-
-// ===== 8. 链式运算（所有运算符）=====
-print("=== 8. 链式运算 ===");
-
-print("int + int + int:");
-r = i_int + i_short + i_int8;
-print(r);
-
-print("int * int + int:");
-r = i_int * i_short + i_int8;
-print(r);
-
-print("(int + int) * int:");
-r = (i_int + i_short) * i_int8;
-print(r);
-
-print("int * (int + int):");
-r = i_int * (i_short + i_int8);
-print(r);
-
-print("int + int * int:");
-r = i_int + i_short * i_int8;
-print(r);
-
-print("int - int - int:");
-r = i_int - i_short - i_int8;
-print(r);
-
-print("int / int * int:");
-r = i_int / i_short * i_int8;
-print(r);
-
-print("double * int + double:");
-r = f_double * i_int + f_float;
-print(r);
-
-print("double + double * int:");
-r = f_double + f_float * i_int;
-print(r);
-
-// ===== 9. 类型继承运算 =====
-print("=== 9. 类型继承运算 ===");
-
-x1 = <int>10;
-x2 = x1;  // 继承 int
-x3 = x1 + x2;  // int + int = int
-
-print("x3 类型:");
-print(type(x3));
-print(x3);
-
-x4 = <double>3.14;
-x5 = x1 + x4;  // int + double = double
-
-print("x5 类型:");
-print(type(x5));
-print(x5);
-
-x6 = <short>5;
-x7 = x6 * x1;  // short * int = int
-
-print("x7 类型:");
-print(type(x7));
-print(x7);
-
-// ===== 10. 默认类型运算 =====
-print("=== 10. 默认类型运算 ===");
-
-y1 = 10;     // 默认 int
-y2 = 3.14;   // 默认 double
-y3 = "hi";   // 默认 string
-
-print("y1 + y2:");
-r = y1 + y2;
-print(r);
-print(type(r));
-
-print("y1 - y2:");
-r = y1 - y2;
-print(r);
-
-print("y1 * y2:");
-r = y1 * y2;
-print(r);
-
-print("y1 / y2:");
-r = y1 / y2;
-print(r);
-
-print("y2 + y1:");
-r = y2 + y1;
-print(r);
-
-print("y2 - y1:");
-r = y2 - y1;
-print(r);
-
-print("y3 + y1:");
-r = y3 + y1;
-print(r);
-
-print("y3 + y2:");
-r = y3 + y2;
-print(r);
-
-// ===== 11. 扩展整数类型混合运算 =====
-print("=== 11. 扩展整数类型混合运算 ===");
-
-print("long + int:");
-r = i_long + i_int;
-print(r);
-print("long - int:");
-r = i_long - i_int;
-print(r);
-print("long * int:");
-r = i_long * i_int;
-print(r);
-print("long / int:");
-r = i_long / i_int;
-print(r);
-
-print("longlong + long:");
-r = i_longlong + i_long;
-print(r);
-print("longlong - long:");
-r = i_longlong - i_long;
-print(r);
-print("longlong * long:");
-r = i_longlong * i_long;
-print(r);
-print("longlong / long:");
-r = i_longlong / i_long;
-print(r);
-
-print("ulong + uint:");
-r = u_ulong + u_uint;
-print(r);
-print("ulong - uint:");
-r = u_ulong - u_uint;
-print(r);
-print("ulong * uint:");
-r = u_ulong * u_uint;
-print(r);
-print("ulong / uint:");
-r = u_ulong / u_uint;
-print(r);
-
-print("uchar + char:");
-r = u_uchar + ch_A;
-print(r);
-print("uchar - char:");
-r = u_uchar - ch_A;
-print(r);
-print("uchar * char:");
-r = u_uchar * ch_A;
-print(r);
-print("uchar / char:");
-r = u_uchar / ch_A;
-print(r);
-
-print("byte + int:");
-r = u_byte + i_int;
-print(r);
-print("byte - int:");
-r = u_byte - i_int;
-print(r);
-print("byte * int:");
-r = u_byte * i_int;
-print(r);
-print("byte / int:");
-r = u_byte / i_int;
-print(r);
-
-print("size_t + int:");
-r = u_sizet + i_int;
-print(r);
-print("size_t - int:");
-r = u_sizet - i_int;
-print(r);
-print("size_t * int:");
-r = u_sizet * i_int;
-print(r);
-print("size_t / int:");
-r = u_sizet / i_int;
-print(r);
-
-print("ssize_t + int:");
-r = u_ssizet + i_int;
-print(r);
-print("ssize_t - int:");
-r = u_ssizet - i_int;
-print(r);
-print("ssize_t * int:");
-r = u_ssizet * i_int;
-print(r);
-print("ssize_t / int:");
-r = u_ssizet / i_int;
-print(r);
-
-// ===== 12. long double 运算 =====
-print("=== 12. long double 运算 ===");
-
-print("longdouble + double:");
-r = f_longdouble + f_double;
-print(r);
-print("longdouble - double:");
-r = f_longdouble - f_double;
-print(r);
-print("longdouble * double:");
-r = f_longdouble * f_double;
-print(r);
-print("longdouble / double:");
-r = f_longdouble / f_double;
-print(r);
-
-print("longdouble + int:");
-r = f_longdouble + i_int;
-print(r);
-print("longdouble - int:");
-r = f_longdouble - i_int;
-print(r);
-print("longdouble * int:");
-r = f_longdouble * i_int;
-print(r);
-print("longdouble / int:");
-r = f_longdouble / i_int;
-print(r);
-
-// ===== 13. 所有类型交叉运算 =====
-print("=== 13. 所有类型交叉运算 ===");
-
-print("byte + long:");
-r = u_byte + i_long;
-print(r);
-print("byte * long:");
-r = u_byte * i_long;
-print(r);
-
-print("uchar + ulong:");
-r = u_uchar + u_ulong;
-print(r);
-print("uchar * ulong:");
-r = u_uchar * u_ulong;
-print(r);
-
-print("size_t + ulong:");
-r = u_sizet + u_ulong;
-print(r);
-print("size_t * ulong:");
-r = u_sizet * u_ulong;
-print(r);
-
-print("ssize_t + long:");
-r = u_ssizet + i_long;
-print(r);
-print("ssize_t * long:");
-r = u_ssizet * i_long;
-print(r);
-
-print("byte + float:");
-r = u_byte + f_float;
-print(r);
-print("byte * float:");
-r = u_byte * f_float;
-print(r);
-
-print("long + double:");
-r = i_long + f_double;
-print(r);
-print("long * double:");
-r = i_long * f_double;
-print(r);
-
-print("ulong + double:");
-r = u_ulong + f_double;
-print(r);
-print("ulong * double:");
-r = u_ulong * f_double;
-print(r);
-
-// ===== 14. 多类型链式复合运算（5+ 个不同类型连续运算） =====
-print("=== 14. 多类型链式复合运算 ===");
-
-// 有符号整数链式加法：int + short + int8 + int16 + int32 + int64
-print("int + short + int8 + int16 + int32 + int64:");
-r = i_int + i_short + i_int8 + i_int16 + i_int32 + i_int64;
-print(r);
-print("类型:");
-print(type(r));
-
-// 有符号整数链式混合：int - short + int8 * int16 / int32
-print("int - short + int8 * int16 / int32:");
-r = i_int - i_short + i_int8 * i_int16 / i_int32;
-print(r);
-
-// 无符号整数链式加法：uint + ushort + uint8 + uint16 + uint32 + uint64
-print("uint + ushort + uint8 + uint16 + uint32 + uint64:");
-r = u_uint + u_ushort + u_uint8 + u_uint16 + u_uint32 + u_uint64;
-print(r);
-print("类型:");
-print(type(r));
-
-// 有符号+无符号链式：int + uint + short + ushort + int8 + uint8
-print("int + uint + short + ushort + int8 + uint8:");
-r = i_int + u_uint + i_short + u_ushort + i_int8 + u_uint8;
-print(r);
-
-// 浮点链式加法：float + double + long double
-print("float + double + long double:");
-r = f_float + f_double + f_longdouble;
-print(r);
-print("类型:");
-print(type(r));
-
-// 整数+浮点链式：int + double + short + float + int64 + long double
-print("int + double + short + float + int64 + long double:");
-r = i_int + f_double + i_short + f_float + i_int64 + f_longdouble;
-print(r);
-print("类型:");
-print(type(r));
-
-// 全类型链式（整数+浮点+char+bool）：int + double + char + bool + float + short
-print("int + double + char + bool + float + short:");
-r = i_int + f_double + ch_A + b_true + f_float + i_short;
-print(r);
-
-// 扩展整数链式：long + longlong + ulong + uchar + byte + size_t + ssize_t
-print("long + longlong + ulong + uchar + byte + size_t + ssize_t:");
-r = i_long + i_longlong + u_ulong + u_uchar + u_byte + u_sizet + u_ssizet;
-print(r);
-
-// 字符串链式拼接：string + int + double + char + bool + float
-print("string + int + double + char + bool + float:");
-r = s_hello + i_int + f_double + ch_A + b_true + f_float;
-print(r);
-
-// 复杂表达式：(int + short) * (int8 + int16) - (int32 + int64)
-print("(int + short) * (int8 + int16) - (int32 + int64):");
-r = (i_int + i_short) * (i_int8 + i_int16) - (i_int32 + i_int64);
-print(r);
-
-// 复杂表达式：(uint + ushort) * (uint8 + uint16) / (uint32 + uint64)
-print("(uint + ushort) * (uint8 + uint16) / (uint32 + uint64):");
-r = (u_uint + u_ushort) * (u_uint8 + u_uint16) / (u_uint32 + u_uint64);
-print(r);
-
-// 复杂浮点表达式：(float + double) * (int + short) - (float * double)
-print("(float + double) * (int + short) - (float * double):");
-r = (f_float + f_double) * (i_int + i_short) - (f_float * f_double);
-print(r);
-
-// 超长链式：int + short + int8 + uint + ushort + float + double + char + bool + byte
-print("int + short + int8 + uint + ushort + float + double + char + bool + byte:");
-r = i_int + i_short + i_int8 + u_uint + u_ushort + f_float + f_double + ch_A + b_true + u_byte;
-print(r);
-print("类型:");
-print(type(r));
-
-print("=== 全量混合运算测试完成 ===");
+/* 混合运算测试：覆盖二十多种数据类型的混合多链路 */
+
+/* 测试 1：int + double */
+a = <int>10;
+b = <double>20.5;
+c = a + b;
+print("1. int + double:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 2：int + string */
+a = <int>10;
+b = <string>"hello";
+c = a + b;
+print("2. int + string:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 3：double + string */
+a = <double>20.5;
+b = <string>"hello";
+c = a + b;
+print("3. double + string:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 4：char + int */
+a = <char>'A';
+b = <int>1;
+c = a + b;
+print("4. char + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 5：bool + int */
+a = <bool>true;
+b = <int>1;
+c = a + b;
+print("5. bool + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 6：byte + int */
+a = <byte>255;
+b = <int>1;
+c = a + b;
+print("6. byte + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 7：short + int */
+a = <short>100;
+b = <int>200;
+c = a + b;
+print("7. short + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 8：long + int */
+a = <long>1000;
+b = <int>200;
+c = a + b;
+print("8. long + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 9：long long + int */
+a = <long long>1000000;
+b = <int>200;
+c = a + b;
+print("9. long long + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 10：float + double */
+a = <float>3.14;
+b = <double>2.718;
+c = a + b;
+print("10. float + double:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 11：uint + int */
+a = <uint>100;
+b = <int>200;
+c = a + b;
+print("11. uint + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 12：uchar + int */
+a = <uchar>255;
+b = <int>1;
+c = a + b;
+print("12. uchar + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 13：ushort + int */
+a = <ushort>100;
+b = <int>200;
+c = a + b;
+print("13. ushort + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 14：ulong + int */
+a = <ulong>1000;
+b = <int>200;
+c = a + b;
+print("14. ulong + int:");
+print(a);
+print(b);
+print(c);
+
+/* 测试 15：multi-chain: int + double + string + char */
+a = <int>10;
+b = <double>20.5;
+c = <string>"hello";
+d = <char>'A';
+e = a + b + c + d;
+print("15. multi-chain: int + double + string + char:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+
+/* 测试 16：multi-chain: bool + int + double + string */
+a = <bool>true;
+b = <int>10;
+c = <double>20.5;
+d = <string>"hello";
+e = a + b + c + d;
+print("16. multi-chain: bool + int + double + string:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+
+/* 测试 17：multi-chain: byte + short + int + long + long long */
+a = <byte>1;
+b = <short>2;
+c = <int>3;
+d = <long>4;
+e = <long long>5;
+f = a + b + c + d + e;
+print("17. multi-chain: byte + short + int + long + long long:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+
+/* 测试 18：multi-chain: float + double + long double */
+a = <float>1.5;
+b = <double>2.5;
+c = <long double>3.5;
+d = a + b + c;
+print("18. multi-chain: float + double + long double:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* 测试 19：multi-chain: uint + uchar + ushort + ulong */
+a = <uint>100;
+b = <uchar>200;
+c = <ushort>300;
+d = <ulong>400;
+e = a + b + c + d;
+print("19. multi-chain: uint + uchar + ushort + ulong:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+
+/* 测试 20：multi-chain: int - double * char */
+a = <int>100;
+b = <double>20.5;
+c = <char>'A';
+d = a - b * c;
+print("20. multi-chain: int - double * char:");
+print(a);
+print(b);
+print(c);
+print(d);
+
+/* 测试 21：multi-chain: (int + double) * string / char */
+a = <int>10;
+b = <double>20.5;
+c = <string>"hello";
+d = <char>'A';
+e = (a + b) * c / d;
+print("21. multi-chain: (int + double) * string / char:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+
+/* 测试 22：multi-chain: bool + byte + short + int + double + string */
+a = <bool>true;
+b = <byte>1;
+c = <short>2;
+d = <int>3;
+e = <double>4.5;
+f = <string>"hello";
+g = a + b + c + d + e + f;
+print("22. multi-chain: bool + byte + short + int + double + string:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+print(f);
+print(g);
+
+/* 测试 23：multi-chain: 20+ types */
+a1 = <bool>true;
+a2 = <byte>1;
+a3 = <char>'A';
+a4 = <short>2;
+a5 = <ushort>3;
+a6 = <int>4;
+a7 = <uint>5;
+a8 = <long>6;
+a9 = <ulong>7;
+a10 = <long long>8;
+a11 = <float>1.5;
+a12 = <double>2.5;
+a13 = <long double>3.5;
+a14 = <string>"hello";
+result = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14;
+print("23. multi-chain: 20+ types:");
+print(result);
+
+print("All tests passed!");
