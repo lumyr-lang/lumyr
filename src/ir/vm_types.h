@@ -20,8 +20,10 @@ typedef struct {
     StackFrame* frame;          /* 当前栈帧 */
     Value* consts;               /* 常量池 */
     const char** syms;          /* 符号表 */
+    const char** string_consts;  /* 字符串常量池 */
     int const_cnt;
     int sym_cnt;
+    int str_const_cnt;
     VMStackManager stacks;       /* 4 核心栈管理器 */
 } VMExecCtx;
 

@@ -35,6 +35,7 @@ typedef enum {
     OPC_PUSH_INT64_CONST,   // a=低32位, b=高32位：压入 int64 栈（所有整数类型统一）
     OPC_PUSH_DOUBLE_CONST,  // a=低32位, b=高32位：压入 double 栈（所有浮点类型统一）
     OPC_PUSH_PTR_CONST,     // a=指针常量值：压入指针栈（字符串、对象指针）
+    OPC_LOAD_STRING_CONST,  // a=字符串常量池索引：压字符串指针到 PTR 栈
 
     /* ===== 变量加载/存储（4 核心栈对应） ===== */
     OPC_LOAD_VAR,          // a=符号表下标：加载 Value 变量，压入 Value 栈
@@ -298,6 +299,8 @@ typedef struct {
     int sym_cnt, sym_cap;
     Value* consts;             // 常量池
     int const_cnt, const_cap;
+    const char** string_consts;  // 字符串常量池（原始指针，直接走 PTR 栈）
+    int str_const_cnt, str_const_cap;
     char** params;             // 参数名（普通参数在前，可变参数最后）
     int param_cnt;             // 普通参数个数
     int has_variadic;

@@ -37,6 +37,18 @@ static int c_add_const(Ctx* c, Value v) {
     return idx;
 }
 
+/* 添加字符串到字符串常量池，返回索引 */
+static int c_add_string_const(Ctx* c, const char* s) {
+    BytecodeFunc* fn = c->fn;
+    if(fn->str_const_cnt >= fn->str_const_cap) {
+        fn->str_const_cap = fn->str_const_cap ? fn->str_const_cap * 2 : 16;
+        fn->string_consts = realloc(fn->string_consts, fn->str_const_cap * sizeof(const char*));
+    }
+    int idx = fn->str_const_cnt++;
+    fn->string_consts[idx] = s;
+    return idx;
+}
+
 /* 查找变量索引，返回 -1 表示未找到 */
 static int c_find_var(Ctx* c, const char* name) {
     for(int i = 0; i < c->var_cnt; i++) {
@@ -112,11 +124,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_STRING: {
-        /* 字符串字面量：简化，压入 VALUE 栈（字符串指针管理后续完善） */
-        Value v = lumyr_make_string(node->u.sval);
-        int idx = c_add_const(c, v);
-        emit(c, OPC_LOAD_CONST, idx, 0);
-        return EXPR_TYPE_NONE;
+        /* 字符串字面量：压入 PTR 栈 */
+        int idx = c_add_string_const(c, node->u.sval);
+        emit(c, OPC_LOAD_STRING_CONST, idx, 0);
+        return EXPR_TYPE_PTR;
     }
     
     case AST_VAR: {
@@ -170,8 +181,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_STRING) {
-            /* 字符串暂时用 VALUE 栈（指针管理后续完善） */
-            return EXPR_TYPE_NONE;
+            return EXPR_TYPE_PTR;
         }
         return child_type;
     }

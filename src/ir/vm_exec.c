@@ -156,6 +156,14 @@ Value vm_execute(VMExecCtx* ctx) {
             break;
         }
 
+        case OPC_LOAD_STRING_CONST: {
+            const char* s = ctx->string_consts[in.a];
+            int sp = g_stack_mgr->sp[STACK_PTR]++;
+            ((void**)g_stack_mgr->stacks[STACK_PTR])[sp] = (void*)s;
+            handled = 1;
+            break;
+        }
+
         /* ===== 变量加载/存储 ===== */
         case OPC_LOAD_VAR: {
             int idx = in.a;
