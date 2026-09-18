@@ -2,7 +2,8 @@
  * lm_bigint.h - 任意精度整数类型
  *
  * 设计：
- * - 用数组存储十进制数字（每个元素存 0-9，逆序存储，方便运算）
+ * - 用数组存储二进制数字（每个元素存 30 位，逆序存储，方便运算）
+ * - 参考 Python 的 longobject.c 实现
  * - 符号：正负标记
  * - 堆分配，GC 管理
  * - PTR 栈存储指针
@@ -19,9 +20,19 @@
 extern "C" {
 #endif
 
-/* bigint 结构体：任意精度整数 */
+/* bigint 结构体：任意精度整数
+ * 参考 Python 的 longobject.c 实现：
+ * - 用 uint32_t 数组存储二进制数字（每个 digit 是 30 位）
+ * - 逆序存储（低位在前），方便运算
+ * - 符号：正负标记
+ * - 堆分配，GC 管理
+ * - PTR 栈存储指针
+ */
+#define BIGINT_BASE    ((uint32_t)1 << 30)  /* 2^30 */
+#define BIGINT_MASK    (BIGINT_BASE - 1)     /* 0x3FFFFFFF */
+
 typedef struct {
-    uint8_t* digits;   /* 十进制数字数组，逆序存储（低位在前） */
+    uint32_t* digits;  /* 二进制数字数组，逆序存储（低位在前），每个 digit 是 30 位 */
     int len;           /* 当前长度（有效数字个数） */
     int cap;           /* 容量 */
     int sign;          /* 符号：1=正，-1=负，0=零 */

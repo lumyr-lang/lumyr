@@ -25,7 +25,7 @@ static void ensure_cap(BigInt* bi, int need) {
     if (bi->cap >= need) return;
     int new_cap = bi->cap > 0 ? bi->cap * 2 : 8;
     while (new_cap < need) new_cap *= 2;
-    bi->digits = (uint8_t*)realloc(bi->digits, new_cap);
+    bi->digits = (uint32_t*)realloc(bi->digits, new_cap * sizeof(uint32_t));
     bi->cap = new_cap;
 }
 
@@ -47,16 +47,16 @@ static void abs_add(BigInt* a, BigInt* b, BigInt* result) {
     int max_len = a->len > b->len ? a->len : b->len;
     ensure_cap(result, max_len + 1);
 
-    int carry = 0;
+    uint64_t carry = 0;
     for (int i = 0; i < max_len; i++) {
-        int da = i < a->len ? a->digits[i] : 0;
-        int db = i < b->len ? b->digits[i] : 0;
-        int sum = da + db + carry;
-        result->digits[i] = sum % 10;
-        carry = sum / 10;
+        uint64_t da = i < a->len ? a->digits[i] : 0;
+        uint64_t db = i < b->len ? b->digits[i] : 0;
+        uint64_t sum = da + db + carry;
+        result->digits[i] = (uint32_t)(sum & BIGINT_MASK);
+        carry = sum >> 30;
     }
     if (carry > 0) {
-        result->digits[max_len] = carry;
+        result->digits[max_len] = (uint32_t)carry;
         result->len = max_len + 1;
     } else {
         result->len = max_len;
@@ -67,18 +67,18 @@ static void abs_add(BigInt* a, BigInt* b, BigInt* result) {
 static void abs_sub(BigInt* a, BigInt* b, BigInt* result) {
     ensure_cap(result, a->len);
 
-    int borrow = 0;
+    int64_t borrow = 0;
     for (int i = 0; i < a->len; i++) {
-        int da = a->digits[i];
-        int db = i < b->len ? b->digits[i] : 0;
-        int diff = da - db - borrow;
+        int64_t da = a->digits[i];
+        int64_t db = i < b->len ? b->digits[i] : 0;
+        int64_t diff = da - db - borrow;
         if (diff < 0) {
-            diff += 10;
+            diff += BIGINT_BASE;
             borrow = 1;
         } else {
             borrow = 0;
         }
-        result->digits[i] = diff;
+        result->digits[i] = (uint32_t)diff;
     }
     result->len = a->len;
     strip_leading_zeros(result);
@@ -92,7 +92,7 @@ BigInt* lumyr_bigint_from_int64(int64_t v) {
         bi->sign = 0;
         bi->len = 1;
         bi->cap = 8;
-        bi->digits = (uint8_t*)calloc(bi->cap, 1);
+        bi->digits = (uint32_t*)calloc(bi->cap, sizeof(uint32_t));
         return bi;
     }
 
@@ -100,55 +100,64 @@ BigInt* lumyr_bigint_from_int64(int64_t v) {
     uint64_t uv = v < 0 ? (uint64_t)(-v) : (uint64_t)v;
 
     bi->cap = 8;
-    bi->digits = (uint8_t*)calloc(bi->cap, 1);
+    bi->digits = (uint32_t*)calloc(bi->cap, sizeof(uint32_t));
     bi->len = 0;
 
     while (uv > 0) {
         ensure_cap(bi, bi->len + 1);
-        bi->digits[bi->len++] = uv % 10;
-        uv /= 10;
+        bi->digits[bi->len] = (uint32_t)(uv & BIGINT_MASK);
+        uv >>= 30;
+        bi->len++;
     }
+
     return bi;
 }
 
 BigInt* lumyr_bigint_from_string(const char* s) {
-    BigInt* bi = (BigInt*)calloc(1, sizeof(BigInt));
     if (!s || *s == '\0') {
-        bi->sign = 0;
-        bi->len = 1;
-        bi->cap = 8;
-        bi->digits = (uint8_t*)calloc(bi->cap, 1);
-        return bi;
+        return lumyr_bigint_from_int64(0);
     }
 
-    int start = 0;
-    if (s[0] == '-') {
-        bi->sign = -1;
-        start = 1;
-    } else if (s[0] == '+') {
-        bi->sign = 1;
-        start = 1;
-    } else {
-        bi->sign = 1;
+    /* 处理符号 */
+    int sign = 1;
+    if (*s == '-') {
+        sign = -1;
+        s++;
+    } else if (*s == '+') {
+        s++;
     }
 
-    int slen = strlen(s + start);
-    bi->cap = slen + 2;
-    bi->digits = (uint8_t*)calloc(bi->cap, 1);
-    bi->len = slen;
+    BigInt* result = lumyr_bigint_from_int64(0);
+    result->sign = sign;
 
-    /* 逆序存储：字符串高位在前，digits 低位在前 */
-    for (int i = 0; i < slen; i++) {
-        char c = s[start + slen - 1 - i];
-        if (isdigit((unsigned char)c)) {
-            bi->digits[i] = c - '0';
-        }
+    /* 从左到右，每次 result = result * 10 + digit */
+    BigInt* ten = lumyr_bigint_from_int64(10);
+
+    while (*s != '\0' && isdigit((unsigned char)*s)) {
+        int digit = *s - '0';
+
+        /* result = result * 10 */
+        BigInt* temp = lumyr_bigint_mul(result, ten);
+        lumyr_bigint_free(result);
+        result = temp;
+
+        /* result = result + digit */
+        BigInt* d = lumyr_bigint_from_int64(digit);
+        temp = lumyr_bigint_add(result, d);
+        lumyr_bigint_free(result);
+        lumyr_bigint_free(d);
+        result = temp;
+
+        s++;
     }
-    strip_leading_zeros(bi);
-    if (bi->sign != 0 && bi->len == 1 && bi->digits[0] == 0) {
-        bi->sign = 0;
+
+    lumyr_bigint_free(ten);
+
+    if (result->len == 1 && result->digits[0] == 0) {
+        result->sign = 0;
     }
-    return bi;
+
+    return result;
 }
 
 char* lumyr_bigint_to_string(BigInt* bi) {
@@ -156,20 +165,47 @@ char* lumyr_bigint_to_string(BigInt* bi) {
         return strdup("0");
     }
 
-    /* 符号 + 数字 + 结束符 */
-    int buf_len = bi->len + 2;
-    char* buf = (char*)malloc(buf_len);
-    int pos = 0;
+    /* 先把绝对值转成十进制字符串 */
+    BigInt* abs_bi = (BigInt*)calloc(1, sizeof(BigInt));
+    abs_bi->sign = 1;
+    abs_bi->cap = bi->cap;
+    abs_bi->len = bi->len;
+    abs_bi->digits = (uint32_t*)calloc(abs_bi->cap, sizeof(uint32_t));
+    memcpy(abs_bi->digits, bi->digits, bi->len * sizeof(uint32_t));
 
+    /* 用除法转成十进制字符串 */
+    BigInt* ten = lumyr_bigint_from_int64(10);
+    char* buf = (char*)calloc(1024, 1);
+    int pos = 1023;
+    buf[pos--] = '\0';
+
+    BigInt* rem = abs_bi;
+    while (rem->len > 1 || rem->digits[0] > 0) {
+        /* rem / 10，取商和余数 */
+        BigInt* q = lumyr_bigint_div(rem, ten);
+        BigInt* new_rem = (BigInt*)calloc(1, sizeof(BigInt));
+        /* 计算余数：rem - q * 10 */
+        BigInt* q_mul_10 = lumyr_bigint_mul(q, ten);
+        abs_sub(rem, q_mul_10, new_rem);
+        lumyr_bigint_free(q_mul_10);
+        lumyr_bigint_free(rem);
+        /* 把 rem 更新为商，不是余数 */
+        rem = q;
+
+        /* 把余数存入 buf */
+        buf[pos--] = '0' + new_rem->digits[0];
+        lumyr_bigint_free(new_rem);
+    }
+
+    lumyr_bigint_free(rem);
+    lumyr_bigint_free(ten);
+
+    /* 加上符号 */
     if (bi->sign < 0) {
-        buf[pos++] = '-';
+        buf[pos--] = '-';
     }
 
-    for (int i = bi->len - 1; i >= 0; i--) {
-        buf[pos++] = bi->digits[i] + '0';
-    }
-    buf[pos] = '\0';
-    return buf;
+    return strdup(buf + pos + 1);
 }
 
 void lumyr_bigint_free(BigInt* bi) {
@@ -183,9 +219,25 @@ void lumyr_bigint_free(BigInt* bi) {
 BigInt* lumyr_bigint_add(BigInt* a, BigInt* b) {
     if (!a || !b) return NULL;
 
-    /* 零的情况 */
-    if (a->sign == 0) return lumyr_bigint_from_string(lumyr_bigint_to_string(b));
-    if (b->sign == 0) return lumyr_bigint_from_string(lumyr_bigint_to_string(a));
+    /* 零的情况：直接复制，不调用 lumyr_bigint_from_string(lumyr_bigint_to_string(b))，避免无限递归 */
+    if (a->sign == 0) {
+        BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
+        result->sign = b->sign;
+        result->cap = b->cap;
+        result->len = b->len;
+        result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
+        memcpy(result->digits, b->digits, b->len * sizeof(uint32_t));
+        return result;
+    }
+    if (b->sign == 0) {
+        BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
+        result->sign = a->sign;
+        result->cap = a->cap;
+        result->len = a->len;
+        result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
+        memcpy(result->digits, a->digits, a->len * sizeof(uint32_t));
+        return result;
+    }
 
     BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
 
@@ -201,7 +253,7 @@ BigInt* lumyr_bigint_add(BigInt* a, BigInt* b) {
             result->sign = 0;
             result->len = 1;
             result->cap = 8;
-            result->digits = (uint8_t*)calloc(result->cap, 1);
+            result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
         } else if (cmp > 0) {
             /* |a| > |b|，结果符号同 a */
             result->sign = a->sign;
@@ -231,22 +283,23 @@ BigInt* lumyr_bigint_mul(BigInt* a, BigInt* b) {
 
     BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
     result->sign = a->sign * b->sign;
-    result->cap = a->len + b->len;
-    result->digits = (uint8_t*)calloc(result->cap, 1);
+    result->cap = a->len + b->len + 1;
+    result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
     result->len = a->len + b->len;
 
-    /* 竖式乘法 */
+    /* 朴素乘法 */
     for (int i = 0; i < a->len; i++) {
-        int carry = 0;
+        uint64_t carry = 0;
         for (int j = 0; j < b->len; j++) {
-            int prod = result->digits[i + j] + a->digits[i] * b->digits[j] + carry;
-            result->digits[i + j] = prod % 10;
-            carry = prod / 10;
+            uint64_t prod = (uint64_t)a->digits[i] * b->digits[j] + result->digits[i + j] + carry;
+            result->digits[i + j] = (uint32_t)(prod & BIGINT_MASK);
+            carry = prod >> 30;
         }
         if (carry > 0) {
-            result->digits[i + b->len] += carry;
+            result->digits[i + b->len] = (uint32_t)carry;
         }
     }
+
     strip_leading_zeros(result);
     return result;
 }
@@ -261,14 +314,23 @@ BigInt* lumyr_bigint_div(BigInt* a, BigInt* b) {
     BigInt* result = (BigInt*)calloc(1, sizeof(BigInt));
     result->sign = a->sign * b->sign;
     result->cap = 8;
-    result->digits = (uint8_t*)calloc(result->cap, 1);
+    result->digits = (uint32_t*)calloc(result->cap, sizeof(uint32_t));
     result->len = 1;
 
-    BigInt* remainder = lumyr_bigint_from_string(lumyr_bigint_to_string(a));
-    remainder->sign = 1;  /* 用绝对值做除法 */
+    /* 直接用绝对值，不调用 lumyr_bigint_from_string(lumyr_bigint_to_string(a))，避免无限递归 */
+    BigInt* remainder = (BigInt*)calloc(1, sizeof(BigInt));
+    remainder->sign = 1;
+    remainder->cap = a->cap;
+    remainder->len = a->len;
+    remainder->digits = (uint32_t*)calloc(remainder->cap, sizeof(uint32_t));
+    memcpy(remainder->digits, a->digits, a->len * sizeof(uint32_t));
 
-    BigInt* abs_b = lumyr_bigint_from_string(lumyr_bigint_to_string(b));
+    BigInt* abs_b = (BigInt*)calloc(1, sizeof(BigInt));
     abs_b->sign = 1;
+    abs_b->cap = b->cap;
+    abs_b->len = b->len;
+    abs_b->digits = (uint32_t*)calloc(abs_b->cap, sizeof(uint32_t));
+    memcpy(abs_b->digits, b->digits, b->len * sizeof(uint32_t));
 
     int quotient = 0;
     while (abs_cmp(remainder, abs_b) >= 0) {
