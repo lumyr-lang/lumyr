@@ -1,0 +1,51 @@
+// 类型推断测试
+print("=== 类型推断测试 ===");
+
+// 1. 字面量自动推断
+a = 10;
+b = 3.14;
+c = true;
+d = 'a';
+e = "hello";
+
+print("1. 字面量自动推断:");
+print(a);
+print(b);
+print(c);
+print(d);
+print(e);
+
+// 2. 类型继承
+print("\n2. 类型继承:");
+f = a;
+g = b;
+print(f);
+print(g);
+
+// 3. 运算类型推断
+print("\n3. 运算类型推断:");
+h = a + 5;
+i = b + 1.5;
+print(h);
+print(i);
+
+// 4. 显式类型标注
+print("\n4. 显式类型标注:");
+j = <short>100;
+k = <float>3.14159;
+print(j);
+print(k);
+
+// 5. 混合类型运算
+print("\n5. 混合类型运算:");
+m = a + b;
+print(m);
+
+// 6. 赋值后修改类型
+print("\n6. 赋值后修改类型:");
+n = 10;
+print(n);
+n = 3.14;
+print(n);
+
+print("\n=== 测试完成 ===");
