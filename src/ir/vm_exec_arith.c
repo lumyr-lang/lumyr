@@ -355,7 +355,29 @@ int vm_exec_arith_ptr_mul(VMExecCtx* ctx, Instruction* in) {
     }
 
     int len_str = strlen(str);
-    char* result = (char*)malloc(len_str * n + 1);
+    
+    /* 溢出检查：防止内存爆炸 */
+    if(n > 1000000) {
+        /* 超过 100 万次重复，截断为 100 万次 */
+        n = 1000000;
+    }
+    
+    size_t total_size = (size_t)len_str * (size_t)n + 1;
+    if(total_size > 256 * 1024 * 1024) {
+        /* 超过 256MB，截断 */
+        n = 256 * 1024 * 1024 / len_str;
+        total_size = (size_t)len_str * (size_t)n + 1;
+    }
+    
+    char* result = (char*)malloc(total_size);
+    if(!result) {
+        /* 内存分配失败，返回空字符串 */
+        char* empty = (char*)malloc(1);
+        empty[0] = '\0';
+        stack_vm_push(g_stack_mgr, STACK_PTR, &empty);
+        return 1;
+    }
+    
     for(int i = 0; i < n; i++) {
         memcpy(result + i * len_str, str, len_str);
     }

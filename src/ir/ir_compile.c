@@ -568,20 +568,27 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         }
     }
 
-    /* 二元运算：递归判断 */
+    /* 二元运算：递归判断（严格遵循 C/C++ 算术类型提升规则） */
     if(node->type == AST_BINOP) {
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt = c_expr_cast_type(c, node->u.bin.right);
+        
         /* 1. string 优先级最高：任何类型 + string 都是字符串拼接 */
         if(lt == CAST_STRING || rt == CAST_STRING) return CAST_STRING;
-        /* 2. bigint 次之 */
+        
+        /* 2. bigint 次之：bigint 吸收所有类型（除 string） */
         if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
-        /* 3. decimal 再次之 */
+        
+        /* 3. decimal 再次之：decimal 吸收所有类型（除 string/bigint） */
         if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
-        /* 其次是浮点类型 */
-        if(lt == CAST_DOUBLE || lt == CAST_FLOAT || lt == CAST_LONG_DOUBLE) return lt;
-        if(rt == CAST_DOUBLE || rt == CAST_FLOAT || rt == CAST_LONG_DOUBLE) return rt;
-        /* 整数运算：结果统一返回 CAST_INT（不要保留 CHAR/BOOL，否则打印会按字符/布尔） */
+        
+        /* 4. 浮点类型提升（C/C++ 规则：long double > double > float） */
+        if(lt == CAST_LONG_DOUBLE || rt == CAST_LONG_DOUBLE) return CAST_LONG_DOUBLE;
+        if(lt == CAST_DOUBLE || rt == CAST_DOUBLE) return CAST_DOUBLE;
+        if(lt == CAST_FLOAT || rt == CAST_FLOAT) return CAST_FLOAT;
+        
+        /* 5. 整数类型提升（C/C++ 规则：窄类型自动扩到 int） */
+        /* 这里统一返回 CAST_INT，因为所有窄类型都映射到 INT64 栈 */
         return CAST_INT;
     }
 

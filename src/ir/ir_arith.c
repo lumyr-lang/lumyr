@@ -50,6 +50,9 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             case CAST_STRING:
             case CAST_ASCII:
                 return EXPR_TYPE_PTR;  /* 字符串 → PTR 栈 */
+            case CAST_BIGINT:
+            case CAST_DECIMAL:
+                return EXPR_TYPE_PTR;  /* bigint/decimal → PTR 栈 */
 
             default:
                 return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */

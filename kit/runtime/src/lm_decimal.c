@@ -82,22 +82,46 @@ static Decimal* bigint_to_decimal(BigInt* bi, int precision) {
 
     /* 在合适位置插入小数点 */
     int len = strlen(bi_str);
-    int int_len = len - precision;
     
-    char* result = (char*)malloc(len + 2);  /* 多一个小数点和结束符 */
+    /* 处理符号 */
+    int sign_offset = 0;
+    if(bi_str[0] == '-') {
+        sign_offset = 1;
+    }
+    
+    /* 去掉符号后的长度 */
+    int abs_len = len - sign_offset;
+    int int_len = abs_len - precision;
+    
+    /* 计算所需缓冲区大小 */
+    int result_len;
+    if(int_len <= 0) {
+        /* 符号 + "0." + 补零 + 绝对值 + 结束符 */
+        result_len = sign_offset + 2 + (-int_len) + abs_len + 1;
+    } else {
+        /* 符号 + 绝对值 + "." + 结束符 */
+        result_len = len + 2;
+    }
+    
+    char* result = (char*)malloc(result_len);
     
     if(int_len <= 0) {
-        /* 整数部分为 0，如 0.00123 */
-        strcpy(result, "0.");
-        for(int i = 0; i < -int_len; i++) {
-            strcat(result, "0");
+        /* 整数部分为 0，如 -0.00123 */
+        int pos = 0;
+        if(sign_offset) {
+            result[pos++] = '-';
         }
-        strcat(result, bi_str);
+        result[pos++] = '0';
+        result[pos++] = '.';
+        for(int i = 0; i < -int_len; i++) {
+            result[pos++] = '0';
+        }
+        strcpy(result + pos, bi_str + sign_offset);
     } else {
         /* 正常情况：插入小数点 */
-        strncpy(result, bi_str, int_len);
-        result[int_len] = '.';
-        strcpy(result + int_len + 1, bi_str + int_len);
+        strcpy(result, bi_str);
+        result[int_len + sign_offset] = '.';
+        strcpy(result + int_len + sign_offset + 1, bi_str + int_len + sign_offset);
     }
 
     
