@@ -2,27 +2,22 @@
 
 GNU Multiple Precision Arithmetic Library (GMP)
 
-## 平台策略
+本目录现在只存放 **GMP 许可证原文**；头文件与动态库的来源按平台划分：
 
-| 平台 | GMP 来源 |
+| 平台 | GMP 头文件 / 库来源 |
 |------|----------|
-| macOS | Homebrew（`brew install gmp`） |
-| Linux | 发行版包（libgmp-dev） |
-| Windows | 本目录 lib/windows-x64、lib/windows-x86 的预编译 dll |
+| macOS | Homebrew（`brew install gmp`），include 与 lib 在 brew 目录 |
+| Linux | 发行版包（libgmp-dev），系统默认路径 |
+| Windows | `scripts/build_deps_mingw.sh` 从源码构建，装到 prebuilt/windows：
+  include/gmp.h、lib/libgmp.dll.a（导入库）、bin/libgmp-10.dll |
 
 ## 目录结构
 
 ```
 deps/gmp/
-├── include/             # Windows 构建使用的头文件
-├── lib/
-│   ├── windows-x64/     # Windows 64位 libgmp-10.dll
-│   └── windows-x86/     # Windows 32位 libgmp-10.dll
 ├── licenses/            # LGPLv3 / GPLv2 / GPLv3 原文 + INDEX
 └── README.md
 ```
-
-macOS/Linux 不使用本目录的头文件与库（走各自系统路径）。
 
 ## 许可证与动态链接
 
@@ -33,12 +28,3 @@ macOS/Linux 不使用本目录的头文件与库（走各自系统路径）。
   - Windows：libgmp-10.dll 复制到 lumyr.exe 旁
   - Linux：使用系统 libgmp.so.10（随发行版分发，不在本产品内）
 - 动态链接不影响主程序许可证，lm 用户可闭源商用
-
-## Windows GMP 更新方式
-
-从 GMP 官方源码（https://gmplib.org/）在 MSYS2/MinGW 下构建：
-```bash
-./configure --enable-shared --disable-static --prefix=<stage>
-make && make install
-# 把 stage/bin/libgmp-10.dll 复制到 lib/windows-x64/（或 x86）
-```

@@ -20,8 +20,9 @@ GMP (GNU Multiple Precision Arithmetic Library)
             libgmp.10.dylib next to lumyr using @loader_path, so users
             may replace it with their own build (LGPL relinking right).
     Linux:  distribution package (libgmp-dev), libgmp.so.10
-    Windows: deps/gmp/lib/windows-*/libgmp-10.dll, copied next to
-             lumyr.exe at build time
+    Windows: prebuilt/windows/bin/libgmp-10.dll (built from source by
+             scripts/build_deps_mingw.sh, with lib/libgmp.dll.a import
+             library), copied next to lumyr.exe at build time
   License texts: deps/gmp/licenses/
   Source:   https://gmplib.org/
 
@@ -64,10 +65,17 @@ TRE 0.9.0
   Windows lacks (no approximate-matching features are used)
   License text: prebuilt/windows/licenses/tre/
 
+GMP 6.3.0
+  License: LGPL v3 (some files GPL v2+) - see the GMP section above
+  Linking: dynamic (bin/libgmp-10.dll shipped next to lumyr.exe,
+  linked via lib/libgmp.dll.a)
+  License text: deps/gmp/licenses/
+
 Build tools on Windows: WinFlexBison (flex 2.6.4 / bison 3.8.2),
 build-time only; generated parsers are covered by the flex/bison runtime
-exceptions. The Windows libraries are rebuilt from source via
-scripts/build_deps_mingw.sh in an MSYS2 MINGW64 environment.
+exceptions. The Windows libraries (curl/iconv/tre/gmp) are all rebuilt
+from source via scripts/build_deps_mingw.sh in an MSYS2 MINGW64
+environment (MINGW32 for 32-bit).
 
 The third-party components above are not part of the compiler's own
 source code.

@@ -45,10 +45,10 @@ bash scripts/build_deps_mingw.sh
 和 `scripts/build_tools/`（flex、bison、m4）。脚本使用相对路径，需在仓库根目录执行。
 
 ### build_deps_mingw.sh (Windows)
-在 MSYS2 MINGW64 下从源码构建：
+在 MSYS2 MINGW64（或 32 位 MINGW32）下从源码构建四个库：
 - TRE 0.9.0 静态、libcurl 8.22.0 静态（TLS 用 Windows 原生 Schannel）
 - libiconv 1.17 动态（libiconv-2.dll，LGPL 合规）
-- GMP 沿用 `deps/gmp/lib/windows-x64/` 已有动态库，不在此脚本构建
+- GMP 6.3.0 动态（libgmp-10.dll + libgmp.dll.a 导入库，LGPL 合规）
 - 同时装配许可证到 prebuilt/windows/licenses 与 deps/gmp/licenses
 
 ### build.bat (Windows)

@@ -95,13 +95,9 @@ else ifeq ($(OS_NAME),linux)
     # 系统 GMP（apt install libgmp-dev），走默认搜索路径
     GMP_LIB_DIR :=
 else ifeq ($(OS_NAME),windows)
-    ifeq ($(ARCH),x86_64)
-        GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x64
-    else
-        GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x86
-    endif
-    CFLAGS += -I$(GMP_DIR)/include
-    LDFLAGS += -L$(GMP_LIB_DIR)
+    # GMP 与其他 Windows 库同由 build_deps_mingw.sh 构建于 prebuilt/windows
+    # （lib/libgmp.dll.a 导入库 + bin/libgmp-10.dll），-I/-L 已在 Windows 块给出
+    GMP_LIB_DIR := $(CURDIR)/prebuilt/windows
 endif
 LDLIBS += -lgmp
 # ========== Runtime 静态库源文件 ==========
@@ -235,7 +231,7 @@ ifeq ($(OS_NAME),windows)
 	@echo "==> Copying runtime DLLs to $(BIN_DIR)/ (LGPL: GMP/iconv)"
 	@rm -f $(BIN_DIR)/libiconv-2.dll $(BIN_DIR)/libgmp-10.dll
 	@cp $(WIN_DEPS)/bin/libiconv-2.dll $(BIN_DIR)/ && echo "    copied libiconv-2.dll"
-	@cp $(GMP_LIB_DIR)/libgmp-10.dll $(BIN_DIR)/ && echo "    copied libgmp-10.dll"
+	@cp $(WIN_DEPS)/bin/libgmp-10.dll $(BIN_DIR)/ && echo "    copied libgmp-10.dll"
 	@rm -rf $(BIN_DIR)/licenses
 	@cp -R $(WIN_DEPS)/licenses $(BIN_DIR)/licenses
 	@cp -R $(GMP_DIR)/licenses $(BIN_DIR)/licenses/gmp

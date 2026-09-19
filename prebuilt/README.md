@@ -37,9 +37,9 @@ bash scripts/build_deps_mingw.sh
 prebuilt/
 ├── README.md
 └── windows/               # Windows 预编译产物（随 git 提供）
-    ├── include/           # curl / iconv / tre 头文件
-    ├── bin/               # libiconv-2.dll（动态，LGPL）
-    ├── lib/               # libcurl.a / libtre.a 静态 + libiconv.dll.a 导入库
+    ├── include/           # curl / iconv / tre / gmp 头文件
+    ├── bin/               # libiconv-2.dll、libgmp-10.dll（动态，LGPL）
+    ├── lib/               # libcurl.a / libtre.a 静态 + libiconv.dll.a / libgmp.dll.a 导入库
     ├── licenses/          # curl/iconv/tre 许可证原文
     └── tools/             # WinFlexBison（flex 2.6.4 / bison 3.8.2）
 ```
@@ -50,10 +50,11 @@ prebuilt/
 |------|------|------|------|
 | libcurl | 8.22.0 | 静态（TLS: Schannel） | MIT/X |
 | libiconv | 1.17 | 动态 libiconv-2.dll | LGPL-2.1 |
+| GMP | 6.3.0 | 动态 libgmp-10.dll（libgmp.dll.a 导入库） | LGPLv3 |
 | TRE | 0.9.0 | 静态（Windows 上充当 POSIX regex） | BSD 2-Clause |
 | WinFlexBison | 2.5.25 | 构建工具，不随产品分发 | GPL（生成物例外） |
 
-构建后 lumyr.exe 旁还会复制 GMP（deps/gmp/lib/windows-*/libgmp-10.dll，LGPLv3）。
+构建后 lumyr.exe 旁会自动复制 GMP 与 iconv 的 dll（均来自 prebuilt/windows/bin）。
 
 ## 注意事项
 

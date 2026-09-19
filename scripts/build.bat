@@ -16,6 +16,8 @@ if not exist "prebuilt\windows\lib\libcurl.a" goto :missing_deps
 if not exist "prebuilt\windows\lib\libtre.a" goto :missing_deps
 if not exist "prebuilt\windows\lib\libiconv.dll.a" goto :missing_deps
 if not exist "prebuilt\windows\bin\libiconv-2.dll" goto :missing_deps
+if not exist "prebuilt\windows\lib\libgmp.dll.a" goto :missing_deps
+if not exist "prebuilt\windows\bin\libgmp-10.dll" goto :missing_deps
 goto :deps_ok
 
 :missing_deps

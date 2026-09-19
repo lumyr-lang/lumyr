@@ -6,7 +6,7 @@ GMP 在本项目中以**动态链接**方式使用（LGPL 合规）：
 |------|----------------|
 | macOS | Homebrew GMP；构建时复制 libgmp.10.dylib 到 lumyr 旁（@loader_path） |
 | Linux | 系统 libgmp.so.10（发行版包） |
-| Windows | deps/gmp/lib/windows-x64、windows-x86/libgmp-10.dll，复制到 lumyr.exe 旁 |
+| Windows | prebuilt/windows/bin/libgmp-10.dll（源码构建，含 lib/libgmp.dll.a 导入库），复制到 lumyr.exe 旁 |
 
 许可证原文：
 

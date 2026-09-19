@@ -2,15 +2,16 @@
 # ============================================================
 # build_deps_mingw.sh - Windows (MinGW-w64) 运行时依赖源码构建
 #
-# 与 macOS/Linux 的 scripts/build_deps.sh 使用同一套源码版本：
+# 与 macOS/Linux 使用同一套源码版本：
 #   TRE 0.9.0      静态   (BSD-2)
 #   libiconv 1.17  动态   (LGPL-2.1，静态链接不合规)
 #   libcurl 8.22.0 静态   (MIT/X，TLS 用 Windows 原生 Schannel)
-# GMP 不在此脚本构建（沿用 deps/gmp/lib/windows-x64 已有动态库）。
+#   GMP 6.3.0      动态   (LGPLv3，静态链接不合规)
 #
-# 运行环境：MSYS2 的 "MSYS2 MINGW64" 终端（x64）
+# 运行环境：MSYS2 的 "MSYS2 MINGW64" 终端（x64；32 位用 MINGW32 终端）
 #   首次使用先装工具链：
 #     pacman -S --needed base-devel mingw-w64-x86_64-toolchain autoconf automake libtool
+#   x86 (32位) 构建安装 mingw-w64-i686-toolchain 并在 MINGW32 终端运行。
 #
 # 用法：
 #   bash scripts/build_deps_mingw.sh
@@ -78,9 +79,9 @@ echo ""
 
 # ---------- 3. libcurl 8.22.0（静态，Schannel TLS） ----------
 if [ -f "$PREFIX/lib/libcurl.a" ]; then
-    echo "[3/3] libcurl already built, skipping."
+    echo "[3/4] libcurl already built, skipping."
 else
-    echo "[3/3] Building libcurl 8.22.0 (static, Schannel)..."
+    echo "[3/4] Building libcurl 8.22.0 (static, Schannel)..."
     cd "$VENDOR/libcurl"
     make distclean >/dev/null 2>&1 || true
     ./configure --prefix="$PREFIX" --disable-shared --enable-static \
@@ -96,22 +97,22 @@ else
 fi
 echo ""
 
-# ---------- GMP 检查（不构建） ----------
-ARCH="$(gcc -dumpmachine | sed 's/-.*//')"
-case "$ARCH" in
-    x86_64) GMP_DIR="$ROOT/deps/gmp/lib/windows-x64" ;;
-    i686)    GMP_DIR="$ROOT/deps/gmp/lib/windows-x86" ;;
-    *)       GMP_DIR="$ROOT/deps/gmp/lib/windows-x64" ;;
-esac
-if [ -f "$GMP_DIR/libgmp-10.dll" ]; then
-    echo "GMP: $GMP_DIR/libgmp-10.dll (shared, existing)"
+# ---------- 4. GMP 6.3.0（动态，LGPL 合规，含导入库） ----------
+if [ -f "$PREFIX/bin/libgmp-10.dll" ] && [ -f "$PREFIX/lib/libgmp.dll.a" ]; then
+    echo "[4/4] GMP already built, skipping."
 else
-    echo "WARNING: 未找到 $GMP_DIR/libgmp-10.dll；请确认 Windows GMP 动态库就位。"
+    echo "[4/4] Building GMP 6.3.0 (shared, LGPL compliance)..."
+    cd "$VENDOR/gmp"
+    make distclean >/dev/null 2>&1 || true
+    ./configure --prefix="$PREFIX" --enable-shared --disable-static --disable-cxx
+    make -j"$JOBS"
+    make install
+    cd "$ROOT"
+    echo "      Done: $PREFIX/bin/libgmp-10.dll + $PREFIX/lib/libgmp.dll.a"
 fi
-
 echo ""
 
-# ---------- 4. 许可证汇总（随 prebuilt/deps 入库，合规义务） ----------
+# ---------- 5. 许可证汇总（随 prebuilt/deps 入库，合规义务） ----------
 echo "[license] Assembling license texts..."
 LIC="$PREFIX/licenses"
 mkdir -p "$LIC/libcurl" "$LIC/libiconv" "$LIC/tre"
