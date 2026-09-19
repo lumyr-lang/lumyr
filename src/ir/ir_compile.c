@@ -185,7 +185,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
            ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_LONG || ct == CAST_LONGLONG ||
            ct == CAST_UINT8 || ct == CAST_UINT16 || ct == CAST_UINT32 || ct == CAST_UINT ||
            ct == CAST_UINT64 || ct == CAST_ULONG || ct == CAST_UCHAR || ct == CAST_BYTE ||
-           ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
+           ct == CAST_ASCII || ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
             /* double → int：截断 */
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
@@ -195,7 +195,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_INT;
         }
         /* 转成 double：根据源类型 emit 转换指令 */
-        if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
+        if(ct == CAST_DOUBLE || ct == CAST_FLOAT || ct == CAST_LONG_DOUBLE) {
             /* int → double */
             if(child_type == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
@@ -222,42 +222,21 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         } else {
             child_type = c_expr(c, ann_child);
         }
-        const char* ct_name = "unknown";
-        switch(ct) {
-            case 0: ct_name = "CAST_NONE"; break;
-            case 1: ct_name = "CAST_INT"; break;
-            case 2: ct_name = "CAST_DOUBLE"; break;
-            case 3: ct_name = "CAST_INT16"; break;
-            case 4: ct_name = "CAST_STRING"; break;
-            case 5: ct_name = "CAST_CHAR"; break;
-            case 6: ct_name = "CAST_INT8"; break;
-            case 16: ct_name = "CAST_UINT"; break;
-            case 17: ct_name = "CAST_BIGINT"; break;
-            case 18: ct_name = "CAST_DECIMAL"; break;
-            case 40: ct_name = "CAST_BITDECIMAL"; break;
-            default: break;
-        }
-        fprintf(stderr, "DEBUG: TYPE_ANNOTATION: ct=%d (%s), child_type=%d\n", (int)ct, ct_name, (int)child_type);
         /* 根据 CastKind 返回表达式类型，必要时 emit 跨栈转换指令 */
         if(ct == CAST_INT || ct == CAST_SHORT || ct == CAST_USHORT || ct == CAST_INT8 || ct == CAST_INT16 ||
            ct == CAST_INT32 || ct == CAST_INT64 || ct == CAST_LONG || ct == CAST_LONGLONG ||
            ct == CAST_UINT8 || ct == CAST_UINT16 || ct == CAST_UINT32 || ct == CAST_UINT ||
            ct == CAST_UINT64 || ct == CAST_ULONG || ct == CAST_UCHAR || ct == CAST_BYTE ||
-           ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
+           ct == CAST_ASCII || ct == CAST_SIZE_T || ct == CAST_SSIZE_T || ct == CAST_CHAR || ct == CAST_BOOL) {
             /* 如果子表达式是 DOUBLE，需要转成 INT */
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
             }
-            fprintf(stderr, "DEBUG: TYPE_ANNOTATION returns INT (ct=%d)\n", (int)ct);
             return EXPR_TYPE_INT;
-        } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT) {
+        } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT || ct == CAST_LONG_DOUBLE) {
             /* 如果子表达式是 INT，需要转成 DOUBLE */
-            fprintf(stderr, "DEBUG: CAST_DOUBLE branch, child_type=%d\n", (int)child_type);
             if(child_type == EXPR_TYPE_INT) {
-                fprintf(stderr, "DEBUG: emitting INT64_TO_DOUBLE\n");
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
-            } else {
-                fprintf(stderr, "DEBUG: child_type != EXPR_TYPE_INT, got=%d, expected=%d\n", (int)child_type, (int)EXPR_TYPE_INT);
             }
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_BIGINT) {
@@ -424,11 +403,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 一元运算：负号 */
         ExprType child_type = c_expr(c, node->u.uny.child);
         if(node->u.uny.op == OP_UNARY_MINUS) {
-            if(child_type == EXPR_TYPE_INT) {
-                emit(c, OPC_NEG, 0, 0);  /* 通用 NEG，后续改为 INT64_NEG */
-            } else if(child_type == EXPR_TYPE_DOUBLE) {
-                emit(c, OPC_NEG, 0, 0);  /* 通用 NEG */
-            }
+            emit(c, OPC_NEG, (int)child_type, 0);
         }
         return child_type;
     }

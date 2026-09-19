@@ -4,6 +4,7 @@
  */
 #include "vm_types.h"
 #include "stack_manager.h"
+#include "ir_types.h"
 
 /* ===== 类型转换 ===== */
 
@@ -25,11 +26,18 @@ int vm_exec_type_double_to_int64(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* NEG：通用负号（先处理 INT64 栈） */
+/* NEG：负号，a 字段存表达式类型（INT 或 DOUBLE） */
 int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in) {
-    int64_t val;
-    stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
-    val = -val;
-    stack_vm_push(g_stack_mgr, STACK_INT64, &val);
+    if(in->a == (int)EXPR_TYPE_DOUBLE) {
+        double val;
+        stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
+        val = -val;
+        stack_vm_push(g_stack_mgr, STACK_DOUBLE, &val);
+    } else {
+        int64_t val;
+        stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
+        val = -val;
+        stack_vm_push(g_stack_mgr, STACK_INT64, &val);
+    }
     return 1;
 }

@@ -310,7 +310,7 @@ BigInt* lumyr_bigint_mul(BigInt* a, BigInt* b) {
     return result;
 }
 
-/* ===== Knuth 试商法辅助函数（参考 Python 的 longobject.c） ===== */
+/* ===== Knuth 试商法辅助函数 ===== */
 
 /* 左移：把 digits 左移 d 位（乘以 2^d），返回进位 */
 static uint32_t bigint_v_lshift(uint32_t* a, uint32_t* b, int n, int d) {
@@ -350,7 +350,7 @@ BigInt* lumyr_bigint_div(BigInt* a, BigInt* b) {
         return lumyr_bigint_from_int64(0);
     }
 
-    /* Knuth 试商法（完整参考 Python 的 longobject.c x_divrem 函数） */
+    /* Knuth 试商法 */
     /* digits 数组是逆序存储的（低位在前），所以最高位是 digits[len-1] */
 
     /* 把 a 和 b 都转成绝对值 */
@@ -414,8 +414,7 @@ BigInt* lumyr_bigint_div(BigInt* a, BigInt* b) {
     w->len = size_w;
     memcpy(w->digits, abs_b->digits, size_w * sizeof(uint32_t));
 
-    /* normalize: shift w1 left so that its top digit is >= PyLong_BASE/2.
-       shift v1 left by the same amount. */
+    
     int d = 30 - bigint_bit_length_digit(w->digits[size_w - 1]);
     uint32_t carry = bigint_v_lshift(w->digits, w->digits, size_w, d);
     if (carry != 0) {

@@ -133,11 +133,6 @@ Value vm_execute(VMExecCtx* ctx) {
     while (ctx->pc < ctx->fn->code_len) {
         Instruction in = code[ctx->pc++];
         total_instr++;
-        if (total_instr <= 50) {
-            fprintf(stderr, "DEBUG: pc=%d, op=%d, total=%d\n", ctx->pc-1, (int)in.op, total_instr);
-        }
-        if (ctx->pc <= 5) {
-        }
         int handled = 0;
         if((int)in.op >= 115 && (int)in.op <= 120) {
         }

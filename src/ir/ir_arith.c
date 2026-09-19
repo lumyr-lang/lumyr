@@ -27,6 +27,7 @@ static ExprType castkind_to_exprtype(CastKind ct) {
         case CAST_CHAR:
         case CAST_UCHAR:
         case CAST_BYTE:
+        case CAST_ASCII:
         case CAST_UINT8:
         case CAST_UINT16:
         case CAST_UINT32:
@@ -43,7 +44,6 @@ static ExprType castkind_to_exprtype(CastKind ct) {
             return EXPR_TYPE_DOUBLE;  /* 所有浮点 → DOUBLE 栈 */
 
         case CAST_STRING:
-        case CAST_ASCII:
         case CAST_BIGINT:
         case CAST_DECIMAL:
         case CAST_BITDECIMAL:

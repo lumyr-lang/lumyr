@@ -53,6 +53,84 @@ def category(t):
         return CAT_DOUBLE
     return CAT_INT  # 所有整数族 + bool + char 都走 INT64 栈
 
+# ---------- 全量类型操作数池 ----------
+# 覆盖语言中全部 20+ 种数据类型，每类型多份随机值
+INT_TYPES = [
+    ("int", (None, None)), ("int8", (-128, 127)), ("int16", (-32768, 32767)),
+    ("int32", (None, None)), ("int64", (None, None)),
+    ("uint", (0, 4294967295)), ("uint8", (0, 255)),
+    ("uint16", (0, 65535)), ("uint32", (0, 4294967295)),
+    ("uint64", (0, 18446744073709551615)),
+    ("long", (None, None)), ("long long", (None, None)),
+    ("ulong", (0, 18446744073709551615)),
+    ("short", (-32768, 32767)), ("ushort", (0, 65535)),
+    ("byte", (0, 255)), ("uchar", (0, 255)),
+    ("char", (32, 126)), ("ascii", (32, 126)),
+    ("bool", (0, 1)), ("size_t", (0, 18446744073709551615)),
+    ("ssize_t", (None, None)),
+]
+FLOAT_TYPES = ["float", "double", "long double"]
+HP_TYPES = ["bigint", "decimal", "bitdecimal"]
+
+# bigint/decimal/bitdecimal 字面量池（精挑边界值）
+BIGINT_LITS = ["0", "1", "-1", "100", "-99", "999999999999999999",
+               "1000000000000000000", "-99999999999999999999", "42", "-7"]
+DECIMAL_LITS = ["0.0", "1.5", "-2.75", "0.1", "0.2", "3.14159",
+                "-0.001", "123.456", "0.99999", "-99.9", "1.0", "0.0001"]
+BD_LITS = ["1.2", "0.3", "-2.75", "5.858", "123.456", "0.000001",
+           "999.999999", "-0.125", "1000000.5", "7", "42.042", "-12345.6789",
+           "3.14159265", "0.5", "0.0", "-1.0"]
+
+def gen_full_pool(rng):
+    """生成覆盖全部 20+ 类型的操作数池"""
+    pool = []
+    # 整数族：每类型 20 个随机值
+    # char/ascii 需排除 ' (39) 和 \ (92)，词法器不支持转义
+    for tname, (lo, hi) in INT_TYPES:
+        lo_val = lo if lo is not None else -10000
+        hi_val = hi if hi is not None else 10000
+        for _ in range(20):
+            v = rng.randint(lo_val, hi_val)
+            if tname in ("char", "ascii") and v in (39, 92):
+                # 重采样避开词法器不支持的字符
+                while v in (39, 92):
+                    v = rng.randint(lo_val, hi_val)
+            raw = str(v)
+            if tname == "bool":
+                raw = "true" if v else "false"
+            elif tname in ("char", "ascii"):
+                raw = "'%s'" % chr(v)
+            pool.append((CAT_INT, tname, raw, v))
+    # 浮点族：每类型 20 个
+    for tname in FLOAT_TYPES:
+        for _ in range(20):
+            v = rng.uniform(-9999.0, 9999.0)
+            # 避免 NaN/Inf
+            if not math.isfinite(v):
+                continue
+            pool.append((CAT_DOUBLE, tname, repr(v), v))
+    # 字符串：20 个
+    STR_LITS = ["abc", "hello", "123", "x", "", "test", "42", "3.14",
+                "a", "xyz", "0", "-5", "data", "value", "99",
+                "true", "q", "42.5", "tag", "100"]
+    for s in STR_LITS:
+        pool.append((CAT_STRING, "string", '"%s"' % s, s))
+    # bigint：每字面量 3 份
+    for s in BIGINT_LITS:
+        for _ in range(3):
+            pool.append((CAT_BIGINT, "bigint", '"%s"' % s, int(s)))
+    # decimal：每字面量 3 份
+    for s in DECIMAL_LITS:
+        u, p = dec_parse(s)
+        for _ in range(3):
+            pool.append((CAT_DECIMAL, "decimal", '"%s"' % s, (u, p)))
+    # bitdecimal：每字面量 3 份
+    for s in BD_LITS:
+        prec = len(s.split(".")[1]) if "." in s else 0
+        for _ in range(3):
+            pool.append((CAT_BITDECIMAL, "bitdecimal", '"%s"' % s, (Fraction(s), prec)))
+    return pool
+
 # ---------- 提取操作数池 ----------
 def load_pool():
     pool = []
@@ -88,16 +166,28 @@ def load_pool():
 def c_int_to_str(i):
     return str(i)
 
+def to_int64(v):
+    """模拟 C int64_t 溢出：掩码到 64 位有符号整数"""
+    v = v & 0xFFFFFFFFFFFFFFFF
+    if v >= 0x8000000000000000:
+        v -= 0x10000000000000000
+    return v
+
 def c_double_to_str(x):
     # vm_exec_conv_double_to_string: snprintf("%f")，默认 6 位小数
     return f"{x:.6f}"
 
 def c_atoi(s):
-    # C atoi：解析开头可选符号+数字，无法解析为 0
+    # C atoi：解析开头可选符号+数字，无法解析为 0；返回 int（32 位有符号）
     m = re.match(r'^(-?)(\d+)', s)
     if not m:
         return 0
-    return -int(m.group(2)) if m.group(1) else int(m.group(2))
+    v = -int(m.group(2)) if m.group(1) else int(m.group(2))
+    # atoi 返回 int (32 位)，模拟溢出截断
+    v = v & 0xFFFFFFFF
+    if v >= 0x80000000:
+        v -= 0x100000000
+    return v
 
 def c_is_num_str(s):
     # vm_exec_arith_ptr_*：每个字符只能是数字/'-'/'.'
@@ -112,7 +202,7 @@ def trunc_div(a, b):
 # 内部表示：(unscaled:int, prec:int)
 def dec_from_value(cat, v):
     if cat == CAT_INT:
-        return (v, 0)
+        return (to_int64(v), 0)
     if cat == CAT_BIGINT:
         return (v, 0)                      # bigint_to_string 是纯整数
     if cat == CAT_DOUBLE:
@@ -167,7 +257,9 @@ def dec_op(a, b, op):
 
 # ---------- bigint 转换：from_string 只读取小数点前的数字 ----------
 def bigint_from_other(cat, v):
-    if cat == CAT_INT or cat == CAT_BIGINT:
+    if cat == CAT_INT:
+        return to_int64(v)
+    if cat == CAT_BIGINT:
         return v
     if cat == CAT_DOUBLE:
         s = c_double_to_str(v)
@@ -187,7 +279,7 @@ def bigint_from_other(cat, v):
 # 内部表示：(exact_value:Fraction, prec:int)；512 位 mpf 足以让 p<=60 输出精确
 def bd_from_value(cat, v):
     if cat == CAT_INT:
-        return (Fraction(v), 0)            # OPC_BITDECIMAL_FROM_INT64，精确
+        return (Fraction(to_int64(v)), 0)   # OPC_BITDECIMAL_FROM_INT64，精确
     if cat == CAT_DOUBLE:
         return (Fraction(v), 15)           # OPC_BITDECIMAL_FROM_DOUBLE，precision=15
     if cat == CAT_DECIMAL:
@@ -232,7 +324,7 @@ def bd_format(val, p):
 # ---------- 任意值转字符串（模拟字符串拼接路径） ----------
 def to_string(cat, v):
     if cat == CAT_INT:
-        return c_int_to_str(v)
+        return c_int_to_str(to_int64(v))
     if cat == CAT_DOUBLE:
         return c_double_to_str(v)
     if cat == CAT_BIGINT:
@@ -296,7 +388,11 @@ def promote(c1, c2):
 def eval_node(node, operands):
     """返回 (category, value)"""
     if isinstance(node, int):
-        return operands[node][0], operands[node][3]
+        cat = operands[node][0]
+        val = operands[node][3]
+        if cat == CAT_INT:
+            val = to_int64(val)
+        return cat, val
     op, l, r = node
     cl, vl = eval_node(l, operands)
     cr, vr = eval_node(r, operands)
@@ -330,8 +426,8 @@ def eval_node(node, operands):
         return CAT_DECIMAL, dec_op(dl, dr, op)
 
     if res == CAT_DOUBLE:
-        dl = float(vl) if cl == CAT_INT else vl
-        dr = float(vr) if cr == CAT_INT else vr
+        dl = float(to_int64(vl)) if cl == CAT_INT else vl
+        dr = float(to_int64(vr)) if cr == CAT_INT else vr
         if op == "/":
             if dr == 0.0:
                 raise ZeroDivisionError
@@ -346,8 +442,8 @@ def eval_node(node, operands):
     if op == "/":
         if vr == 0:
             raise ZeroDivisionError
-        return CAT_INT, trunc_div(vl, vr)
-    return CAT_INT, {"+": vl + vr, "-": vl - vr, "*": vl * vr}[op]
+        return CAT_INT, to_int64(trunc_div(vl, vr))
+    return CAT_INT, to_int64({"+": vl + vr, "-": vl - vr, "*": vl * vr}[op])
 
 # ---------- 表达式树构造 ----------
 N = lambda op, a, b: (op, a, b)
@@ -359,13 +455,33 @@ def left_chain(ops):
         tree = N(op, tree, i + 1)
     return tree
 
+def right_chain(ops):
+    """ops 长度 k → k+1 个叶子的右结合链"""
+    n = len(ops)
+    tree = n
+    for i in range(n - 1, -1, -1):
+        tree = N(ops[i], i, tree)
+    return tree
+
 SHAPES = [
     N("+", 0, N("*", 1, 2)),                       # a + b*c（优先级）
     N("+", N("*", 0, 1), N("*", 2, 3)),            # a*b + c*d
     N("*", N("+", 0, 1), N("-", 2, 3)),            # (a+b)*(c-d)
     N("-", N("+", 0, N("*", 1, 2)), N("/", 3, 4)), # a+b*c - d/e
+    # 新增形状
+    N("/", N("+", 0, 1), N("-", 2, 3)),            # (a+b)/(c-d)
+    N("*", N("/", 0, 1), N("+", 2, 3)),            # (a/b)*(c+d)
+    N("+", N("-", 0, 1), N("*", 2, 3)),            # (a-b)+c*d
+    N("-", N("*", 0, 1), N("/", 2, 3)),            # a*b - c/d
+    N("+", N("+", 0, 1), N("-", 2, 3)),            # (a+b)+(c-d) 同优先级
+    N("*", N("*", 0, 1), N("*", 2, 3)),            # a*b*c*d（全乘）
+    N("+", N("/", 0, 1), N("/", 2, 3)),            # a/b + c/d（全除）
+    # 5 叶子
+    N("+", N("*", 0, 1), N("+", N("*", 2, 3), 4)),  # a*b + c*d + e
+    N("*", N("+", 0, 1), N("+", 2, N("+", 3, 4))),  # (a+b)*(c+d+e)
+    N("-", N("+", 0, N("+", 1, 2)), N("*", 3, 4)),  # (a+b+c) - d*e
 ]
-SHAPE_ARITY = [3, 4, 4, 5]
+SHAPE_ARITY = [3, 4, 4, 5, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5]
 
 # ---------- 树 → 源码（叶子引用变量名） ----------
 def emit_node(node, names):
@@ -379,40 +495,51 @@ def result_str(cat, v):
 
 # ---------- 主生成流程 ----------
 def main():
-    pool = load_pool()
-    assert len(pool) >= 3000, len(pool)
+    rng = random.Random(20260919)
+    pool = gen_full_pool(rng)
+    assert len(pool) >= 500, len(pool)
 
-    # bitdecimal 操作数池（random_type_test.lm 无此类型，内置 14 个字面量）
-    # (cat, tname, raw_lit, (Fraction 值, 小数位数))；precision 尽量小，避免乘链超护栏
-    # 重复 4 份提高采样权重，让混合链路（吸收 int/double/decimal、被 bigint 吸收）更密集
-    BD_POOL = []
-    for s in ["1.2", "0.3", "5.858", "-2.75", "123.456", "0.000001", "999.999999",
-              "-0.125", "1000000.5", "7", "42.042", "-12345.6789", "3.14159265", "0.5"]:
-        p = len(s.split(".")[1]) if "." in s else 0
-        BD_POOL.append((CAT_BITDECIMAL, "bitdecimal", '"' + s + '"',
-                        (Fraction(s), p)))
-    pool = pool + BD_POOL * 4
+    # 合并 random_type_test 的操作数（增加历史覆盖）
+    old_pool = load_pool()
+    pool = pool + old_pool
 
     rng = random.Random(20260919)
 
     cases = []  # (id, tree, arity, [(cat,tname,raw,val)])
 
     seq_templates = []
+    # 左结合链（2~6 操作数）
     for s in ["++", "+-", "+*", "+/", "-+", "--", "-*", "*+", "*-", "**", "*/", "/+", "/*"]:
         seq_templates.append((left_chain(list(s)), 3))
-    for s in ["+++", "++-", "+*-", "*+*", "+-+", "*/+", "**+", "++*", "-+/", "*/*", "---", "///"]:
+    for s in ["+++", "++-", "+*-", "*+*", "+-+", "*/+", "**+", "++*", "-+/", "*/*", "---", "///",
+              "+/*", "/*-", "*-+", "-*/", "/+-", "*/*", "+-/", "/-+"]:
         seq_templates.append((left_chain(list(s)), 4))
-    for s in ["++++", "*+*+", "+-+-", "**+*", "+-++", "****"]:
+    for s in ["++++", "*+*+", "+-+-", "**+*", "+-++", "****", "++*/", "*-*+", "+*-*", "/++*",
+              "-+-+", "*/*-", "+++*", "***/", "+/*+", "-*-/", "/+-/", "*/**", "++-/", "*+-*"]:
         seq_templates.append((left_chain(list(s)), 5))
+    for s in ["+++++", "*+*++", "+-+-+"]:
+        seq_templates.append((left_chain(list(s)), 6))
+    for s in ["***+**", "+-++*+", "****++"]:
+        seq_templates.append((left_chain(list(s)), 7))
+    # 右结合链（确保结合顺序不影响结果）
+    for s in ["++", "*+", "+*", "**", "*/", "/*"]:
+        seq_templates.append((right_chain(list(s)), 3))
+    for s in ["+++", "***", "*+*", "*/+", "+/*"]:
+        seq_templates.append((right_chain(list(s)), 4))
     for tree, arity in zip(SHAPES, SHAPE_ARITY):
         seq_templates.append((tree, arity))
 
+    # 类型对覆盖模板：4 运算 × 2 操作数，确保不同类型直接组合
+    for op in ["+", "-", "*", "/"]:
+        seq_templates.append((N(op, 0, 1), 2))
+
     # 每个模板多次随机抽样，直到拿够合法案例
-    PER = 8
+    PER = 100
+
     for tree, arity in seq_templates:
         got = 0
         attempts = 0
-        while got < PER and attempts < 400:
+        while got < PER and attempts < 1000:
             attempts += 1
             ops = tuple(rng.choice(pool) for _ in range(arity))
             try:
@@ -597,7 +724,11 @@ def main():
         names = ["v%d_%d" % (cid, i) for i in range(arity)]
         expr = emit_node(tree, names)
         emit_case(cid, decls, expr)
-        expected.append("C%d:%s=%s" % (cid, cat, result_str(cat, v)))
+        # long double 类型名：任一操作数是 long double 时，type() 返回 "long double"
+        type_name = cat
+        if cat == CAT_DOUBLE and any(o[1] == "long double" for o in ops):
+            type_name = "long double"
+        expected.append("C%d:%s=%s" % (cid, type_name, result_str(cat, v)))
 
     # 手工用例
     base = len(cases)
@@ -675,8 +806,8 @@ def main():
             if isinstance(n, int):
                 if n in operands_eval:
                     o = operands_eval[n]
-                    return o[0], o[3]
-                return (CAT_INT, n)
+                    return o[0], to_int64(o[3]) if o[0] == CAT_INT else o[3]
+                return (CAT_INT, to_int64(n))
             if isinstance(n, float):
                 return (CAT_DOUBLE, n)
             if isinstance(n, str):
@@ -701,13 +832,13 @@ def main():
                 dr = (vr[0], vr[1]) if cr == CAT_DECIMAL else dec_from_value(cr, vr)
                 return CAT_DECIMAL, dec_op(dl, dr, op)
             if res == CAT_DOUBLE:
-                dl = float(vl) if cl == CAT_INT else vl
-                dr = float(vr) if cr == CAT_INT else vr
+                dl = float(to_int64(vl)) if cl == CAT_INT else vl
+                dr = float(to_int64(vr)) if cr == CAT_INT else vr
                 if op == "/" and dr == 0.0:
                     return CAT_DOUBLE, 0.0   # VM double 除零返回 0
                 return CAT_DOUBLE, {"+": dl + dr, "-": dl - dr, "*": dl * dr, "/": dl / dr}[op]
-            return CAT_INT, {"+": vl + vr, "-": vl - vr, "*": vl * vr,
-                             "/": (0 if vr == 0 else trunc_div(vl, vr))}[op]
+            return CAT_INT, to_int64({"+": vl + vr, "-": vl - vr, "*": vl * vr,
+                             "/": (0 if vr == 0 else trunc_div(vl, vr))}[op])
 
         cat3, v3 = eval_with_const(tree)
         expected.append("C%d:%s=%s" % (cid, cat3, result_str(cat3, v3)))

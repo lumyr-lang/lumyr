@@ -19,7 +19,6 @@ int vm_exec_io_print(VMExecCtx* ctx, Instruction* in) {
     print_count++;
     Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
     int sp = --g_stack_mgr->sp[STACK_VALUE];
-    fprintf(stderr, "DEBUG: print #%d, sp=%d\n", print_count, sp);
     lumyr_print(stk[sp]);
     return 1;
 }
@@ -73,7 +72,6 @@ int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
     print_ptr_count++;
     void* val;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
-    fprintf(stderr, "DEBUG: print_ptr #%d, val=%s\n", print_ptr_count, val ? (char*)val : "(null)");
     if(val) {
         printf("%s\n", (char*)val);
     } else {

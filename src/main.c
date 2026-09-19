@@ -219,13 +219,9 @@ int main(int argc, char** argv) {
             }
         } else {
             // 字节码 VM 执行（AST → IR → vm）
-            fprintf(stderr, "[MAIN] before ir_compile_main\n");
             BytecodeFunc* main_fn = ir_compile_main(root);
-            fprintf(stderr, "[MAIN] after ir_compile_main, before vm_run_main\n");
             vm_run_main(main_fn);
-            fprintf(stderr, "[MAIN] after vm_run_main, before bytecode_func_free\n");
             bytecode_func_free(main_fn);
-            fprintf(stderr, "[MAIN] after bytecode_func_free\n");
         }
         ast_free(root);
     }
