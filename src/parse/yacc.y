@@ -1067,6 +1067,23 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.is_ffi = 0;
           try_register_global_func($2, func_val); /* class内部不注册全局符号表 */
         }
+        | FUNC ID LPAREN param_list RPAREN COLON type_name_str block_stmt {
+          /* 冒号后缀返回类型：func name(params) : type { ... } */
+          $$ = ast_func_def($2, $4, $8);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.ret_type_name = $7;
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($2, func_val);
+        }
         | FUNC operator LPAREN param_list RPAREN block_stmt {
           /* 运算符重载：func +(other) { ... } */
           $$ = ast_func_def($2, $4, $6);

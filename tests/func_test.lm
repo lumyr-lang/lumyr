@@ -39,6 +39,16 @@ p = 1; q = 2;
 swap_ref(p, q);
 print("AC5b", p, q);                  // 期望 2 1
 
+// 带类型标注 ref <int>（走 INT64 槽，零 BOX）
+func inc_typed(ref <int> n) { n = n + 5; }
+func swap_typed(ref <int> a, ref <int> b) { t = a; a = b; b = t; }
+x = 100;
+inc_typed(x);
+print("AC5c", x);                     // 期望 105
+p = 7; q = 9;
+swap_typed(p, q);
+print("AC5d", p, q);                  // 期望 9 7
+
 // --- AC-6: 返回值与返回类型标注 ---
 func <int> ret_int() { return 42; }
 func no_ret() { x = 1; }

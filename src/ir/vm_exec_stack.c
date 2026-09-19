@@ -5,6 +5,7 @@
 #include "vm_types.h"
 #include "stack_manager.h"
 #include "lumyr_value.h"
+#include "lm_map.h"
 
 /* ===== 栈操作 ===== */
 
@@ -70,6 +71,39 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
         int64_t i = value_to_index(idx);
         if(i >= 0 && i < (int64_t)arr.v.array->len)
             r = arr.v.array->items[i];
+    } else if(arr.type == VAL_MAP) {
+        r = lumyr_map_get(arr, idx);
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+    return 1;
+}
+
+/* INDEX_SET：弹 val,idx,arr（栈顶为 val），写入数组/字典，压回 val（表达式值） */
+int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx; (void)in;
+    Value val; stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    Value idx; stack_vm_pop(g_stack_mgr, STACK_VALUE, &idx);
+    Value arr; stack_vm_pop(g_stack_mgr, STACK_VALUE, &arr);
+    if(arr.type == VAL_ARRAY) {
+        int64_t i = value_to_index(idx);
+        if(i >= 0 && i < (int64_t)arr.v.array->len)
+            arr.v.array->items[i] = val;
+    } else if(arr.type == VAL_MAP) {
+        lumyr_map_set(&arr, idx, val);
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &val);
+    return 1;
+}
+
+/* MAP_LIT：弹 2b 个 VALUE（键、值交替，栈顶为最后一个值），构造字典压 VALUE 栈 */
+int vm_exec_map_lit(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    int pairs = in->b;
+    Value r = val_map();
+    for(int p = pairs - 1; p >= 0; --p) {
+        Value val; stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+        Value key; stack_vm_pop(g_stack_mgr, STACK_VALUE, &key);
+        lumyr_map_set(&r, key, val);
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;

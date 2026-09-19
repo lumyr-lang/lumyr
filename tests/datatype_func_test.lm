@@ -1,0 +1,212 @@
+// ============================================================
+// 全数据类型函数测试：值传递 + ref 引用传递
+// 覆盖：整型族 19 种 + 浮点族 3 种 + string/bigint/decimal + array/map
+// ============================================================
+
+// ------------------------------------------------------------
+// 第一部分：整型族（统一 INT64 存储栈）
+// 每种类型：pass 值传递恒等 + bump ref 自增
+// ------------------------------------------------------------
+
+func <int>      pass_int(<int> x)      { return x; }
+func <int8>     pass_int8(<int8> x)    { return x; }
+func <int16>    pass_int16(<int16> x)  { return x; }
+func <int32>    pass_int32(<int32> x)  { return x; }
+func <int64>    pass_int64(<int64> x)  { return x; }
+func <uint8>    pass_uint8(<uint8> x)  { return x; }
+func <uint16>   pass_uint16(<uint16> x){ return x; }
+func <uint32>   pass_uint32(<uint32> x){ return x; }
+func <uint64>   pass_uint64(<uint64> x){ return x; }
+func <short>    pass_short(<short> x)  { return x; }
+func <ushort>   pass_ushort(<ushort> x){ return x; }
+func <long>     pass_long(<long> x)    { return x; }
+func <long long>     pass_long_long(<long long> x)    { return x; }
+func <ulong>    pass_ulong(<ulong> x)  { return x; }
+func <size_t>   pass_size(<size_t> x)  { return x; }
+func <ssize_t>  pass_ssize(<ssize_t> x){ return x; }
+func <byte>     pass_byte(<byte> x)    { return x; }
+func <uchar>    pass_uchar(<uchar> x)  { return x; }
+func <bool>     pass_bool(<bool> x)    { return x; }
+func <char>     pass_char(<char> x)    { return x; }
+
+func bump_int(ref <int> x)      { x = x + 1; }
+func bump_int8(ref <int8> x)    { x = x + 1; }
+func bump_int16(ref <int16> x)  { x = x + 1; }
+func bump_int32(ref <int32> x)  { x = x + 1; }
+func bump_int64(ref <int64> x)  { x = x + 1; }
+func bump_uint8(ref <uint8> x)  { x = x + 1; }
+func bump_uint16(ref <uint16> x){ x = x + 1; }
+func bump_uint32(ref <uint32> x){ x = x + 1; }
+func bump_uint64(ref <uint64> x){ x = x + 1; }
+func bump_short(ref <short> x)  { x = x + 1; }
+func bump_ushort(ref <ushort> x){ x = x + 1; }
+func bump_long(ref <long> x)    { x = x + 1; }
+func bump_ulong(ref <ulong> x)  { x = x + 1; }
+func bump_size(ref <size_t> x)  { x = x + 1; }
+func bump_ssize(ref <ssize_t> x){ x = x + 1; }
+func bump_byte(ref <byte> x)    { x = x + 1; }
+func bump_uchar(ref <uchar> x)  { x = x + 1; }
+func bump_bool(ref <bool> x)    { x = x - 1; }   // 1 -> 0
+func bump_char(ref <char> x)    { x = x + 1; }   // A(65) -> B(66)
+
+v = <int>40;
+print("D1 int pass", pass_int(v));
+bump_int(v); print("D1 int ref", v);             // 期望 41
+
+v = <int8>5;
+print("D2 int8 pass", pass_int8(v));
+bump_int8(v); print("D2 int8 ref", v);           // 期望 6
+
+v = <int16>1000;
+print("D3 int16 pass", pass_int16(v));
+bump_int16(v); print("D3 int16 ref", v);         // 期望 1001
+
+v = <int32>100000;
+print("D4 int32 pass", pass_int32(v));
+bump_int32(v); print("D4 int32 ref", v);         // 期望 100001
+
+v = <int64>10000000000;
+print("D5 int64 pass", pass_int64(v));
+bump_int64(v); print("D5 int64 ref", v);         // 期望 10000000001
+
+v = <uint8>200;
+print("D6 uint8 pass", pass_uint8(v));
+bump_uint8(v); print("D6 uint8 ref", v);         // 期望 201
+
+v = <uint16>60000;
+print("D7 uint16 pass", pass_uint16(v));
+bump_uint16(v); print("D7 uint16 ref", v);       // 期望 60001
+
+v = <uint32>4000000000;
+print("D8 uint32 pass", pass_uint32(v));
+bump_uint32(v); print("D8 uint32 ref", v);       // 期望 4000000001
+
+v = <uint64>10000000000;
+print("D9 uint64 pass", pass_uint64(v));
+bump_uint64(v); print("D9 uint64 ref", v);       // 期望 10000000001
+
+v = <short>100;
+print("D10 short pass", pass_short(v));
+bump_short(v); print("D10 short ref", v);        // 期望 101
+
+v = <ushort>100;
+print("D11 ushort pass", pass_ushort(v));
+bump_ushort(v); print("D11 ushort ref", v);      // 期望 101
+
+v = <long>100;
+print("D12 long pass", pass_long(v));
+bump_long(v); print("D12 long ref", v);          // 期望 101
+
+v = <ulong>100;
+print("D13 ulong pass", pass_ulong(v));
+bump_ulong(v); print("D13 ulong ref", v);        // 期望 101
+
+v = <size_t>100;
+print("D14 size pass", pass_size(v));
+bump_size(v); print("D14 size ref", v);          // 期望 101
+
+v = <ssize_t>100;
+print("D15 ssize pass", pass_ssize(v));
+bump_ssize(v); print("D15 ssize ref", v);        // 期望 101
+
+v = <byte>200;
+print("D16 byte pass", pass_byte(v));
+bump_byte(v); print("D16 byte ref", v);          // 期望 201
+
+v = <uchar>200;
+print("D17 uchar pass", pass_uchar(v));
+bump_uchar(v); print("D17 uchar ref", v);        // 期望 201
+
+v = <bool>1;
+print("D18 bool pass", pass_bool(v));
+bump_bool(v); print("D18 bool ref", v);          // 期望 0
+
+v = <char>65;
+print("D19 char pass", pass_char(v));
+bump_char(v); print("D19 char ref", v);          // 期望 66
+
+// ------------------------------------------------------------
+// 第二部分：浮点族（统一 DOUBLE 存储栈），bump 为 x = x + x
+// ------------------------------------------------------------
+
+func <double>      pass_double(<double> x)       { return x; }
+func <float>       pass_float(<float> x)         { return x; }
+func <long double> pass_ldouble(<long double> x) { return x; }
+
+func bump_double(ref <double> x)       { x = x + x; }
+func bump_float(ref <float> x)         { x = x + x; }
+func bump_ldouble(ref <long double> x) { x = x + x; }
+
+dv = <double>2.25;
+print("D20 double pass", pass_double(dv));
+bump_double(dv); print("D20 double ref", dv);    // 期望 4.5
+
+fv = <float>1.25;
+print("D21 float pass", pass_float(fv));
+bump_float(fv); print("D21 float ref", fv);       // 期望 2.5
+
+lv = <long_double>3.75;
+print("D22 ldouble pass", pass_ldouble(lv));
+bump_ldouble(lv); print("D22 ldouble ref", lv);  // 期望 7.5
+
+// ------------------------------------------------------------
+// 第三部分：string / bigint / decimal（PTR 存储栈）
+// ------------------------------------------------------------
+
+func <string>  pass_string(<string> x)   { return x; }
+func <bigint>  pass_bigint(<bigint> x)   { return x; }
+func <decimal> pass_decimal(<decimal> x) { return x; }
+
+func bump_string(ref <string> x)   { x = x + "!"; }
+func bump_bigint(ref <bigint> x)   { x = x + x; }
+func bump_decimal(ref <decimal> x) { x = x + x; }
+
+s = <string>"abc";
+print("D23 string pass", pass_string(s));
+bump_string(s); print("D23 string ref", s);      // 期望 abc!
+
+bi = <bigint>"1000";
+print("D24 bigint pass", pass_bigint(bi));
+bump_bigint(bi); print("D24 bigint ref", bi);    // 期望 2000
+
+de = <decimal>"1.25";
+print("D25 decimal pass", pass_decimal(de));
+bump_decimal(de); print("D25 decimal ref", de);  // 期望 2.5
+
+// ------------------------------------------------------------
+// 第四部分：array / map（引用类型，经 ref 改元素/键）
+// ------------------------------------------------------------
+
+func bump_array(ref a) { a[0] = 99; }
+func bump_map(ref m)   { m["a"] = 2; }
+
+arr = [1, 2, 3];
+bump_array(arr); print("D26 array ref", arr[0]); // 期望 99
+print("D26 array len", arr);
+
+mp = {"a": 1, "b": 2};
+bump_map(mp); print("D27 map ref", mp["a"]);     // 期望 2
+print("D27 map get b", mp["b"]);                 // 期望 2
+
+// ------------------------------------------------------------
+// 第五部分：混合场景
+// ------------------------------------------------------------
+
+// 多类型形参 + 跨类型运算：d * n，n 需提升为 double
+func <double> poly(<int> n, <double> d) { return d * n; }
+print("D28 mixed poly", poly(3, 2.5));           // 期望 7.5
+
+// 无标注（动态）形参接受任意类型，原样返回
+func echo(v) { return v; }
+print("D29 echo int", echo(42));
+print("D29 echo double", echo(1.5));
+print("D29 echo string", echo("zzz"));
+print("D29 echo array", echo([7, 8]));
+print("D29 echo map", echo({"k": 1}));
+
+// typed 返回 + 默认参数（默认形参不支持类型标注，RETURN 处自动拆箱）
+func <int> step(<int> x, d = 10) { return x + d; }
+print("D30 default omit", step(5));              // 期望 15
+print("D30 default give", step(5, 100));         // 期望 105
+
+print("DATATYPE_TEST_DONE");

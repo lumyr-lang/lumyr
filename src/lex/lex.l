@@ -24,6 +24,15 @@ static int is_expr_end(int t)
         case TRY:                 /* try { → 块 */
         case FINALLY:             /* finally { → 块 */
         case TOK_DO:              /* do { → 块 */
+        /* 内置类型关键字：出现在冒号返回类型后，其后的 { 一定是块而非 map */
+        case TOK_INT: case TOK_DOUBLE: case TOK_CHAR: case TOK_STRING:
+        case TOK_BOOL: case TOK_ASCII: case TOK_BYTE:
+        case TOK_INT8: case TOK_INT16: case TOK_INT32: case TOK_INT64:
+        case TOK_UINT8: case TOK_UINT16: case TOK_UINT32: case TOK_UINT64:
+        case TOK_UINT: case TOK_LONGLONG: case TOK_LONG: case TOK_FLOAT:
+        case TOK_ULONG: case TOK_UCHAR: case TOK_SHORT: case TOK_USHORT:
+        case TOK_SIZE_T: case TOK_SSIZE_T: case TOK_VOID:
+        case TOK_LONG_DOUBLE: case TOK_PTR:
             return 1;
         default:
             return 0;

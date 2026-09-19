@@ -495,6 +495,32 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         return EXPR_TYPE_NONE;
     }
 
+    case AST_MAP_LIT: {
+        /* 字典字面量 {k1:v1,...}：键、值交替目标 VALUE 压栈，MAP_LIT 弹出组装 */
+        AstNode** ev = NULL;
+        int ecnt = 0, ecap = 0;
+        collect_call_args(node->u.map_lit.entries, &ev, &ecnt, &ecap);
+        for(int i = 0; i < ecnt; i++) {
+            AstNode* e = ev[i];
+            if(e && e->type == AST_MAP_ENTRY) {
+                c_expr_to_value(c, e->u.map_entry.key);
+                c_expr_to_value(c, e->u.map_entry.value);
+            }
+        }
+        emit(c, OPC_MAP_LIT, 0, ecnt);
+        free(ev);
+        return EXPR_TYPE_NONE;
+    }
+
+    case AST_INDEX_ASSIGN: {
+        /* 下标写 arr[i] = v（表达式值为 v）：arr,idx,v 目标 VALUE 压栈，INDEX_SET */
+        c_expr_to_value(c, node->u.index_assign.arr);
+        c_expr_to_value(c, node->u.index_assign.idx);
+        c_expr_to_value(c, node->u.index_assign.value);
+        emit(c, OPC_INDEX_SET, 0, 0);
+        return EXPR_TYPE_NONE;
+    }
+
     case AST_DYN_CALL: {
         /* 动态调用 callee(args)：callee 与实参全部目标 VALUE + CALLV */
         c_expr_to_value(c, node->u.dyn_call.callee);
@@ -957,6 +983,14 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         }
     }
 
+    /* 函数调用：取 callee 返回类型标注（无标注 → NONE） */
+    if(node->type == AST_CALL) {
+        BytecodeFunc* callee = ir_func_table_lookup(node->u.call.name);
+        if(callee && callee->ret_type_name)
+            return ir_type_name_to_castkind(callee->ret_type_name);
+        return CAST_NONE;
+    }
+
     /* 二元运算：递归判断（严格遵循 C/C++ 算术类型提升规则） */
     if(node->type == AST_BINOP) {
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
@@ -989,12 +1023,29 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
 
 /* 把栈顶值从 from 转换为目标 ExprType（仅处理已支持的跨栈转换） */
 static void emit_value_cast(Ctx* c, ExprType from, ExprType to) {
-    if(from == to || from == EXPR_TYPE_NONE || to == EXPR_TYPE_NONE) return;
+    if(from == to) return;
+    if(to == EXPR_TYPE_NONE) return;   /* 目标 VALUE：装箱由 emit_to_dynamic 负责 */
+    if(from == EXPR_TYPE_NONE) {
+        /* 源 VALUE（动态） -> 目标 typed：拆箱 */
+        if(to == EXPR_TYPE_INT)
+            emit(c, OPC_UNBOX_INT64, 0, 0);
+        else if(to == EXPR_TYPE_DOUBLE)
+            emit(c, OPC_UNBOX_DOUBLE, 0, 0);
+        /* VALUE -> PTR 无通用拆箱，暂不支持 */
+        return;
+    }
     if(to == EXPR_TYPE_DOUBLE && from == EXPR_TYPE_INT)
         emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
     else if(to == EXPR_TYPE_INT && from == EXPR_TYPE_DOUBLE)
         emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
-    /* PTR/string 与数值的跨类转换当前不支持，保持原样 */
+    else if(to == EXPR_TYPE_PTR) {
+        /* 数值 -> string（结果 PTR 栈）；数值到其它 PTR 类型无意义 */
+        if(from == EXPR_TYPE_INT)
+            emit(c, OPC_INT64_TO_STRING, 0, 0);
+        else if(from == EXPR_TYPE_DOUBLE)
+            emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+    }
+    /* PTR/string 与数值的其它跨类转换当前不支持，保持原样 */
 }
 
 /* 判断表达式是否"数值型"（可能产生数值 VALUE）。
@@ -1516,6 +1567,13 @@ void c_stmt(Ctx* c, AstNode* node) {
         } else {
             fprintf(stderr, "IR: unknown function %s\n", call_name);
         }
+        break;
+    }
+
+    case AST_INDEX_ASSIGN: {
+        /* 下标写语句：编译（INDEX_SET 压回 v），丢弃结果 */
+        c_expr(c, node);
+        emit(c, OPC_POP, 0, 0);
         break;
     }
 

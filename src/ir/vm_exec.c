@@ -23,6 +23,8 @@ int vm_exec_stack_pop(VMExecCtx* ctx, Instruction* in);
 int vm_exec_stack_dup(VMExecCtx* ctx, Instruction* in);
 int vm_exec_array_lit(VMExecCtx* ctx, Instruction* in);
 int vm_exec_index_get(VMExecCtx* ctx, Instruction* in);
+int vm_exec_index_set(VMExecCtx* ctx, Instruction* in);
+int vm_exec_map_lit(VMExecCtx* ctx, Instruction* in);
 
 /* 常量加载 */
 int vm_exec_load_int64_const(VMExecCtx* ctx, Instruction* in);
@@ -196,6 +198,8 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DUP: handled = vm_exec_stack_dup(ctx, &in); break;
         case OPC_ARRAY_LIT: handled = vm_exec_array_lit(ctx, &in); break;
         case OPC_INDEX_GET: handled = vm_exec_index_get(ctx, &in); break;
+        case OPC_INDEX_SET: handled = vm_exec_index_set(ctx, &in); break;
+        case OPC_MAP_LIT: handled = vm_exec_map_lit(ctx, &in); break;
 
         /* ===== 常量加载 ===== */
         case OPC_PUSH_INT64_CONST: handled = vm_exec_load_int64_const(ctx, &in); break;
