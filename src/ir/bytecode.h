@@ -19,6 +19,7 @@ int bf_emit_here(BytecodeFunc* fn, OpCode op, int a, int b);
 const char* opc_name(OpCode op);
 void bf_patch(BytecodeFunc* fn, int pos, int target);
 void bf_patch_b(BytecodeFunc* fn, int pos, int target);
+int bf_add_callsite(BytecodeFunc* fn, const char* callee, int argc, int keep_result, int ret_stack);
 
 /* ============================================================
  * 静态栈深度分析

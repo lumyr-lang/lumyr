@@ -5,6 +5,7 @@
  */
 #include "vm_types.h"
 #include "vm.h"
+#include "ir_types.h"
 #include "stack_manager.h"
 #include "ast/stackframe.h"
 #include "lumyr_value_type.h"
@@ -20,6 +21,8 @@
 /* 栈操作 */
 int vm_exec_stack_pop(VMExecCtx* ctx, Instruction* in);
 int vm_exec_stack_dup(VMExecCtx* ctx, Instruction* in);
+int vm_exec_array_lit(VMExecCtx* ctx, Instruction* in);
+int vm_exec_index_get(VMExecCtx* ctx, Instruction* in);
 
 /* 常量加载 */
 int vm_exec_load_int64_const(VMExecCtx* ctx, Instruction* in);
@@ -101,6 +104,9 @@ int vm_exec_control_jmp_if_false(VMExecCtx* ctx, Instruction* in);
 int vm_exec_call(VMExecCtx* ctx, Instruction* in);
 int vm_exec_return(VMExecCtx* ctx, Instruction* in);
 int vm_exec_builtin(VMExecCtx* ctx, Instruction* in);
+int vm_exec_getfunc(VMExecCtx* ctx, Instruction* in);
+int vm_exec_callv(VMExecCtx* ctx, Instruction* in);
+int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in);
 
 /* 输入输出 */
 int vm_exec_io_print(VMExecCtx* ctx, Instruction* in);
@@ -114,18 +120,57 @@ int vm_exec_io_print_decimal(VMExecCtx* ctx, Instruction* in);
 int vm_exec_type_int64_to_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_type_double_to_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in);
+int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in);
+int vm_exec_box_double(VMExecCtx* ctx, Instruction* in);
+int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in);
+int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in);
+int vm_exec_unbox_double(VMExecCtx* ctx, Instruction* in);
 
-/* ========== 主执行循环 ========== */
-Value vm_execute(VMExecCtx* ctx) {
-    Instruction* code = ctx->code;
-    ctx->pc = 0;
-    Value result = val_none();
+/* 异常处理（vm_except.c） */
+int vm_exec_try(VMExecCtx* ctx, Instruction* in);
+int vm_exec_endtry(VMExecCtx* ctx, Instruction* in);
+int vm_exec_get_err(VMExecCtx* ctx, Instruction* in);
+int vm_exec_throw(VMExecCtx* ctx, Instruction* in);
+int vm_exec_finish(VMExecCtx* ctx, Instruction* in);
+int vm_exec_pend_return(VMExecCtx* ctx, Instruction* in);
+int vm_exec_fin_push(VMExecCtx* ctx, Instruction* in);
+int vm_exec_catch_match(VMExecCtx* ctx, Instruction* in);
 
+/* 通用 Value 运算（动态兜底） */
+int vm_exec_vadd(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vsub(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vmul(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vdiv(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vmod(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vneg(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vgt(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vlt(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vge(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vle(VMExecCtx* ctx, Instruction* in);
+int vm_exec_veq(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vne(VMExecCtx* ctx, Instruction* in);
+int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in);
+int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in);
 
-    /* 初始化全局栈管理器 */
-    if (!g_stack_mgr) {
-        stack_global_init(256);
+/* ========== 返回值独立化：堆字符串拷贝为独立副本（帧销毁后仍有效）；SSO/数值按值拷贝即可 ========== */
+Value ret_value_detach(Value v) {
+    if (v.type == VAL_STRING && !v.str_inline && v.v.s) {
+        char* p = strdup(v.v.s);
+        if (p) v.v.s = p;
     }
+    return v;
+}
+
+/* ========== 可重入执行循环：运行 ctx->fn 直到 RETURN/RETURN_NIL 或自然结束 ==========
+   返回值写入 *ret_out。每层函数调用（vm_exec_call）都会新建帧并再次进入本循环，
+   故 RETURN 只结束当前层，而非直接终止整个程序。 */
+int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
+    Instruction* code = ctx->code;
+    ret->et = EXPR_TYPE_NONE;
+    ret->v  = val_none();
+    ret->i  = 0;
+    ret->d  = 0.0;
+    ret->p  = NULL;
 
     int total_instr = 0;
     /* 程序计数器统一使用 ctx->pc：控制流指令（JMP/JMP_IF_*）直接改写它。
@@ -147,6 +192,8 @@ Value vm_execute(VMExecCtx* ctx) {
         /* ===== 栈操作 ===== */
         case OPC_POP: handled = vm_exec_stack_pop(ctx, &in); break;
         case OPC_DUP: handled = vm_exec_stack_dup(ctx, &in); break;
+        case OPC_ARRAY_LIT: handled = vm_exec_array_lit(ctx, &in); break;
+        case OPC_INDEX_GET: handled = vm_exec_index_get(ctx, &in); break;
 
         /* ===== 常量加载 ===== */
         case OPC_PUSH_INT64_CONST: handled = vm_exec_load_int64_const(ctx, &in); break;
@@ -176,6 +223,26 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_INT64_TO_DOUBLE: handled = vm_exec_type_int64_to_double(ctx, &in); break;
         case OPC_DOUBLE_TO_INT64: handled = vm_exec_type_double_to_int64(ctx, &in); break;
         case OPC_NEG: handled = vm_exec_type_neg(ctx, &in); break;
+        case OPC_BOX_INT64:  handled = vm_exec_box_int64(ctx, &in); break;
+        case OPC_BOX_DOUBLE: handled = vm_exec_box_double(ctx, &in); break;
+        case OPC_BOX_PTR:    handled = vm_exec_box_ptr(ctx, &in); break;
+        case OPC_PUSH_NONE: {
+            Value v; v.type = VAL_NONE; v.v.i = 0;
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+            handled = 1; break;
+        }
+        case OPC_UNBOX_INT64:  handled = vm_exec_unbox_int64(ctx, &in); break;
+        case OPC_UNBOX_DOUBLE: handled = vm_exec_unbox_double(ctx, &in); break;
+
+        /* ===== 异常处理 ===== */
+        case OPC_TRY:         handled = vm_exec_try(ctx, &in); break;
+        case OPC_ENDTRY:      handled = vm_exec_endtry(ctx, &in); break;
+        case OPC_GET_ERR:     handled = vm_exec_get_err(ctx, &in); break;
+        case OPC_THROW:       handled = vm_exec_throw(ctx, &in); break;
+        case OPC_FINISH:      handled = vm_exec_finish(ctx, &in); break;
+        case OPC_PEND_RETURN: handled = vm_exec_pend_return(ctx, &in); break;
+        case OPC_FIN_PUSH:    handled = vm_exec_fin_push(ctx, &in); break;
+        case OPC_CATCH_MATCH: handled = vm_exec_catch_match(ctx, &in); break;
 
         /* ===== 算术运算（DOUBLE 栈） ===== */
         case OPC_DOUBLE_ADD: handled = vm_exec_arith_double_add(ctx, &in); break;
@@ -236,10 +303,29 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_JMP: handled = vm_exec_control_jmp(ctx, &in); break;
         case OPC_JMP_IF_TRUE: handled = vm_exec_control_jmp_if_true(ctx, &in); break;
         case OPC_JMP_IF_FALSE: handled = vm_exec_control_jmp_if_false(ctx, &in); break;
+        case OPC_JMP_IF_TRUE_V: handled = vm_exec_control_jmp_if_true_value(ctx, &in); break;
+        case OPC_JMP_IF_FALSE_V: handled = vm_exec_control_jmp_if_false_value(ctx, &in); break;
+
+        /* ===== 通用 Value 运算（动态兜底） ===== */
+        case OPC_VADD: handled = vm_exec_vadd(ctx, &in); break;
+        case OPC_VSUB: handled = vm_exec_vsub(ctx, &in); break;
+        case OPC_VMUL: handled = vm_exec_vmul(ctx, &in); break;
+        case OPC_VDIV: handled = vm_exec_vdiv(ctx, &in); break;
+        case OPC_VMOD: handled = vm_exec_vmod(ctx, &in); break;
+        case OPC_VNEG: handled = vm_exec_vneg(ctx, &in); break;
+        case OPC_VGT: handled = vm_exec_vgt(ctx, &in); break;
+        case OPC_VLT: handled = vm_exec_vlt(ctx, &in); break;
+        case OPC_VGE: handled = vm_exec_vge(ctx, &in); break;
+        case OPC_VLE: handled = vm_exec_vle(ctx, &in); break;
+        case OPC_VEQ: handled = vm_exec_veq(ctx, &in); break;
+        case OPC_VNE: handled = vm_exec_vne(ctx, &in); break;
 
         /* ===== 函数调用 ===== */
         case OPC_CALL: handled = vm_exec_call(ctx, &in); break;
         case OPC_BUILTIN: handled = vm_exec_builtin(ctx, &in); break;
+        case OPC_GETFUNC: handled = vm_exec_getfunc(ctx, &in); break;
+        case OPC_CALLV: handled = vm_exec_callv(ctx, &in); break;
+        case OPC_MKCLOSURE: handled = vm_exec_mkclosure(ctx, &in); break;
 
         /* ===== 打印 ===== */
         case OPC_PRINT: handled = vm_exec_io_print(ctx, &in); break;
@@ -249,22 +335,75 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_PRINT_BIGINT: handled = vm_exec_io_print_bigint(ctx, &in); break;
         case OPC_PRINT_DECIMAL: handled = vm_exec_io_print_decimal(ctx, &in); break;
 
-        /* ===== 返回 ===== */
+        /* ===== 返回：只结束当前层；按 ExprType 从对应栈弹原始值入返回槽 ===== */
         case OPC_RETURN: {
-            stack_vm_pop(g_stack_mgr, STACK_VALUE, &result);
-            goto done;
+            ExprType et = (ExprType)in.a;
+            ret->et = (int)et;
+            switch (et) {
+            case EXPR_TYPE_INT:
+                ret->i = POP_INT64();
+                break;
+            case EXPR_TYPE_DOUBLE:
+                ret->d = POP_DOUBLE();
+                break;
+            case EXPR_TYPE_PTR: {
+                void* p = POP_PTR();
+                /* b=CastKind：字符串深拷贝，使其独立于即将销毁的帧 */
+                if ((CastKind)in.b == CAST_STRING && p) {
+                    char* cp = strdup((char*)p);
+                    if (cp) p = cp;
+                }
+                ret->p = p;
+                break;
+            }
+            default:
+                stack_vm_pop(g_stack_mgr, STACK_VALUE, &ret->v);
+                ret->v = ret_value_detach(ret->v);
+                break;
+            }
+            return 0;
         }
+
+        case OPC_RETURN_NIL:
+            ret->et = EXPR_TYPE_NONE;
+            ret->v  = val_none();
+            return 0;
 
         default:
             fprintf(stderr, "VM: unknown opcode %d at pc %d\n", (int)in.op, ctx->pc-1);
-            goto done;
+            ret->et = EXPR_TYPE_NONE;
+            ret->v  = val_none();
+            return 0;
         }
 
         if (!handled) {
             fprintf(stderr, "VM: instruction not handled %d at pc %d\n", (int)in.op, ctx->pc-1);
         }
+
+        /* try 内 return 且所有 finally 已执行完：用挂起值结束当前帧 */
+        if (vm_except_take_pending_return(ret))
+            return VM_LOOP_NORMAL;
+
+        /* 异常跨帧展开：捕获帧由 check 内部设 current_error 并重定位 pc；
+           非捕获帧结束当前层，向调用者传播 VM_LOOP_UNWIND。 */
+        if (vm_except_check_unwind(ctx) < 0)
+            return VM_LOOP_UNWIND;
     }
 
-done:
-    return result;
+    /* 函数自然走到末尾（无显式 return）：返回 nil */
+    ret->et = EXPR_TYPE_NONE;
+    ret->v  = val_none();
+    return 0;
+}
+
+/* ========== 顶层入口：初始化栈管理器并进入执行循环 ========== */
+Value vm_execute(VMExecCtx* ctx) {
+    if (!g_stack_mgr) {
+        stack_global_init(256);
+    }
+    ctx->pc = 0;
+    RetSlot ret;
+    vm_exec_loop(ctx, &ret);
+    /* 顶层 main 一般无 typed 返回值；有则退化为 nil（主流程不消费） */
+    return ret.et == EXPR_TYPE_NONE ? ret.v : val_none();
 }

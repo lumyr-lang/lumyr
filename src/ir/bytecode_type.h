@@ -186,7 +186,30 @@ typedef enum {
     /* ===== 类 ===== */
     OPC_CLASS_NEW,      // a=class名符号下标：创建 C 结构体实例并包装成 Value
 
-    OPC_HALT
+    OPC_HALT,
+
+    /* ===== 通用 Value 运算（动态类型兜底：无类型标注参数/变量，运行时按 Value.type 分派） ===== */
+    OPC_VADD,           // VALUE 栈弹2 → lumyr_add → 压结果
+    OPC_VSUB, OPC_VMUL, OPC_VDIV, OPC_VMOD,
+    OPC_VNEG,           // VALUE 栈弹1 → lumyr_unary_minus
+    OPC_VGT, OPC_VLT, OPC_VGE, OPC_VLE, OPC_VEQ, OPC_VNE, // 弹2 → bool Value
+    OPC_JMP_IF_TRUE_V,  // 条件在 VALUE 栈（truthy 判断）
+    OPC_JMP_IF_FALSE_V,
+
+    /* ===== typed 栈 -> VALUE 栈装箱（实参 typed、形参动态 NONE 时绑定用） ===== */
+    OPC_BOX_INT64,      // INT64 栈弹1 -> lumyr_make_int64 -> VALUE 栈
+    OPC_BOX_DOUBLE,     // DOUBLE 栈弹1 -> lumyr_make_double -> VALUE 栈
+    OPC_BOX_PTR,        // PTR 栈弹1，a=CastKind -> 对应 Value -> VALUE 栈
+
+    // 多 catch 类型匹配：a=异常类型字符串常量下标(-1=捕获全部)，b=不匹配跳转pc
+    OPC_CATCH_MATCH,
+
+    // null 字面量：压入 VALUE 栈的 NONE
+    OPC_PUSH_NONE,
+
+    // VALUE 栈 -> typed 栈拆箱（赋值给已 typed 变量时使用）
+    OPC_UNBOX_INT64,    // VALUE 栈弹1 -> 取 i64 -> INT64 栈
+    OPC_UNBOX_DOUBLE,   // VALUE 栈弹1 -> 取 double -> DOUBLE 栈
 } OpCode;
 
 /* ============================================================
@@ -347,6 +370,19 @@ typedef struct {
 } ConstEntry;
 
 /* ============================================================
+ * CallSite：一次用户函数调用点的静态信息
+ * OPC_CALL 的 a 字段 = 该 CallSite 在所属 BytecodeFunc.callsites 中的下标
+ * ============================================================ */
+typedef struct CallSite {
+    char* callee;        /* 被调用函数名（VM 据此查函数表） */
+    int argc;            /* 绑定到形参的实参个数（含默认值补全） */
+    int* arg_is_ref;     /* 每个形参是否按 ref 传递（长度 argc） */
+    int* arg_ref_slots;  /* ref 实参在调用方帧的槽位（非 ref 为 -1，长度 argc） */
+    int keep_result;     /* 1=压返回值（表达式语境）；0=丢弃（表达式语句语境） */
+    int ret_stack;       /* 返回值压入的栈（ExprType：INT/DOUBLE/PTR/NONE→VALUE） */
+} CallSite;
+
+/* ============================================================
  * BytecodeFunc 结构体：一个可执行单元（main 或一个 lum 函数）
  * ============================================================ */
 typedef struct {
@@ -368,6 +404,9 @@ typedef struct {
     int is_method;              // 是否为结构体方法（self 参数传递指针）
     char* method_self_struct;   // 方法 self 参数的 struct 类型名
     char* class_name;           // 方法所属的 class 名（NULL 表示不是 class 方法）
+    char* ret_type_name;        // 返回值类型名（如 "int"/"double"，NULL=无标注）
+    CallSite* callsites;        // 本函数内全部调用点（OPC_CALL.a 索引）
+    int callsite_cnt, callsite_cap;
 } BytecodeFunc;
 
 #endif // LUMYR_IR_BYTECODE_TYPE_H

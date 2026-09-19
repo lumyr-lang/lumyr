@@ -32,7 +32,6 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LOAD_FIELD:
         case OPC_LOAD_STRUCT_PTR:
         case OPC_BUILTIN:
-        case OPC_CALL:
         case OPC_CALLV:
         case OPC_RETURN:
         case OPC_RETURN_NIL:
@@ -61,10 +60,17 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             break;
         case OPC_ADD: case OPC_SUB: case OPC_MUL:
         case OPC_DIV: case OPC_MOD:
+        case OPC_VADD: case OPC_VSUB: case OPC_VMUL:
+        case OPC_VDIV: case OPC_VMOD:
             d.value = -1; /* 2 个弹出，1 个压入 */
+            break;
+        case OPC_VNEG:
+            d.value = 0;  /* 1 弹 1 压 */
             break;
         case OPC_GT: case OPC_LT: case OPC_GE:
         case OPC_LE: case OPC_EQ: case OPC_NE:
+        case OPC_VGT: case OPC_VLT: case OPC_VGE:
+        case OPC_VLE: case OPC_VEQ: case OPC_VNE:
         case OPC_IMPLEMENTS:
             d.value = -1; /* 2 个弹出，1 个压入 bool */
             break;
@@ -79,6 +85,8 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_JMP_IF_FALSE:
         case OPC_JMP_IF_TRUE:
         case OPC_JMP_IF_NULL:
+        case OPC_JMP_IF_FALSE_V:
+        case OPC_JMP_IF_TRUE_V:
             d.value = -1;
             break;
         case OPC_TRY:
@@ -91,12 +99,34 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             break;
         case OPC_PEND_RETURN:
             break;
+        case OPC_CATCH_MATCH:
+            break;
         case OPC_YIELD:
             d.value = 0;
             break;
         case OPC_HALT:
             break;
         case OPC_NOP:
+            break;
+
+        /* PUSH_CONST_IDX：按常量池实际类型压入对应栈（与 vm_exec_load_const_idx 一致） */
+        case OPC_PUSH_CONST_IDX:
+            if(in.a >= 0 && in.a < fn->const_cnt) {
+                switch(fn->const_pool[in.a].type) {
+                    case CONST_INT64:
+                    case CONST_UINT64: d.int64 = +1; break;
+                    case CONST_DOUBLE: d.double_stk = +1; break;
+                    case CONST_STRING: d.ptr = +1; break;
+                    default: break;
+                }
+            }
+            break;
+
+        /* CALL：压返回值与否取决于 callsite.keep_result。
+         * argc 个实参分散在各栈，此处不精确扣减（保守计入最大栈深，避免误报）。 */
+        case OPC_CALL:
+            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result)
+                d.value = +1;
             break;
 
         /* ===== INT64 栈压入指令 ===== */
@@ -131,6 +161,18 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT64_TO_PTR:
             d.int64 = -1;
             d.ptr = +1;
+            break;
+        case OPC_BOX_INT64:
+            d.int64 = -1;
+            d.value = +1;
+            break;
+        case OPC_BOX_DOUBLE:
+            d.double_stk = -1;
+            d.value = +1;
+            break;
+        case OPC_BOX_PTR:
+            d.ptr = -1;
+            d.value = +1;
             break;
         case OPC_INT64_INDEX_SET:
             d.int64 = -3; /* idx + val + receiver */
@@ -316,6 +358,7 @@ int op_stack_push(OpCode op)
         case OPC_FIN_PUSH:
         case OPC_FINISH:
         case OPC_PEND_RETURN:
+        case OPC_CATCH_MATCH:
         case OPC_THROW:
         case OPC_YIELD:
         case OPC_HALT:

@@ -244,3 +244,23 @@ void rbtree_delete(RBTree* tree, RBTNamespace ns, const char* class_name, const 
     /* TODO: 完整的红黑树删除实现 */
     (void)tree; (void)ns; (void)class_name; (void)name;
 }
+
+/* 替换已存在节点的 data，返回旧 data；键不存在返回 NULL */
+void* rbtree_set_data(RBTree* tree, RBTNamespace ns, const char* class_name, const char* name, void* data) {
+    if(!tree || !name) return NULL;
+    RBNode* x = tree->root;
+    while(x != tree->nil) {
+        RBNode key;
+        key.ns = ns;
+        key.class_name = (char*)class_name;
+        key.name = (char*)name;
+        int cmp = rbtree_compare(&key, x);
+        if(cmp == 0) {
+            void* old = x->data;
+            x->data = data;
+            return old;
+        }
+        x = cmp < 0 ? x->left : x->right;
+    }
+    return NULL;
+}

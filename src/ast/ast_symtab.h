@@ -9,6 +9,7 @@ typedef struct SymStaticEntry {
     char* name;
     ValueType ty;
     struct SymStaticEntry* next;  /* 符号栈，用于变量遮蔽 */
+    int deleted;                  /* 逻辑删除标记（rbtree_delete 未实现，作用域恢复时置位） */
 } SymStaticEntry;
 
 /* 静态符号表：用红黑树存储 */

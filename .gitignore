@@ -109,7 +109,7 @@ tests/*.c
 # Visual Studio Code
 .vscode/
 *.code-workspace
-
+*.trae/
 # Visual Studio
 .vs/
 *.suo

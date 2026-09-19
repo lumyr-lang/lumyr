@@ -291,7 +291,8 @@ RuntimeFunc* compile_func_from_ast_with_class(AstNode* func_def_ast, const char*
     // 编译函数体为字节码 IR（VM 执行；不再直接求值 AST）
     payload->body = func_def_ast->u.func_def.body;
     payload->bytecode = ir_compile_function(func_def_ast->u.func_def.name, func_def_ast->u.func_def.params, func_def_ast->u.func_def.body,
-                                            func_def_ast->u.func_def.is_generator, class_name);
+                                            func_def_ast->u.func_def.is_generator, class_name,
+                                            func_def_ast->u.func_def.ret_type_name);
 
     // 构造RuntimeFunc，原有字段一个不动
     RuntimeFunc* rf = malloc(sizeof(RuntimeFunc));
@@ -321,7 +322,9 @@ void func_compile_recompile(AstNode* def)
 {
     if(!def || def->type != AST_FUNC_DEF) return;
     const char* name = def->u.func_def.name;
-    BytecodeFunc* nb = ir_func_table_recompile(name, def->u.func_def.params, def->u.func_def.body);
+    BytecodeFunc* nb = ir_func_table_recompile(name, def->u.func_def.params, def->u.func_def.body,
+                                               def->u.func_def.is_generator, NULL,
+                                               def->u.func_def.ret_type_name);
     Value fv = sym_get(name);
     if(fv.type == VAL_FUNC) {
         RuntimeFunc* rf = (RuntimeFunc*)fv.v.func.func_obj;

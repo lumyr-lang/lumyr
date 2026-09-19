@@ -25,19 +25,18 @@ void static_sym_save(void)
     scope_stack = level;
 }
 
-/* 恢复到上一个作用域层级（弹栈），删除当前层级新创建的所有符号 */
+/* 恢复到上一个作用域层级（弹栈），逻辑删除当前层级新创建的所有符号。
+ * 注意：rbtree_delete 是未实现的 stub，不能从树中移除节点；因此采用逻辑删除
+ * （置 entry->deleted=1），既避免 use-after-free，又使 static_sym_get 视其为不存在。 */
 void static_sym_restore(void)
 {
     if(!scope_stack) return;
     ScopeLevel* level = scope_stack;
-    /* 遍历当前层级新创建的符号，从红黑树中删除并释放 */
     for(int i = 0; i < level->count; i++) {
         if(static_sym_tree) {
             SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, level->names[i]);
             if(entry) {
-                rbtree_delete(static_sym_tree, NS_VARIABLE, NULL, level->names[i]);
-                free(entry->name);
-                free(entry);
+                entry->deleted = 1;  /* 逻辑删除，不 free */
             }
         }
         free(level->names[i]);
@@ -91,10 +90,13 @@ void static_sym_reset(void)
 int static_sym_put(const char* name, ValueType ty)
 {
     if(!static_sym_tree) static_sym_tree = rbtree_create();
-    /* 查找是否已存在 */
     SymStaticEntry* existing = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
     if(existing) {
-        /* 已存在，直接更新类型（与原来的数组实现一致） */
+        /* 已存在：若为逻辑删除则复活（当前作用域接管所有权），否则就地更新类型 */
+        if(existing->deleted) {
+            existing->deleted = 0;
+            scope_record_name(name);
+        }
         existing->ty = ty;
         return 1;
     }
@@ -103,8 +105,8 @@ int static_sym_put(const char* name, ValueType ty)
     entry->name = strdup(name);
     entry->ty = ty;
     entry->next = NULL;
+    entry->deleted = 0;
     rbtree_insert(static_sym_tree, NS_VARIABLE, NULL, name, entry);
-    /* 记录到当前作用域层级（用于恢复时删除） */
     scope_record_name(name);
     return 1;
 }
@@ -114,7 +116,7 @@ int static_sym_get(const char* name, ValueType* out_ty)
     if(strcmp(name, "log") == 0) { *out_ty = VAL_MAP; return 1; }  // 预定义全局对象 log
     if(!static_sym_tree) return 0;
     SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
-    if(entry) {
+    if(entry && !entry->deleted) {
         *out_ty = entry->ty;
         return 1;
     }

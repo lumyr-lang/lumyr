@@ -47,8 +47,14 @@ int arith_is_ssize_t_var(Ctx* c, AstNode* node);
 
 /* ========== 表达式类型判断 ========== */
 
+/* CastKind → ExprType：4 核心栈映射（所有整数合并 INT64，浮点合并 DOUBLE，动态类型 NONE） */
+ExprType castkind_to_exprtype(CastKind ct);
+
 /* 获取表达式的类型（用于算术运算结果的上下文感知） */
 ExprType arith_get_expr_type(Ctx* c, AstNode* node);
+
+/* 类型名 → CastKind（定义在 ir_compile.c） */
+CastKind ir_type_name_to_castkind(const char* n);
 
 /* ========== 算术运算和比较运算优化 ========== */
 

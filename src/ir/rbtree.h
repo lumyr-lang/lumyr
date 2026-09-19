@@ -53,6 +53,9 @@ void* rbtree_find(RBTree* tree, RBTNamespace ns, const char* class_name, const c
 /* 删除节点 */
 void rbtree_delete(RBTree* tree, RBTNamespace ns, const char* class_name, const char* name);
 
+/* 替换已存在节点的 data，返回旧 data；键不存在时返回 NULL（不插入） */
+void* rbtree_set_data(RBTree* tree, RBTNamespace ns, const char* class_name, const char* name, void* data);
+
 /* 获取节点数量 */
 int rbtree_count(RBTree* tree);
 

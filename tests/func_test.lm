@@ -1,0 +1,118 @@
+// ============================================================
+// 函数完整功能测试 (AC-1 ~ AC-13)
+// 每个测试输出一行结果，便于校验
+// ============================================================
+
+// --- AC-1: 基本函数定义与调用 ---
+func add(a, b) { return a + b; }
+print("AC1", add(2, 3));              // 期望 5
+
+// --- AC-2: 形参类型标注与转换 ---
+func add_int(<int> a, <int> b) { return a + b; }
+print("AC2", add_int(10, 20));        // 期望 30
+
+// --- AC-3: 默认参数 ---
+func power(base, exp = 2) {
+    r = 1;
+    for (i = 0; i < exp; i = i + 1) { r = r * base; }
+    return r;
+}
+print("AC3a", power(3));              // 期望 9
+print("AC3b", power(2, 4));           // 期望 16
+
+// --- AC-4: 可变参数 ...args ---
+func sum_all(<int> n, ...args) {
+    s = n;
+    for (i = 0; i < len(args); i = i + 1) { s = s + args[i]; }
+    return s;
+}
+print("AC4a", sum_all(10, 1, 2, 3));  // 期望 16
+print("AC4b", sum_all(5));            // 期望 5
+
+// --- AC-5: ref 引用传递 ---
+func inc_ref(ref n) { n = n + 1; }
+func swap_ref(ref a, ref b) { t = a; a = b; b = t; }
+x = 41;
+inc_ref(x);
+print("AC5a", x);                     // 期望 42
+p = 1; q = 2;
+swap_ref(p, q);
+print("AC5b", p, q);                  // 期望 2 1
+
+// --- AC-6: 返回值与返回类型标注 ---
+func <int> ret_int() { return 42; }
+func no_ret() { x = 1; }
+print("AC6a", ret_int());             // 期望 42
+no_ret();
+print("AC6b", "ok");                  // 期望 ok
+
+// --- AC-7: 递归 ---
+func fact(n) {
+    if (n <= 1) { return 1; }
+    return n * fact(n - 1);
+}
+func fib(n) {
+    if (n < 2) { return n; }
+    return fib(n - 1) + fib(n - 2);
+}
+print("AC7a", fact(5));               // 期望 120
+print("AC7b", fib(10));               // 期望 55
+
+// --- AC-8: 函数作为值与动态调用 ---
+func mul(a, b) { return a * b; }
+f = add;
+print("AC8a", f(6, 7));               // 期望 42
+f = mul;
+print("AC8b", f(6, 7));               // 期望 42
+func apply2(fn, x, y) { return fn(x, y); }
+print("AC8c", apply2(add, 3, 4));     // 期望 7
+print("AC8d", apply2(mul, 3, 4));     // 期望 12
+
+// --- AC-9: 匿名函数 ---
+sq = func(n) { return n * n; };
+print("AC9a", sq(5));                 // 期望 25
+print("AC9b", (func(a, b) { return a - b; })(10, 3));  // 期望 7
+
+// --- AC-10: 闭包捕获与共享 ---
+func make_counter() {
+    n = 0;
+    return func() { n = n + 1; return n; };
+}
+c = make_counter();
+print("AC10a", c(), c(), c());        // 期望 1 2 3
+func make_pair2() {
+    v = 100;
+    inc = func() { v = v + 1; };
+    get = func() { return v; };
+    return [inc, get];
+}
+p = make_pair2();
+p[0]();
+p[0]();
+print("AC10b", p[1]());               // 期望 102
+
+// --- AC-11: 栈帧隔离 ---
+func iso(n) {
+    local = n * 10;
+    return local;
+}
+print("AC11a", iso(1), iso(2), iso(3));  // 期望 10 20 30
+
+// --- AC-12: try/finally 中的返回 ---
+func fin_test() {
+    try {
+        return 1;
+    } finally {
+        print("AC12", "finally");
+    }
+}
+print("AC12ret", fin_test());         // 期望 finally 换行 1
+
+// --- AC-13: 递归深度 ---
+func deep(n) {
+    if (n == 0) { return 0; }
+    return 1 + deep(n - 1);
+}
+print("AC13", deep(500));             // 期望 500
+
+print("FUNC_TEST_DONE");

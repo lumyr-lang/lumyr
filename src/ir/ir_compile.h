@@ -12,15 +12,17 @@
 ExprType c_expr(Ctx* c, AstNode* node);
 
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
-BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name);
+BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
 // 重编译已注册函数（typecheck 转换 AST_VAR→AST_FUNCREF 后原位替换字节码）
-BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body);
+BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
 
 // 编译顶层语句为 main 字节码（执行 / -c 生成 C 共用同一 IR）
 BytecodeFunc* ir_compile_main(AstNode* root);
 
 // 全局函数表（ir_compile_function / ir_compile_main 注册；ir_cgen 遍历用）
 void ir_func_table_reset(void);
+/* 注册/替换普通函数（同名旧函数被释放） */
+void ir_func_table_register(BytecodeFunc* fn);
 BytecodeFunc* ir_func_table_lookup(const char* name);
 /* 按 class_name + method_name 查找 class 方法（红黑树快速查找） */
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name);

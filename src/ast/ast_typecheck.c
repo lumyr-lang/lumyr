@@ -77,12 +77,27 @@ static void cap_add(const char* name) {
     L->names[L->cnt++] = strdup(name);
 }
 
-// 弹出当前 lambda 的捕获列表并登记到侧表，返回捕获个数
+static int is_global_var(const char* n);
+static int is_lambda_local(const char* n);
+static int is_lambda_param(const char* n);
+
+// 弹出当前 lambda 的捕获列表并登记到侧表，返回捕获个数。
+// 关键：内层 lambda 捕获的变量，若不是当前（外层）lambda 的形参/局部/全局，
+// 则外层 lambda 也必须捕获该变量（闭包捕获向上传播），否则运行时无法传递。
 static int cap_pop_record(const char* lambda_name) {
     g_cap_depth--;
     CaptList* L = &g_cap_stack[g_cap_depth];
     func_compile_set_lambda_captures(lambda_name, (const char* const*)L->names, L->cnt);
     int n = L->cnt;
+    /* 向上传播：把本层捕获中不属于外层作用域的变量加入外层捕获表 */
+    if(g_cap_depth > 0) {
+        for(int i = 0; i < L->cnt; i++) {
+            const char* cn = L->names[i];
+            if(!is_lambda_param(cn) && !is_lambda_local(cn) && !is_global_var(cn)) {
+                cap_add(cn);
+            }
+        }
+    }
     for(int i = 0; i < L->cnt; i++) free(L->names[i]);
     free(L->names);
     L->names = NULL; L->cnt = 0; L->cap = 0;
@@ -629,7 +644,9 @@ int typecheck_expr(AstNode* node)
                 assign_capture = !is_lambda_param(vn) && !is_lambda_local(vn) &&
                                  !is_global_var(vn) && in_static;
             }
-            static_sym_put(node->u.assign.varname, node->val_type);
+            /* 变量持有函数值时存 VAL_NONE（动态），避免后续引用被误判为函数名引用（AST_FUNCREF） */
+            static_sym_put(node->u.assign.varname,
+                           node->val_type == VAL_FUNC ? VAL_NONE : node->val_type);
             if(in_lambda) {
                 const char* vn = node->u.assign.varname;
                 if(!assign_capture) {
@@ -920,20 +937,28 @@ int typecheck_expr(AstNode* node)
             if(is_lambda) {
                 in_lambda = save_in_lambda; g_lambda_params = save_params; lambda_locals_cnt = save_lc;
                 int ncapt = cap_pop_record(node->u.func_def.name);
-                // 该 lambda 捕获了外层局部变量：其所在外层函数体需重编译以发射 OPC_MKCLOSURE
-                if(ncapt > 0 && save_cur) {
-                    int dup = 0;
-                    for(int i = 0; i < g_recompile_cnt; i++)
-                        if(g_recompile[i] == save_cur) { dup = 1; break; }
-                    if(!dup) {
-                        if(g_recompile_cnt >= g_recompile_cap) {
-                            int ncap2 = g_recompile_cap > 0 ? g_recompile_cap * 2 : 16;
-                            AstNode** nt = (AstNode**)realloc(g_recompile, (size_t)ncap2 * sizeof(AstNode*));
-                            if(!nt) { LOG_ERROR("重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
-                            g_recompile = nt; g_recompile_cap = ncap2;
-                        }
-                        g_recompile[g_recompile_cnt++] = save_cur;
-                    }
+                // 该 lambda 捕获了外层局部变量：
+                // - lambda 自身需重编译以把捕获变量注册为槽位
+                // - 其所在外层函数体需重编译以发射 OPC_MKCLOSURE
+                if(ncapt > 0) {
+                    /* 加入重编译列表的辅助 */
+                    #define RECOMPILE_ADD(n) do { \
+                        int _dup = 0; \
+                        for(int _i = 0; _i < g_recompile_cnt; _i++) \
+                            if(g_recompile[_i] == (n)) { _dup = 1; break; } \
+                        if(!_dup) { \
+                            if(g_recompile_cnt >= g_recompile_cap) { \
+                                int _nc = g_recompile_cap > 0 ? g_recompile_cap * 2 : 16; \
+                                AstNode** _nt = (AstNode**)realloc(g_recompile, (size_t)_nc * sizeof(AstNode*)); \
+                                if(!_nt) { LOG_ERROR("重编译表扩容内存不足\n"); exit(EXIT_FAILURE); } \
+                                g_recompile = _nt; g_recompile_cap = _nc; \
+                            } \
+                            g_recompile[g_recompile_cnt++] = (n); \
+                        } \
+                    } while(0)
+                    RECOMPILE_ADD(node);
+                    if(save_cur) RECOMPILE_ADD(save_cur);
+                    #undef RECOMPILE_ADD
                 }
             }
             sym_restore();

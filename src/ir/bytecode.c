@@ -26,10 +26,19 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn->params);
     free(fn->param_is_ref);
     free(fn->method_self_struct);
+    free(fn->class_name);
+    free(fn->ret_type_name);
     free(fn->var_type_tags);
     if(fn->var_struct_names) {
         for(int i = 0; i < fn->sym_cnt; i++) free(fn->var_struct_names[i]);
         free(fn->var_struct_names);
+    }
+    if(fn->callsites) {
+        for(int i = 0; i < fn->callsite_cnt; i++) {
+            free(fn->callsites[i].callee);
+            free(fn->callsites[i].arg_is_ref);
+        }
+        free(fn->callsites);
     }
     free(fn);
 }
@@ -53,43 +62,6 @@ int bf_sym(BytecodeFunc* fn, const char* name)
     }
     fn->syms[fn->sym_cnt] = strdup(name);
     return fn->sym_cnt++;
-}
-
-static int const_equal(Value a, Value b)
-{
-    if(a.type != b.type) return 0;
-    switch(a.type) {
-        /* 有符号整数 */
-        case VAL_INT:        return a.v.i == b.v.i;
-        case VAL_INT8:       return a.v.i8 == b.v.i8;
-        case VAL_INT16:      return a.v.i16 == b.v.i16;
-        case VAL_SHORT:      return a.v.sh == b.v.sh;
-        case VAL_INT32:      return a.v.i32 == b.v.i32;
-        case VAL_INT64:      return a.v.i64 == b.v.i64;
-        case VAL_LONG:       return a.v.l == b.v.l;
-        case VAL_LONG_LONG:  return a.v.ll == b.v.ll;
-        /* 无符号整数 */
-        case VAL_UINT:       return a.v.ui == b.v.ui;
-        case VAL_UINT8:      return a.v.u8 == b.v.u8;
-        case VAL_UINT16:     return a.v.u16 == b.v.u16;
-        case VAL_UINT32:     return a.v.u32 == b.v.u32;
-        case VAL_UINT64:     return a.v.u64 == b.v.u64;
-        case VAL_ULONG:      return a.v.ul == b.v.ul;
-        case VAL_BYTE:       return a.v.by == b.v.by;
-        case VAL_UCHAR:      return a.v.uc == b.v.uc;
-        case VAL_USHORT:     return a.v.us == b.v.us;
-        case VAL_SIZE_T:     return a.v.st == b.v.st;
-        case VAL_SSIZE_T:    return a.v.sst == b.v.sst;
-        /* 浮点 */
-        case VAL_FLOAT:      return a.v.f == b.v.f;
-        case VAL_DOUBLE:     return a.v.d == b.v.d;
-        case VAL_LONG_DOUBLE: return a.v.ld == b.v.ld;
-        /* 其他 */
-        case VAL_BOOL:       return a.v.b == b.v.b;
-        case VAL_CHAR:       return a.v.c == b.v.c;
-        case VAL_STRING:     return strcmp(lumyr_str_cstr(&a), lumyr_str_cstr(&b)) == 0;
-        default:             return 0;
-    }
 }
 
 /* 添加 int64 到大常量池，返回索引 */
@@ -177,6 +149,27 @@ void bf_patch_b(BytecodeFunc* fn, int pos, int target)
         exit(EXIT_FAILURE);
     }
     fn->code[pos].b = target;
+}
+
+/* 新增一个调用点，返回其在 fn->callsites 中的下标（OPC_CALL.a） */
+int bf_add_callsite(BytecodeFunc* fn, const char* callee, int argc, int keep_result, int ret_stack)
+{
+    if(fn->callsite_cnt >= fn->callsite_cap) {
+        fn->callsite_cap = fn->callsite_cap ? fn->callsite_cap * 2 : 8;
+        fn->callsites = (CallSite*)realloc(fn->callsites, sizeof(CallSite) * fn->callsite_cap);
+        if(!fn->callsites) { perror("bf_add_callsite"); exit(EXIT_FAILURE); }
+    }
+    CallSite* cs = &fn->callsites[fn->callsite_cnt];
+    cs->callee = strdup(callee);
+    cs->argc = argc;
+    cs->arg_is_ref = (int*)calloc(argc > 0 ? argc : 1, sizeof(int));
+    if(!cs->arg_is_ref) { perror("bf_add_callsite arg_is_ref"); exit(EXIT_FAILURE); }
+    cs->arg_ref_slots = (int*)malloc((argc > 0 ? argc : 1) * sizeof(int));
+    if(!cs->arg_ref_slots) { perror("bf_add_callsite arg_ref_slots"); exit(EXIT_FAILURE); }
+    for(int i = 0; i < (argc > 0 ? argc : 1); i++) cs->arg_ref_slots[i] = -1;
+    cs->keep_result = keep_result ? 1 : 0;
+    cs->ret_stack = ret_stack;
+    return fn->callsite_cnt++;
 }
 
 int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
@@ -282,6 +275,7 @@ const char* opc_name(OpCode op)
         case OPC_MUL: return "MUL";
         case OPC_DIV: return "DIV";
         case OPC_MOD: return "MOD";
+        case OPC_PUSH_CONST_IDX: return "PUSH_CONST_IDX";
         case OPC_GT: return "GT";
         case OPC_LT: return "LT";
         case OPC_GE: return "GE";
@@ -379,43 +373,28 @@ const char* opc_name(OpCode op)
         case OPC_YIELD: return "YIELD";
         case OPC_CLASS_NEW: return "CLASS_NEW";
         case OPC_HALT: return "HALT";
+        case OPC_VADD: return "VADD";
+        case OPC_VSUB: return "VSUB";
+        case OPC_VMUL: return "VMUL";
+        case OPC_VDIV: return "VDIV";
+        case OPC_VMOD: return "VMOD";
+        case OPC_VNEG: return "VNEG";
+        case OPC_VGT: return "VGT";
+        case OPC_VLT: return "VLT";
+        case OPC_VGE: return "VGE";
+        case OPC_VLE: return "VLE";
+        case OPC_VEQ: return "VEQ";
+        case OPC_VNE: return "VNE";
+        case OPC_JMP_IF_TRUE_V: return "JMP_IF_TRUE_V";
+        case OPC_JMP_IF_FALSE_V: return "JMP_IF_FALSE_V";
+        case OPC_BOX_INT64:  return "BOX_INT64";
+        case OPC_BOX_DOUBLE: return "BOX_DOUBLE";
+        case OPC_BOX_PTR:    return "BOX_PTR";
+        case OPC_CATCH_MATCH:return "CATCH_MATCH";
+        case OPC_PUSH_NONE:  return "PUSH_NONE";
+        case OPC_UNBOX_INT64:  return "UNBOX_INT64";
+        case OPC_UNBOX_DOUBLE: return "UNBOX_DOUBLE";
         default: return "UNKNOWN";
-    }
-}
-
-static void const_to_text(Value v, char* buf, int cap)
-{
-    switch(v.type) {
-        /* 有符号整数 */
-        case VAL_INT:        snprintf(buf, cap, "%lld", v.v.i); break;
-        case VAL_INT8:       snprintf(buf, cap, "%d", (int)v.v.i8); break;
-        case VAL_INT16:      snprintf(buf, cap, "%d", (int)v.v.i16); break;
-        case VAL_SHORT:      snprintf(buf, cap, "%d", (int)v.v.sh); break;
-        case VAL_INT32:      snprintf(buf, cap, "%d", (int)v.v.i32); break;
-        case VAL_INT64:      snprintf(buf, cap, "%lld", v.v.i64); break;
-        case VAL_LONG:       snprintf(buf, cap, "%ld", v.v.l); break;
-        case VAL_LONG_LONG:  snprintf(buf, cap, "%lld", v.v.ll); break;
-        /* 无符号整数 */
-        case VAL_UINT:       snprintf(buf, cap, "%u", (unsigned int)v.v.ui); break;
-        case VAL_UINT8:      snprintf(buf, cap, "%u", (unsigned int)v.v.u8); break;
-        case VAL_UINT16:     snprintf(buf, cap, "%u", (unsigned int)v.v.u16); break;
-        case VAL_UINT32:     snprintf(buf, cap, "%u", v.v.u32); break;
-        case VAL_UINT64:     snprintf(buf, cap, "%llu", v.v.u64); break;
-        case VAL_ULONG:      snprintf(buf, cap, "%lu", v.v.ul); break;
-        case VAL_BYTE:       snprintf(buf, cap, "%u", (unsigned int)v.v.by); break;
-        case VAL_UCHAR:      snprintf(buf, cap, "%u", (unsigned int)v.v.uc); break;
-        case VAL_USHORT:     snprintf(buf, cap, "%u", (unsigned int)v.v.us); break;
-        case VAL_SIZE_T:     snprintf(buf, cap, "%zu", v.v.st); break;
-        case VAL_SSIZE_T:    snprintf(buf, cap, "%zd", v.v.sst); break;
-        /* 浮点 */
-        case VAL_FLOAT:      snprintf(buf, cap, "%g", (double)v.v.f); break;
-        case VAL_DOUBLE:     snprintf(buf, cap, "%.17g", v.v.d); break;
-        case VAL_LONG_DOUBLE: snprintf(buf, cap, "%Lg", v.v.ld); break;
-        /* 其他 */
-        case VAL_BOOL:       snprintf(buf, cap, "%s", v.v.b ? "true" : "false"); break;
-        case VAL_CHAR:       snprintf(buf, cap, "'%c'", v.v.c); break;
-        case VAL_STRING:     snprintf(buf, cap, "\"%s\"", lumyr_str_cstr(&v)); break;
-        default:             snprintf(buf, cap, "nil"); break;
     }
 }
 
@@ -473,10 +452,17 @@ void bc_disasm(FILE* out, BytecodeFunc* fn)
             case OPC_FIN_PUSH:
                 snprintf(txt, sizeof(txt), "FIN_PUSH act=%d tgt=L%d", in.a, in.b);
                 break;
-            case OPC_CALL:
-                snprintf(txt, sizeof(txt), "CALL %s argc=%d",
-                         (in.a >= 0 && in.a < fn->sym_cnt) ? fn->syms[in.a] : "?", in.b);
+            case OPC_CALL: {
+                const char* cn = "?";
+                int keep = 1;
+                if(in.a >= 0 && in.a < fn->callsite_cnt) {
+                    cn = fn->callsites[in.a].callee;
+                    keep = fn->callsites[in.a].keep_result;
+                }
+                snprintf(txt, sizeof(txt), "CALL %s argc=%d%s",
+                         cn, in.b, keep ? "" : " discard");
                 break;
+            }
             case OPC_CALLV:
                 snprintf(txt, sizeof(txt), "CALLV argc=%d", in.b);
                 break;

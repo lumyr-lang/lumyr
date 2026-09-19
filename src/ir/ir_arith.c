@@ -12,7 +12,7 @@ CastKind get_var_cast_type(Ctx* c, const char* name) {
 }
 
 /* CastKind → ExprType：4 核心栈映射（所有整数合并 INT64，浮点合并 DOUBLE） */
-static ExprType castkind_to_exprtype(CastKind ct) {
+ExprType castkind_to_exprtype(CastKind ct) {
     switch(ct) {
         case CAST_INT:
         case CAST_INT8:
@@ -82,6 +82,15 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
     if(node->type == AST_CHAR) return EXPR_TYPE_INT;     /* 字符字面量 → int (ASCII) */
     if(node->type == AST_STRING) return EXPR_TYPE_PTR; /* 字符串字面量 → string */
 
+    /* 函数调用：按被调函数返回类型标注判断（无标注 → 动态 NONE），与 c_expr AST_CALL 一致 */
+    if(node->type == AST_CALL) {
+        BytecodeFunc* callee = ir_func_table_lookup(node->u.call.name);
+        if(callee && callee->ret_type_name) {
+            return castkind_to_exprtype(ir_type_name_to_castkind(callee->ret_type_name));
+        }
+        return EXPR_TYPE_NONE;
+    }
+
     /* 二元运算：递归判断左右操作数类型 */
     if(node->type == AST_BINOP) {
         ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
@@ -101,11 +110,7 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             return EXPR_TYPE_INT;
         }
 
-        /* 一个已知，一个未知：保持已知类型（字面量提升） */
-        if(left_type != EXPR_TYPE_NONE) return left_type;
-        if(right_type != EXPR_TYPE_NONE) return right_type;
-
-        /* 都是未知 → 动态类型 */
+        /* 任一操作数为动态（NONE）→ 动态运算（VADD 等，操作数统一 box 到 VALUE） */
         return EXPR_TYPE_NONE;
     }
 

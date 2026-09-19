@@ -1,33 +1,379 @@
 /*
  * vm_exec_call.c - VM 函数调用指令
- * CALL / RETURN
+ * OPC_CALL：建帧 -> 逆序弹参/顺序绑定 -> 保存并切换执行状态 ->
+ *           可重入执行 callee -> 恢复调用方 -> 按 callsite 处理返回值 -> 销毁帧
+ * RETURN / RETURN_NIL 在 vm_exec.c 处理（只结束当前层）
  */
 #include "vm_types.h"
 #include "stack_manager.h"
 #include "ast/stackframe.h"
+#include "ir_compile.h"
+#include "ir_arith.h"
+#include "ir_types.h"
+#include "ast/func_compile.h"
+#include "lumyr_value_type.h"
 #include "lm_value.h"
 #include <stdio.h>
 #include <stdlib.h>
 
+/* 暂存一个已弹出的实参（跨 4 核心栈，按形参宽类型解释） */
+typedef struct {
+    ExprType et;
+    int64_t i;
+    double  d;
+    void*   p;
+    Value   v;
+} ArgTmp;
+
+/* 调用方需保存/恢复的执行状态 */
+typedef struct {
+    BytecodeFunc* fn;
+    Instruction*  code;
+    int           pc;
+    StackFrame*   frame;
+    ConstEntry*   const_pool;
+    const char**  syms;
+    int           const_cnt;
+    int           sym_cnt;
+} SavedState;
+
 /* ========== 函数调用 ========== */
 int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
-    /* in->a = 函数索引，in->b = 参数个数 */
-    int func_idx = in->a;
-    int argc = in->b;
-    
-    /* TODO: 从函数表获取函数 */
-    /* 当前简化：打印调试信息 */
-    fprintf(stderr, "VM: CALL func_idx=%d argc=%d\n", func_idx, argc);
-    
+    int cs_idx = in->a;
+    CallSite* cs = &ctx->fn->callsites[cs_idx];
+    int argc = cs->argc;
+
+    BytecodeFunc* callee = ir_func_table_lookup(cs->callee);
+    if (!callee) {
+        fprintf(stderr, "VM: 调用未定义函数 %s\n", cs->callee);
+        return 0;
+    }
+
+    /* 1. 逆序弹实参（栈顶是最后一个实参），按各形参宽类型，暂存以便顺序绑定 */
+    ArgTmp* args = (ArgTmp*)malloc(sizeof(ArgTmp) * (argc > 0 ? argc : 1));
+    if (!args) { perror("vm_exec_call args"); return 0; }
+
+    for (int slot = argc - 1; slot >= 0; --slot) {
+        CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
+                       ? (CastKind)callee->var_type_tags[slot]
+                       : CAST_NONE;
+        ExprType et = castkind_to_exprtype(pck);
+        args[slot].et = et;
+        switch (et) {
+        case EXPR_TYPE_INT:    args[slot].i = POP_INT64();  break;
+        case EXPR_TYPE_DOUBLE: args[slot].d = POP_DOUBLE(); break;
+        case EXPR_TYPE_PTR:    args[slot].p = POP_PTR();    break;
+        default:               args[slot].v = POP_VALUE();  break;
+        }
+    }
+
+    /* 2. 新建帧并按形参声明顺序绑定（保证帧槽 i == 形参符号槽 i） */
+    StackFrame* caller_frame = ctx->frame;   /* ref 形参需引用调用方槽位 */
+    StackFrame* new_frame = stackframe_new(ctx->frame);
+    int name_slots = callee->param_cnt + callee->has_variadic;
+    for (int slot = 0; slot < argc; ++slot) {
+        const char* pname = (slot < name_slots && callee->params[slot])
+                            ? callee->params[slot] : "_";
+        if (slot < callee->param_cnt && callee->param_is_ref
+            && callee->param_is_ref[slot] && cs->arg_is_ref[slot]) {
+            /* ref 形参：别名调用方槽位，丢弃栈上弹出的值 */
+            stackframe_bind_ref(new_frame, pname, caller_frame, cs->arg_ref_slots[slot]);
+            continue;
+        }
+        switch (args[slot].et) {
+        case EXPR_TYPE_INT:
+            stackframe_bind_int64(new_frame, pname, args[slot].i);
+            break;
+        case EXPR_TYPE_DOUBLE:
+            stackframe_bind_double(new_frame, pname, args[slot].d);
+            break;
+        case EXPR_TYPE_PTR:
+            stackframe_bind_ptr(new_frame, pname, args[slot].p);
+            break;
+        default:
+            stackframe_bind(new_frame, pname, args[slot].v);
+            break;
+        }
+    }
+    free(args);
+
+    /* 3. 保存调用方执行状态 */
+    SavedState save;
+    save.fn         = ctx->fn;
+    save.code       = ctx->code;
+    save.pc         = ctx->pc;
+    save.frame      = ctx->frame;
+    save.const_pool = ctx->const_pool;
+    save.syms       = ctx->syms;
+    save.const_cnt  = ctx->const_cnt;
+    save.sym_cnt    = ctx->sym_cnt;
+
+    /* 4. 切换到 callee 的字节码/帧/常量池/符号表 */
+    ctx->fn         = callee;
+    ctx->code       = callee->code;
+    ctx->pc         = 0;
+    ctx->frame      = new_frame;
+    ctx->const_pool = callee->const_pool;
+    ctx->syms       = (const char**)callee->syms;
+    ctx->const_cnt  = callee->const_cnt;
+    ctx->sym_cnt    = callee->sym_cnt;
+
+    /* 5. 可重入执行 callee（嵌套 CALL 会再次进入 vm_exec_loop） */
+    RetSlot ret;
+    int status = vm_exec_loop(ctx, &ret);
+
+    /* 6. 恢复调用方执行状态 */
+    ctx->fn         = save.fn;
+    ctx->code       = save.code;
+    ctx->pc         = save.pc;
+    ctx->frame      = save.frame;
+    ctx->const_pool = save.const_pool;
+    ctx->syms       = save.syms;
+    ctx->const_cnt  = save.const_cnt;
+    ctx->sym_cnt    = save.sym_cnt;
+
+    /* 7. 销毁 callee 帧（返回值已在 RETURN 处 detach 为独立副本） */
+    stackframe_destroy(new_frame);
+
+    /* 异常穿过本调用：不压返回值，恢复后继续向调用方传播 */
+    if (status == VM_LOOP_UNWIND)
+        return VM_LOOP_UNWIND;
+
+    /* 8. 按调用点需要处理返回值：表达式语境压入对应栈；表达式语句丢弃 */
+    if (cs->keep_result) {
+        switch ((ExprType)cs->ret_stack) {
+        case EXPR_TYPE_INT:
+            PUSH_INT64(ret.i);
+            break;
+        case EXPR_TYPE_DOUBLE:
+            PUSH_DOUBLE(ret.d);
+            break;
+        case EXPR_TYPE_PTR:
+            PUSH_PTR(ret.p);
+            break;
+        default:
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &ret.v);
+            break;
+        }
+    }
     return 1;
 }
 
-/* ========== 函数返回 ========== */
-int vm_exec_return(VMExecCtx* ctx, Instruction* in) {
-    /* 从栈顶获取返回值 */
-    Value val;
-    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
-    /* TODO: 把返回值存到调用者的帧 */
+/* ========== 获取函数值（裸函数名引用） ========== */
+int vm_exec_getfunc(VMExecCtx* ctx, Instruction* in) {
+    const char* name = ctx->syms[in->a];
+    RuntimeFunc* rf = (RuntimeFunc*)calloc(1, sizeof(RuntimeFunc));
+    if(!rf) { perror("vm_exec_getfunc"); return 0; }
+    rf->name = strdup(name ? name : "");
+    rf->captures = NULL;
+    rf->capture_count = 0;
+    Value v;
+    v.type = VAL_FUNC;
+    v.v.func.func_obj = rf;
+    v.v.func.ffi_func = NULL;
+    v.v.func.is_ffi = 0;
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
+
+/* 辅助：在 BytecodeFunc 符号表中按名查槽位下标 */
+static int bf_find_slot(BytecodeFunc* fn, const char* name) {
+    if(!fn || !name) return -1;
+    for(int i = 0; i < fn->sym_cnt; i++) {
+        if(fn->syms[i] && strcmp(fn->syms[i], name) == 0) return i;
+    }
+    return -1;
+}
+
+/* 从调用方帧的 typed 槽位读值并 box 成 Value */
+static Value frame_slot_to_value(StackFrame* f, BytecodeFunc* fn, int slot) {
+    Value v;
+    if(slot < 0 || slot >= f->cap) { v.type = VAL_NONE; return v; }
+    /* 捕获变量以 ref 别名绑定：值存储在 ref->ptr 指向的 cell 中 */
+    if(slot < f->cnt && f->refs && f->refs[slot] && f->refs[slot]->ptr) {
+        return *(Value*)f->refs[slot]->ptr;
+    }
+    int tag = (slot < fn->sym_cnt) ? fn->var_type_tags[slot] : -1;
+    switch((CastKind)tag) {
+    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
+    case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
+    case CAST_UINT64: case CAST_ULONG: case CAST_SIZE_T: case CAST_SSIZE_T:
+        return lumyr_make_int64(f->int_slots[slot]);
+    case CAST_FLOAT: case CAST_DOUBLE: case CAST_LONG_DOUBLE:
+        return lumyr_make_double(f->flt_slots[slot]);
+    case CAST_STRING: {
+        v.type = VAL_STRING; v.str_inline = 0; v.v.s = (char*)f->ptr_slots[slot];
+        return v;
+    }
+    default:
+        return f->vals[slot];
+    }
+}
+
+/* ========== 创建闭包（捕获外层变量） ========== */
+int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
+    const char* lname = ctx->syms[in->a];
+    int ncap = lambda_capture_count(lname);
+    RuntimeFunc* rf = (RuntimeFunc*)calloc(1, sizeof(RuntimeFunc));
+    if(!rf) { perror("vm_exec_mkclosure"); return 0; }
+    rf->name = strdup(lname ? lname : "");
+    rf->capture_count = ncap;
+    if(ncap > 0) {
+        Value** cells = (Value**)calloc((size_t)ncap, sizeof(Value*));
+        if(!cells) { perror("mkclosure cells"); free(rf); return 0; }
+        for(int i = 0; i < ncap; i++) {
+            const char* cname = lambda_capture_name(lname, i);
+            /* 优先复用帧中已有的 cell */
+            Value** cellp = stackframe_find_cell(ctx->frame, cname);
+            Value* cell = cellp ? *cellp : NULL;
+            if(!cell) {
+                int slot = bf_find_slot(ctx->fn, cname);
+                if(slot < 0) {
+                    fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");
+                    free(cells); free(rf); return 0;
+                }
+                cell = (Value*)malloc(sizeof(Value));
+                if(!cell) { perror("mkclosure cell"); free(cells); free(rf); return 0; }
+                *cell = frame_slot_to_value(ctx->frame, ctx->fn, slot);
+                stackframe_add_cell(ctx->frame, cname, cell);
+            }
+            cells[i] = cell;
+        }
+        rf->captures = (Value*)cells;
+    } else {
+        rf->captures = NULL;
+    }
+    Value v;
+    v.type = VAL_FUNC;
+    v.v.func.func_obj = rf;
+    v.v.func.ffi_func = NULL;
+    v.v.func.is_ffi = 0;
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
+
+/* ========== 动态调用 CALLV ==========
+ * 栈布局（自底向上）：函数值, arg0, arg1, ..., arg_{argc-1}（argc-1 在栈顶）
+ * in->b = argc。所有实参均为 VALUE（动态调用）。
+ */
+int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
+    int argc = in->b;
+
+    /* 1. 逆序弹 argc 个实参（均为 VALUE） */
+    Value* args = (Value*)malloc(sizeof(Value) * (argc > 0 ? argc : 1));
+    if(!args) { perror("vm_exec_callv args"); return 0; }
+    for(int slot = argc - 1; slot >= 0; --slot) {
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &args[slot]);
+    }
+
+    /* 2. 弹函数值 */
+    Value fv;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &fv);
+    if(fv.type != VAL_FUNC || !fv.v.func.func_obj || !fv.v.func.func_obj->name) {
+        fprintf(stderr, "VM: 动态调用的值不是函数\n");
+        free(args);
+        return 0;
+    }
+    const char* fname = fv.v.func.func_obj->name;
+    BytecodeFunc* callee = ir_func_table_lookup(fname);
+    if(!callee) {
+        fprintf(stderr, "VM: 动态调用未定义函数 %s\n", fname);
+        free(args);
+        return 0;
+    }
+
+    /* 3. 新建帧，按形参类型 unbox 绑定 */
+    StackFrame* new_frame = stackframe_new(ctx->frame);
+    int name_slots = callee->param_cnt + callee->has_variadic;
+    for(int slot = 0; slot < argc; ++slot) {
+        const char* pname = (slot < name_slots && callee->params[slot])
+                            ? callee->params[slot] : "_";
+        CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
+                       ? (CastKind)callee->var_type_tags[slot]
+                       : CAST_NONE;
+        ExprType et = castkind_to_exprtype(pck);
+        switch(et) {
+        case EXPR_TYPE_INT: {
+            int64_t iv = 0;
+            if(args[slot].type == VAL_INT64) iv = args[slot].v.i64;
+            else if(args[slot].type == VAL_INT) iv = (int64_t)args[slot].v.i;
+            else if(args[slot].type == VAL_DOUBLE) iv = (int64_t)args[slot].v.d;
+            stackframe_bind_int64(new_frame, pname, iv);
+            break;
+        }
+        case EXPR_TYPE_DOUBLE: {
+            double dv = 0;
+            if(args[slot].type == VAL_DOUBLE) dv = args[slot].v.d;
+            else if(args[slot].type == VAL_INT64) dv = (double)args[slot].v.i64;
+            else if(args[slot].type == VAL_INT) dv = (double)args[slot].v.i;
+            stackframe_bind_double(new_frame, pname, dv);
+            break;
+        }
+        default:
+            stackframe_bind(new_frame, pname, args[slot]);
+            break;
+        }
+    }
+    free(args);
+
+    /* 3b. 闭包：把捕获的 cell 绑定到 callee 帧对应槽位（通过 ref 别名） */
+    RuntimeFunc* rf = fv.v.func.func_obj;
+    if(rf->capture_count > 0 && rf->captures) {
+        Value** cells = (Value**)rf->captures;
+        const char* lname = rf->name;
+        int ncap = lambda_capture_count(lname);
+        for(int i = 0; i < ncap && i < rf->capture_count; i++) {
+            const char* cname = lambda_capture_name(lname, i);
+            int cslot = bf_find_slot(callee, cname);
+            if(cslot >= 0 && cells[i]) {
+                /* 确保槽位已分配（绑定一个占位 NONE），再用 ref 别名覆盖 */
+                Value none; none.type = VAL_NONE; none.v.i = 0;
+                stackframe_bind(new_frame, cname, none);
+                RefDesc* rd = (RefDesc*)malloc(sizeof(RefDesc));
+                if(rd) {
+                    rd->ptr = cells[i];
+                    rd->type = (int)CAST_NONE;
+                    new_frame->refs[cslot] = rd;
+                }
+            }
+        }
+    }
+
+    /* 4. 保存/切换执行状态 */
+    SavedState save;
+    save.fn = ctx->fn; save.code = ctx->code; save.pc = ctx->pc; save.frame = ctx->frame;
+    save.const_pool = ctx->const_pool; save.syms = ctx->syms;
+    save.const_cnt = ctx->const_cnt; save.sym_cnt = ctx->sym_cnt;
+
+    ctx->fn = callee; ctx->code = callee->code; ctx->pc = 0; ctx->frame = new_frame;
+    ctx->const_pool = callee->const_pool; ctx->syms = (const char**)callee->syms;
+    ctx->const_cnt = callee->const_cnt; ctx->sym_cnt = callee->sym_cnt;
+
+    RetSlot ret;
+    int status = vm_exec_loop(ctx, &ret);
+
+    ctx->fn = save.fn; ctx->code = save.code; ctx->pc = save.pc; ctx->frame = save.frame;
+    ctx->const_pool = save.const_pool; ctx->syms = save.syms;
+    ctx->const_cnt = save.const_cnt; ctx->sym_cnt = save.sym_cnt;
+
+    stackframe_destroy(new_frame);
+
+    if(status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;
+
+    /* 5. 返回值统一 box 到 VALUE 栈 */
+    Value rv;
+    switch((ExprType)ret.et) {
+    case EXPR_TYPE_INT:    rv = lumyr_make_int64(ret.i); break;
+    case EXPR_TYPE_DOUBLE: rv = lumyr_make_double(ret.d); break;
+    case EXPR_TYPE_PTR: {
+        rv.type = VAL_STRING; rv.str_inline = 0; rv.v.s = (char*)ret.p;
+        break;
+    }
+    default: rv = ret.v; break;
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &rv);
     return 1;
 }
 
@@ -37,9 +383,21 @@ int vm_exec_builtin(VMExecCtx* ctx, Instruction* in) {
     int builtin_id = in->a;
     int argc = in->b;
 
-    /* type() 已在编译期实现（直接 push 字符串常量），不需要运行时处理 */
-    /* 其他内置函数（len/input/range/substr 等）后续实现 */
-
-    fprintf(stderr, "VM: unknown builtin %d (argc=%d)\n", builtin_id, argc);
-    return 0;
+    switch(builtin_id) {
+    case BUILTIN_LEN: {
+        /* len(x)：数组/字符串长度，弹 1 个 VALUE，压 int64 Value */
+        (void)argc;
+        Value v;
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+        int64_t n = 0;
+        if(v.type == VAL_ARRAY) n = v.v.array ? (int64_t)v.v.array->len : 0;
+        else if(v.type == VAL_STRING) n = lumyr_str_len(&v);
+        Value r = lumyr_make_int64(n);
+        stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+        return 1;
+    }
+    default:
+        fprintf(stderr, "VM: unknown builtin %d (argc=%d)\n", builtin_id, argc);
+        return 0;
+    }
 }

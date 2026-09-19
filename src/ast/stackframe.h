@@ -47,6 +47,9 @@ void* stackframe_get_ptr(StackFrame* f, const char* name, _Bool* found);
 // 绑定指针变量（宽槽，所有指针/字符串类型统一存储）
 void stackframe_bind_ptr(StackFrame* f, const char* name, void* v);
 
+// ref 引用绑定：使槽 name 别名调用方 caller 帧 caller_slot 槽的存储（自动 box/unbox）
+void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, int caller_slot);
+
 // ---- 闭包单元（cell）支持 ----
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
 Value* stackframe_ensure_cell(StackFrame* f, const char* name);

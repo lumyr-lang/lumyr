@@ -52,7 +52,34 @@ typedef struct GeneratorObject {
     Value send_value;
 } GeneratorObject;
 
+/* ========== 一层函数执行结束时的返回槽 ==========
+   直接承载 4 栈之一的原始值，避免 typed<->Value 装箱与类型信息丢失。
+   et 为 ExprType：NONE=v / INT=i / DOUBLE=d / PTR=p。 */
+typedef struct {
+    int     et;
+    Value   v;     /* EXPR_TYPE_NONE -> VALUE 栈 */
+    int64_t i;     /* EXPR_TYPE_INT -> INT64 栈 */
+    double  d;     /* EXPR_TYPE_DOUBLE -> DOUBLE 栈 */
+    void*   p;     /* EXPR_TYPE_PTR -> PTR 栈 */
+} RetSlot;
+
 /* ========== 指令处理函数类型 ========== */
 typedef void (*VMInstrHandler)(VMExecCtx* ctx, Instruction* in);
+
+/* ========== 可重入执行循环（vm_exec.c）：运行 ctx->fn，返回值写 *ret ========== */
+/* 返回码 */
+#define VM_LOOP_NORMAL 0   /* 正常结束（RETURN/RETURN_NIL/自然末尾） */
+#define VM_LOOP_UNWIND 1   /* 异常跨帧展开中，调用者须继续向外传播 */
+int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret);
+
+/* 异常展开检测（vm_except.c）：
+   0=无展开；1=当前帧是捕获目标（已设置 current_error 并重定位 pc）；-1=需向外传播 */
+int vm_except_check_unwind(VMExecCtx* ctx);
+
+/* FINISH 后若挂起返回已走完所有 finally：取出返回值（1=有，0=无） */
+int vm_except_take_pending_return(RetSlot* out);
+
+/* 返回值独立化（字符串堆值深拷贝），定义在 vm_exec.c */
+Value ret_value_detach(Value v);
 
 #endif /* LUMYR_VM_TYPES_H */

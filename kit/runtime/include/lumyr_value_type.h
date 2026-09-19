@@ -25,6 +25,7 @@ typedef struct RuntimeFunc {
     int has_variadic;        // 新增：是否有 ...rest 可变参数
     Value* captures;         // 闭包捕获值
     int capture_count;
+    char* name;              // 字节码VM用：函数名（用于动态调用时查找 BytecodeFunc）
 } RuntimeFunc;
 
 // 强制转换类型，给 new_cast_node 使用
@@ -280,7 +281,16 @@ typedef struct StackFrame {
     int cell_cnt;
     int cell_cap;
     uint8_t* type_tags;   /* 变量类型标记（CastKind 枚举，0=CAST_NONE 表示无精确类型），与 names/vals 平行数组 */
+    /* ref 引用传递：refs[i] 非 NULL 表示槽 i 是调用方某存储的别名，
+     * LOAD/STORE 时通过 refs[i]->ptr 转发并按 refs[i]->type 自动 box/unbox。 */
+    struct RefDesc** refs;
 } StackFrame;
+
+/* ref 引用描述符：指向调用方栈帧的实际存储，附带类型以实现自动 box/unbox */
+typedef struct RefDesc {
+    void* ptr;    /* 调用方存储指针（Value或int64_t或double或void指针，由 type 决定） */
+    int type;     /* 调用方变量的 CastKind（-1=CAST_NONE 表示 VALUE） */
+} RefDesc;
 
 
 

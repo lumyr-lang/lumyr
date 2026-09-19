@@ -578,3 +578,34 @@ int vm_exec_bitdecimal_div(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;
 }
+
+/* ============================================================
+ * 通用 Value 运算（动态类型兜底：VALUE 栈，运行时按 Value.type 分派）
+ * ============================================================ */
+
+typedef Value (*VBinFn)(Value, Value);
+
+/* 弹 b、a，调 fn，压结果（弹栈顺序：后压的 b 先弹） */
+static int vbin_exec(VBinFn fn) {
+    Value a, b;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &b);
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &a);
+    Value r = fn(a, b);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+    return 1;
+}
+
+/* 通用算术：VADD/VSUB/VMUL/VDIV/VMOD */
+int vm_exec_vadd(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_add); }
+int vm_exec_vsub(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_sub); }
+int vm_exec_vmul(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_mul); }
+int vm_exec_vdiv(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_div); }
+int vm_exec_vmod(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_mod); }
+
+/* 通用比较：结果为 bool Value（压 VALUE 栈） */
+int vm_exec_vgt(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_gt); }
+int vm_exec_vlt(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_lt); }
+int vm_exec_vge(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_ge); }
+int vm_exec_vle(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_le); }
+int vm_exec_veq(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_eq); }
+int vm_exec_vne(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_ne); }

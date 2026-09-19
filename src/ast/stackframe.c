@@ -23,10 +23,23 @@ StackFrame* stackframe_new(StackFrame* parent)
     if(g_frame_freelist) {
         f = g_frame_freelist;
         g_frame_freelist = *(StackFrame**)f;
-        f->cnt = 0;
-        f->parent = parent;
-        f->shared = 0;
+        /* 复用前完整重置为初始态：destroy 已 free 全部数组，
+           若不清指针/cap，frame_ensure 会因 need<=旧cap 跳过分配而使用悬垂指针 */
+        f->names      = NULL;
+        f->vals       = NULL;
+        f->int_slots  = NULL;
+        f->flt_slots  = NULL;
+        f->ptr_slots  = NULL;
+        f->type_tags  = NULL;
+        f->refs       = NULL;
+        f->cell_names = NULL;
+        f->cells      = NULL;
+        f->cnt      = 0;
+        f->cap      = 0;
         f->cell_cnt = 0;
+        f->cell_cap = 0;
+        f->parent   = parent;
+        f->shared   = 0;
     } else {
         f = (StackFrame*)calloc(1, sizeof(StackFrame));
         if(!f) { perror("stackframe_new"); exit(EXIT_FAILURE); }
@@ -108,6 +121,15 @@ static void frame_ensure(StackFrame* f, int need)
     f->type_tags = ntag;
     free(old_tag);
 
+    /* 扩容 refs（ref 引用描述符指针数组） */
+    RefDesc** nref = (RefDesc**)malloc((size_t)newcap * sizeof(RefDesc*));
+    if(!nref) { perror("stackframe expand refs"); exit(EXIT_FAILURE); }
+    if(f->refs) memcpy(nref, f->refs, (size_t)f->cap * sizeof(RefDesc*));
+    for(int i = f->cap; i < newcap; i++) nref[i] = NULL;
+    RefDesc** old_ref = f->refs;
+    f->refs = nref;
+    free(old_ref);
+
     f->cap = newcap;
 }
 
@@ -127,6 +149,10 @@ void stackframe_destroy(StackFrame* f)
     free(f->flt_slots);
     free(f->ptr_slots);
     free(f->type_tags);
+    if(f->refs) {
+        for(int i = 0; i < f->cnt; i++) free(f->refs[i]);
+        free(f->refs);
+    }
     free(f->cell_names);
     free(f->cells);
 
@@ -350,6 +376,59 @@ void stackframe_bind_ptr(StackFrame* f, const char* name, void* v)
     f->flt_slots[idx] = 0.0;
     f->ptr_slots[idx] = v;
     f->type_tags[idx] = -1;
+}
+
+/* ref 引用绑定：使槽 name 别名调用方 caller 帧 caller_slot 槽的存储。
+ * 根据调用方变量的 CastKind 选择存储指针（vals/int_slots/flt_slots/ptr_slots），
+ * LOAD/STORE 时按 type 自动 box/unbox。 */
+void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, int caller_slot)
+{
+    if(!f || !name || !caller || caller_slot < 0) return;
+    int idx = frame_find(f, name);
+    if(idx < 0) {
+        frame_ensure(f, f->cnt + 1);
+        idx = f->cnt++;
+        f->names[idx] = strdup(name);
+        f->vals[idx].type = VAL_NONE;
+        f->int_slots[idx] = 0;
+        f->flt_slots[idx] = 0.0;
+        f->ptr_slots[idx] = NULL;
+        f->type_tags[idx] = -1;
+    }
+    frame_ensure(caller, caller_slot + 1);
+    /* 若调用方槽本身是 ref，跟随 ref 链（传递引用别名） */
+    if (caller->refs && caller->refs[caller_slot]) {
+        RefDesc* src = caller->refs[caller_slot];
+        void* ptr = src->ptr;
+        int ct = src->type;
+        RefDesc* rd = (RefDesc*)malloc(sizeof(RefDesc));
+        if(!rd) { perror("stackframe_bind_ref"); return; }
+        rd->ptr = ptr;
+        rd->type = ct;
+        f->refs[idx] = rd;
+        return;
+    }
+    int ct = (caller_slot < caller->cap) ? caller->type_tags[caller_slot] : -1;
+    void* ptr;
+    switch((CastKind)ct) {
+    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
+    case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
+    case CAST_UINT64: case CAST_ULONG: case CAST_SIZE_T: case CAST_SSIZE_T:
+        ptr = &caller->int_slots[caller_slot]; break;
+    case CAST_FLOAT: case CAST_DOUBLE: case CAST_LONG_DOUBLE:
+        ptr = &caller->flt_slots[caller_slot]; break;
+    case CAST_STRING: case CAST_BIGINT: case CAST_DECIMAL: case CAST_BITDECIMAL:
+        ptr = &caller->ptr_slots[caller_slot]; break;
+    default:
+        ptr = &caller->vals[caller_slot]; break;
+    }
+    RefDesc* rd = (RefDesc*)malloc(sizeof(RefDesc));
+    if(!rd) { perror("stackframe_bind_ref"); return; }
+    rd->ptr = ptr;
+    rd->type = ct;
+    f->refs[idx] = rd;
 }
 
 /* ===== 闭包单元（cell）支持 ===== */
