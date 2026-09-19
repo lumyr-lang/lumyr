@@ -25,6 +25,7 @@ ExprType c_expr(Ctx* c, AstNode* node);
 static const char* c_expr_type_name(Ctx* c, AstNode* node);
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck);
+static void c_expr_to_value(Ctx* c, AstNode* node);
 AstNode* func_ast_lookup(const char* name);   /* AST 函数表（func_compile.c） */
 static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result);
 static void collect_call_args(AstNode* n, AstNode*** argv, int* argc, int* acap);
@@ -439,8 +440,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(strcmp(func_name, "len") == 0 && argc == 1) {
                 AstNode* arg = args;
                 if(args && args->type == AST_SEQ) arg = args->u.seq.first;
-                ExprType at = c_expr(c, arg);
-                emit_to_dynamic(c, at, c_expr_cast_type(c, arg));
+                c_expr_to_value(c, arg);
                 emit(c, OPC_BUILTIN, BUILTIN_LEN, 1);
                 return EXPR_TYPE_NONE;
             }
@@ -462,8 +462,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 AstNode** dargv = NULL;
                 collect_call_args(args, &dargv, &dargc, &dacap);
                 for(int i = 0; i < dargc; i++) {
-                    ExprType at = c_expr(c, dargv[i]);
-                    emit_to_dynamic(c, at, c_expr_cast_type(c, dargv[i]));
+                    c_expr_to_value(c, dargv[i]);
                 }
                 free(dargv);
                 emit(c, OPC_CALLV, 0, dargc);
@@ -476,23 +475,20 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_INDEX: {
-        /* 数组/字符串下标读 arr[i]：arr、i 均转 VALUE，弹 i 再弹 arr，压元素 */
-        ExprType at = c_expr(c, node->u.index.arr);
-        emit_to_dynamic(c, at, c_expr_cast_type(c, node->u.index.arr));
-        ExprType it = c_expr(c, node->u.index.idx);
-        emit_to_dynamic(c, it, c_expr_cast_type(c, node->u.index.idx));
+        /* 数组/字符串下标读 arr[i]：arr、i 目标 VALUE，弹 i 再弹 arr，压元素 */
+        c_expr_to_value(c, node->u.index.arr);
+        c_expr_to_value(c, node->u.index.idx);
         emit(c, OPC_INDEX_GET, 0, 0);
         return EXPR_TYPE_NONE;
     }
 
     case AST_ARRAY_LIT: {
-        /* 数组字面量 [e1,e2,...]：各元素转 VALUE 压栈，ARRAY_LIT 弹出组装为数组 */
+        /* 数组字面量 [e1,e2,...]：各元素目标 VALUE 压栈，ARRAY_LIT 弹出组装 */
         AstNode** argv = NULL;
         int argc = 0, acap = 0;
         collect_call_args(node->u.array_lit.elems, &argv, &argc, &acap);
         for(int i = 0; i < argc; i++) {
-            ExprType et = c_expr(c, argv[i]);
-            emit_to_dynamic(c, et, c_expr_cast_type(c, argv[i]));
+            c_expr_to_value(c, argv[i]);
         }
         emit(c, OPC_ARRAY_LIT, 0, argc);
         free(argv);
@@ -500,15 +496,13 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_DYN_CALL: {
-        /* 动态调用 callee(args)：callee 是函数值表达式，全部走 VALUE 栈 + CALLV */
-        ExprType ct = c_expr(c, node->u.dyn_call.callee);
-        emit_to_dynamic(c, ct, c_expr_cast_type(c, node->u.dyn_call.callee));
+        /* 动态调用 callee(args)：callee 与实参全部目标 VALUE + CALLV */
+        c_expr_to_value(c, node->u.dyn_call.callee);
         AstNode** argv = NULL;
         int argc = 0, acap = 0;
         collect_call_args(node->u.dyn_call.args, &argv, &argc, &acap);
         for(int i = 0; i < argc; i++) {
-            ExprType at = c_expr(c, argv[i]);
-            emit_to_dynamic(c, at, c_expr_cast_type(c, argv[i]));
+            c_expr_to_value(c, argv[i]);
         }
         emit(c, OPC_CALLV, 0, argc);
         return EXPR_TYPE_NONE;
@@ -1028,6 +1022,113 @@ static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck) {
         emit(c, OPC_BOX_PTR, (int)ck, 0);
 }
 
+/* ===== 上下文目标类型（自顶向下）编译 =====
+ * 当使用处需要 VALUE 栈（无标注形参/动态调用实参/数组元素/下标）时，
+ * 直接按目标 VALUE 编译表达式，消除"typed 压栈 + BOX"开销。 */
+
+/* cast 是否为特殊/非标量数值类型（这些仍走各自专用路径 + box） */
+static int cast_is_special_value(CastKind k) {
+    return k == CAST_STRING || k == CAST_BIGINT ||
+           k == CAST_DECIMAL || k == CAST_BITDECIMAL;
+}
+
+/* 二元运算符对应的通用 Value 操作码；不可直接走 Value 时返回 -1 */
+static int binop_value_opcode(int op) {
+    switch(op) {
+    case OP_ADD: return OPC_VADD;
+    case OP_SUB: return OPC_VSUB;
+    case OP_MUL: return OPC_VMUL;
+    case OP_DIV: return OPC_VDIV;
+    case OP_MOD: return OPC_VMOD;
+    case OP_GT:  return OPC_VGT;
+    case OP_LT:  return OPC_VLT;
+    case OP_GE:  return OPC_VGE;
+    case OP_LE:  return OPC_VLE;
+    case OP_EQ:  return OPC_VEQ;
+    case OP_NE:  return OPC_VNE;
+    default:     return -1;
+    }
+}
+
+/* 兜底：按自然类型编译，再按需 BOX 到 VALUE（已是 NONE 时 emit_to_dynamic 无操作） */
+static void c_value_fallback(Ctx* c, AstNode* node) {
+    ExprType t = c_expr(c, node);
+    emit_to_dynamic(c, t, c_expr_cast_type(c, node));
+}
+
+/* 编译表达式，保证结果落在 VALUE 栈 */
+static void c_expr_to_value(Ctx* c, AstNode* node) {
+    if(!node) return;
+    switch(node->type) {
+    /* 字面量：直接构造 Value，零 typed 压栈、零 BOX */
+    case AST_INT: {
+        int64_t v = node->u.inum;
+        if(v >= INT32_MIN && v <= INT32_MAX)
+            emit(c, OPC_PUSH_INT_VAL, (int)v, 0);
+        else {
+            int idx = bf_add_i64_const(c->fn, v);
+            emit(c, OPC_PUSH_CONST_VAL, idx, 0);
+        }
+        return;
+    }
+    case AST_BOOL: emit(c, OPC_PUSH_INT_VAL, node->u.bval ? 1 : 0, 0); return;
+    case AST_CHAR: emit(c, OPC_PUSH_INT_VAL, (int)(int64_t)node->u.ch, 0); return;
+    case AST_NUM: {
+        int idx = bf_add_double_const(c->fn, node->u.num);
+        emit(c, OPC_PUSH_CONST_VAL, idx, 0);
+        return;
+    }
+    case AST_STRING: {
+        int idx = bf_add_str_const(c->fn, node->u.sval);
+        emit(c, OPC_PUSH_CONST_VAL, idx, 0);
+        return;
+    }
+    case AST_NONE: emit(c, OPC_PUSH_NONE, 0, 0); return;
+
+    /* 变量：仅当本身就是动态变量时直接 LOAD_VAR；typed 存储无法避免一次 BOX */
+    case AST_VAR: {
+        int idx = c_find_var(c, node->u.varname);
+        if(idx >= 0 && c->var_types[idx] == EXPR_TYPE_NONE) {
+            emit(c, OPC_LOAD_VAR, idx, 0);
+            return;
+        }
+        c_value_fallback(c, node);
+        return;
+    }
+
+    /* 一元负号：子树目标 VALUE + VNEG */
+    case AST_UNARY: {
+        if(node->u.uny.op == OP_UNARY_MINUS &&
+           !cast_is_special_value(c_expr_cast_type(c, node->u.uny.child))) {
+            c_expr_to_value(c, node->u.uny.child);
+            emit(c, OPC_VNEG, 0, 0);
+            return;
+        }
+        c_value_fallback(c, node);
+        return;
+    }
+
+    /* 二元运算：左右子树均目标 VALUE，发通用 Value 指令 */
+    case AST_BINOP: {
+        int vop = binop_value_opcode(node->u.bin.op);
+        CastKind lk = c_expr_cast_type(c, node->u.bin.left);
+        CastKind rk = c_expr_cast_type(c, node->u.bin.right);
+        if(vop >= 0 && !cast_is_special_value(lk) && !cast_is_special_value(rk)) {
+            c_expr_to_value(c, node->u.bin.left);
+            c_expr_to_value(c, node->u.bin.right);
+            emit(c, (OpCode)vop, 0, 0);
+            return;
+        }
+        c_value_fallback(c, node);
+        return;
+    }
+
+    default:
+        c_value_fallback(c, node);
+        return;
+    }
+}
+
 /* 编译语句 */
 /* 编译条件表达式，发出"假则跳转"（目标待回填），返回 jmp 指令序号。
  * 已知类型条件（比较/逻辑运算）在 INT64 栈；动态条件（无类型标注）在 VALUE 栈。 */
@@ -1200,17 +1301,19 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
         }
 
         if(slot < argc) {
-            ExprType at = c_expr(c, argv[slot]);
-            if(param_et != EXPR_TYPE_NONE)
+            if(param_et != EXPR_TYPE_NONE) {
+                ExprType at = c_expr(c, argv[slot]);
                 emit_value_cast(c, at, param_et);   /* typed -> typed */
-            else
-                emit_to_dynamic(c, at, c_expr_cast_type(c, argv[slot])); /* typed -> VALUE */
+            } else {
+                c_expr_to_value(c, argv[slot]);      /* 上下文目标 VALUE，免 BOX */
+            }
         } else if(p->u.param.default_val) {
-            ExprType at = c_expr(c, p->u.param.default_val);
-            if(param_et != EXPR_TYPE_NONE)
+            if(param_et != EXPR_TYPE_NONE) {
+                ExprType at = c_expr(c, p->u.param.default_val);
                 emit_value_cast(c, at, param_et);
-            else
-                emit_to_dynamic(c, at, c_expr_cast_type(c, p->u.param.default_val));
+            } else {
+                c_expr_to_value(c, p->u.param.default_val);
+            }
         } else {
             fprintf(stderr, "IR: 调用 %s 缺少第 %d 个必填参数\n",
                     callee->name ? callee->name : "?", slot + 1);
@@ -1224,8 +1327,7 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
         int extra = argc - bound;
         if(extra < 0) extra = 0;
         for(int i = 0; i < extra; i++) {
-            ExprType at = c_expr(c, argv[bound + i]);
-            emit_to_dynamic(c, at, c_expr_cast_type(c, argv[bound + i]));
+            c_expr_to_value(c, argv[bound + i]);
         }
         emit(c, OPC_ARRAY_LIT, 0, extra);   /* 弹 extra 个 VALUE，压数组 */
         total = bound + 1;                  /* 数组作为第 bound 个槽（可变形参） */
@@ -1306,6 +1408,13 @@ void c_stmt(Ctx* c, AstNode* node) {
         } else {
             target_et = rt;
         }
+        /* 判断 typed->typed 是否存在真实转换（仅 INT<->DOUBLE）；
+           不存在则放弃旧类型，变量改用 RHS 实际类型，避免栈错位。 */
+        if (rt != target_et && rt != EXPR_TYPE_NONE && target_et != EXPR_TYPE_NONE) {
+            int convertible = (rt == EXPR_TYPE_INT || rt == EXPR_TYPE_DOUBLE) &&
+                              (target_et == EXPR_TYPE_INT || target_et == EXPR_TYPE_DOUBLE);
+            if (!convertible) target_et = rt;
+        }
         int var_idx = c_add_var(c, var_name, target_et);
         int bf_idx = bf_sym(c->fn, var_name);
         /* 若 RHS 类型与目标类型不同，进行转换 */
@@ -1328,7 +1437,7 @@ void c_stmt(Ctx* c, AstNode* node) {
                     c_add_var(c, var_name, EXPR_TYPE_NONE);
                 }
             } else {
-                /* typed -> typed 转换 */
+                /* typed -> typed 真实转换（INT<->DOUBLE） */
                 emit_value_cast(c, rt, target_et);
             }
         }

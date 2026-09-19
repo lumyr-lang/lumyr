@@ -122,6 +122,12 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             }
             break;
 
+        /* PUSH_INT_VAL / PUSH_CONST_VAL：直接压 VALUE 栈 */
+        case OPC_PUSH_INT_VAL:
+        case OPC_PUSH_CONST_VAL:
+            d.value = +1;
+            break;
+
         /* CALL：压返回值与否取决于 callsite.keep_result。
          * argc 个实参分散在各栈，此处不精确扣减（保守计入最大栈深，避免误报）。 */
         case OPC_CALL:

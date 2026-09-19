@@ -394,6 +394,8 @@ const char* opc_name(OpCode op)
         case OPC_PUSH_NONE:  return "PUSH_NONE";
         case OPC_UNBOX_INT64:  return "UNBOX_INT64";
         case OPC_UNBOX_DOUBLE: return "UNBOX_DOUBLE";
+        case OPC_PUSH_INT_VAL:   return "PUSH_INT_VAL";
+        case OPC_PUSH_CONST_VAL: return "PUSH_CONST_VAL";
         default: return "UNKNOWN";
     }
 }

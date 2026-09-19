@@ -4,6 +4,7 @@
  */
 #include "vm_types.h"
 #include "stack_manager.h"
+#include "lumyr_value.h"
 #include <string.h>
 
 /* ===== 常量加载 ===== */
@@ -64,5 +65,28 @@ int vm_exec_load_string_const(VMExecCtx* ctx, Instruction* in) {
     const char* s = ctx->const_pool[idx].s;
     void* ptr = (void*)s;
     stack_vm_push(g_stack_mgr, STACK_PTR, &ptr);
+    return 1;
+}
+
+/* PUSH_INT_VAL：小 int32 直接构造 int64 Value 压 VALUE 栈（省去 INT 压栈 + BOX） */
+int vm_exec_load_int_val(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    Value v = lumyr_make_int64((int64_t)in->a);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
+
+/* PUSH_CONST_VAL：常量池条目直接构造对应 Value 压 VALUE 栈 */
+int vm_exec_load_const_val(VMExecCtx* ctx, Instruction* in) {
+    ConstEntry* e = &ctx->const_pool[in->a];
+    Value v;
+    switch(e->type) {
+    case CONST_INT64:  v = lumyr_make_int64(e->i64); break;
+    case CONST_UINT64: v = lumyr_make_int64((int64_t)e->u64); break;
+    case CONST_DOUBLE: v = lumyr_make_double(e->d); break;
+    case CONST_STRING: v = lumyr_make_string(e->s); break;
+    default: v = val_none(); break;
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }

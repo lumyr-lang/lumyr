@@ -210,6 +210,10 @@ typedef enum {
     // VALUE 栈 -> typed 栈拆箱（赋值给已 typed 变量时使用）
     OPC_UNBOX_INT64,    // VALUE 栈弹1 -> 取 i64 -> INT64 栈
     OPC_UNBOX_DOUBLE,   // VALUE 栈弹1 -> 取 double -> DOUBLE 栈
+
+    // 上下文目标 VALUE：直接构造 Value 压 VALUE 栈（省去 typed push + BOX）
+    OPC_PUSH_INT_VAL,   // a=小 int32 -> make_int64 -> VALUE 栈
+    OPC_PUSH_CONST_VAL, // a=常量池下标 -> 按常量类型构造 Value -> VALUE 栈
 } OpCode;
 
 /* ============================================================

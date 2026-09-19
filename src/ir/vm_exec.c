@@ -30,6 +30,8 @@ int vm_exec_load_const_idx(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_double_const(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_ptr_const(VMExecCtx* ctx, Instruction* in);
 int vm_exec_load_string_const(VMExecCtx* ctx, Instruction* in);
+int vm_exec_load_int_val(VMExecCtx* ctx, Instruction* in);
+int vm_exec_load_const_val(VMExecCtx* ctx, Instruction* in);
 
 /* 变量存取 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in);
@@ -201,6 +203,8 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_PUSH_DOUBLE_CONST: handled = vm_exec_load_double_const(ctx, &in); break;
         case OPC_PUSH_PTR_CONST: handled = vm_exec_load_ptr_const(ctx, &in); break;
         case OPC_LOAD_STRING_CONST: handled = vm_exec_load_string_const(ctx, &in); break;
+        case OPC_PUSH_INT_VAL:   handled = vm_exec_load_int_val(ctx, &in); break;
+        case OPC_PUSH_CONST_VAL: handled = vm_exec_load_const_val(ctx, &in); break;
 
         /* ===== 变量存取 ===== */
         case OPC_LOAD_VAR: handled = vm_exec_var_load(ctx, &in); break;
