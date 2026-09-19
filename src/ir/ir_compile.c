@@ -59,6 +59,39 @@ static int c_add_var(Ctx* c, const char* name, ExprType type) {
     return idx;
 }
 
+/* ============================================================
+ * 三元表达式辅助
+ * ============================================================ */
+
+/* 在两个分支类型名之间选统一目标，优先级与 BINOP 类型提升一致 */
+static const char* ternary_target_name(const char* a, const char* b) {
+    static const char* order[] = {"string", "bigint", "decimal", "double", "int"};
+    for(int i = 0; i < 5; i++) {
+        if(strcmp(a, order[i]) == 0 || strcmp(b, order[i]) == 0) return order[i];
+    }
+    return a;
+}
+
+/* 把栈顶值从 from 类型转换为 to 类型（仅处理本编译器已支持的转换指令） */
+static void ternary_cast_to(Ctx* c, const char* from, const char* to) {
+    if(strcmp(from, to) == 0) return;
+    if(strcmp(to, "double") == 0) {
+        if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+    } else if(strcmp(to, "int") == 0) {
+        if(strcmp(from, "double") == 0) emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+    } else if(strcmp(to, "string") == 0) {
+        if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_STRING, 0, 0);
+        else if(strcmp(from, "double") == 0) emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+    }
+}
+
+/* 类型名 → ExprType */
+static ExprType ternary_name_to_exprtype(const char* n) {
+    if(strcmp(n, "double") == 0) return EXPR_TYPE_DOUBLE;
+    if(strcmp(n, "int") == 0) return EXPR_TYPE_INT;
+    return EXPR_TYPE_PTR;
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
@@ -606,12 +639,62 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_DOUBLE_DIV, 0, 0);
             }
             break;
+        case OP_GT: case OP_LT: case OP_GE:
+        case OP_LE: case OP_EQ: case OP_NE: {
+            /* 比较结果统一压 INT64 栈（0/1），供条件跳转直接使用 */
+            if(result == EXPR_TYPE_DOUBLE) {
+                switch(node->u.bin.op) {
+                case OP_GT: emit(c, OPC_DOUBLE_GT, 0, 0); break;
+                case OP_LT: emit(c, OPC_DOUBLE_LT, 0, 0); break;
+                case OP_GE: emit(c, OPC_DOUBLE_GE, 0, 0); break;
+                case OP_LE: emit(c, OPC_DOUBLE_LE, 0, 0); break;
+                case OP_EQ: emit(c, OPC_DOUBLE_EQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_DOUBLE_NE, 0, 0); break;
+                default: break;
+                }
+            } else {
+                switch(node->u.bin.op) {
+                case OP_GT: emit(c, OPC_INT64_GT, 0, 0); break;
+                case OP_LT: emit(c, OPC_INT64_LT, 0, 0); break;
+                case OP_GE: emit(c, OPC_INT64_GE, 0, 0); break;
+                case OP_LE: emit(c, OPC_INT64_LE, 0, 0); break;
+                case OP_EQ: emit(c, OPC_INT64_EQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_INT64_NE, 0, 0); break;
+                default: break;
+                }
+            }
+            return EXPR_TYPE_INT;
+        }
         default:
             break;
         }
         return result;
     }
-    
+
+    case AST_TERNARY: {
+        /* 三元 cond ? t : f：预判两分支类型，统一到目标类型，结果压对应栈 */
+        const char* name_t = c_expr_type_name(c, node->u.ternary.true_expr);
+        const char* name_f = c_expr_type_name(c, node->u.ternary.false_expr);
+        const char* name_target = ternary_target_name(name_t, name_f);
+
+        /* 条件（结果在 INT64 栈），假则跳到 else */
+        c_expr(c, node->u.ternary.cond);
+        int jfalse = emit_here(c, OPC_JMP_IF_FALSE, 0, 0);
+
+        /* true 分支：编译后按目标类型转换 */
+        c_expr(c, node->u.ternary.true_expr);
+        ternary_cast_to(c, name_t, name_target);
+        int jend = emit_here(c, OPC_JMP, 0, 0);
+
+        /* else 分支 */
+        patch_to(c, jfalse);
+        c_expr(c, node->u.ternary.false_expr);
+        ternary_cast_to(c, name_f, name_target);
+        patch_to(c, jend);
+
+        return ternary_name_to_exprtype(name_target);
+    }
+
     case AST_SEQ: {
         /* 语句序列：编译所有语句，返回最后一个表达式的类型 */
         ExprType last_type = EXPR_TYPE_NONE;

@@ -7,6 +7,12 @@
  * - 回调函数（函数指针作为参数）
  * - 完善的错误处理
  */
+/* glibc 需要 _GNU_SOURCE 才暴露 RTLD_DEFAULT（须在包含系统头之前定义） */
+#ifndef _WIN32
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#endif
 #include "lumyr_ffi.h"
 #include "lumyr_log.h"
 #include <stdlib.h>

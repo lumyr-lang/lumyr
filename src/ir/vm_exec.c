@@ -118,7 +118,7 @@ int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in);
 /* ========== 主执行循环 ========== */
 Value vm_execute(VMExecCtx* ctx) {
     Instruction* code = ctx->code;
-    int pc = 0;
+    ctx->pc = 0;
     Value result = val_none();
 
 
@@ -128,13 +128,15 @@ Value vm_execute(VMExecCtx* ctx) {
     }
 
     int total_instr = 0;
-    while (pc < ctx->fn->code_len) {
-        Instruction in = code[pc++];
+    /* 程序计数器统一使用 ctx->pc：控制流指令（JMP/JMP_IF_*）直接改写它。
+       取指后自增；若指令是跳转，会在执行时覆盖为目标地址。 */
+    while (ctx->pc < ctx->fn->code_len) {
+        Instruction in = code[ctx->pc++];
         total_instr++;
         if (total_instr <= 50) {
-            fprintf(stderr, "DEBUG: pc=%d, op=%d, total=%d\n", pc-1, (int)in.op, total_instr);
+            fprintf(stderr, "DEBUG: pc=%d, op=%d, total=%d\n", ctx->pc-1, (int)in.op, total_instr);
         }
-        if (pc <= 5) {
+        if (ctx->pc <= 5) {
         }
         int handled = 0;
         if((int)in.op >= 115 && (int)in.op <= 120) {
@@ -259,12 +261,12 @@ Value vm_execute(VMExecCtx* ctx) {
         }
 
         default:
-            fprintf(stderr, "VM: unknown opcode %d at pc %d\n", (int)in.op, pc-1);
+            fprintf(stderr, "VM: unknown opcode %d at pc %d\n", (int)in.op, ctx->pc-1);
             goto done;
         }
 
         if (!handled) {
-            fprintf(stderr, "VM: instruction not handled %d at pc %d\n", (int)in.op, pc-1);
+            fprintf(stderr, "VM: instruction not handled %d at pc %d\n", (int)in.op, ctx->pc-1);
         }
     }
 

@@ -193,9 +193,17 @@ int main(int argc, char** argv) {
                              "-lruntime -lcurl -liconv -ltre "
                              "-lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32",
                              gen_cc, gen_cflags, c_path, exe_path);
-#else
+#elif defined(__APPLE__)
+                    /* macOS：系统 curl/iconv，GMP 来自 brew（/usr/local/lib 默认在搜索路径） */
                     snprintf(cmd, sizeof(cmd),
-                             "%s -std=gnu11 %s -Ikit/runtime/include -Llib %s -o %s -lruntime -lcurl -liconv",
+                             "%s -std=gnu11 %s -Ikit/runtime/include -Llib %s -o %s "
+                             "-lruntime -lcurl -liconv -lgmp",
+                             gen_cc, gen_cflags, c_path, exe_path);
+#else
+                    /* Linux：glibc 内置 iconv/regex；libm、pthread、gmp 均为系统库 */
+                    snprintf(cmd, sizeof(cmd),
+                             "%s -std=gnu11 %s -Ikit/runtime/include -Llib %s -o %s "
+                             "-lruntime -lcurl -lm -lpthread -lgmp",
                              gen_cc, gen_cflags, c_path, exe_path);
 #endif
                     int sys_ret = system(cmd);

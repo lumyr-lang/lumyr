@@ -72,12 +72,14 @@ YACC_REPORT := $(GEN_DIR)/yacc.output
 
 # ========== 链接库（跨平台） ==========
 ifeq ($(OS_NAME),macos)
-    # 系统 libcurl（SecureTransport）+ 系统 libiconv + libc POSIX regex，全部动态系统库
+    # 系统 libcurl（SecureTransport）+ 系统 libiconv + libc POSIX regex
     LDLIBS := -lcurl -liconv
 else ifeq ($(OS_NAME),windows)
     LDLIBS :=
 else
-    LDLIBS := -lcurl -liconv
+    # Linux：glibc 已内置 iconv 与 POSIX regex，无独立 libiconv，只需 curl；
+    # libm 提供数学函数；glibc 2.34 之前 pthread 为独立库（新版为空操作兼容）
+    LDLIBS := -lcurl -lm -lpthread
 endif
 
 # ========== GMP 高精度数学库（动态链接，LGPL v3 合规） ==========
