@@ -135,7 +135,6 @@ RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 
 # ========== 编译器本体源文件（不含 runtime） ==========
 C_SRCS := $(wildcard $(SRC_DIR)/ast/*.c)
-C_SRCS := $(filter-out $(RUNTIME_DIR)/src/lumyr_value.c, $(C_SRCS))
 C_SRCS += $(wildcard $(SRC_DIR)/ir/*.c)
 C_SRCS += $(wildcard $(SRC_DIR)/parse/*.c)
 C_SRCS += $(wildcard $(SRC_DIR)/i18n/*.c)
@@ -169,7 +168,7 @@ endif
 .PHONY: all clean distclean check-env parser-gen env-info runtime-lib
 
 # ========== 主目标 ==========
-all: check-env runtime-lib parser-gen $(BIN_LOCAL)
+all: check-env parser-gen runtime-lib $(BIN_LOCAL)
 
 runtime-lib: $(RUNTIME_LIB)
 

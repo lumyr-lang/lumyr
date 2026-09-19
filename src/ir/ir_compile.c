@@ -235,6 +235,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case 17: ct_name = "CAST_BIGINT"; break;
             case 18: ct_name = "CAST_DECIMAL"; break;
             case 40: ct_name = "CAST_BITDECIMAL"; break;
+            default: break;
         }
         fprintf(stderr, "DEBUG: TYPE_ANNOTATION: ct=%d (%s), child_type=%d\n", (int)ct, ct_name, (int)child_type);
         /* 根据 CastKind 返回表达式类型，必要时 emit 跨栈转换指令 */
@@ -476,6 +477,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_BIGINT_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_BIGINT_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_BIGINT_DIV, 0, 0); break;
+            default: break;
             }
             return EXPR_TYPE_PTR;
         }
@@ -513,10 +515,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_BITDECIMAL_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_BITDECIMAL_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_BITDECIMAL_DIV, 0, 0); break;
+            default: break;
             }
             return EXPR_TYPE_PTR;
         }
-
+    
         /* decimal 运算：至少一个操作数是 decimal */
         if((lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
             /* 编译左操作数 */
@@ -550,6 +553,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_DECIMAL_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_DECIMAL_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_DECIMAL_DIV, 0, 0); break;
+            default: break;
             }
             return EXPR_TYPE_PTR;
         }
@@ -593,6 +597,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB:
                 emit(c, OPC_PTR_SUB, 0, 0);
                 break;
+            default: break;
             }
             return EXPR_TYPE_PTR;
         }
