@@ -12,12 +12,23 @@ echo ============================================================
 echo.
 
 REM Check if prebuilt dependencies exist
-if not exist "prebuilt\windows\lib\libcurl.a" (
-    echo ERROR: Prebuilt dependencies not found!
-    echo Please run scripts\download_deps.bat first to download dependencies.
-    echo.
-    exit /b 1
-)
+if not exist "prebuilt\windows\lib\libcurl.a" goto :missing_deps
+if not exist "prebuilt\windows\lib\libtre.a" goto :missing_deps
+if not exist "prebuilt\windows\lib\libiconv.dll.a" goto :missing_deps
+if not exist "prebuilt\windows\bin\libiconv-2.dll" goto :missing_deps
+goto :deps_ok
+
+:missing_deps
+echo ERROR: Prebuilt dependencies not found or incomplete!
+echo Please run scripts\download_deps.bat first, then build the libraries
+echo from source in the "MSYS2 MINGW64" terminal:
+echo.
+echo   pacman -S --needed base-devel mingw-w64-x86_64-toolchain autoconf automake libtool
+echo   bash scripts/build_deps_mingw.sh
+echo.
+exit /b 1
+
+:deps_ok
 
 REM Set up PATH
 set PATH=C:\mingw64\bin;D:\apps\git\Git\usr\bin;prebuilt\windows\tools\winflexbison;%PATH%

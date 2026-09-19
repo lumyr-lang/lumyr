@@ -73,6 +73,13 @@ int vm_exec_decimal_div(VMExecCtx* ctx, Instruction* in);
 
 /* bitdecimal 高精度十进制浮点（基于 GMP mpf_t） */
 int vm_exec_bitdecimal_from_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_to_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_from_int64(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_from_double(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_add(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_sub(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_mul(VMExecCtx* ctx, Instruction* in);
+int vm_exec_bitdecimal_div(VMExecCtx* ctx, Instruction* in);
 
 /* 比较运算 */
 int vm_exec_compare_int64_eq(VMExecCtx* ctx, Instruction* in);
@@ -204,6 +211,13 @@ Value vm_execute(VMExecCtx* ctx) {
         case OPC_DECIMAL_MUL: handled = vm_exec_decimal_mul(ctx, &in); break;
         case OPC_DECIMAL_DIV: handled = vm_exec_decimal_div(ctx, &in); break;
         case OPC_DECIMAL_TO_STRING: handled = vm_exec_decimal_to_string(ctx, &in); break;
+        case OPC_BITDECIMAL_TO_STRING: handled = vm_exec_bitdecimal_to_string(ctx, &in); break;
+        case OPC_BITDECIMAL_FROM_INT64: handled = vm_exec_bitdecimal_from_int64(ctx, &in); break;
+        case OPC_BITDECIMAL_FROM_DOUBLE: handled = vm_exec_bitdecimal_from_double(ctx, &in); break;
+        case OPC_BITDECIMAL_ADD: handled = vm_exec_bitdecimal_add(ctx, &in); break;
+        case OPC_BITDECIMAL_SUB: handled = vm_exec_bitdecimal_sub(ctx, &in); break;
+        case OPC_BITDECIMAL_MUL: handled = vm_exec_bitdecimal_mul(ctx, &in); break;
+        case OPC_BITDECIMAL_DIV: handled = vm_exec_bitdecimal_div(ctx, &in); break;
 
         /* ===== bitdecimal 高精度十进制浮点（基于 GMP mpf_t） ===== */
         case OPC_BITDECIMAL_FROM_STRING: handled = vm_exec_bitdecimal_from_string(ctx, &in); break;

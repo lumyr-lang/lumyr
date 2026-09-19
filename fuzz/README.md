@@ -13,10 +13,12 @@ fuzz/
 
 ## 链式混合运算差分测试（gen_chain_test.py）
 
-从 `tests/random_type_test.lm` 的 1500 个二元运算案例提取操作数池，生成 304 个
+从 `tests/random_type_test.lm` 的 1500 个二元运算案例提取操作数池，生成 318 个
 3~5 操作数链式/混合运算案例（左结合链、`a+b*c`、`(a+b)*(c-d)` 等优先级形状，
-以及除零、负数、字符串链、bigint 大整数、decimal 精度等边界用例），并用独立
-Python oracle 按 VM 语义计算每行期望的「类型+值」。固定随机种子，结果可复现。
+以及除零、负数、字符串链、bigint 大整数、decimal 精度、bitdecimal 精度等边界
+用例），并用独立 Python oracle 按 VM 语义计算每行期望的「类型+值」。固定随机
+种子，结果可复现。bitdecimal 语义：512 位 GMP mpf_t，加减取 max 精度、乘法
+精度相加、除法多保留 10 位，按 precision 固定小数位半偶舍入输出。
 
 ```bash
 python3 fuzz/gen_chain_test.py

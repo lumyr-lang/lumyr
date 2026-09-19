@@ -7,35 +7,67 @@ You may obtain a copy of the License at:
     http://www.apache.org/licenses/LICENSE-2.0
 
 This product includes software developed by other open source projects.
-Third-party components are listed below:
+Third-party components and their licenses are listed below.
 
 ---------------------------------------------------------------------------
-Build Tools (Windows, included in third_party/windows/tools/)
+Shared (dynamic) library - LGPL, dynamically linked for compliance
 ---------------------------------------------------------------------------
 
-WinFlexBison 2.5.25
-  - flex 2.6.4
-  - bison 3.8.2
-  License: GNU General Public License v3.0 (build-time only, not distributed)
+GMP (GNU Multiple Precision Arithmetic Library)
+  License: LGPL v3 (some files GPL v2+)
+  Linking: dynamic
+    macOS:  Homebrew ("brew install gmp"); the build bundles
+            libgmp.10.dylib next to lumyr using @loader_path, so users
+            may replace it with their own build (LGPL relinking right).
+    Linux:  distribution package (libgmp-dev), libgmp.so.10
+    Windows: deps/gmp/lib/windows-*/libgmp-10.dll, copied next to
+             lumyr.exe at build time
+  License texts: deps/gmp/licenses/
+  Source:   https://gmplib.org/
 
 ---------------------------------------------------------------------------
-Libraries (Windows, statically linked, included in third_party/windows/lib/)
+System libraries (provided by the OS, not redistributed by this product)
 ---------------------------------------------------------------------------
 
-curl 8.22.0
-  License: MIT/X derivate license (https://curl.se/docs/copyright.html)
+On macOS and Linux the following facilities are provided by the operating
+system's own libraries and are not bundled with this product:
 
-libiconv 1.19
-  License: GNU Lesser General Public License v2.1 (LGPL-2.1)
+  HTTP client : libcurl (macOS: /usr/lib/libcurl.4.dylib;
+                Linux: distribution package)
+  Charset conv: iconv (POSIX; macOS /usr/lib/libiconv.2.dylib)
+  Regex       : POSIX regex.h (libc)
 
-tre (approximate regex library)
-  License: BSD 2-Clause License
+Their use is governed by the platform's own terms (macOS: Apple software
+license; Linux: respective distribution licenses).
+
+Build-time requirements:
+  macOS:  brew install gmp bison flex
+  Linux:  libgmp-dev, bison, flex (distribution packages)
 
 ---------------------------------------------------------------------------
-Note
+Windows (MinGW-w64) - prebuilt third-party components
 ---------------------------------------------------------------------------
 
-The third-party components listed above are used for building and running
-the compiler on Windows. They are not part of the compiler's own source
-code. On macOS and Linux, these libraries are typically provided by the
-system package manager.
+libcurl 8.22.0
+  License: MIT/X derivate (https://curl.se/docs/copyright.html)
+  Linking: static; TLS backend is Windows Schannel (-lsecur32)
+  License text: prebuilt/windows/licenses/libcurl/
+
+libiconv 1.17
+  License: LGPL v2.1
+  Linking: dynamic (libiconv-2.dll, shipped next to lumyr.exe)
+  License text: prebuilt/windows/licenses/libiconv/
+
+TRE 0.9.0
+  License: BSD 2-Clause
+  Linking: static; used solely as the POSIX regex.h implementation that
+  Windows lacks (no approximate-matching features are used)
+  License text: prebuilt/windows/licenses/tre/
+
+Build tools on Windows: WinFlexBison (flex 2.6.4 / bison 3.8.2),
+build-time only; generated parsers are covered by the flex/bison runtime
+exceptions. The Windows libraries are rebuilt from source via
+scripts/build_deps_mingw.sh in an MSYS2 MINGW64 environment.
+
+The third-party components above are not part of the compiler's own
+source code.

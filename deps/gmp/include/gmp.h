@@ -59,7 +59,13 @@ see https://www.gnu.org/licenses/.  */
 /* Instantiated by configure. */
 #if ! defined (__GMP_WITHIN_CONFIGURE)
 #define _LONG_LONG_LIMB 1
+/* 仅 Windows DLL 形态的 libgmp 需要 dllimport/dllexport 标注；
+   macOS/Linux 动态库不需要，置 0 避免 clang 报 __declspec 错误 */
+#if defined (_WIN32) || defined (__CYGWIN__)
 #define __GMP_LIBGMP_DLL  1
+#else
+#define __GMP_LIBGMP_DLL  0
+#endif
 #endif
 
 

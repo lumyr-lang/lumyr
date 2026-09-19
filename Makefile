@@ -23,6 +23,31 @@ else
     EXE_EXT :=
 endif
 
+# ========== bison/flex 工具链 ==========
+# macOS 系统自带 bison 2.3 过旧：使用 Homebrew 版本（brew install bison flex）。
+# 用绝对路径调用，同时规避 make 直接 execvp 时沿用启动 PATH 的问题。
+ARCH := $(shell uname -m)
+ifeq ($(OS_NAME),macos)
+    BREW_BISON := $(firstword $(wildcard /usr/local/opt/bison/bin/bison /opt/homebrew/opt/bison/bin/bison))
+    BREW_FLEX  := $(firstword $(wildcard /usr/local/opt/flex/bin/flex  /opt/homebrew/opt/flex/bin/flex))
+    BISON_CMD  := $(if $(BREW_BISON),$(BREW_BISON),bison)
+    FLEX_CMD   := $(if $(BREW_FLEX),$(BREW_FLEX),flex)
+    # bison 用的 m4：brew m4 优先
+    BREW_M4 := $(firstword $(wildcard /usr/local/opt/m4/bin/m4 /opt/homebrew/opt/m4/bin/m4))
+    M4_PATH := $(if $(BREW_M4),$(BREW_M4),m4)
+    BISON_M4_ENV := M4=$(M4_PATH)
+else ifeq ($(OS_NAME),windows)
+    BISON_CMD := bison
+    FLEX_CMD  := flex
+    M4_PATH   :=
+    BISON_M4_ENV :=
+else
+    BISON_CMD := bison
+    FLEX_CMD  := flex
+    M4_PATH   := m4
+    BISON_M4_ENV := M4=$(M4_PATH)
+endif
+
 # ========== 目录定义 ==========
 SRC_DIR     := src
 GEN_DIR     := build/gen
@@ -45,62 +70,40 @@ YACC_GEN_C  := $(YACC_DIR)/yacc.tab.c
 YACC_GEN_H  := $(YACC_DIR)/yacc.tab.h
 YACC_REPORT := $(GEN_DIR)/yacc.output
 
-# ========== m4 路径（跨平台） ==========
-ifeq ($(OS_NAME),macos)
-    BREW_M4_INTEL := /usr/local/opt/m4/bin/m4
-    BREW_M4_ARM   := /opt/homebrew/opt/m4/bin/m4
-    ifeq ($(shell test -x $(BREW_M4_INTEL) && echo yes),yes)
-        M4_PATH := $(BREW_M4_INTEL)
-    else ifeq ($(shell test -x $(BREW_M4_ARM) && echo yes),yes)
-        M4_PATH := $(BREW_M4_ARM)
-    else
-        M4_PATH := m4
-    endif
-    BISON_M4_ENV := M4=$(M4_PATH)
-else ifeq ($(OS_NAME),windows)
-    M4_PATH :=
-    BISON_M4_ENV :=
-else
-    M4_PATH := m4
-    BISON_M4_ENV := M4=$(M4_PATH)
-endif
-
 # ========== 链接库（跨平台） ==========
-LDLIBS := -lcurl -liconv
+ifeq ($(OS_NAME),macos)
+    # 系统 libcurl（SecureTransport）+ 系统 libiconv + libc POSIX regex，全部动态系统库
+    LDLIBS := -lcurl -liconv
+else ifeq ($(OS_NAME),windows)
+    LDLIBS :=
+else
+    LDLIBS := -lcurl -liconv
+endif
 
 # ========== GMP 高精度数学库（动态链接，LGPL v3 合规） ==========
 GMP_DIR := $(CURDIR)/deps/gmp
-ARCH := $(shell uname -m)
 ifeq ($(OS_NAME),macos)
-    ifeq ($(ARCH),arm64)
-        GMP_LIB_DIR := $(GMP_DIR)/lib/macos-arm64
-    else
-        GMP_LIB_DIR := $(GMP_DIR)/lib/macos-x86_64
+    # Homebrew GMP（brew install gmp）
+    GMP_BREW := $(firstword $(wildcard /usr/local/opt/gmp /opt/homebrew/opt/gmp))
+    ifeq ($(GMP_BREW),)
+        $(warning GMP not found: run "brew install gmp")
     endif
+    GMP_LIB_DIR := $(GMP_BREW)/lib
+    CFLAGS += -I$(GMP_BREW)/include
+    LDFLAGS += -L$(GMP_BREW)/lib
 else ifeq ($(OS_NAME),linux)
-    ifeq ($(ARCH),aarch64)
-        GMP_LIB_DIR := $(GMP_DIR)/lib/linux-aarch64
-    else ifeq ($(ARCH),x86_64)
-        GMP_LIB_DIR := $(GMP_DIR)/lib/linux-x86_64
-    endif
+    # 系统 GMP（apt install libgmp-dev），走默认搜索路径
+    GMP_LIB_DIR :=
 else ifeq ($(OS_NAME),windows)
     ifeq ($(ARCH),x86_64)
         GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x64
     else
         GMP_LIB_DIR := $(GMP_DIR)/lib/windows-x86
     endif
+    CFLAGS += -I$(GMP_DIR)/include
+    LDFLAGS += -L$(GMP_LIB_DIR)
 endif
-CFLAGS += -I$(GMP_DIR)/include
-LDFLAGS += -L$(GMP_LIB_DIR) -Wl,-rpath,$(GMP_LIB_DIR)
 LDLIBS += -lgmp
-ifneq ($(CURL_DIR),)
-    CFLAGS += -I$(CURL_DIR)/include
-    LDFLAGS += -L$(CURL_DIR)/lib
-endif
-ifneq ($(ICONV_DIR),)
-    CFLAGS += -I$(ICONV_DIR)/include
-    LDFLAGS += -L$(ICONV_DIR)/lib
-endif
 # ========== Runtime 静态库源文件 ==========
 # lm_runtime.c 已 include 了 gc_runtime.c / lm_string.c / lm_array.c / lm_math.c / lm_io.c
 # 这些文件不再单独编译，避免重复定义
@@ -151,7 +154,9 @@ ifeq ($(OS_NAME),windows)
     export PATH := $(CURDIR)/$(WIN_DEPS)/tools/winflexbison;$(PATH)
     CFLAGS += -I$(WIN_DEPS)/include -DCURL_STATICLIB
     LDFLAGS += -L$(WIN_DEPS)/lib
-    LDLIBS += -ltre -lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32
+    # 静态 curl(Schannel TLS)/tre + 动态 iconv（libiconv.dll.a 导入库，LGPL 合规）
+    LDLIBS += -lcurl -liconv -ltre \
+              -lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32
 endif
 
 .PHONY: all clean distclean check-env parser-gen env-info runtime-lib
@@ -169,17 +174,23 @@ env-info:
 	@echo "LDFLAGS: $(LDFLAGS)"
 	@echo "LDLIBS: $(LDLIBS)"
 	@echo "M4: $(M4_PATH)"
+	@echo "bison: $(BISON_CMD)"
+	@echo "flex: $(FLEX_CMD)"
+	@echo "GMP lib: $(GMP_LIB_DIR) [dynamic, LGPL]"
+	@echo "curl/iconv/regex: system libraries"
 	@echo "EXE_EXT: $(EXE_EXT)"
 	@echo "Runtime lib: $(RUNTIME_LIB)"
 	@echo "Target: $(BIN_LOCAL)"
 
 check-env:
 	@echo "=== Toolchain Check ($(OS_NAME)) ==="
-	@flex --version
-	@bison --version | head -1
-	@bison --version | grep -q " 3." || (echo "ERROR: bison >=3.x required"; exit 1)
+	@echo "flex:   $(FLEX_CMD)"
+	@$(FLEX_CMD) --version
+	@echo "bison:  $(BISON_CMD)"
+	@$(BISON_CMD) --version | head -1
+	@$(BISON_CMD) --version | grep -q " 3." || (echo "ERROR: bison >=3.x required"; exit 1)
 ifeq ($(OS_NAME),macos)
-	@test -x $(M4_PATH) || (echo "ERROR: m4 missing, brew install m4"; exit 1)
+	@case "$(M4_PATH)" in /*) test -x "$(M4_PATH)" || (echo "ERROR: m4 missing, brew install m4"; exit 1) ;; *) command -v "$(M4_PATH)" >/dev/null || (echo "ERROR: m4 missing, brew install m4"; exit 1) ;; esac
 endif
 
 # ========== Runtime 静态库 ==========
@@ -195,21 +206,41 @@ parser-gen: $(YACC_GEN_C) $(LEX_GEN)
 
 $(YACC_GEN_C) $(YACC_GEN_H): $(YACC_SRC)
 	@mkdir -p $(GEN_DIR) $(YACC_DIR)
-	$(BISON_M4_ENV) bison -v --report-file=$(YACC_REPORT) -d $< -o $(YACC_GEN_C)
+	M4=$(M4_PATH) $(BISON_CMD) -v --report-file=$(YACC_REPORT) -d $< -o $(YACC_GEN_C)
 
 $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 	@mkdir -p $(YACC_DIR)
-	flex -o $@ $<
+	$(FLEX_CMD) -o $@ $<
 
-# ========== 编译器本体链接 ==========
 # ========== 编译器本体链接 ==========
 $(BIN_LOCAL): $(OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
 	@echo "    Built: $@"
-	@echo "==> Copying GMP dynamic library to $(BIN_DIR)/"
-	cp $(GMP_LIB_DIR)/libgmp.10.dylib $(BIN_DIR)/
-	cp $(GMP_LIB_DIR)/libgmp.dylib $(BIN_DIR)/ 2>/dev/null || true
+ifeq ($(OS_NAME),macos)
+	@# GMP 随包分发（LGPL）：拷入 bin/ 并改为 @loader_path 定位，用户可替换
+	@rm -f $(BIN_DIR)/libgmp.10.dylib
+	@cp $(GMP_LIB_DIR)/libgmp.10.dylib $(BIN_DIR)/
+	@chmod u+w $(BIN_DIR)/libgmp.10.dylib
+	@OLD_ID=$$(otool -D $(BIN_DIR)/libgmp.10.dylib | tail -1); \
+	 install_name_tool -id @loader_path/libgmp.10.dylib $(BIN_DIR)/libgmp.10.dylib; \
+	 install_name_tool -change "$$OLD_ID" @loader_path/libgmp.10.dylib $@
+	@echo "    bundled libgmp.10.dylib (@loader_path)"
+	@# GMP 许可证（LGPL）随分发包提供
+	@rm -rf $(BIN_DIR)/licenses
+	@cp -R $(GMP_DIR)/licenses $(BIN_DIR)/licenses
+	@echo "    copied licenses -> bin/licenses/"
+endif
+ifeq ($(OS_NAME),windows)
+	@echo "==> Copying runtime DLLs to $(BIN_DIR)/ (LGPL: GMP/iconv)"
+	@rm -f $(BIN_DIR)/libiconv-2.dll $(BIN_DIR)/libgmp-10.dll
+	@cp $(WIN_DEPS)/bin/libiconv-2.dll $(BIN_DIR)/ && echo "    copied libiconv-2.dll"
+	@cp $(GMP_LIB_DIR)/libgmp-10.dll $(BIN_DIR)/ && echo "    copied libgmp-10.dll"
+	@rm -rf $(BIN_DIR)/licenses
+	@cp -R $(WIN_DEPS)/licenses $(BIN_DIR)/licenses
+	@cp -R $(GMP_DIR)/licenses $(BIN_DIR)/licenses/gmp
+	@echo "    copied licenses -> bin/licenses/"
+endif
 # ========== 单元测试 ==========
 TEST_STACKFRAME := $(TEST_DIR)/stackframe_test$(EXE_EXT)
 

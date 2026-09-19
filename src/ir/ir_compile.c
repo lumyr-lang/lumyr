@@ -316,12 +316,22 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 int idx = bf_add_str_const(c->fn, child->u.sval);
                 emit(c, OPC_PUSH_CONST_IDX, idx, 0);
             } else {
-                /* 其他表达式：先识别成原来的类型，再转换 */
-                if(child_type == EXPR_TYPE_DOUBLE) {
-                    emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
-                } else if(child_type == EXPR_TYPE_INT) {
-                    emit(c, OPC_INT64_TO_STRING, 0, 0);
+                /* 非字面量：按源类型精确转换（int/double 走专用指令，字符串/高精度对象经字符串） */
+                CastKind child_ct = c_expr_cast_type(c, child);
+                if(child_type == EXPR_TYPE_INT) {
+                    emit(c, OPC_BITDECIMAL_FROM_INT64, 0, 0);
+                    return EXPR_TYPE_PTR;
+                } else if(child_type == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_BITDECIMAL_FROM_DOUBLE, 0, 0);
+                    return EXPR_TYPE_PTR;
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
                 }
+                /* PTR(string) 及其他：字符串形式 FROM_STRING */
+                emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+                return EXPR_TYPE_PTR;
             }
             emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
@@ -408,6 +418,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
                 } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
                     emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BITDECIMAL) {
+                    emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             }
@@ -421,6 +433,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
                 } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
                     emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BITDECIMAL) {
+                    emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
                 }
                 emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             }
@@ -429,6 +443,43 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_BIGINT_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_BIGINT_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_BIGINT_DIV, 0, 0); break;
+            }
+            return EXPR_TYPE_PTR;
+        }
+
+        /* bitdecimal 运算：至少一个操作数是 bitdecimal（吸收 int/double/decimal） */
+        if((lt_cast == CAST_BITDECIMAL || rt_cast == CAST_BITDECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
+            /* 编译左操作数 */
+            ExprType lt = c_expr(c, node->u.bin.left);
+            /* 如果左操作数不是 bitdecimal，转成 bitdecimal */
+            if(lt_cast != CAST_BITDECIMAL) {
+                if(lt == EXPR_TYPE_INT) {
+                    emit(c, OPC_BITDECIMAL_FROM_INT64, 0, 0);
+                } else if(lt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_BITDECIMAL_FROM_DOUBLE, 0, 0);
+                } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                    emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+                }
+            }
+            /* 编译右操作数 */
+            ExprType rt = c_expr(c, node->u.bin.right);
+            /* 如果右操作数不是 bitdecimal，转成 bitdecimal */
+            if(rt_cast != CAST_BITDECIMAL) {
+                if(rt == EXPR_TYPE_INT) {
+                    emit(c, OPC_BITDECIMAL_FROM_INT64, 0, 0);
+                } else if(rt == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_BITDECIMAL_FROM_DOUBLE, 0, 0);
+                } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                    emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+                }
+            }
+            switch(node->u.bin.op) {
+            case OP_ADD: emit(c, OPC_BITDECIMAL_ADD, 0, 0); break;
+            case OP_SUB: emit(c, OPC_BITDECIMAL_SUB, 0, 0); break;
+            case OP_MUL: emit(c, OPC_BITDECIMAL_MUL, 0, 0); break;
+            case OP_DIV: emit(c, OPC_BITDECIMAL_DIV, 0, 0); break;
             }
             return EXPR_TYPE_PTR;
         }
@@ -481,6 +532,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_BIGINT_TO_STRING, 0, 0);
             } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
                 emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+            } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BITDECIMAL) {
+                emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
             }
             ExprType rt = c_expr(c, node->u.bin.right);
             if(rt == EXPR_TYPE_INT) {
@@ -491,6 +544,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_BIGINT_TO_STRING, 0, 0);
             } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
                 emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+            } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BITDECIMAL) {
+                emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
             }
             switch(node->u.bin.op) {
             case OP_ADD:
@@ -705,8 +760,11 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         
         /* 2. bigint 次之：bigint 吸收所有类型（除 string） */
         if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
-        
-        /* 3. decimal 再次之：decimal 吸收所有类型（除 string/bigint） */
+
+        /* 2.5 bitdecimal 再次之：bitdecimal 吸收所有类型（除 string/bigint） */
+        if(lt == CAST_BITDECIMAL || rt == CAST_BITDECIMAL) return CAST_BITDECIMAL;
+
+        /* 3. decimal 再次之：decimal 吸收所有类型（除 string/bigint/bitdecimal） */
         if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
         
         /* 4. 浮点类型提升（C/C++ 规则：float 自动提升为 double） */

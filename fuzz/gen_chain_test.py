@@ -21,6 +21,7 @@ import random
 import math
 import sys
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 
 # 仓库根目录 = fuzz/ 的上一级；脚本可从任意工作目录执行
@@ -32,6 +33,7 @@ OUT_EXPECT = str(Path(tempfile.gettempdir()) / "chain_expected.txt")
 # ---------- 类型分类（与 ir_compile.c 提升规则一致） ----------
 CAT_STRING = "string"
 CAT_BIGINT = "bigint"
+CAT_BITDECIMAL = "bitdecimal"
 CAT_DECIMAL = "decimal"
 CAT_DOUBLE = "double"
 CAT_INT = "int"
@@ -43,6 +45,8 @@ def category(t):
         return CAT_STRING
     if t == "bigint":
         return CAT_BIGINT
+    if t == "bitdecimal":
+        return CAT_BITDECIMAL
     if t == "decimal":
         return CAT_DECIMAL
     if t in DOUBLE_TYPES:
@@ -173,7 +177,57 @@ def bigint_from_other(cat, v):
         s = dec_format(v[0], v[1])          # 运行时走 DECIMAL_TO_STRING（原始定点串）
         m = re.match(r'^(-?)(\d+)', s)
         return -int(m.group(2)) if m and m.group(1) else (int(m.group(2)) if m else 0)
+    if cat == CAT_BITDECIMAL:
+        s = bd_format(v[0], v[1])           # 运行时走 BITDECIMAL_TO_STRING（定点 p 位小数）
+        m = re.match(r'^(-?)(\d+)', s)
+        return -int(m.group(2)) if m and m.group(1) else (int(m.group(2)) if m else 0)
     raise ValueError(cat)
+
+# ---------- bitdecimal：模拟 lm_bitdecimal.c 的 GMP mpf_t 运算 ----------
+# 内部表示：(exact_value:Fraction, prec:int)；512 位 mpf 足以让 p<=60 输出精确
+def bd_from_value(cat, v):
+    if cat == CAT_INT:
+        return (Fraction(v), 0)            # OPC_BITDECIMAL_FROM_INT64，精确
+    if cat == CAT_DOUBLE:
+        return (Fraction(v), 15)           # OPC_BITDECIMAL_FROM_DOUBLE，precision=15
+    if cat == CAT_DECIMAL:
+        return (Fraction(v[0], 10 ** v[1]), v[1])  # DECIMAL_TO_STRING → FROM_STRING
+    if cat == CAT_BITDECIMAL:
+        return v
+    raise ValueError(cat)
+
+def bd_op(a, b, op):
+    va, pa = a
+    vb, pb = b
+    if op == "+":
+        return (va + vb, max(pa, pb))
+    if op == "-":
+        return (va - vb, max(pa, pb))
+    if op == "*":
+        return (va * vb, pa + pb)
+    if op == "/":
+        if vb == 0:
+            raise ZeroDivisionError
+        return (va / vb, pa + 10)          # 除法多保留 10 位
+    raise ValueError(op)
+
+def bd_format(val, p):
+    """按 p 位小数半偶舍入输出（复刻 BITDECIMAL_TO_STRING），无 dot 时 p=0"""
+    neg = val < 0
+    v = -val if neg else val
+    scale = 10 ** p
+    q, r = divmod(v.numerator * scale, v.denominator)
+    twice = r * 2
+    if twice > v.denominator or (twice == v.denominator and q % 2 == 1):
+        q += 1
+    digits = str(q)
+    if p > 0:
+        if len(digits) <= p:
+            digits = "0" * (p - len(digits) + 1) + digits
+        s = digits[:-p] + "." + digits[-p:]
+    else:
+        s = digits
+    return ("-" + s) if neg else s
 
 # ---------- 任意值转字符串（模拟字符串拼接路径） ----------
 def to_string(cat, v):
@@ -185,6 +239,8 @@ def to_string(cat, v):
         return str(v)
     if cat == CAT_DECIMAL:
         return dec_format(*v)
+    if cat == CAT_BITDECIMAL:
+        return bd_format(*v)
     return v  # string
 
 # ---------- 字符串栈四运算 ----------
@@ -231,8 +287,8 @@ class SkipCase(Exception):
     pass
 
 def promote(c1, c2):
-    # 与 c_expr_cast_type 优先级一致：string > bigint > decimal > double > int
-    for t in (CAT_STRING, CAT_BIGINT, CAT_DECIMAL, CAT_DOUBLE):
+    # 与 c_expr_cast_type 优先级一致：string > bigint > bitdecimal > decimal > double > int
+    for t in (CAT_STRING, CAT_BIGINT, CAT_BITDECIMAL, CAT_DECIMAL, CAT_DOUBLE):
         if c1 == t or c2 == t:
             return t
     return CAT_INT
@@ -262,6 +318,11 @@ def eval_node(node, operands):
             if bi_r == 0:
                 raise ZeroDivisionError
             return CAT_BIGINT, trunc_div(bi_l, bi_r)
+
+    if res == CAT_BITDECIMAL:
+        bl = vl if cl == CAT_BITDECIMAL else bd_from_value(cl, vl)
+        br = vr if cr == CAT_BITDECIMAL else bd_from_value(cr, vr)
+        return CAT_BITDECIMAL, bd_op(bl, br, op)
 
     if res == CAT_DECIMAL:
         dl = (vl[0], vl[1]) if cl == CAT_DECIMAL else dec_from_value(cl, vl)
@@ -320,6 +381,18 @@ def result_str(cat, v):
 def main():
     pool = load_pool()
     assert len(pool) >= 3000, len(pool)
+
+    # bitdecimal 操作数池（random_type_test.lm 无此类型，内置 14 个字面量）
+    # (cat, tname, raw_lit, (Fraction 值, 小数位数))；precision 尽量小，避免乘链超护栏
+    # 重复 4 份提高采样权重，让混合链路（吸收 int/double/decimal、被 bigint 吸收）更密集
+    BD_POOL = []
+    for s in ["1.2", "0.3", "5.858", "-2.75", "123.456", "0.000001", "999.999999",
+              "-0.125", "1000000.5", "7", "42.042", "-12345.6789", "3.14159265", "0.5"]:
+        p = len(s.split(".")[1]) if "." in s else 0
+        BD_POOL.append((CAT_BITDECIMAL, "bitdecimal", '"' + s + '"',
+                        (Fraction(s), p)))
+    pool = pool + BD_POOL * 4
+
     rng = random.Random(20260919)
 
     cases = []  # (id, tree, arity, [(cat,tname,raw,val)])
@@ -350,6 +423,8 @@ def main():
             if cat == CAT_STRING and len(v) > 200:
                 continue
             if cat == CAT_BIGINT and len(str(abs(v))) > 80:
+                continue
+            if cat == CAT_BITDECIMAL and (v[1] > 60 or len(bd_format(*v)) > 60):
                 continue
             cases.append((len(cases) + 1, tree, arity, ops, cat, v))
             got += 1
@@ -401,6 +476,48 @@ def main():
        '"x" + true + <char>A', N("+", N("+", "x", ("bool", 1)), ("char", 65)))
     ec("五连加全整数 1+2+3+4+5", [], "1 + 2 + 3 + 4 + 5",
        N("+", N("+", N("+", N("+", 1, 2), 3), 4), 5))
+    # ---- bitdecimal 系列 ----
+    ec("bitdecimal 基本加法 1.2+0.3", [],
+       '<bitdecimal>"1.2" + <bitdecimal>"0.3"',
+       N("+", ("bd", "1.2"), ("bd", "0.3")))
+    ec("bitdecimal 乘法精度 1.2*0.3", [],
+       '<bitdecimal>"1.2" * <bitdecimal>"0.3"',
+       N("*", ("bd", "1.2"), ("bd", "0.3")))
+    ec("bitdecimal 除法保留 prec+10 位 10/4", [],
+       '<bitdecimal>"10" / <bitdecimal>"4"',
+       N("/", ("bd", "10"), ("bd", "4")))
+    ec("bitdecimal 循环小数 1/3", [],
+       '<bitdecimal>"1" / <bitdecimal>"3"',
+       N("/", ("bd", "1"), ("bd", "3")))
+    ec("bitdecimal 吸收 int 链 1.5+2+10", [],
+       '<bitdecimal>"1.5" + <int>2 + <int>10',
+       N("+", N("+", ("bd", "1.5"), 2), 10))
+    ec("bitdecimal 吸收 double（二进制精确 15 位）1.2+0.05", [],
+       '<bitdecimal>"1.2" + <double>0.05',
+       N("+", ("bd", "1.2"), ("dbl", 0.05)))
+    ec("bitdecimal 吸收 decimal 1.2+0.005", [],
+       '<bitdecimal>"1.2" + <decimal>"0.005"',
+       N("+", ("bd", "1.2"), ("dec", "0.005")))
+    ec("bigint 吸收 bitdecimal 截断 99999999999999999999+1.2", [],
+       '<bigint>"99999999999999999999" + <bitdecimal>"1.2"',
+       N("+", ("bi", 99999999999999999999), ("bd", "1.2")))
+    ec("bitdecimal 链式 (1.2-0.3)*0.5+0.05", [],
+       '(<bitdecimal>"1.2" - <bitdecimal>"0.3") * <bitdecimal>"0.5" + <bitdecimal>"0.05"',
+       N("+", N("*", N("-", ("bd", "1.2"), ("bd", "0.3")), ("bd", "0.5")), ("bd", "0.05")))
+    ec("bitdecimal 负数 -1.2-0.8", [],
+       '<bitdecimal>"-1.2" - <bitdecimal>"0.8"',
+       N("-", ("bd", "-1.2"), ("bd", "0.8")))
+    ec("bitdecimal 高精度大数 123456789.123456789*2", [],
+       '<bitdecimal>"123456789.123456789" * <bitdecimal>"2"',
+       N("*", ("bd", "123456789.123456789"), ("bd", "2")))
+    ec("string 与 bitdecimal 拼接 v=1.2", [],
+       '"v=" + <bitdecimal>"1.2"', N("+", "v=", ("bd", "1.2")))
+    ec("bitdecimal 小数前导零 0.0000001*10", [],
+       '<bitdecimal>"0.0000001" * <bitdecimal>"10"',
+       N("*", ("bd", "0.0000001"), ("bd", "10")))
+    ec("bitdecimal 除法舍入进位 2/3", [],
+       '<bitdecimal>"2" / <bitdecimal>"3"',
+       N("/", ("bd", "2"), ("bd", "3")))
 
     # 把手工叶子规约成 oracle 操作数
     def edge_operands(decls, tree):
@@ -424,6 +541,9 @@ def main():
                     return (CAT_DECIMAL, "decimal", x, (u, p))
                 if tag == "bi":
                     return (CAT_BIGINT, "bigint", str(x), x)
+                if tag == "bd":
+                    return (CAT_BITDECIMAL, "bitdecimal", '"' + x + '"',
+                            (Fraction(x), len(x.split(".")[1]) if "." in x else 0))
                 if tag == "dbl":
                     return (CAT_DOUBLE, "double", repr(x), float(x))
                 if tag == "bool":
@@ -493,6 +613,8 @@ def main():
                     return '<decimal>"%s"' % x
                 if tag == "bi":
                     return '<bigint>"%d"' % x
+                if tag == "bd":
+                    return '<bitdecimal>"%s"' % x
                 if tag == "dbl":
                     return "<double>" + repr(float(x))
                 if tag == "bool":
@@ -537,6 +659,9 @@ def main():
                     return (CAT_DECIMAL, (u, p))
                 if tag == "bi":
                     return (CAT_BIGINT, x)
+                if tag == "bd":
+                    return (CAT_BITDECIMAL, (Fraction(x),
+                            len(x.split(".")[1]) if "." in x else 0))
                 if tag == "dbl":
                     return (CAT_DOUBLE, float(x))
                 if tag == "bool":
@@ -567,6 +692,10 @@ def main():
                 br = vr if cr == CAT_BIGINT else bigint_from_other(cr, vr)
                 return CAT_BIGINT, {"+": bl + br, "-": bl - br, "*": bl * br,
                                     "/": trunc_div(bl, br)}[op]
+            if res == CAT_BITDECIMAL:
+                bl = vl if cl == CAT_BITDECIMAL else bd_from_value(cl, vl)
+                br = vr if cr == CAT_BITDECIMAL else bd_from_value(cr, vr)
+                return CAT_BITDECIMAL, bd_op(bl, br, op)
             if res == CAT_DECIMAL:
                 dl = (vl[0], vl[1]) if cl == CAT_DECIMAL else dec_from_value(cl, vl)
                 dr = (vr[0], vr[1]) if cr == CAT_DECIMAL else dec_from_value(cr, vr)

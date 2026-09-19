@@ -46,7 +46,8 @@ static ExprType castkind_to_exprtype(CastKind ct) {
         case CAST_ASCII:
         case CAST_BIGINT:
         case CAST_DECIMAL:
-            return EXPR_TYPE_PTR;  /* 字符串/bigint/decimal → PTR 栈 */
+        case CAST_BITDECIMAL:
+            return EXPR_TYPE_PTR;  /* 字符串/bigint/decimal/bitdecimal → PTR 栈 */
 
         default:
             return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */

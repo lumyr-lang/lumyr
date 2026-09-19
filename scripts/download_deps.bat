@@ -125,12 +125,13 @@ echo Directory structure:
 echo   vendor/         - Third-party library source code
 echo   build_tools/    - Build toolchain source code
 echo   deps/gmp/       - GMP headers and prebuilt libraries
-echo   prebuilt/       - Prebuilt binaries (Windows only)
+echo   prebuilt/       - Prebuilt binaries (windows ready to use)
 echo.
 echo Next steps:
-echo   1. Read vendor/README.md and build_tools/README.md for build instructions
-echo   2. Read deps/gmp/README.md for GMP build instructions
-echo   3. Or use prebuilt/windows/ for quick start on Windows
+echo   Windows: in "MSYS2 MINGW64" terminal run:
+echo              bash scripts/build_deps_mingw.sh
+echo            then: scripts\build.bat
+echo   macOS/Linux: bash scripts/build_deps.sh ^&^& make
 echo.
 
 endlocal

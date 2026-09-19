@@ -1,7 +1,33 @@
-// bitdecimal 类型标注测试
-print("=== bitdecimal 类型标注测试 ===");
+// bitdecimal 类型标注与运算测试（基于 GMP mpf_t）
+print("=== bitdecimal 类型测试 ===");
 
 a = <bitdecimal>"1234567890.123456789";
-print("bitdecimal:", type(a));
+print("type=" + type(a));
+
+print("=== 基础四则运算 ===");
+b = <bitdecimal>"1.2";
+c = <bitdecimal>"0.3";
+print("1.2+0.3 = " + (b + c));
+print("1.2-0.3 = " + (b - c));
+print("1.2*0.3 = " + (b * c));
+print("10/4    = " + (<bitdecimal>"10" / <bitdecimal>"4"));
+print("1/3     = " + (<bitdecimal>"1" / <bitdecimal>"3"));
+
+print("=== 与其他类型混合 ===");
+print("1.2+1(int) = " + (b + <int>1));
+print("1.2+0.05(double) = " + (b + <double>0.05));
+print("1.2+0.005(decimal) = " + (b + <decimal>"0.005"));
+print("bigint+1.2 = " + (<bigint>"99999999999999999999" + b));
+print("字符串拼接: v=" + b);
+
+print("=== 负数与精度 ===");
+print("-1.2-0.8 = " + (<bitdecimal>"-1.2" - <bitdecimal>"0.8"));
+print("0.0000001*10 = " + (<bitdecimal>"0.0000001" * <bitdecimal>"10"));
+print("大数 123456789.123456789*2 = " + (<bitdecimal>"123456789.123456789" * <bitdecimal>"2"));
+
+print("=== 链式混合运算 ===");
+print("(1.2+0.3)*2 = " + ((b + c) * <bitdecimal>"2"));
+print("1.2+0.3*2(优先级) = " + (b + c * <bitdecimal>"2"));
+print("(1.2-0.3)*0.5+0.05 = " + ((b - c) * <bitdecimal>"0.5" + <bitdecimal>"0.05"));
 
 print("=== 测试完成 ===");

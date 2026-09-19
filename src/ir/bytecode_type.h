@@ -120,6 +120,15 @@ typedef enum {
     OPC_DECIMAL_DIV,          // 从 PTR 栈弹 2 个 decimal 指针，相除，结果压回 PTR 栈
     OPC_DECIMAL_TO_STRING,    // 从 PTR 栈弹 decimal 指针，转字符串，压回 PTR 栈
 
+    /* ===== bitdecimal 高精度十进制浮点（基于 GMP mpf_t） ===== */
+    OPC_BITDECIMAL_TO_STRING,   // 从 PTR 栈弹 bitdecimal 指针，转字符串，压回 PTR 栈
+    OPC_BITDECIMAL_FROM_INT64,  // 从 INT64 栈弹整数，转 bitdecimal 对象，压回 PTR 栈
+    OPC_BITDECIMAL_FROM_DOUBLE, // 从 DOUBLE 栈弹浮点，转 bitdecimal 对象，压回 PTR 栈
+    OPC_BITDECIMAL_ADD,         // 从 PTR 栈弹 2 个 bitdecimal 指针，相加，结果压回 PTR 栈
+    OPC_BITDECIMAL_SUB,         // 从 PTR 栈弹 2 个 bitdecimal 指针，相减，结果压回 PTR 栈
+    OPC_BITDECIMAL_MUL,         // 从 PTR 栈弹 2 个 bitdecimal 指针，相乘，结果压回 PTR 栈
+    OPC_BITDECIMAL_DIV,         // 从 PTR 栈弹 2 个 bitdecimal 指针，相除，结果压回 PTR 栈
+
     /* ===== 数组/字典字面量 ===== */
     OPC_ARRAY_LIT,      // b=元素个数；弹 b 个 Value 元素，压数组
     OPC_INT64_ARRAY_LIT,   // b=元素个数；弹 b 个 int64 元素，压入 int64 类型化数组

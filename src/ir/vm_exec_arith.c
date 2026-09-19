@@ -501,3 +501,86 @@ int vm_exec_arith_ptr_sub(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_PTR, &result);
     return 1;
 }
+
+/* ========== bitdecimal 高精度十进制浮点（基于 GMP mpf_t） ========== */
+
+/* bitdecimal → string */
+int vm_exec_bitdecimal_to_string(VMExecCtx* ctx, Instruction* in) {
+    BitDecimal* d;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &d);
+
+    char* s = lumyr_bitdecimal_to_string(d);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &s);
+    return 1;
+}
+
+/* int64 → bitdecimal */
+int vm_exec_bitdecimal_from_int64(VMExecCtx* ctx, Instruction* in) {
+    int64_t v;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &v);
+
+    BitDecimal* d = lumyr_bitdecimal_from_int64((long long)v);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &d);
+    return 1;
+}
+
+/* double → bitdecimal */
+int vm_exec_bitdecimal_from_double(VMExecCtx* ctx, Instruction* in) {
+    double v;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &v);
+
+    BitDecimal* d = lumyr_bitdecimal_from_double(v);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &d);
+    return 1;
+}
+
+/* bitdecimal 加法 */
+int vm_exec_bitdecimal_add(VMExecCtx* ctx, Instruction* in) {
+    BitDecimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BitDecimal* result = lumyr_bitdecimal_add(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bitdecimal 减法 */
+int vm_exec_bitdecimal_sub(VMExecCtx* ctx, Instruction* in) {
+    BitDecimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BitDecimal* result = lumyr_bitdecimal_sub(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bitdecimal 乘法 */
+int vm_exec_bitdecimal_mul(VMExecCtx* ctx, Instruction* in) {
+    BitDecimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BitDecimal* result = lumyr_bitdecimal_mul(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
+
+/* bitdecimal 除法 */
+int vm_exec_bitdecimal_div(VMExecCtx* ctx, Instruction* in) {
+    BitDecimal *a, *b;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &b);
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &a);
+
+    BitDecimal* result = lumyr_bitdecimal_div(a, b);
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &result);
+    return 1;
+}
