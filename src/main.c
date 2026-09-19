@@ -13,6 +13,24 @@
 #include "yacc.tab.h"
 #include "ast/ast.h"
 #include "ir/ir_compile.h"
+
+/* 生成 C 代码的链接配置：由 Makefile 编译 main.o 时注入。
+   未通过 Makefile 编译时使用 fallback 默认值（开发调试用）。 */
+#ifndef LUMYR_GEN_INC
+#define LUMYR_GEN_INC "-Ikit/runtime/include"
+#endif
+#ifndef LUMYR_GEN_LIB
+#define LUMYR_GEN_LIB "-Llib"
+#endif
+#ifndef LUMYR_GEN_LDLIBS
+#ifdef _WIN32
+#define LUMYR_GEN_LDLIBS "-lcurl -liconv -ltre -lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32"
+#elif defined(__APPLE__)
+#define LUMYR_GEN_LDLIBS "-lcurl -liconv -lgmp"
+#else
+#define LUMYR_GEN_LDLIBS "-lcurl -lm -lpthread -lgmp"
+#endif
+#endif
 #include "ir/vm.h"
 #include "ir/ir_cgen.h"
 #include "parse/import.h"
@@ -184,28 +202,11 @@ int main(int argc, char** argv) {
                     const char* gen_cflags = getenv("LM_GEN_CFLAGS");
                     if(!gen_cc) gen_cc = "gcc";
                     if(!gen_cflags) gen_cflags = "-O2";
-                    // 大项目架构：链接 runtime 静态库
-                    // 根据平台添加第三方库路径和系统库
-#ifdef _WIN32
+                    /* 链接配置由 Makefile 注入（GEN_INC/GEN_LIB/LDLIBS），消除跨平台硬编码 */
                     snprintf(cmd, sizeof(cmd),
-                             "%s -std=gnu11 %s -Ikit/runtime/include -Ithird_party/windows/include -DCURL_STATICLIB "
-                             "-Llib -Lthird_party/windows/lib %s -o %s "
-                             "-lruntime -lcurl -liconv -ltre "
-                             "-lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32",
-                             gen_cc, gen_cflags, c_path, exe_path);
-#elif defined(__APPLE__)
-                    /* macOS：系统 curl/iconv，GMP 来自 brew（/usr/local/lib 默认在搜索路径） */
-                    snprintf(cmd, sizeof(cmd),
-                             "%s -std=gnu11 %s -Ikit/runtime/include -Llib %s -o %s "
-                             "-lruntime -lcurl -liconv -lgmp",
-                             gen_cc, gen_cflags, c_path, exe_path);
-#else
-                    /* Linux：glibc 内置 iconv/regex；libm、pthread、gmp 均为系统库 */
-                    snprintf(cmd, sizeof(cmd),
-                             "%s -std=gnu11 %s -Ikit/runtime/include -Llib %s -o %s "
-                             "-lruntime -lcurl -lm -lpthread -lgmp",
-                             gen_cc, gen_cflags, c_path, exe_path);
-#endif
+                             "%s -std=gnu11 %s %s %s %s -o %s -lruntime %s",
+                             gen_cc, gen_cflags, LUMYR_GEN_INC, LUMYR_GEN_LIB,
+                             c_path, exe_path, LUMYR_GEN_LDLIBS);
                     int sys_ret = system(cmd);
 
                     if(sys_ret == 0) {

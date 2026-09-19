@@ -157,6 +157,15 @@ ifeq ($(OS_NAME),windows)
               -lcrypt32 -lws2_32 -lwldap32 -lwinmm -lnormaliz -liphlpapi -lbcrypt -lsecur32
 endif
 
+# ========== 生成 C 代码的编译配置（注入 main.o，消除 main.c 硬编码） ==========
+# lumyr -c 模式用 system() 调 gcc 编译用户代码，链接库须与 lumyr 本体一致
+GEN_INC := -Ikit/runtime/include
+GEN_LIB := -Llib
+ifeq ($(OS_NAME),windows)
+    GEN_INC += -I$(WIN_DEPS)/include -DCURL_STATICLIB
+    GEN_LIB += -L$(WIN_DEPS)/lib
+endif
+
 .PHONY: all clean distclean check-env parser-gen env-info runtime-lib
 
 # ========== 主目标 ==========
@@ -209,6 +218,14 @@ $(YACC_GEN_C) $(YACC_GEN_H): $(YACC_SRC)
 $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 	@mkdir -p $(YACC_DIR)
 	$(FLEX_CMD) -o $@ $<
+
+# ========== main.o 特殊编译规则（注入生成代码的链接配置） ==========
+src/main.o: src/main.c
+	$(CC) $(CFLAGS) \
+	  -DLUMYR_GEN_INC='"$(GEN_INC)"' \
+	  -DLUMYR_GEN_LIB='"$(GEN_LIB)"' \
+	  -DLUMYR_GEN_LDLIBS='"$(LDLIBS)"' \
+	  -c -o $@ $<
 
 # ========== 编译器本体链接 ==========
 $(BIN_LOCAL): $(OBJS) $(RUNTIME_LIB)
