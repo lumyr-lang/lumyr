@@ -1055,3 +1055,44 @@ Value lumyr_pre_dec(Value* v) {
     value_dec(v);
     return *v;
 }
+
+int lumyr_etype_stackcls(ValueType et) {
+    switch(et) {
+    case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32:
+    case VAL_INT64: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32:
+    case VAL_UINT: case VAL_UINT64: case VAL_LONG: case VAL_ULONG:
+    case VAL_UCHAR: case VAL_SHORT: case VAL_USHORT: case VAL_SIZE_T:
+    case VAL_SSIZE_T: case VAL_BOOL: case VAL_CHAR: case VAL_LONG_LONG:
+        return 1;
+    case VAL_DOUBLE: case VAL_FLOAT: case VAL_LONG_DOUBLE:
+        return 2;
+    case VAL_STRING: case VAL_PTR: case VAL_BIGINT:
+    case VAL_DECIMAL: case VAL_BITDECIMAL:
+        return 3;
+    default:
+        return 0;
+    }
+}
+
+size_t lumyr_etype_itemsz(ValueType et) {
+    switch(et) {
+    case VAL_INT8: case VAL_UINT8: case VAL_UCHAR:
+    case VAL_BOOL: case VAL_CHAR:
+        return 1;
+    case VAL_INT16: case VAL_UINT16: case VAL_SHORT: case VAL_USHORT:
+        return 2;
+    case VAL_INT: case VAL_UINT: case VAL_FLOAT:
+    case VAL_INT32: case VAL_UINT32:
+        return 4;
+    case VAL_INT64: case VAL_UINT64: case VAL_LONG: case VAL_ULONG:
+    case VAL_SIZE_T: case VAL_SSIZE_T: case VAL_LONG_LONG:
+    case VAL_DOUBLE:
+    case VAL_STRING: case VAL_PTR: case VAL_BIGINT:
+    case VAL_DECIMAL: case VAL_BITDECIMAL:
+        return 8;
+    case VAL_LONG_DOUBLE:
+        return sizeof(long double);
+    default:
+        return 0;
+    }
+}

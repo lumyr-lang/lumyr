@@ -98,6 +98,62 @@ static ExprType ternary_name_to_exprtype(const char* n) {
     return EXPR_TYPE_PTR;
 }
 
+/* CastKind 是否整型族（统一 INT64 存储栈） */
+static int cast_is_intfamily(CastKind ck) {
+    return ck == CAST_INT || ck == CAST_SHORT || ck == CAST_USHORT ||
+           ck == CAST_INT8 || ck == CAST_INT16 || ck == CAST_INT32 || ck == CAST_INT64 ||
+           ck == CAST_LONG || ck == CAST_LONGLONG ||
+           ck == CAST_UINT8 || ck == CAST_UINT16 || ck == CAST_UINT32 ||
+           ck == CAST_UINT || ck == CAST_UINT64 || ck == CAST_ULONG ||
+           ck == CAST_UCHAR || ck == CAST_BYTE ||
+           ck == CAST_ASCII || ck == CAST_SIZE_T || ck == CAST_SSIZE_T ||
+           ck == CAST_CHAR || ck == CAST_BOOL;
+}
+
+/* CastKind 是否浮点族（统一 DOUBLE 存储栈） */
+static int cast_is_floatfamily(CastKind ck) {
+    return ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE;
+}
+
+/* 编译类型化数组字面量：逐元素按目标 CastKind 编译到 typed 栈，
+   再 emit 对应的 *_ARRAY_LIT（a=元素数，b=元素 ValueType），数组压 VALUE 栈。
+   via_cast=1 时元素走 AST_CAST（(T)[...] 路径），否则走 AST_TYPE_ANNOTATION（<T>[...]）。 */
+static void compile_typed_array_lit(Ctx* c, CastKind ct, AstNode* elems, int via_cast) {
+    AstNode** argv = NULL;
+    int argc = 0, acap = 0;
+    collect_call_args(elems, &argv, &argc, &acap);
+    for(int i = 0; i < argc; i++) {
+        AstNode* e = argv[i];
+        /* 元素本身已是同类型标注/转型（如 <decimal>[<decimal>"1.5"]）：
+         * 直接编译，重复包装会让 FROM_STRING 二次触发、把对象当字符串解析 */
+        int same_ann  = !via_cast && e->type == AST_TYPE_ANNOTATION &&
+                        e->u.type_annotation.cast_type == ct;
+        int same_cast = via_cast && e->type == AST_CAST &&
+                        e->u.cast.cast_type == ct;
+        if(same_ann || same_cast) {
+            c_expr(c, e);
+            continue;
+        }
+        AstNode elem_ann;
+        memset(&elem_ann, 0, sizeof(elem_ann));
+        if(via_cast) {
+            elem_ann.type = AST_CAST;
+            elem_ann.u.cast.cast_type = ct;
+            elem_ann.u.cast.child = e;
+        } else {
+            elem_ann.type = AST_TYPE_ANNOTATION;
+            elem_ann.u.type_annotation.cast_type = ct;
+            elem_ann.u.type_annotation.expr = e;
+        }
+        c_expr(c, &elem_ann);
+    }
+    int op = cast_is_intfamily(ct)   ? OPC_INT64_ARRAY_LIT :
+             cast_is_floatfamily(ct) ? OPC_DOUBLE_ARRAY_LIT :
+                                       OPC_PTR_ARRAY_LIT;
+    emit(c, op, argc, (int)castkind_to_valtype(ct));
+    free(argv);
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
@@ -204,8 +260,13 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 
     case AST_CAST: {
         /* 类型强转 (type)expr：编译子表达式，根据目标类型 emit 转换指令 */
-        ExprType child_type = c_expr(c, node->u.cast.child);
         CastKind ct = node->u.cast.cast_type;
+        /* cast 目标是数组字面量（(T)[e1,e2]）：逐元素强转构造类型化数组 */
+        if(node->u.cast.child && node->u.cast.child->type == AST_ARRAY_LIT) {
+            compile_typed_array_lit(c, ct, node->u.cast.child->u.array_lit.elems, 1);
+            return EXPR_TYPE_NONE;
+        }
+        ExprType child_type = c_expr(c, node->u.cast.child);
         CastKind child_ct = c_expr_cast_type(c, node->u.cast.child);
         /* 转成 string：根据源类型选择转换指令 */
         if(ct == CAST_STRING) {
@@ -230,6 +291,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
             }
+            /* ptr → int：取整数地址 */
+            else if(child_type == EXPR_TYPE_PTR) {
+                emit(c, OPC_PTR_TO_INT64, 0, 0);
+            }
             /* bigint → int：截断（后续实现） */
             /* decimal → int：截断（后续实现） */
             return EXPR_TYPE_INT;
@@ -242,6 +307,16 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             return EXPR_TYPE_DOUBLE;
         }
+        /* 转成 ptr：整数地址 → 裸指针 */
+        if(ct == CAST_PTR) {
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_PTR, 0, 0);
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+                emit(c, OPC_INT64_TO_PTR, 0, 0);
+            }
+            return EXPR_TYPE_PTR;
+        }
         return child_type;
     }
 
@@ -249,6 +324,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
+        /* 标注目标是数组字面量（<T>[e1,e2]）：逐元素转型构造类型化数组 */
+        if(ann_child && ann_child->type == AST_ARRAY_LIT) {
+            compile_typed_array_lit(c, ct, ann_child->u.array_lit.elems, 0);
+            return EXPR_TYPE_NONE;
+        }
         /* bigint/decimal 字面量快速路径：下面的标注分支会自己把字面量压成字符串常量。
            若先调 c_expr，子表达式会先压一次值，标注又压一次 → PTR 栈残留原始指针；
            后续二元运算会把该 char* 当成 BigInt*/
@@ -272,7 +352,20 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
             }
+            /* ptr → int：取整数地址 */
+            else if(child_type == EXPR_TYPE_PTR) {
+                emit(c, OPC_PTR_TO_INT64, 0, 0);
+            }
             return EXPR_TYPE_INT;
+        } else if(ct == CAST_PTR) {
+            /* <ptr>expr：整数地址 → 裸指针，压 PTR 栈 */
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_PTR, 0, 0);
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+                emit(c, OPC_INT64_TO_PTR, 0, 0);
+            }
+            return EXPR_TYPE_PTR;
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT || ct == CAST_LONG_DOUBLE) {
             /* 如果子表达式是 INT，需要转成 DOUBLE */
             if(child_type == EXPR_TYPE_INT) {
@@ -417,22 +510,15 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
         /* 识别内置函数 */
         if(strcmp(func_name, "type") == 0 && argc == 1) {
-            /* type(x)：编译期推断类型，直接 push 字符串常量 */
+            /* type(x)：运行时求值（下标取值/typed array 等动态情形编译期无法确定），
+             * 参数编译到 VALUE 栈，BUILTIN_TYPE 返回类型名字符串 Value */
             AstNode* arg = args;
             if(args && args->type == AST_SEQ) {
                 arg = args->u.seq.first;
             }
-            /* 编译期推断类型名 */
-            const char* type_name = c_expr_type_name(c, arg);
-            /* 添加字符串常量，压入 PTR 栈 */
-            int const_idx = bf_add_str_const(c->fn, type_name);
-            /* 释放 c_expr_type_name 可能分配的临时字符串（castkind_to_name 返回 strdup） */
-            if(arg && arg->type == AST_VAR) {
-                free((void*)type_name);
-            }
-            emit(c, OPC_PUSH_CONST_IDX, const_idx, 0);
-            /* type() 返回字符串 */
-            return EXPR_TYPE_PTR;
+            c_expr_to_value(c, arg);
+            emit(c, OPC_BUILTIN, BUILTIN_TYPE, 1);
+            return EXPR_TYPE_NONE;
         }
         /* 用户自定义函数：查函数表 + AST 表 */
         {
@@ -1433,6 +1519,10 @@ void c_stmt(Ctx* c, AstNode* node) {
                         emit(c, OPC_PRINT_BIGINT, (int)cast_type, 0);
                     } else if(cast_type == CAST_DECIMAL) {
                         emit(c, OPC_PRINT_DECIMAL, (int)cast_type, 0);
+                    } else if(cast_type == CAST_BITDECIMAL) {
+                        /* 无 PRINT_BITDECIMAL：先转字符串再打印 */
+                        emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+                        emit(c, OPC_PRINT_PTR, 0, 0);
                     } else {
                         emit(c, OPC_PRINT_PTR, (int)cast_type, 0);
                     }

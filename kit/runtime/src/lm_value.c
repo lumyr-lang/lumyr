@@ -2,6 +2,9 @@
 #include "lm_json.h"
 #include "lm_class.h"
 #include "lm_struct.h"
+#include "lm_bigint.h"
+#include "lm_decimal.h"
+#include "lm_bitdecimal.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -617,6 +620,10 @@ Value lumyr_type(Value v) {
         case VAL_LONG_DOUBLE: return lumyr_make_string("long double");
         case VAL_PTR:      return lumyr_make_string("pointer");
         case VAL_CALLBACK: return lumyr_make_string("callback");
+        case VAL_UINT:     return lumyr_make_string("uint");
+        case VAL_BIGINT:   return lumyr_make_string("bigint");
+        case VAL_DECIMAL:  return lumyr_make_string("decimal");
+        case VAL_BITDECIMAL: return lumyr_make_string("bitdecimal");
     }
     return lumyr_make_string("unknown");
 }
@@ -1301,6 +1308,24 @@ void lumyr_print(Value v) {
         case VAL_GENERATOR:   printf("<generator>\n"); break;
         case VAL_PTR:         printf("%p\n", (void*)(intptr_t)v.v.ll); break;
         case VAL_CALLBACK:    printf("<callback>\n"); break;
+        case VAL_BIGINT: {
+            char* s = lumyr_bigint_to_string(v.v.bigint);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_DECIMAL: {
+            char* s = lumyr_decimal_to_string(v.v.decimal);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_BITDECIMAL: {
+            char* s = lumyr_bitdecimal_to_string(v.v.bitdecimal);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
         default:              printf("<unknown>\n"); break;
     }
 }

@@ -19,6 +19,7 @@
  *   - 大对象（user_size > TLA_MAX_SIZE）走原有直接 malloc + free 路径
  */
 #include "gc_runtime.h"
+#include "lumyr_value.h"
 #include "lumyr_log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -790,6 +791,27 @@ void gc_mark(Value v)
         lumyr_gc_mark_generator(v);
         break;
     }
+    case VAL_TYPED_ARRAY: {
+        /* TypedArray：标记容器 + items 内部缓冲；仅 PTR 族元素需递归标记 */
+        TypedArray* ta = v.v.typed_array;
+        if (!GC_VALID_PTR(ta)) break;
+        if (!gc_mark_ptr(ta)) break;
+        if (ta->items) gc_mark_ptr(ta->items);
+        if (lumyr_etype_stackcls(ta->elem_type) == 3) {
+            for (int i = 0; i < ta->len; i++) {
+                void* ep = ((void**)ta->items)[i];
+                /* 仅 GC 管理的对象需标记；malloc 对象（bigint/decimal/数字转字符串）GC 不管 */
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = ta->elem_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark(ev);
+            }
+        }
+        break;
+    }
     default:
         break;
     }
@@ -988,6 +1010,13 @@ void gc_mark_value_to_stack(Value v)
         }
         break;
     }
+    case VAL_TYPED_ARRAY: {
+        /* 堆 TypedArray：容器变灰入栈，items/元素由 gc_mark_one 扫描 */
+        TypedArray* ta = v.v.typed_array;
+        if (!GC_VALID_PTR(ta)) break;
+        if (!gc_mark_ptr_to_stack(ta)) break;
+        break;
+    }
     default:
         /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
         break;
@@ -1077,6 +1106,24 @@ void gc_mark_one(GCObject* obj)
     case VAL_FUNC:
         /* RuntimeFunc 是 malloc 的，不是 GCObject。gc_mark_one 不会遇到。 */
         break;
+    case VAL_TYPED_ARRAY: {
+        /* TypedArray：items 标内部黑；仅 PTR 族元素需变灰入栈 */
+        TypedArray* ta = (TypedArray*)obj_to_ptr(obj);
+        if (ta->items) gc_mark_internal_black(ta->items);
+        if (lumyr_etype_stackcls(ta->elem_type) == 3) {
+            for (int i = 0; i < ta->len; i++) {
+                void* ep = ((void**)ta->items)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = ta->elem_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack(ev);
+            }
+        }
+        break;
+    }
     default:
         break;
     }
@@ -1210,6 +1257,11 @@ static void gc_mark_value_to_stack_minor(Value v)
         }
         break;
     }
+    case VAL_TYPED_ARRAY: {
+        TypedArray* ta = v.v.typed_array;
+        if (GC_VALID_PTR(ta)) gc_mark_ptr_to_stack(ta);
+        break;
+    }
     default:
         break;
     }
@@ -1273,6 +1325,23 @@ static void gc_mark_one_minor(GCObject* obj)
                     gc_mark_value_to_stack_minor(e->value);
                     e = e->next;
                 }
+            }
+        }
+        break;
+    }
+    case VAL_TYPED_ARRAY: {
+        TypedArray* ta = (TypedArray*)obj_to_ptr(obj);
+        if (ta->items) gc_mark_internal_black(ta->items);
+        if (lumyr_etype_stackcls(ta->elem_type) == 3) {
+            for (int i = 0; i < ta->len; i++) {
+                void* ep = ((void**)ta->items)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = ta->elem_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack_minor(ev);
             }
         }
         break;

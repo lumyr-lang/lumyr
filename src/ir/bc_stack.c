@@ -374,6 +374,7 @@ int op_stack_push(OpCode op)
 
         /* 数组操作（需要额外栈空间） */
         case OPC_INDEX_SET:
+        case OPC_TYPED_INDEX_SET:
         case OPC_INT64_INDEX_SET:
         case OPC_DOUBLE_INDEX_SET:
         case OPC_STORE_FIELD:

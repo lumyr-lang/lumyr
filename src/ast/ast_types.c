@@ -140,9 +140,10 @@ ValueType castkind_to_valtype(int ck)
         case CAST_UINT8: return VAL_UINT8;
         case CAST_UINT16: return VAL_UINT16;
         case CAST_UINT32: return VAL_UINT32;
+        case CAST_UINT:   return VAL_UINT;
         case CAST_UINT64: return VAL_UINT64;
         case CAST_LONG: return VAL_LONG;
-        case CAST_LONGLONG: return VAL_INT64;  // long long 等价于 int64
+        case CAST_LONGLONG: return VAL_LONG_LONG;  // 与 int64 区分，独立类型名/元素存储
         case CAST_FLOAT: return VAL_FLOAT;
         case CAST_ULONG: return VAL_ULONG;
         case CAST_UCHAR: return VAL_UCHAR;
@@ -152,6 +153,10 @@ ValueType castkind_to_valtype(int ck)
         case CAST_SSIZE_T: return VAL_SSIZE_T;
         case CAST_LONG_DOUBLE: return VAL_LONG_DOUBLE;
         case CAST_PTR: return VAL_PTR;
+        case CAST_BIGINT: return VAL_BIGINT;
+        case CAST_DECIMAL: return VAL_DECIMAL;
+        case CAST_BITDECIMAL: return VAL_BITDECIMAL;
+        case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
         case CAST_VOID: return VAL_NONE;
         default: return VAL_NONE;
     }

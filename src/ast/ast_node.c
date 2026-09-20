@@ -520,11 +520,8 @@ AstNode* ast_extern_func(char* name, AstNode* params, char* ret_type_name, char*
 // 数组字面量：直接设置 AST_ARRAY_LIT 节点的 elem_type 字段，创建类型化数组
 // 其他表达式：创建 AST_TYPE_ANNOTATION 节点，运行时进行类型转换
 AstNode* ast_type_annotation(CastKind cast_type, AstNode* expr) {
-    if(expr && expr->type == AST_ARRAY_LIT) {
-        // 数组字面量：直接设置 elem_type 字段，创建类型化数组
-        expr->u.array_lit.elem_type = castkind_to_valtype(cast_type);
-        return expr;
-    }
+    /* 统一创建 AST_TYPE_ANNOTATION 节点（含数组字面量）：
+     * ir_compile 的标注分支负责逐元素转型构造 TypedArray */
     AstNode* n = ast_new(AST_TYPE_ANNOTATION);
     n->u.type_annotation.cast_type = cast_type;
     n->u.type_annotation.expr = expr;

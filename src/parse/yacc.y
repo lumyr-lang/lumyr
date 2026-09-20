@@ -1462,7 +1462,7 @@ primary
     | LPAREN TOK_UINT16 RPAREN postfix_expr { $$ = new_cast_node(CAST_UINT16, $4); }
     | LPAREN TOK_UINT32 RPAREN postfix_expr { $$ = new_cast_node(CAST_UINT32, $4); }
     | LPAREN TOK_UINT64 RPAREN postfix_expr { $$ = new_cast_node(CAST_UINT64, $4); }
-    | LPAREN TOK_UINT RPAREN postfix_expr   { $$ = new_cast_node(CAST_UINT64, $4); }
+    | LPAREN TOK_UINT RPAREN postfix_expr   { $$ = new_cast_node(CAST_UINT, $4); }
     | LPAREN TOK_LONG RPAREN postfix_expr   { $$ = new_cast_node(CAST_LONG, $4); }
     | LPAREN TOK_LONGLONG RPAREN postfix_expr { $$ = new_cast_node(CAST_LONGLONG, $4); }
     | LPAREN TOK_FLOAT RPAREN postfix_expr    { $$ = new_cast_node(CAST_FLOAT, $4); }

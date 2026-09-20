@@ -1,6 +1,11 @@
 // ============================================================
 // 全数据类型函数测试：值传递 + ref 引用传递
-// 覆盖：整型族 19 种 + 浮点族 3 种 + string/bigint/decimal + array/map
+// 覆盖：整型存储栈 22 种（int/int8~64/uint/uint8~64/short/ushort/long/long long/
+//       ulong/size_t/ssize_t/byte/uchar/bool/char/ascii）
+//       + 浮点族 3 种（double/float/long double）
+//       + PTR 类型 5 种（string/bigint/decimal/bitdecimal/ptr）
+//       + array/map + void 无返回过程，共 36 组场景 D1-D36
+// 第七部分 S1-S32：冒号后缀返回类型 func name(params) : type，32 种类型逐一覆盖
 // ============================================================
 
 // ------------------------------------------------------------
@@ -208,5 +213,252 @@ print("D29 echo map", echo({"k": 1}));
 func <int> step(<int> x, d = 10) { return x + d; }
 print("D30 default omit", step(5));              // 期望 15
 print("D30 default give", step(5, 100));         // 期望 105
+
+// ------------------------------------------------------------
+// 第六部分：补充类型（ascii / long long / bitdecimal / ptr / 无返回过程）
+// pass_long_long 声明见第一部分
+// ------------------------------------------------------------
+
+func <ascii>      pass_ascii(<ascii> x)     { return x; }
+func <bitdecimal> pass_bitd(<bitdecimal> x) { return x; }
+func <ptr>        pass_ptr_t(<ptr> x)       { return x; }
+func <uint>       pass_uint_d(<uint> x)     { return x; }
+func pass_uint_s(<uint> x) : uint           { return x; }
+func say_void(<int> x)                      { print(x); }
+
+func bump_ascii(ref <ascii> x)     { x = x + 1; }
+func bump_bitd(ref <bitdecimal> x) { x = x + x; }
+func bump_uint_d(ref <uint> x)     { x = x + 1; }
+
+av = <ascii>65;
+print("D31 ascii pass", pass_ascii(av));
+bump_ascii(av); print("D31 ascii ref", av);      // 期望 66
+
+ll = <long long>100;
+print("D32 longlong pass", pass_long_long(ll));  // 期望 100
+
+bv = <bitdecimal>"1.5";
+print("D33 bitd pass", pass_bitd(bv));
+bump_bitd(bv); print("D33 bitd ref", bv);        // 期望 3.0
+
+print("D34 ptr pass", pass_ptr_t(<ptr>0));       // 期望 0
+
+print("D35 void proc");
+say_void(99);                                    // 期望 99
+
+uv = <uint>100;
+print("D36 uint pass", pass_uint_d(uv));
+bump_uint_d(uv); print("D36 uint ref", uv);      // 期望 101
+print("D36 uint suffix", pass_uint_s(200));      // 期望 200
+
+// ------------------------------------------------------------
+// 第七部分：冒号后缀返回类型全覆盖（func name(params) : type）
+// S1-S22 整型族  S23-S25 浮点族  S26-S30 PTR 类型  S31-S32 array/map
+// ------------------------------------------------------------
+
+func sf_int(<int> x) : int             { return x; }
+func sf_int8(<int8> x) : int8          { return x; }
+func sf_int16(<int16> x) : int16       { return x; }
+func sf_int32(<int32> x) : int32       { return x; }
+func sf_int64(<int64> x) : int64       { return x; }
+func sf_uint8(<uint8> x) : uint8       { return x; }
+func sf_uint16(<uint16> x) : uint16    { return x; }
+func sf_uint32(<uint32> x) : uint32    { return x; }
+func sf_uint64(<uint64> x) : uint64    { return x; }
+func sf_uint(<uint> x) : uint          { return x; }
+func sf_short(<short> x) : short       { return x; }
+func sf_ushort(<ushort> x) : ushort    { return x; }
+func sf_long(<long> x) : long          { return x; }
+func sf_ll(<long long> x) : long long  { return x; }
+func sf_ulong(<ulong> x) : ulong       { return x; }
+func sf_size(<size_t> x) : size_t      { return x; }
+func sf_ssize(<ssize_t> x) : ssize_t   { return x; }
+func sf_byte(<byte> x) : byte          { return x; }
+func sf_uchar(<uchar> x) : uchar       { return x; }
+func sf_bool(<bool> x) : bool          { return x; }
+func sf_char(<char> x) : char          { return x; }
+func sf_ascii(<ascii> x) : ascii       { return x; }
+
+func sf_double(<double> x) : double          { return x; }
+func sf_float(<float> x) : float             { return x; }
+func sf_ldouble(<long double> x) : long double { return x; }
+
+func sf_string(<string> x) : string    { return x; }
+func sf_bigint(<bigint> x) : bigint    { return x; }
+func sf_decimal(<decimal> x) : decimal { return x; }
+func sf_bitd(<bitdecimal> x) : bitdecimal { return x; }
+func sf_ptr(<ptr> x) : ptr             { return x; }
+
+func sf_arr(a) : array                 { return a; }
+func sf_map(m) : map                   { return m; }
+
+print("S1 int",       sf_int(11));                  // 11
+print("S2 int8",      sf_int8(12));                 // 12
+print("S3 int16",     sf_int16(1001));              // 1001
+print("S4 int32",     sf_int32(100001));            // 100001
+print("S5 int64",     sf_int64(10000000001));       // 10000000001
+print("S6 uint8",     sf_uint8(201));               // 201
+print("S7 uint16",    sf_uint16(60001));            // 60001
+print("S8 uint32",    sf_uint32(4000000001));       // 4000000001
+print("S9 uint64",    sf_uint64(10000000001));      // 10000000001
+print("S10 uint",     sf_uint(300));                // 300
+print("S11 short",    sf_short(101));               // 101
+print("S12 ushort",   sf_ushort(102));              // 102
+print("S13 long",     sf_long(103));                // 103
+print("S14 longlong", sf_ll(104));                  // 104
+print("S15 ulong",    sf_ulong(105));               // 105
+print("S16 size",     sf_size(106));                // 106
+print("S17 ssize",    sf_ssize(107));               // 107
+print("S18 byte",     sf_byte(202));                // 202
+print("S19 uchar",    sf_uchar(203));               // 203
+print("S20 bool",     sf_bool(1));                  // true
+print("S21 char",     sf_char(67));                 // C
+print("S22 ascii",    sf_ascii(68));                // 68
+print("S23 double",   sf_double(2.25));             // 2.25
+print("S24 float",    sf_float(1.25));              // 1.25
+print("S25 ldouble",  sf_ldouble(3.75));            // 3.75
+print("S26 string",   sf_string("sf"));             // sf
+print("S27 bigint",   sf_bigint(<bigint>"1000"));   // 1000
+print("S28 decimal",  sf_decimal(<decimal>"1.25")); // 1.25
+print("S29 bitd",     sf_bitd(<bitdecimal>"1.5"));  // 1.5
+print("S30 ptr",      sf_ptr(<ptr>0));              // 0
+sa = sf_arr([5, 6]); print("S31 array", sa[0]);     // 5
+sm = sf_map({"k": 9}); print("S32 map", sm["k"]);   // 9
+
+// ------------------------------------------------------------
+// 第八部分：TypedArray 元素类型矩阵 T1-T28
+// 每种元素类型：<T>[...] 构造（逐元素转型）+ 下标取值 + type() + 下标写回读
+// ------------------------------------------------------------
+
+/* ---- 整型族 20 种（统一 INT64 栈，裸存储宽度各异） ---- */
+
+ta_int = <int>[10, -20];
+print("T1 int", ta_int[0], ta_int[1], type(ta_int), type(ta_int[0]));   // 10 -20 typed_array int
+ta_int[0] = 77; print("T1 int set", ta_int[0]);                         // 77
+
+ta_int8 = <int8>[-128, 127];
+print("T2 int8", ta_int8[0], ta_int8[1], type(ta_int8), type(ta_int8[0])); // -128 127 typed_array int8
+ta_int8[1] = 77; print("T2 int8 set", ta_int8[1]);                      // 77
+
+ta_int16 = <int16>[-32768, 32767];
+print("T3 int16", ta_int16[0], ta_int16[1], type(ta_int16), type(ta_int16[0])); // -32768 32767 typed_array int16
+ta_int16[0] = 77; print("T3 int16 set", ta_int16[0]);                   // 77
+
+ta_int32 = <int32>[-2147483648, 2147483647];
+print("T4 int32", ta_int32[0], ta_int32[1], type(ta_int32), type(ta_int32[0])); // -2147483648 2147483647 typed_array int32
+ta_int32[0] = 77; print("T4 int32 set", ta_int32[0]);                   // 77
+
+ta_int64 = <int64>[-9000000000000000000, 9000000000000000000];
+print("T5 int64", ta_int64[0], ta_int64[1], type(ta_int64), type(ta_int64[0])); // -9000000000000000000 9000000000000000000 typed_array int64
+ta_int64[0] = 77; print("T5 int64 set", ta_int64[0]);                   // 77
+
+ta_short = <short>[-100, 200];
+print("T6 short", ta_short[0], ta_short[1], type(ta_short), type(ta_short[0])); // -100 200 typed_array short
+ta_short[0] = 77; print("T6 short set", ta_short[0]);                   // 77
+
+ta_long = <long>[-1000, 2000];
+print("T7 long", ta_long[0], ta_long[1], type(ta_long), type(ta_long[0])); // -1000 2000 typed_array long
+ta_long[0] = 77; print("T7 long set", ta_long[0]);                      // 77
+
+ta_ll = <long long>[-10000000001, 10000000001];
+print("T8 longlong", ta_ll[0], ta_ll[1], type(ta_ll), type(ta_ll[0]));  // -10000000001 10000000001 typed_array long long
+ta_ll[0] = 77; print("T8 longlong set", ta_ll[0]);                      // 77
+
+ta_uint8 = <uint8>[200, 255];
+print("T9 uint8", ta_uint8[0], ta_uint8[1], type(ta_uint8), type(ta_uint8[0])); // 200 255 typed_array uint8
+ta_uint8[0] = 77; print("T9 uint8 set", ta_uint8[0]);                   // 77
+
+ta_uint16 = <uint16>[60000, 65535];
+print("T10 uint16", ta_uint16[0], ta_uint16[1], type(ta_uint16), type(ta_uint16[0])); // 60000 65535 typed_array uint16
+ta_uint16[0] = 77; print("T10 uint16 set", ta_uint16[0]);               // 77
+
+ta_uint32 = <uint32>[4000000000, 4000000001];
+print("T11 uint32", ta_uint32[0], ta_uint32[1], type(ta_uint32), type(ta_uint32[0])); // 4000000000 4000000001 typed_array uint32
+ta_uint32[0] = 77; print("T11 uint32 set", ta_uint32[0]);               // 77
+
+ta_uint = <uint>[300, 301];
+print("T12 uint", ta_uint[0], ta_uint[1], type(ta_uint), type(ta_uint[0])); // 300 301 typed_array uint
+ta_uint[0] = 77; print("T12 uint set", ta_uint[0]);                     // 77
+
+ta_uint64 = <uint64>[18000000000000000000, 18000000000000000001];
+print("T13 uint64", ta_uint64[0], ta_uint64[1], type(ta_uint64), type(ta_uint64[0])); // 18000000000000000000 18000000000000000001 typed_array uint64
+ta_uint64[0] = 77; print("T13 uint64 set", ta_uint64[0]);               // 77
+
+ta_ulong = <ulong>[400, 401];
+print("T14 ulong", ta_ulong[0], ta_ulong[1], type(ta_ulong), type(ta_ulong[0])); // 400 401 typed_array unsigned long
+ta_ulong[0] = 77; print("T14 ulong set", ta_ulong[0]);                  // 77
+
+ta_uchar = <uchar>[250, 251];
+print("T15 uchar", ta_uchar[0], ta_uchar[1], type(ta_uchar), type(ta_uchar[0])); // 250 251 typed_array unsigned char
+ta_uchar[0] = 77; print("T15 uchar set", ta_uchar[0]);                  // 77
+
+ta_ushort = <ushort>[500, 501];
+print("T16 ushort", ta_ushort[0], ta_ushort[1], type(ta_ushort), type(ta_ushort[0])); // 500 501 typed_array unsigned short
+ta_ushort[0] = 77; print("T16 ushort set", ta_ushort[0]);               // 77
+
+ta_size = <size_t>[5000, 5001];
+print("T17 size_t", ta_size[0], ta_size[1], type(ta_size), type(ta_size[0])); // 5000 5001 typed_array size_t
+ta_size[0] = 77; print("T17 size_t set", ta_size[0]);                   // 77
+
+ta_ssize = <ssize_t>[-5000, 5001];
+print("T18 ssize_t", ta_ssize[0], ta_ssize[1], type(ta_ssize), type(ta_ssize[0])); // -5000 5001 typed_array ssize_t
+ta_ssize[0] = 77; print("T18 ssize_t set", ta_ssize[0]);                // 77
+
+ta_bool = <bool>[1, 0];
+print("T19 bool", ta_bool[0], ta_bool[1], type(ta_bool), type(ta_bool[0])); // true false typed_array bool
+ta_bool[1] = 1; print("T19 bool set", ta_bool[1]);                      // true
+
+ta_char = <char>[65, 66];
+print("T20 char", ta_char[0], ta_char[1], type(ta_char), type(ta_char[0])); // A B typed_array char
+ta_char[1] = 67; print("T20 char set", ta_char[1]);                     // C
+
+/* ---- 浮点族 3 种（DOUBLE 栈，裸存储宽度各异） ---- */
+
+ta_double = <double>[1.5, -2.25];
+print("T21 double", ta_double[0], ta_double[1], type(ta_double), type(ta_double[0])); // 1.5 -2.25 typed_array double
+ta_double[0] = 7.5; print("T21 double set", ta_double[0]);              // 7.5
+
+ta_float = <float>[1.25, 2.5];
+print("T22 float", ta_float[0], ta_float[1], type(ta_float), type(ta_float[0])); // 1.25 2.5 typed_array float
+ta_float[0] = 7.5; print("T22 float set", ta_float[0]);                 // 7.5
+
+ta_ld = <long double>[3.75, 4.25];
+print("T23 ldouble", ta_ld[0], ta_ld[1], type(ta_ld), type(ta_ld[0]));  // 3.75 4.25 typed_array long double
+ta_ld[0] = 7.5; print("T23 ldouble set", ta_ld[0]);                     // 7.5
+
+/* ---- PTR 族 5 种（PTR 栈，元素为裸指针） ---- */
+
+ta_str = <string>["ab", "cd"];
+print("T24 string", ta_str[0], ta_str[1], type(ta_str), type(ta_str[0])); // ab cd typed_array string
+ta_str[0] = "zz"; print("T24 string set", ta_str[0]);                   // zz
+
+ta_bigint = <bigint>[<bigint>"100", <bigint>"200"];
+print("T25 bigint", ta_bigint[0], ta_bigint[1], type(ta_bigint), type(ta_bigint[0])); // 100 200 typed_array bigint
+ta_bigint[0] = <bigint>"777"; print("T25 bigint set", ta_bigint[0]);    // 777
+
+ta_dec = <decimal>[<decimal>"1.5", <decimal>"2.5"];
+print("T26 decimal", ta_dec[0], ta_dec[1], type(ta_dec), type(ta_dec[0])); // 1.5 2.5 typed_array decimal
+ta_dec[0] = <decimal>"7.75"; print("T26 decimal set", ta_dec[0]);       // 7.75
+
+ta_bitd = <bitdecimal>[<bitdecimal>"1.5", <bitdecimal>"2.5"];
+print("T27 bitd", ta_bitd[0], ta_bitd[1], type(ta_bitd), type(ta_bitd[0])); // 1.5 2.5 typed_array bitdecimal
+ta_bitd[0] = <bitdecimal>"7.75"; print("T27 bitd set", ta_bitd[0]);     // 7.75
+
+ta_ptr = <ptr>[<ptr>1234, <ptr>5678];
+print("T28 ptr", ta_ptr[0], ta_ptr[1], type(ta_ptr), type(ta_ptr[0]));  // 0x4d2 0x162e typed_array pointer
+ta_ptr[0] = <ptr>777; print("T28 ptr set", ta_ptr[0]);                  // 0x309
+
+/* ---- 逐元素转型专项：元素按目标类型逐一转换，非整体类型标记 ---- */
+
+tc1 = <int>[1.9, 2.1];
+print("T29 trunc dbl", tc1[0], tc1[1]);                  // 1 2
+tc2 = <string>[10, 20];
+print("T30 int to str", tc2[0], tc2[1]);                 // 10 20
+tc3 = (int)[3.9, 4.2];
+print("T31 c-style cast", tc3[0], tc3[1]);               // 3 4
+tc4 = <int8>[200, 201];
+print("T32 narrow wrap", tc4[0], tc4[1]);                // -56 -55
+tc5 = <int>[];
+print("T33 empty", len(tc5), type(tc5));                 // 0 typed_array
 
 print("DATATYPE_TEST_DONE");

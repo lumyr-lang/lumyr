@@ -214,6 +214,9 @@ typedef enum {
     // 上下文目标 VALUE：直接构造 Value 压 VALUE 栈（省去 typed push + BOX）
     OPC_PUSH_INT_VAL,   // a=小 int32 -> make_int64 -> VALUE 栈
     OPC_PUSH_CONST_VAL, // a=常量池下标 -> 按常量类型构造 Value -> VALUE 栈
+
+    // 类型化数组下标写入：VALUE 栈弹 val、idx、arr，按 arr.elem_type 转换写入
+    OPC_TYPED_INDEX_SET,
 } OpCode;
 
 /* ============================================================

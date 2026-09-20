@@ -91,4 +91,10 @@ Value lumyr_pre_inc(Value* v);
 Value lumyr_post_dec(Value* v);
 Value lumyr_pre_dec(Value* v);
 
+// ---------------- TypedArray 元素类型查询 ----------------
+// 元素类型所属存储栈：1=INT64 栈，2=DOUBLE 栈，3=PTR 栈，0=未知
+int lumyr_etype_stackcls(ValueType et);
+// 元素类型单个 item 的 C 字节大小
+size_t lumyr_etype_itemsz(ValueType et);
+
 #endif

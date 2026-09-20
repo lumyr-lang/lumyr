@@ -391,8 +391,18 @@ int vm_exec_builtin(VMExecCtx* ctx, Instruction* in) {
         stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
         int64_t n = 0;
         if(v.type == VAL_ARRAY) n = v.v.array ? (int64_t)v.v.array->len : 0;
+        else if(v.type == VAL_TYPED_ARRAY) n = v.v.typed_array ? (int64_t)v.v.typed_array->len : 0;
         else if(v.type == VAL_STRING) n = lumyr_str_len(&v);
         Value r = lumyr_make_int64(n);
+        stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+        return 1;
+    }
+    case BUILTIN_TYPE: {
+        /* type(x)：弹 1 VALUE，压类型名字符串 Value */
+        (void)argc;
+        Value v;
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+        Value r = lumyr_type(v);
         stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
         return 1;
     }

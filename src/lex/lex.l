@@ -215,7 +215,7 @@ f\"([^"\\]|\\.)*\"   {
 "<uint8>"          { yylval.ll = CAST_UINT8; LEX_RET(TOK_TYPE_ANNOT); }
 "<uint16>"         { yylval.ll = CAST_UINT16; LEX_RET(TOK_TYPE_ANNOT); }
 "<uint32>"         { yylval.ll = CAST_UINT32; LEX_RET(TOK_TYPE_ANNOT); }
-"<uint>"           { yylval.ll = CAST_UINT32; LEX_RET(TOK_TYPE_ANNOT); }
+"<uint>"           { yylval.ll = CAST_UINT; LEX_RET(TOK_TYPE_ANNOT); }
 "<uint64>"         { yylval.ll = CAST_UINT64; LEX_RET(TOK_TYPE_ANNOT); }
 "<long>"           { yylval.ll = CAST_LONG; LEX_RET(TOK_TYPE_ANNOT); }
 "<long long>"      { yylval.ll = CAST_LONGLONG; LEX_RET(TOK_TYPE_ANNOT); }

@@ -24,6 +24,10 @@ int vm_exec_stack_dup(VMExecCtx* ctx, Instruction* in);
 int vm_exec_array_lit(VMExecCtx* ctx, Instruction* in);
 int vm_exec_index_get(VMExecCtx* ctx, Instruction* in);
 int vm_exec_index_set(VMExecCtx* ctx, Instruction* in);
+int vm_exec_typed_array_lit(VMExecCtx* ctx, Instruction* in);
+int vm_exec_typed_index_set(VMExecCtx* ctx, Instruction* in);
+int vm_exec_int64_to_ptr(VMExecCtx* ctx, Instruction* in);
+int vm_exec_ptr_to_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_map_lit(VMExecCtx* ctx, Instruction* in);
 
 /* 常量加载 */
@@ -199,6 +203,12 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_ARRAY_LIT: handled = vm_exec_array_lit(ctx, &in); break;
         case OPC_INDEX_GET: handled = vm_exec_index_get(ctx, &in); break;
         case OPC_INDEX_SET: handled = vm_exec_index_set(ctx, &in); break;
+        case OPC_INT64_ARRAY_LIT:
+        case OPC_DOUBLE_ARRAY_LIT:
+        case OPC_PTR_ARRAY_LIT: handled = vm_exec_typed_array_lit(ctx, &in); break;
+        case OPC_TYPED_INDEX_SET: handled = vm_exec_typed_index_set(ctx, &in); break;
+        case OPC_INT64_TO_PTR: handled = vm_exec_int64_to_ptr(ctx, &in); break;
+        case OPC_PTR_TO_INT64: handled = vm_exec_ptr_to_int64(ctx, &in); break;
         case OPC_MAP_LIT: handled = vm_exec_map_lit(ctx, &in); break;
 
         /* ===== 常量加载 ===== */
