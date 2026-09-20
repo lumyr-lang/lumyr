@@ -114,6 +114,7 @@ static int64_t typed_read_i64(ValueType et, const void* items, int i) {
     case VAL_SSIZE_T:   return (int64_t)((const ssize_t*)items)[i];
     case VAL_BOOL:      return ((const _Bool*)items)[i];
     case VAL_CHAR:      return ((const char*)items)[i];
+    case VAL_BYTE:      return ((const unsigned char*)items)[i];
     default:            return 0;
     }
 }
@@ -141,6 +142,7 @@ static void typed_write_i64(ValueType et, void* items, int i, int64_t v) {
     case VAL_SSIZE_T:   ((ssize_t*)items)[i] = (ssize_t)v; break;
     case VAL_BOOL:      ((_Bool*)items)[i] = (_Bool)v; break;
     case VAL_CHAR:      ((char*)items)[i] = (char)v; break;
+    case VAL_BYTE:      ((unsigned char*)items)[i] = (unsigned char)v; break;
     default: break;
     }
 }

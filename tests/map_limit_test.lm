@@ -1,0 +1,282 @@
+// tests/map_limit_test.lm
+// map 各数据类型极限容量测试（由 fuzz/gen_map_limit_test.py 生成，勿手改）
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+n = 0;
+
+// ===== V = int =====
+m_int_max = <string, int>{"v": 2147483647};
+check(type(m_int_max) == "map", "int max: container");
+check(m_int_max["v"] == <int>2147483647, "int max: value");
+check(type(m_int_max["v"]) == "int", "int max: vtype");
+n = n + 1;
+m_int_min = <string, int>{"v": -2147483648};
+check(type(m_int_min) == "map", "int min: container");
+check(m_int_min["v"] == <int>-2147483648, "int min: value");
+check(type(m_int_min["v"]) == "int", "int min: vtype");
+n = n + 1;
+
+// ===== V = int8 =====
+m_int8_max = <string, int8>{"v": 127};
+check(type(m_int8_max) == "map", "int8 max: container");
+check(m_int8_max["v"] == <int8>127, "int8 max: value");
+check(type(m_int8_max["v"]) == "int8", "int8 max: vtype");
+n = n + 1;
+m_int8_min = <string, int8>{"v": -128};
+check(type(m_int8_min) == "map", "int8 min: container");
+check(m_int8_min["v"] == <int8>-128, "int8 min: value");
+check(type(m_int8_min["v"]) == "int8", "int8 min: vtype");
+n = n + 1;
+
+// ===== V = int16 =====
+m_int16_max = <string, int16>{"v": 32767};
+check(type(m_int16_max) == "map", "int16 max: container");
+check(m_int16_max["v"] == <int16>32767, "int16 max: value");
+check(type(m_int16_max["v"]) == "int16", "int16 max: vtype");
+n = n + 1;
+m_int16_min = <string, int16>{"v": -32768};
+check(type(m_int16_min) == "map", "int16 min: container");
+check(m_int16_min["v"] == <int16>-32768, "int16 min: value");
+check(type(m_int16_min["v"]) == "int16", "int16 min: vtype");
+n = n + 1;
+
+// ===== V = int32 =====
+m_int32_max = <string, int32>{"v": 2147483647};
+check(type(m_int32_max) == "map", "int32 max: container");
+check(m_int32_max["v"] == <int32>2147483647, "int32 max: value");
+check(type(m_int32_max["v"]) == "int32", "int32 max: vtype");
+n = n + 1;
+m_int32_min = <string, int32>{"v": -2147483648};
+check(type(m_int32_min) == "map", "int32 min: container");
+check(m_int32_min["v"] == <int32>-2147483648, "int32 min: value");
+check(type(m_int32_min["v"]) == "int32", "int32 min: vtype");
+n = n + 1;
+
+// ===== V = int64 =====
+m_int64_max = <string, int64>{"v": 9223372036854775807};
+check(type(m_int64_max) == "map", "int64 max: container");
+check(m_int64_max["v"] == <int64>9223372036854775807, "int64 max: value");
+check(type(m_int64_max["v"]) == "int64", "int64 max: vtype");
+n = n + 1;
+m_int64_min = <string, int64>{"v": -9223372036854775808};
+check(type(m_int64_min) == "map", "int64 min: container");
+check(m_int64_min["v"] == <int64>-9223372036854775808, "int64 min: value");
+check(type(m_int64_min["v"]) == "int64", "int64 min: vtype");
+n = n + 1;
+
+// ===== V = uint8 =====
+m_uint8_max = <string, uint8>{"v": 255};
+check(type(m_uint8_max) == "map", "uint8 max: container");
+check(m_uint8_max["v"] == <uint8>255, "uint8 max: value");
+check(type(m_uint8_max["v"]) == "uint8", "uint8 max: vtype");
+n = n + 1;
+
+// ===== V = uint16 =====
+m_uint16_max = <string, uint16>{"v": 65535};
+check(type(m_uint16_max) == "map", "uint16 max: container");
+check(m_uint16_max["v"] == <uint16>65535, "uint16 max: value");
+check(type(m_uint16_max["v"]) == "uint16", "uint16 max: vtype");
+n = n + 1;
+
+// ===== V = uint32 =====
+m_uint32_max = <string, uint32>{"v": 4294967295};
+check(type(m_uint32_max) == "map", "uint32 max: container");
+check(m_uint32_max["v"] == <uint32>4294967295, "uint32 max: value");
+check(type(m_uint32_max["v"]) == "uint32", "uint32 max: vtype");
+n = n + 1;
+
+// ===== V = uint64 =====
+m_uint64_max = <string, uint64>{"v": 18446744073709551615};
+check(type(m_uint64_max) == "map", "uint64 max: container");
+check(m_uint64_max["v"] == <uint64>18446744073709551615, "uint64 max: value");
+check(type(m_uint64_max["v"]) == "uint64", "uint64 max: vtype");
+n = n + 1;
+
+// ===== V = byte =====
+m_byte_max = <string, byte>{"v": 255};
+check(type(m_byte_max) == "map", "byte max: container");
+check(m_byte_max["v"] == <byte>255, "byte max: value");
+check(type(m_byte_max["v"]) == "byte", "byte max: vtype");
+n = n + 1;
+
+// ===== V = uchar =====
+m_uchar_max = <string, uchar>{"v": 255};
+check(type(m_uchar_max) == "map", "uchar max: container");
+check(m_uchar_max["v"] == <uchar>255, "uchar max: value");
+check(type(m_uchar_max["v"]) == "unsigned char", "uchar max: vtype");
+n = n + 1;
+
+// ===== V = ushort =====
+m_ushort_max = <string, ushort>{"v": 65535};
+check(type(m_ushort_max) == "map", "ushort max: container");
+check(m_ushort_max["v"] == <ushort>65535, "ushort max: value");
+check(type(m_ushort_max["v"]) == "unsigned short", "ushort max: vtype");
+n = n + 1;
+
+// ===== V = ulong =====
+m_ulong_max = <string, ulong>{"v": 18446744073709551615};
+check(type(m_ulong_max) == "map", "ulong max: container");
+check(m_ulong_max["v"] == <ulong>18446744073709551615, "ulong max: value");
+check(type(m_ulong_max["v"]) == "unsigned long", "ulong max: vtype");
+n = n + 1;
+
+// ===== V = uint =====
+m_uint_max = <string, uint>{"v": 18446744073709551615};
+check(type(m_uint_max) == "map", "uint max: container");
+check(m_uint_max["v"] == <uint64>18446744073709551615, "uint max: value");
+check(type(m_uint_max["v"]) == "uint64", "uint max: vtype");
+n = n + 1;
+
+// ===== V = size_t =====
+m_size_t_max = <string, size_t>{"v": 18446744073709551615};
+check(type(m_size_t_max) == "map", "size_t max: container");
+check(m_size_t_max["v"] == <size_t>18446744073709551615, "size_t max: value");
+check(type(m_size_t_max["v"]) == "size_t", "size_t max: vtype");
+n = n + 1;
+
+// ===== V = short =====
+m_short_max = <string, short>{"v": 32767};
+check(type(m_short_max) == "map", "short max: container");
+check(m_short_max["v"] == <short>32767, "short max: value");
+check(type(m_short_max["v"]) == "short", "short max: vtype");
+n = n + 1;
+m_short_min = <string, short>{"v": -32768};
+check(type(m_short_min) == "map", "short min: container");
+check(m_short_min["v"] == <short>-32768, "short min: value");
+check(type(m_short_min["v"]) == "short", "short min: vtype");
+n = n + 1;
+
+// ===== V = long =====
+m_long_max = <string, long>{"v": 9223372036854775807};
+check(type(m_long_max) == "map", "long max: container");
+check(m_long_max["v"] == <long>9223372036854775807, "long max: value");
+check(type(m_long_max["v"]) == "long", "long max: vtype");
+n = n + 1;
+m_long_min = <string, long>{"v": -9223372036854775808};
+check(type(m_long_min) == "map", "long min: container");
+check(m_long_min["v"] == <long>-9223372036854775808, "long min: value");
+check(type(m_long_min["v"]) == "long", "long min: vtype");
+n = n + 1;
+
+// ===== V = long long =====
+m_longlong_max = <string, long long>{"v": 9223372036854775807};
+check(type(m_longlong_max) == "map", "longlong max: container");
+check(m_longlong_max["v"] == <long long>9223372036854775807, "longlong max: value");
+check(type(m_longlong_max["v"]) == "long long", "longlong max: vtype");
+n = n + 1;
+m_longlong_min = <string, long long>{"v": -9223372036854775808};
+check(type(m_longlong_min) == "map", "longlong min: container");
+check(m_longlong_min["v"] == <long long>-9223372036854775808, "longlong min: value");
+check(type(m_longlong_min["v"]) == "long long", "longlong min: vtype");
+n = n + 1;
+
+// ===== V = ssize_t =====
+m_ssize_t_max = <string, ssize_t>{"v": 9223372036854775807};
+check(type(m_ssize_t_max) == "map", "ssize_t max: container");
+check(m_ssize_t_max["v"] == <ssize_t>9223372036854775807, "ssize_t max: value");
+check(type(m_ssize_t_max["v"]) == "ssize_t", "ssize_t max: vtype");
+n = n + 1;
+m_ssize_t_min = <string, ssize_t>{"v": -9223372036854775808};
+check(type(m_ssize_t_min) == "map", "ssize_t min: container");
+check(m_ssize_t_min["v"] == <ssize_t>-9223372036854775808, "ssize_t min: value");
+check(type(m_ssize_t_min["v"]) == "ssize_t", "ssize_t min: vtype");
+n = n + 1;
+
+// ===== V = char =====
+m_char_max = <string, char>{"v": 127};
+check(type(m_char_max) == "map", "char max: container");
+check(m_char_max["v"] == <char>127, "char max: value");
+check(type(m_char_max["v"]) == "char", "char max: vtype");
+n = n + 1;
+m_char_min = <string, char>{"v": -128};
+check(type(m_char_min) == "map", "char min: container");
+check(m_char_min["v"] == <char>-128, "char min: value");
+check(type(m_char_min["v"]) == "char", "char min: vtype");
+n = n + 1;
+
+// ===== V = ascii =====
+m_ascii_max = <string, ascii>{"v": 2147483647};
+check(type(m_ascii_max) == "map", "ascii max: container");
+check(m_ascii_max["v"] == <ascii>2147483647, "ascii max: value");
+check(type(m_ascii_max["v"]) == "int", "ascii max: vtype");
+n = n + 1;
+
+// ===== V = bool =====
+m_bool_true = <string, bool>{"v": true};
+check(type(m_bool_true) == "map", "bool true: container");
+check(m_bool_true["v"] == <bool>true, "bool true: value");
+check(type(m_bool_true["v"]) == "bool", "bool true: vtype");
+n = n + 1;
+m_bool_false = <string, bool>{"v": false};
+check(type(m_bool_false) == "map", "bool false: container");
+check(m_bool_false["v"] == <bool>false, "bool false: value");
+check(type(m_bool_false["v"]) == "bool", "bool false: vtype");
+n = n + 1;
+
+// ===== V = double =====
+m_double_large = <string, double>{"v": <double>100000000000000000000000000000};
+check(type(m_double_large) == "map", "double large: container");
+check(m_double_large["v"] == <double><double>100000000000000000000000000000, "double large: value");
+check(type(m_double_large["v"]) == "double", "double large: vtype");
+n = n + 1;
+
+// ===== V = float =====
+m_float_max = <string, float>{"v": <float>340000000000000000000000000000000000000};
+check(type(m_float_max) == "map", "float max: container");
+check(m_float_max["v"] == <float><float>340000000000000000000000000000000000000, "float max: value");
+check(type(m_float_max["v"]) == "double", "float max: vtype");
+n = n + 1;
+
+// ===== V = long double =====
+m_longdouble_large = <string, long double>{"v": <long double>100000000000000000000000000000};
+check(type(m_longdouble_large) == "map", "longdouble large: container");
+check(m_longdouble_large["v"] == <long double><long double>100000000000000000000000000000, "longdouble large: value");
+check(type(m_longdouble_large["v"]) == "double", "longdouble large: vtype");
+n = n + 1;
+
+// ===== V = bigint =====
+m_bigint_huge = <string, bigint>{"v": <bigint>1234567890123456789012345678901234567890};
+check(type(m_bigint_huge) == "map", "bigint huge: container");
+check((string)m_bigint_huge["v"] == "1234567890123456789012345678901234567890", "bigint huge: value");
+check(type(m_bigint_huge["v"]) == "bigint", "bigint huge: vtype");
+n = n + 1;
+
+// ===== V = decimal =====
+m_decimal_precise = <string, decimal>{"v": <decimal>3.141592653589793238462643383279};
+check(type(m_decimal_precise) == "map", "decimal precise: container");
+check((string)m_decimal_precise["v"] == "3.141592653589793238462643383279", "decimal precise: value");
+check(type(m_decimal_precise["v"]) == "decimal", "decimal precise: vtype");
+n = n + 1;
+
+// ===== V = bitdecimal =====
+m_bitdecimal_precise = <string, bitdecimal>{"v": <bitdecimal>3.141592653589793238462643383279};
+check(type(m_bitdecimal_precise) == "map", "bitdecimal precise: container");
+check((string)m_bitdecimal_precise["v"] == "3.141592653589793238462643383279", "bitdecimal precise: value");
+check(type(m_bitdecimal_precise["v"]) == "bitdecimal", "bitdecimal precise: vtype");
+n = n + 1;
+
+// ===== 整型溢出回绕（max+1 截断到类型范围，不应崩溃） =====
+ov_int8 = <string, int8>{"v": 200};
+check(ov_int8["v"] == <int8>-56, "overflow int8: 200 -> -56");
+n = n + 1;
+ov_int8 = <string, int8>{"v": -200};
+check(ov_int8["v"] == <int8>56, "overflow int8: -200 -> 56");
+n = n + 1;
+ov_uint8 = <string, uint8>{"v": 300};
+check(ov_uint8["v"] == <uint8>44, "overflow uint8: 300 -> 44");
+n = n + 1;
+ov_int16 = <string, int16>{"v": 40000};
+check(ov_int16["v"] == <int16>-25536, "overflow int16: 40000 -> -25536");
+n = n + 1;
+ov_uint16 = <string, uint16>{"v": 70000};
+check(ov_uint16["v"] == <uint16>4464, "overflow uint16: 70000 -> 4464");
+n = n + 1;
+ov_int32 = <string, int32>{"v": 3000000000};
+check(ov_int32["v"] == <int32>-1294967296, "overflow int32: 3000000000 -> -1294967296");
+n = n + 1;
+
+print("map_limit_test cases =", n);
+print("map_limit_test ALL PASS");

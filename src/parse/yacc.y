@@ -302,6 +302,69 @@ extern int yylineno;
 AstNode* new_cast_node(CastKind cast_type, AstNode* child);
 AstNode* maybe_template(const char* s);      // 字符串模板拆解（parse/tmpl.c）
 void yyerror(const char* s);
+/* 泛型命名字段构造 <CustomType>{ name: v, ... }：把具名 init 展开成位置构造
+   ast_class_new（与 CustomType(...) 同路），字段按声明序排列，缺省用 ast_none()。 */
+static void collect_map_entries(AstNode* node, AstNode*** arr, int* n, int* cap) {
+    if(!node) return;
+    if(node->type == AST_SEQ) {
+        collect_map_entries(node->u.seq.first, arr, n, cap);
+        collect_map_entries(node->u.seq.second, arr, n, cap);
+        return;
+    }
+    if(*n >= *cap) { *cap = *cap ? *cap*2 : 8; *arr = realloc(*arr, (size_t)*cap * sizeof(AstNode*)); }
+    (*arr)[(*n)++] = node;
+}
+static AstNode* wrap_struct_named(const char* tname, AstNode* items)
+{
+    TypeDef* td = type_lookup(tname);
+    if(!td) {
+        char buf[256];
+        snprintf(buf, sizeof buf, "未定义类型 '%s'", tname);
+        yyerror(buf);
+        return NULL;
+    }
+    AstNode** entries = NULL; int en = 0, ecap = 0;
+    collect_map_entries(items, &entries, &en, &ecap);
+    /* 建立 字段名 -> 值 映射 */
+    AstNode** values = (AstNode**)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(AstNode*));
+    for(int i = 0; i < en; i++) {
+        AstNode* e = entries[i];
+        if(!e || e->type != AST_MAP_ENTRY) continue;
+        const char* fname = e->u.map_entry.key->u.sval;
+        int idx = -1;
+        for(int j = 0; j < td->nprops; j++) {
+            if(td->props[j] && strcmp(td->props[j], fname) == 0) { idx = j; break; }
+        }
+        if(idx < 0) {
+            char buf[256];
+            snprintf(buf, sizeof buf, "类型 '%s' 无字段 '%s'", tname, fname);
+            yyerror(buf);
+            free(values); free(entries);
+            return NULL;
+        }
+        values[idx] = e->u.map_entry.value;
+    }
+    free(entries);
+    if(td->is_struct || td->is_class) {
+        /* struct/class：按声明序组装位置实参，走 ast_class_new 构造 */
+        AstNode* args = NULL;
+        for(int i = 0; i < td->nprops; i++)
+            args = ast_arg_append(args, values[i] ? values[i] : ast_none());
+        free(values);
+        return ast_class_new(strdup(tname), td->nprops, args);
+    }
+    /* type 形状：构造带类型 cast 的 map literal，每个值 cast 到字段声明类型 */
+    AstNode* out = NULL;
+    for(int i = 0; i < td->nprops; i++) {
+        if(!values[i]) continue;
+        CastKind ck = td->ptypes ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
+        AstNode* v = (ck != CAST_NONE) ? new_cast_node(ck, values[i]) : values[i];
+        AstNode* entry = ast_map_entry(ast_string(strdup(td->props[i])), v);
+        out = out ? ast_seq(out, entry) : entry;
+    }
+    free(values);
+    return ast_map_lit(out);
+}
 static int g_lambda_seq = 0;                 // 匿名函数内部名 _lambda_N
 static int g_unpack_tmp_counter = 0;              // unpack 临时变量计数器
 // 把一个语句列表（AST_SEQ 链）展开，追加到另一个语句列表末尾
@@ -1560,6 +1623,10 @@ primary
           /* 接口类型标注：<Printable>expr → 接口引用类型 */
           if(interface_lookup($2) != NULL) {
               $$ = ast_interface_annotation($2, $4);
+          } else if(type_lookup($2) != NULL && $4 && $4->type == AST_MAP_LIT) {
+              /* 命名字段构造：<CustomType>{ name: v, ... } 展开为位置构造 */
+              $$ = L(wrap_struct_named($2, $4->u.map_lit.entries));
+              free($2);
           } else {
               /* 非接口类型：暂时当作普通表达式处理（后续可扩展自定义类型标注） */
               $$ = $4;

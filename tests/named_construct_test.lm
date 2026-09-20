@@ -1,0 +1,177 @@
+// ============================================================
+// 自定义类型命名字段构造 <T>{ field: value, ... } 全类型矩阵
+// 覆盖：struct 与 type(形状) 两种声明 × 24 种字段类型
+// 验证：构造、字段读回值、字段类型、字段写回、乱序命名、缺省字段
+// ============================================================
+
+func check(cond, msg) {
+    if (cond) { } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 1. struct 命名字段构造（24 种字段类型）
+// ------------------------------------------------------------
+struct AllTypes {
+    a: int;
+    b: int8;
+    c: int16;
+    d: int32;
+    e: int64;
+    f: uint8;
+    g: uint16;
+    h: uint32;
+    i: uint64;
+    j: short;
+    k: ushort;
+    l: long;
+    m: long long;
+    n: ulong;
+    o: size_t;
+    p: ssize_t;
+    q: byte;
+    r: uchar;
+    s: bool;
+    t: char;
+    u: float;
+    v: double;
+    w: long double;
+    x: string;
+}
+
+// 乱序命名构造（验证按字段名匹配而非位置）
+s = <AllTypes>{
+    x: "hello",
+    a: 1,
+    s: true,
+    t: 65,
+    v: 3.14,
+    b: 2, c: 3, d: 4, e: 5,
+    f: 6, g: 7, h: 8, i: 9,
+    j: 10, k: 11, l: 12, m: 13, n: 14,
+    o: 15, p: 16, q: 17, r: 18,
+    u: 1.5, w: 2.5
+};
+
+check(type(s) == "AllTypes", "struct: container type");
+check(s.a == 1, "struct: int");
+check(s.b == 2, "struct: int8");
+check(s.c == 3, "struct: int16");
+check(s.d == 4, "struct: int32");
+check(s.e == 5, "struct: int64");
+check(s.f == 6, "struct: uint8");
+check(s.g == 7, "struct: uint16");
+check(s.h == 8, "struct: uint32");
+check(s.i == 9, "struct: uint64");
+check(s.j == 10, "struct: short");
+check(s.k == 11, "struct: ushort");
+check(s.l == 12, "struct: long");
+check(s.m == 13, "struct: long long");
+check(s.n == 14, "struct: ulong");
+check(s.o == 15, "struct: size_t");
+check(s.p == 16, "struct: ssize_t");
+check(s.q == 17, "struct: byte");
+check(s.r == 18, "struct: uchar");
+check(s.s == true, "struct: bool");
+check(s.t == 65, "struct: char('A')");
+check(s.u == 1.5, "struct: float");
+check(s.v == 3.14, "struct: double");
+check(s.w == 2.5, "struct: long double");
+check(s.x == "hello", "struct: string");
+
+// 字段类型校验
+check(type(s.a) == "int", "struct vtype: int");
+check(type(s.e) == "int64", "struct vtype: int64");
+check(type(s.s) == "bool", "struct vtype: bool");
+check(type(s.t) == "char", "struct vtype: char");
+check(type(s.u) == "float", "struct vtype: float");
+check(type(s.v) == "double", "struct vtype: double");
+check(type(s.x) == "string", "struct vtype: string");
+
+// 字段写回
+s.a = 100;
+s.x = "world";
+check(s.a == 100, "struct write: int");
+check(s.x == "world", "struct write: string");
+
+// ------------------------------------------------------------
+// 2. type 形状命名字段构造（值 cast 到声明类型）
+// ------------------------------------------------------------
+type Shape {
+    name: string,
+    count: int,
+    ratio: double,
+    flag: bool
+}
+
+sh = <Shape>{
+    ratio: 0.5,
+    name: "box",
+    count: 42,
+    flag: true
+};
+
+check(type(sh) == "map", "type shape: container is map");
+check(sh.name == "box", "type shape: string");
+check(sh.count == 42, "type shape: int");
+check(sh.ratio == 0.5, "type shape: double");
+check(sh.flag == true, "type shape: bool");
+
+// 值被 cast 到声明类型：int 字面量写入 double 字段
+sh2 = <Shape>{ name: "s", count: 7, ratio: 9, flag: 0 };
+check(type(sh2.ratio) == "double", "type shape cast: int->double");
+check(sh2.ratio == 9.0, "type shape cast: value");
+check(type(sh2.flag) == "bool", "type shape cast: int->bool");
+
+// ------------------------------------------------------------
+// 3. 缺省字段：未提供的字段保持默认值
+// ------------------------------------------------------------
+struct Partial {
+    x: int;
+    y: string;
+    z: double;
+}
+p = <Partial>{ x: 5 };
+check(type(p) == "Partial", "partial: container type");
+check(p.x == 5, "partial: provided field");
+// 未提供字段为默认零值
+check(type(p.y) == "string", "partial: default string type");
+check(p.z == 0.0, "partial: default double");
+
+// ------------------------------------------------------------
+// 4. 嵌套 struct 命名字段构造
+// ------------------------------------------------------------
+struct Inner {
+    v: int;
+}
+struct Outer {
+    inner: Inner;
+    label: string;
+}
+o = <Outer>{
+    label: "outer",
+    inner: <Inner>{ v: 99 }
+};
+check(type(o) == "Outer", "nested: outer type");
+check(o.label == "outer", "nested: label");
+check(type(o.inner) == "Inner", "nested: inner type");
+check(o.inner.v == 99, "nested: inner value");
+
+// ------------------------------------------------------------
+// 5. 用户原始用例
+// ------------------------------------------------------------
+type CustomType {
+    name: string,
+    age: int,
+    price: float
+}
+a = <CustomType>{
+    "name": "nick",
+    "age": 10,
+    "price": 1.0
+};
+check(type(a) == "map", "user case: container");
+check(a.name == "nick", "user case: name");
+check(a.age == 10, "user case: age");
+check(a.price == 1.0, "user case: price");
+
+print("named_construct_test ALL PASS");

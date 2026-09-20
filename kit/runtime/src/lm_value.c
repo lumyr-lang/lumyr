@@ -330,6 +330,18 @@ Value lumyr_unary_minus(Value v) {
         if(v.v.i == INT_MIN) return lumyr_make_double(-(double)v.v.i);  // 溢出保护，int类型用INT_MIN
         return lumyr_make_int(-v.v.i);
     }
+    if(v.type == VAL_DOUBLE) {
+        return lumyr_make_double(-v.v.d);
+    }
+    /* 其余整型族（VAL_INT64 及各子类型、uint 族、bool、char、byte、long、
+       size_t 等）：按 int64 取负并保留整型，避免负整数字面量（如 -5、
+       -9223372036854775808）被错误转换为 double */
+    if(v.type == VAL_BOOL || v.type == VAL_CHAR || v.type == VAL_BYTE ||
+       (v.type >= VAL_INT8 && v.type <= VAL_SSIZE_T)) {
+        int64_t n = (int64_t)lumyr_extract_ll(v);
+        if(n == INT64_MIN) return lumyr_make_int64(INT64_MIN);  /* -INT64_MIN 溢出，按补码回绕保持值 */
+        return lumyr_make_int64(-n);
+    }
     double num = value_as_number(v);
     return lumyr_make_double(-num);
 }

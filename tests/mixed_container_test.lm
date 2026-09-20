@@ -1,0 +1,201 @@
+// ============================================================
+// 单容器混合存储全数据类型压力测试
+// 验证：把 29 种数据类型同时放进一个 map / 一个 type 形状，
+//       逐个读回值与类型，确认异构存储不串型、不丢失。
+// ============================================================
+
+func check(cond, msg) {
+    if (cond) { } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 1. 单个 map 同时存储所有 29 种数据类型（异构值）
+// ------------------------------------------------------------
+big = {
+    "int":        7,
+    "double":     3.5,
+    "string":     "v7",
+    "bool":       true,
+    "ascii":      <ascii>7,
+    "char":       'G',
+    "byte":       <byte>7,
+    "int8":       <int8>7,
+    "int16":      <int16>7,
+    "int32":      <int32>7,
+    "int64":      <int64>7,
+    "uint8":      <uint8>7,
+    "uint16":     <uint16>7,
+    "uint32":     <uint32>7,
+    "uint":       <uint>7,
+    "uint64":     <uint64>7,
+    "long":       <long>7,
+    "longlong":   <long long>7,
+    "ulong":      <ulong>7,
+    "uchar":      <uchar>7,
+    "short":      <short>7,
+    "ushort":     <ushort>7,
+    "size_t":     <size_t>7,
+    "ssize_t":    <ssize_t>7,
+    "float":      <float>3.5,
+    "longdouble": <long double>3.5,
+    "bigint":     <bigint>99,
+    "decimal":    <decimal>99,
+    "bitdecimal": <bitdecimal>99
+};
+
+check(type(big) == "map", "mixed map: container");
+check(big.len == 29, "mixed map: size 29");
+
+// 逐个读回值
+check(big["int"] == 7, "mixed map: int value");
+check(big["double"] == 3.5, "mixed map: double value");
+check(big["string"] == "v7", "mixed map: string value");
+check(big["bool"] == true, "mixed map: bool value");
+check(big["ascii"] == 7, "mixed map: ascii value");
+check(big["char"] == 71, "mixed map: char value");
+check(big["byte"] == 7, "mixed map: byte value");
+check(big["int8"] == 7, "mixed map: int8 value");
+check(big["int16"] == 7, "mixed map: int16 value");
+check(big["int32"] == 7, "mixed map: int32 value");
+check(big["int64"] == 7, "mixed map: int64 value");
+check(big["uint8"] == 7, "mixed map: uint8 value");
+check(big["uint16"] == 7, "mixed map: uint16 value");
+check(big["uint32"] == 7, "mixed map: uint32 value");
+check(big["uint"] == 7, "mixed map: uint value");
+check(big["uint64"] == 7, "mixed map: uint64 value");
+check(big["long"] == 7, "mixed map: long value");
+check(big["longlong"] == 7, "mixed map: long long value");
+check(big["ulong"] == 7, "mixed map: ulong value");
+check(big["uchar"] == 7, "mixed map: uchar value");
+check(big["short"] == 7, "mixed map: short value");
+check(big["ushort"] == 7, "mixed map: ushort value");
+check(big["size_t"] == 7, "mixed map: size_t value");
+check(big["ssize_t"] == 7, "mixed map: ssize_t value");
+check(big["float"] == 3.5, "mixed map: float value");
+check(big["longdouble"] == 3.5, "mixed map: long double value");
+check((string)big["bigint"] == "99", "mixed map: bigint value");
+check((string)big["decimal"] == "99", "mixed map: decimal value");
+check((string)big["bitdecimal"] == "99", "mixed map: bitdecimal value");
+
+// 逐个读回类型（确认不串型；注意：普通 map 中 int/bool/char 字面量坍缩为 int64）
+check(type(big["int"]) == "int64", "mixed map vtype: int->int64");
+check(type(big["double"]) == "double", "mixed map vtype: double");
+check(type(big["string"]) == "string", "mixed map vtype: string");
+check(type(big["bool"]) == "int64", "mixed map vtype: bool->int64");
+check(type(big["ascii"]) == "int", "mixed map vtype: ascii->int");
+check(type(big["char"]) == "int64", "mixed map vtype: char->int64");
+check(type(big["byte"]) == "byte", "mixed map vtype: byte");
+check(type(big["int8"]) == "int8", "mixed map vtype: int8");
+check(type(big["int16"]) == "int16", "mixed map vtype: int16");
+check(type(big["int32"]) == "int32", "mixed map vtype: int32");
+check(type(big["int64"]) == "int64", "mixed map vtype: int64");
+check(type(big["uint8"]) == "uint8", "mixed map vtype: uint8");
+check(type(big["uint16"]) == "uint16", "mixed map vtype: uint16");
+check(type(big["uint32"]) == "uint32", "mixed map vtype: uint32");
+check(type(big["uint"]) == "uint", "mixed map vtype: uint");
+check(type(big["uint64"]) == "uint64", "mixed map vtype: uint64");
+check(type(big["long"]) == "long", "mixed map vtype: long");
+check(type(big["longlong"]) == "long long", "mixed map vtype: long long");
+check(type(big["ulong"]) == "unsigned long", "mixed map vtype: ulong");
+check(type(big["uchar"]) == "unsigned char", "mixed map vtype: uchar");
+check(type(big["short"]) == "short", "mixed map vtype: short");
+check(type(big["ushort"]) == "unsigned short", "mixed map vtype: ushort");
+check(type(big["size_t"]) == "size_t", "mixed map vtype: size_t");
+check(type(big["ssize_t"]) == "ssize_t", "mixed map vtype: ssize_t");
+check(type(big["float"]) == "double", "mixed map vtype: float->double");
+check(type(big["longdouble"]) == "double", "mixed map vtype: long double->double");
+check(type(big["bigint"]) == "bigint", "mixed map vtype: bigint");
+check(type(big["decimal"]) == "decimal", "mixed map vtype: decimal");
+check(type(big["bitdecimal"]) == "bitdecimal", "mixed map vtype: bitdecimal");
+
+// 同 key 覆盖为不同类型（异构 map 允许）
+big["int"] = "now a string";
+check(type(big["int"]) == "string", "mixed map overwrite: type changed");
+check(big["int"] == "now a string", "mixed map overwrite: value");
+big["int"] = 7;
+check(big["int"] == 7, "mixed map overwrite: restored");
+
+// 删除一个 key 后其余不受影响
+big.remove("string");
+check(big.len == 28, "mixed map remove: size");
+check(big["string"] == null, "mixed map remove: gone");
+check(big["bigint"] != null, "mixed map remove: others intact");
+
+// ------------------------------------------------------------
+// 2. 单个 type 形状同时承载全部字段类型（含高精度）
+// ------------------------------------------------------------
+type AllFields {
+    f_int: int,
+    f_double: double,
+    f_string: string,
+    f_bool: bool,
+    f_char: char,
+    f_byte: byte,
+    f_int8: int8,
+    f_int16: int16,
+    f_int32: int32,
+    f_int64: int64,
+    f_uint8: uint8,
+    f_uint16: uint16,
+    f_uint32: uint32,
+    f_uint64: uint64,
+    f_long: long,
+    f_longlong: long long,
+    f_ulong: ulong,
+    f_uchar: uchar,
+    f_short: short,
+    f_ushort: ushort,
+    f_size_t: size_t,
+    f_ssize_t: ssize_t,
+    f_float: float,
+    f_longdouble: long double,
+    f_bigint: bigint,
+    f_decimal: decimal,
+    f_bitdecimal: bitdecimal
+}
+
+af = <AllFields>{
+    f_int: 7,
+    f_double: 3.5,
+    f_string: "v7",
+    f_bool: true,
+    f_char: 71,
+    f_byte: 7,
+    f_int8: 7,
+    f_int16: 7,
+    f_int32: 7,
+    f_int64: 7,
+    f_uint8: 7,
+    f_uint16: 7,
+    f_uint32: 7,
+    f_uint64: 7,
+    f_long: 7,
+    f_longlong: 7,
+    f_ulong: 7,
+    f_uchar: 7,
+    f_short: 7,
+    f_ushort: 7,
+    f_size_t: 7,
+    f_ssize_t: 7,
+    f_float: 3.5,
+    f_longdouble: 3.5,
+    f_bigint: <bigint>99,
+    f_decimal: <decimal>99,
+    f_bitdecimal: <bitdecimal>99
+};
+
+check(type(af) == "map", "type shape: container");
+check(af.f_int == 7, "type shape: int");
+check(af.f_double == 3.5, "type shape: double");
+check(af.f_string == "v7", "type shape: string");
+check(af.f_bool == true, "type shape: bool");
+check(af.f_char == 71, "type shape: char");
+check(af.f_bigint == null || (string)af.f_bigint == "99", "type shape: bigint");
+check((string)af.f_decimal == "99", "type shape: decimal");
+check((string)af.f_bitdecimal == "99", "type shape: bitdecimal");
+check(type(af.f_bigint) == "bigint", "type shape vtype: bigint");
+check(type(af.f_decimal) == "decimal", "type shape vtype: decimal");
+check(type(af.f_bitdecimal) == "bitdecimal", "type shape vtype: bitdecimal");
+check(type(af.f_float) == "double", "type shape vtype: float->double");
+
+print("mixed_container_test ALL PASS");
