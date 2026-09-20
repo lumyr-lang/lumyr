@@ -32,6 +32,7 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INDEX_GET:
         case OPC_LOAD_STRUCT_PTR:
         case OPC_BUILTIN:
+        case OPC_CALL_BUILTIN_METHOD: /* 同 OPC_BUILTIN：弹实参+receiver 后压 1 个返回值，保守 +1 */
         case OPC_CALLV:
         case OPC_RETURN:
         case OPC_RETURN_NIL:
@@ -206,6 +207,18 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.ptr = -1;
             d.value = +1;
             break;
+        case OPC_UNBOX_INT64:
+            d.value = -1;
+            d.int64 = +1;
+            break;
+        case OPC_UNBOX_DOUBLE:
+            d.value = -1;
+            d.double_stk = +1;
+            break;
+        case OPC_UNBOX_PTR:
+            d.value = -1;
+            d.ptr = +1;
+            break;
         case OPC_INT64_INDEX_SET:
             d.int64 = -3; /* idx + val + receiver */
             break;
@@ -330,6 +343,7 @@ int op_stack_push(OpCode op)
         case OPC_LOAD_FIELD:
         case OPC_LOAD_STRUCT_PTR:
         case OPC_BUILTIN:
+        case OPC_CALL_BUILTIN_METHOD:
         case OPC_CALL:
         case OPC_CALLV:
         case OPC_CALL_METHOD:
@@ -369,6 +383,8 @@ int op_stack_push(OpCode op)
         case OPC_INT64_TO_PTR: case OPC_PTR_TO_INT64:
         case OPC_CAST_INT: case OPC_CAST_DOUBLE:
         case OPC_CAST_STRING: case OPC_CAST_BOOL:
+        case OPC_UNBOX_INT64: case OPC_UNBOX_DOUBLE: case OPC_UNBOX_PTR:
+        case OPC_STR_TO_INT64: case OPC_STR_TO_DOUBLE:
             return 1;
 
         /* 不压栈 */

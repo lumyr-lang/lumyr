@@ -1,6 +1,7 @@
 #include "bytecode.h"
 #include "bc_stack.h"
 #include "gc_runtime.h"
+#include "vm_exec.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,7 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn->code);
     for(int i = 0; i < fn->sym_cnt; i++) free(fn->syms[i]);
     free(fn->syms);
+    symhash_reset(&fn->sym_idx);
     free(fn->const_pool);  /* 统一常量池 */
     for(int i = 0; i < fn->param_cnt + fn->has_variadic; i++) free(fn->params[i]);
     free(fn->params);
@@ -43,11 +45,62 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn);
 }
 
+/* ===== SymHash 符号哈希（开放寻址，load factor < 0.5） ===== */
+
+unsigned symhash_code(const char* s) {
+    /* FNV-1a 32 位 */
+    unsigned h = 2166136261u;
+    while(s && *s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+    return h;
+}
+
+int symhash_lookup(const SymHash* h, char* const* names, const char* name) {
+    if(!h->tab || h->cap == 0) return -1;
+    int mask = h->cap - 1;
+    int p = (int)(symhash_code(name) & (unsigned)mask);
+    while(h->tab[p] != -1) {
+        int idx = h->tab[p];
+        if(strcmp(names[idx], name) == 0) return idx;
+        p = (p + 1) & mask;
+    }
+    return -1;
+}
+
+void symhash_insert(SymHash* h, char* const* names, int cnt, int idx) {
+    int need = cnt * 2;
+    if(h->cap < need) {
+        /* 容量不足：扩容（2 幂）并全量 rehash [0..cnt)，含新 idx */
+        int nc = h->cap > 0 ? h->cap : 16;
+        while(nc < need) nc *= 2;
+        int* t = (int*)malloc((size_t)nc * sizeof(int));
+        if(!t) { perror("symhash_insert"); exit(EXIT_FAILURE); }
+        for(int i = 0; i < nc; i++) t[i] = -1;
+        for(int i = 0; i < cnt; i++) {
+            int p = (int)(symhash_code(names[i]) & (unsigned)(nc - 1));
+            while(t[p] != -1) p = (p + 1) & (nc - 1);
+            t[p] = i;
+        }
+        free(h->tab);
+        h->tab = t; h->cap = nc;
+        return;
+    }
+    /* 容量足够：表已覆盖 [0..cnt-1)，增量放置新下标 idx（=cnt-1） */
+    int mask = h->cap - 1;
+    int p = (int)(symhash_code(names[idx]) & (unsigned)mask);
+    while(h->tab[p] != -1) p = (p + 1) & mask;
+    h->tab[p] = idx;
+}
+
+void symhash_reset(SymHash* h) {
+    free(h->tab);
+    h->tab = NULL; h->cap = 0;
+}
+
 int bf_sym(BytecodeFunc* fn, const char* name)
 {
-    for(int i = 0; i < fn->sym_cnt; i++) {
-        if(strcmp(fn->syms[i], name) == 0) return i;
-    }
+    int hit = symhash_lookup(&fn->sym_idx, fn->syms, name);
+    if(hit >= 0) return hit;
+
     if(fn->sym_cnt >= fn->sym_cap) {
         int old_cap = fn->sym_cap;
         fn->sym_cap = fn->sym_cap ? fn->sym_cap * 2 : 16;
@@ -60,8 +113,12 @@ int bf_sym(BytecodeFunc* fn, const char* name)
         if(!fn->var_struct_names) { perror("bf_sym var_struct_names"); exit(EXIT_FAILURE); }
         for(int i = old_cap; i < fn->sym_cap; i++) fn->var_struct_names[i] = NULL;
     }
-    fn->syms[fn->sym_cnt] = strdup(name);
-    return fn->sym_cnt++;
+    int newidx = fn->sym_cnt;
+    fn->syms[newidx] = strdup(name);
+    fn->sym_cnt++;
+    /* 登记哈希（names[newidx] 已就绪） */
+    symhash_insert(&fn->sym_idx, fn->syms, fn->sym_cnt, newidx);
+    return newidx;
 }
 
 /* 添加 int64 到大常量池，返回索引 */
@@ -408,6 +465,9 @@ const char* opc_name(OpCode op)
         case OPC_PUSH_NONE:  return "PUSH_NONE";
         case OPC_UNBOX_INT64:  return "UNBOX_INT64";
         case OPC_UNBOX_DOUBLE: return "UNBOX_DOUBLE";
+        case OPC_UNBOX_PTR:    return "UNBOX_PTR";
+        case OPC_STR_TO_INT64:  return "STR_TO_INT64";
+        case OPC_STR_TO_DOUBLE: return "STR_TO_DOUBLE";
         case OPC_PUSH_INT_VAL:   return "PUSH_INT_VAL";
         case OPC_PUSH_CONST_VAL: return "PUSH_CONST_VAL";
         default: return "UNKNOWN";
@@ -485,12 +545,12 @@ void bc_disasm(FILE* out, BytecodeFunc* fn)
             case OPC_ARRAY_LIT:
                 snprintf(txt, sizeof(txt), "ARRAY_LIT n=%d", in.b);
                 break;
-            case OPC_BUILTIN: {
-                static const char* bname[] = {"len", "type", "input", "range", "substr", "toupper", "tolower", "split", "del", "insert", "floor", "ceil", "abs", "sqrt", "max", "min", "join", "contains", "repeat", "replace", "sum", "avg", "format", "sort", "reverse", "map", "filter", "reduce", "strip", "startswith", "endswith"};
-                const char* bn = (in.a >= 0 && in.a < 31) ? bname[in.a] : "?";
-                snprintf(txt, sizeof(txt), "BUILTIN %s argc=%d", bn, in.b);
+            case OPC_BUILTIN:
+                snprintf(txt, sizeof(txt), "BUILTIN %s argc=%d", builtin_id_name(in.a), in.b);
                 break;
-            }
+            case OPC_CALL_BUILTIN_METHOD:
+                snprintf(txt, sizeof(txt), "BUILTIN_METHOD %s argc=%d", builtin_id_name(in.a), in.b);
+                break;
             default:
                 snprintf(txt, sizeof(txt), "%s", opc_name(in.op));
                 break;

@@ -223,10 +223,18 @@ static void collect_top_level(AstNode* node) {
         case AST_PRINT:
             collect_top_level(node->u.print.args);
             break;
-        case AST_SEQ:
-            collect_top_level(node->u.seq.first);
-            collect_top_level(node->u.seq.second);
+        case AST_SEQ: {
+            /* 顶层语句经左结合 SEQ 链承载，N 万语句时递归 N 层会栈溢出。
+               沿链迭代下沉，只对叶子语句调用 collect（叶子内部递归深度有限，
+               不再随顶层语句数增长）。 */
+            AstNode* p = node;
+            while(p && p->type == AST_SEQ) {
+                collect_top_level(p->u.seq.second);
+                p = p->u.seq.first;
+            }
+            if(p) collect_top_level(p);
             break;
+        }
         case AST_BLOCK:
             collect_top_level(node->u.block.stmts);
             break;
@@ -556,15 +564,14 @@ int typecheck_expr(AstNode* node)
             int right_unknown = (tr == VAL_NONE);
             int left_is_str = (tl == VAL_STRING);
             int right_is_str = (tr == VAL_STRING);
-            int left_is_num = (tl == VAL_INT || tl == VAL_DOUBLE || tl == VAL_CHAR || tl == VAL_BYTE);
-            int right_is_num = (tr == VAL_INT || tr == VAL_DOUBLE || tr == VAL_CHAR || tr == VAL_BYTE);
-            int left_is_bool = (tl == VAL_BOOL);
-            int right_is_bool= (tr == VAL_BOOL);
+            int left_is_num = (tl == VAL_INT || tl == VAL_DOUBLE || tl == VAL_CHAR || tl == VAL_BYTE || tl == VAL_BOOL);
+            int right_is_num = (tr == VAL_INT || tr == VAL_DOUBLE || tr == VAL_CHAR || tr == VAL_BYTE || tr == VAL_BOOL);
             BinOp op = node->u.bin.op;
             if(op == OP_ADD) {
                 if(left_unknown || right_unknown) {
                     node->val_type = VAL_NONE;
-                } else if(left_is_str || right_is_str || left_is_bool || right_is_bool) {
+                } else if(left_is_str || right_is_str) {
+                    /* 与运行时一致：bool 走 INT64 数值算术（非字符串拼接） */
                     node->val_type = VAL_STRING;
                 } else if(left_is_num && right_is_num) {
                     if(tl == VAL_DOUBLE || tr == VAL_DOUBLE)
@@ -581,9 +588,13 @@ int typecheck_expr(AstNode* node)
                 } else {
                     int ok = 0;
                     if(tl == tr) { ok = 1; }
-                    if( (tl == VAL_CHAR && tr == VAL_INT) || (tl == VAL_INT && tr == VAL_CHAR) ||
-                        (tl == VAL_BYTE && tr == VAL_INT) || (tl == VAL_INT && tr == VAL_BYTE) ||
-                        (tl == VAL_CHAR && tr == VAL_BYTE) || (tl == VAL_BYTE && tr == VAL_CHAR) ) { ok = 1; }
+                    /* 数值族（int/char/byte/bool/double）跨类型比较：运行时经
+                       INT64_EQ/DOUBLE_EQ 支持（混合时编译器路由到 DOUBLE 统一比较） */
+                    if(left_is_num && right_is_num) { ok = 1; }
+                    if((tl == VAL_STRING && tr != VAL_STRING) || (tl != VAL_STRING && tr == VAL_STRING)) {
+                        /* 字符串与非字符串比较交给运行时动态判定 */
+                        ok = 1;
+                    }
                     if(!ok) {
                         LOG_ERROR("语义错误：==/!= 两侧类型不一致 %s vs %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
                         err = 1;
@@ -836,6 +847,28 @@ int typecheck_expr(AstNode* node)
                 break;
             }
             switch(node->u.cast.cast_type) {
+                case CAST_INT:      node->val_type = VAL_INT; break;
+                case CAST_DOUBLE:   node->val_type = VAL_DOUBLE; break;
+                case CAST_CHAR:     node->val_type = VAL_CHAR; break;
+                case CAST_BOOL:     node->val_type = VAL_BOOL; break;
+                case CAST_STRING:   node->val_type = VAL_STRING; break;
+                case CAST_ASCII:    node->val_type = VAL_INT; break;
+                case CAST_BYTE:     node->val_type = VAL_BYTE; break;
+                default:            node->val_type = VAL_INT;
+            }
+            break;
+        }
+        case AST_TYPE_ANNOTATION: {
+            /* 类型标注 <type>expr：必须检查子表达式，否则未定义变量等错误逃过语义检查，
+               编译出跨栈不平衡字节码（VALUE 压栈 / INT64 弹出 → 栈下溢） */
+            err |= typecheck_expr(node->u.type_annotation.expr);
+            /* 容器泛型：<T>[..] 逐元素转型，仍是容器 */
+            if(node->u.type_annotation.expr->val_type == VAL_ARRAY ||
+               node->u.type_annotation.expr->val_type == VAL_MAP) {
+                node->val_type = node->u.type_annotation.expr->val_type;
+                break;
+            }
+            switch(node->u.type_annotation.cast_type) {
                 case CAST_INT:      node->val_type = VAL_INT; break;
                 case CAST_DOUBLE:   node->val_type = VAL_DOUBLE; break;
                 case CAST_CHAR:     node->val_type = VAL_CHAR; break;

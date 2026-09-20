@@ -656,8 +656,23 @@ Value lumyr_input(void) {
 // range() 参数转 long long（double 整数值截断，兼容旧行为）
 long long range_to_ll(Value v) {
     if(v.type == VAL_DOUBLE) return (long long)v.v.d;
-    if(v.type != VAL_INT) runtime_error("range() 参数必须是整数");
-    return v.v.i;
+    if(v.type == VAL_INT) return v.v.i;
+    /* 整型族：字面量经 VALUE 栈统一为 VAL_INT64，其余整型一并接受 */
+    if(v.type == VAL_INT64) return v.v.i64;
+    if(v.type == VAL_LONG_LONG) return v.v.ll;
+    if(v.type == VAL_LONG) return v.v.l;
+    if(v.type == VAL_INT32) return v.v.i32;
+    if(v.type == VAL_INT16) return v.v.i16;
+    if(v.type == VAL_INT8) return v.v.i8;
+    if(v.type == VAL_SHORT) return v.v.sh;
+    if(v.type == VAL_UINT) return (long long)v.v.ui;
+    if(v.type == VAL_UINT64) return (long long)v.v.u64;
+    if(v.type == VAL_UINT32) return (long long)v.v.u32;
+    if(v.type == VAL_UINT16) return (long long)v.v.u16;
+    if(v.type == VAL_UINT8) return (long long)v.v.u8;
+    if(v.type == VAL_BOOL) return v.v.b ? 1LL : 0LL;
+    runtime_error("range() 参数必须是整数");
+    return 0;
 }
 
 // range(n) / range(a,b) / range(a,b,step)：生成等差数列数组
@@ -1261,6 +1276,9 @@ long long lumyr_extract_ll(Value v) {
     }
 }
 
+/* 前置声明：数组/类型化数组内容打印（定义在 lumyr_print_inline 之前供 lumyr_print 复用） */
+static void print_array_inline(Value v);
+
 void lumyr_print(Value v) {
     switch(v.type) {
         case VAL_INT:         printf("%d\n", v.v.i); break;
@@ -1291,8 +1309,8 @@ void lumyr_print(Value v) {
         case VAL_NONE:        printf("null\n"); break;
         case VAL_VOID:        printf("void\n"); break;
         case VAL_FUNC:        printf("<func>\n"); break;
-        case VAL_ARRAY:       printf("<array>\n"); break;
-        case VAL_TYPED_ARRAY: printf("<typed_array>\n"); break;
+        case VAL_ARRAY:       print_array_inline(v); printf("\n"); break;
+        case VAL_TYPED_ARRAY: print_array_inline(v); printf("\n"); break;
         case VAL_MAP: {
             char* js = lumyr_json_stringify(v);
             printf("%s\n", js);
@@ -1325,6 +1343,31 @@ void lumyr_print(Value v) {
         }
         default:              printf("<unknown>\n"); break;
     }
+}
+
+/* 打印数组/类型化数组内容（inline）：[e0, e1, ...]，元素递归展开。
+ * VAL_TYPED_ARRAY 元素经 lumyr_index_get 装箱读取（仅打印路径，非热路径） */
+static void print_array_inline(Value v) {
+    printf("[");
+    if(v.type == VAL_ARRAY) {
+        ValueArray* a = v.v.array;
+        if(a) {
+            for(int i = 0; i < a->len; i++) {
+                if(i) printf(", ");
+                lumyr_print_inline(a->items[i]);
+            }
+        }
+    } else if(v.type == VAL_TYPED_ARRAY) {
+        TypedArray* t = v.v.typed_array;
+        if(t) {
+            for(int i = 0; i < t->len; i++) {
+                if(i) printf(", ");
+                Value e = lumyr_index_get(v, lumyr_make_int(i));
+                lumyr_print_inline(e);
+            }
+        }
+    }
+    printf("]");
 }
 
 /* 打印单个值不换行，用于多参数 print(a, b, c) */
@@ -1415,9 +1458,6 @@ void lumyr_print_inline(Value v) {
         case VAL_CLASS_PTR:
             printf("<class_ptr>");
             break;
-        case VAL_TYPED_ARRAY:
-            printf("<typed_array>");
-            break;
         case VAL_GENERATOR:
             printf("<generator>");
             break;
@@ -1437,7 +1477,10 @@ void lumyr_print_inline(Value v) {
             printf("<func>");
             break;
         case VAL_ARRAY:
-            printf("<array>");
+            print_array_inline(v);
+            break;
+        case VAL_TYPED_ARRAY:
+            print_array_inline(v);
             break;
         case VAL_MAP: {
             char* js = lumyr_json_stringify(v);

@@ -158,6 +158,8 @@ typedef struct {
     char**    all_symbols; /* 模块内所有顶层符号名（含导出/私有） */
     int       nsymbols;
     int       cap_symbols;
+    int*      sym_hash;    /* all_symbols → 下标开放寻址哈希（-1 空槽），O(1) 去重 */
+    int       sym_hash_cap;
 } TransformResult;
 
 static void tr_push_import(TransformResult* t, char* path, char* alias) {
@@ -181,21 +183,53 @@ static void tr_push_export(TransformResult* t, const char* name, int n) {
     t->exports[t->nexports][n] = '\0';
     t->nexports++;
 }
-/* 记录一个顶层符号名（去重）。 */
+/* FNV-1a：对长度 n 的（可能非 NUL 结尾）符号片段求哈希 */
+static unsigned tr_hash_n(const char* s, int n) {
+    unsigned h = 2166136261u;
+    for(int k = 0; k < n; k++) { h ^= (unsigned char)s[k]; h *= 16777619u; }
+    return h;
+}
+
+/* 记录一个顶层符号名（去重）。O(1) 开放寻址，替代线性 strlen/strncmp 扫描（O(N^2)）。 */
 static void tr_push_symbol(TransformResult* t, const char* name, int n) {
-    for(int i = 0; i < t->nsymbols; i++) {
-        size_t sl = strlen(t->all_symbols[i]);
-        if((int)sl == n && strncmp(t->all_symbols[i], name, (size_t)n) == 0) return;
+    /* 1. 确保哈希能容纳 nsymbols+1（load < 0.5）；扩容则全量 rehash 现有符号 */
+    int need_cap = (t->nsymbols + 1) * 2;
+    if(t->sym_hash_cap < need_cap) {
+        int nc = t->sym_hash_cap ? t->sym_hash_cap : 16;
+        while(nc < need_cap) nc *= 2;
+        int* nh = (int*)malloc((size_t)nc * sizeof(int));
+        for(int i = 0; i < nc; i++) nh[i] = -1;
+        for(int i = 0; i < t->nsymbols; i++) {
+            int sl = (int)strlen(t->all_symbols[i]);
+            int p = (int)(tr_hash_n(t->all_symbols[i], sl) & (unsigned)(nc - 1));
+            while(nh[p] != -1) p = (p + 1) & (nc - 1);
+            nh[p] = i;
+        }
+        free(t->sym_hash);
+        t->sym_hash = nh; t->sym_hash_cap = nc;
     }
+    /* 2. 探测新符号（name 为长度 n 的源码片段） */
+    int mask = t->sym_hash_cap - 1;
+    int p = (int)(tr_hash_n(name, n) & (unsigned)mask);
+    while(t->sym_hash[p] != -1) {
+        int idx = t->sym_hash[p];
+        if((int)strlen(t->all_symbols[idx]) == n &&
+           strncmp(t->all_symbols[idx], name, (size_t)n) == 0) return;  /* 已存在 */
+        p = (p + 1) & mask;
+    }
+    /* 3. 追加符号（all_symbols 独立扩容，不影响已建好的 sym_hash） */
     if(t->nsymbols >= t->cap_symbols) {
         int nc = t->cap_symbols ? t->cap_symbols * 2 : 8;
         t->all_symbols = (char**)realloc(t->all_symbols, (size_t)nc * sizeof(char*));
         t->cap_symbols = nc;
     }
-    t->all_symbols[t->nsymbols] = (char*)malloc((size_t)n + 1);
-    memcpy(t->all_symbols[t->nsymbols], name, (size_t)n);
-    t->all_symbols[t->nsymbols][n] = '\0';
+    int idx = t->nsymbols;
+    t->all_symbols[idx] = (char*)malloc((size_t)n + 1);
+    memcpy(t->all_symbols[idx], name, (size_t)n);
+    t->all_symbols[idx][n] = '\0';
     t->nsymbols++;
+    /* 4. p 是探测到的空槽，登记新下标 */
+    t->sym_hash[p] = idx;
 }
 
 /*
@@ -563,6 +597,7 @@ static void tr_free(TransformResult* tr) {
     free(tr->exports);
     for(int q = 0; q < tr->nsymbols; q++) free(tr->all_symbols[q]);
     free(tr->all_symbols);
+    free(tr->sym_hash);
     free(tr);
 }
 

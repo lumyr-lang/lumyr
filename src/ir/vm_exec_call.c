@@ -333,37 +333,24 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* ========== 动态调用 CALLV ==========
- * 栈布局（自底向上）：函数值, arg0, arg1, ..., arg_{argc-1}（argc-1 在栈顶）
- * in->b = argc。所有实参均为 VALUE（动态调用）。
- */
-int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
-    int argc = in->b;
-
-    /* 1. 逆序弹 argc 个实参（均为 VALUE） */
-    Value* args = (Value*)malloc(sizeof(Value) * (argc > 0 ? argc : 1));
-    if(!args) { perror("vm_exec_callv args"); return 0; }
-    for(int slot = argc - 1; slot >= 0; --slot) {
-        stack_vm_pop(g_stack_mgr, STACK_VALUE, &args[slot]);
-    }
-
-    /* 2. 弹函数值 */
-    Value fv;
-    stack_vm_pop(g_stack_mgr, STACK_VALUE, &fv);
+/* ========== 函数值调用内核（OPC_CALLV 与 map/filter/reduce 高阶内置共用） ==========
+ * 校验函数值 → 查全局函数表 → 新建帧按形参类型 unbox 绑定 → 闭包捕获 ref 别名 →
+ * 保存/切换执行状态 → 执行 → 恢复 → 返回值 box 到 *out。
+ * 返回 1=成功；0=失败（已打印错误）；VM_LOOP_UNWIND=异常穿过本调用 */
+int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* out) {
+    *out = val_none();
     if(fv.type != VAL_FUNC || !fv.v.func.func_obj || !fv.v.func.func_obj->name) {
         fprintf(stderr, "VM: 动态调用的值不是函数\n");
-        free(args);
         return 0;
     }
     const char* fname = fv.v.func.func_obj->name;
     BytecodeFunc* callee = ir_func_table_lookup(fname);
     if(!callee) {
         fprintf(stderr, "VM: 动态调用未定义函数 %s\n", fname);
-        free(args);
         return 0;
     }
 
-    /* 3. 新建帧，按形参类型 unbox 绑定 */
+    /* 新建帧，按形参类型 unbox 绑定 */
     StackFrame* new_frame = stackframe_new(ctx->frame);
     int name_slots = callee->param_cnt + callee->has_variadic;
     for(int slot = 0; slot < argc; ++slot) {
@@ -395,9 +382,8 @@ int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
             break;
         }
     }
-    free(args);
 
-    /* 3b. 闭包：把捕获的 cell 绑定到 callee 帧对应槽位（通过 ref 别名） */
+    /* 闭包：把捕获的 cell 绑定到 callee 帧对应槽位（通过 ref 别名） */
     RuntimeFunc* rf = fv.v.func.func_obj;
     if(rf->capture_count > 0 && rf->captures) {
         Value** cells = (Value**)rf->captures;
@@ -420,7 +406,7 @@ int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
         }
     }
 
-    /* 4. 保存/切换执行状态 */
+    /* 保存/切换执行状态 */
     SavedState save;
     save.fn = ctx->fn; save.code = ctx->code; save.pc = ctx->pc; save.frame = ctx->frame;
     save.const_pool = ctx->const_pool; save.syms = ctx->syms;
@@ -441,52 +427,38 @@ int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
 
     if(status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;
 
-    /* 5. 返回值统一 box 到 VALUE 栈 */
-    Value rv;
+    /* 返回值统一 box */
     switch((ExprType)ret.et) {
-    case EXPR_TYPE_INT:    rv = lumyr_make_int64(ret.i); break;
-    case EXPR_TYPE_DOUBLE: rv = lumyr_make_double(ret.d); break;
-    case EXPR_TYPE_PTR: {
-        rv.type = VAL_STRING; rv.str_inline = 0; rv.v.s = (char*)ret.p;
+    case EXPR_TYPE_INT:    *out = lumyr_make_int64(ret.i); break;
+    case EXPR_TYPE_DOUBLE: *out = lumyr_make_double(ret.d); break;
+    case EXPR_TYPE_PTR:
+        out->type = VAL_STRING; out->str_inline = 0; out->v.s = (char*)ret.p;
         break;
+    default: *out = ret.v; break;
     }
-    default: rv = ret.v; break;
-    }
-    stack_vm_push(g_stack_mgr, STACK_VALUE, &rv);
     return 1;
 }
 
-/* ========== 调用内置函数 ========== */
-int vm_exec_builtin(VMExecCtx* ctx, Instruction* in) {
-    /* in->a = 内置函数 ID，in->b = 参数个数 */
-    int builtin_id = in->a;
+/* ========== 动态调用 CALLV ==========
+ * 栈布局（自底向上）：函数值, arg0, arg1, ..., arg_{argc-1}（argc-1 在栈顶）
+ * in->b = argc。所有实参均为 VALUE（动态调用）。
+ */
+int vm_exec_callv(VMExecCtx* ctx, Instruction* in) {
     int argc = in->b;
 
-    switch(builtin_id) {
-    case BUILTIN_LEN: {
-        /* len(x)：数组/字符串长度，弹 1 个 VALUE，压 int64 Value */
-        (void)argc;
-        Value v;
-        stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
-        int64_t n = 0;
-        if(v.type == VAL_ARRAY) n = v.v.array ? (int64_t)v.v.array->len : 0;
-        else if(v.type == VAL_TYPED_ARRAY) n = v.v.typed_array ? (int64_t)v.v.typed_array->len : 0;
-        else if(v.type == VAL_STRING) n = lumyr_str_len(&v);
-        Value r = lumyr_make_int64(n);
-        stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
-        return 1;
+    /* 逆序弹 argc 个实参（均为 VALUE） */
+    Value* args = (Value*)malloc(sizeof(Value) * (argc > 0 ? argc : 1));
+    if(!args) { perror("vm_exec_callv args"); return 0; }
+    for(int slot = argc - 1; slot >= 0; --slot) {
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &args[slot]);
     }
-    case BUILTIN_TYPE: {
-        /* type(x)：弹 1 VALUE，压类型名字符串 Value */
-        (void)argc;
-        Value v;
-        stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
-        Value r = lumyr_type(v);
-        stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
-        return 1;
-    }
-    default:
-        fprintf(stderr, "VM: unknown builtin %d (argc=%d)\n", builtin_id, argc);
-        return 0;
-    }
+
+    /* 弹函数值，交内核执行 */
+    Value fv;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &fv);
+    Value rv;
+    int rc = vm_call_func_value(ctx, fv, argc, args, &rv);
+    free(args);
+    if(rc == 1) stack_vm_push(g_stack_mgr, STACK_VALUE, &rv);
+    return rc;
 }

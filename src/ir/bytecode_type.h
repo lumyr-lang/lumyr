@@ -211,6 +211,7 @@ typedef enum {
     // VALUE 栈 -> typed 栈拆箱（赋值给已 typed 变量时使用）
     OPC_UNBOX_INT64,    // VALUE 栈弹1 -> 取 i64 -> INT64 栈
     OPC_UNBOX_DOUBLE,   // VALUE 栈弹1 -> 取 double -> DOUBLE 栈
+    OPC_UNBOX_PTR,      // VALUE 栈弹1 -> 取裸指针/字符串复制 -> PTR 栈
 
     // 上下文目标 VALUE：直接构造 Value 压 VALUE 栈（省去 typed push + BOX）
     OPC_PUSH_INT_VAL,   // a=小 int32 -> make_int64 -> VALUE 栈
@@ -218,6 +219,14 @@ typedef enum {
 
     // 类型化数组下标写入：VALUE 栈弹 val、idx、arr，按 arr.elem_type 转换写入
     OPC_TYPED_INDEX_SET,
+
+    // 内置方法调用（方法/属性形式）：VALUE 栈弹 b 个实参再弹 receiver；
+    // a=BuiltinId。与 OPC_BUILTIN（全局形式）共用同一 builtin_dispatch 实现
+    OPC_CALL_BUILTIN_METHOD,
+
+    // PTR 栈字符串 -> 数值解析（三元分支统一/显式转型路径）
+    OPC_STR_TO_INT64,   // PTR 栈弹 char* -> strtoll -> INT64 栈（不 free，同 FROM_STRING 惯例）
+    OPC_STR_TO_DOUBLE,  // PTR 栈弹 char* -> strtod  -> DOUBLE 栈
 } OpCode;
 
 /* ============================================================
@@ -301,12 +310,12 @@ typedef enum {
     BUILTIN_HTTP_PATCH,   // requests.patch(url, params?, config?)
     BUILTIN_JSON,         // json(s)：解析 JSON 文本 → 值
     BUILTIN_STRINGIFY,    // stringify(v)：值 → JSON 文本
-    BUILTIN_ARRAY_ADD,    // add(arr, x)：追加元素，返回新数组（arr.add(x) 方法链）
-    BUILTIN_ARRAY_REMOVE, // remove(arr, i)：删下标 i，返回新数组（arr.remove(i)）
-    BUILTIN_ARRAY_CLEAR,  // clear(arr)：清空，返回空数组（arr.clear()）
-    BUILTIN_ARRAY_INDEXOF,// indexOf(arr, x)：首个相等元素下标，-1 未找到
-    BUILTIN_ARRAY_GET,    // arr_get(arr, i)：安全取（越界/非数组 → null）
-    BUILTIN_ARRAY_SET,    // set(arr, i, v)：原地改，返回数组（arr.set(i,v) 链式）
+    BUILTIN_ARRAY_ADD,    // add(arr, x)：末尾追加，原地修改并返回 self（arr.add(x) 链式）
+    BUILTIN_ARRAY_REMOVE, // remove(arr, i)：删下标 i 元素，原地修改并返回 self
+    BUILTIN_ARRAY_CLEAR,  // clear(arr)：清空，原地修改并返回 self
+    BUILTIN_ARRAY_INDEXOF,// indexOf(arr, x)：按值相等查首个下标，-1 未找到
+    BUILTIN_GET,          // get(arr/map, i/key)：安全取元素/键值（越界/缺键 → null）
+    BUILTIN_SET,          // set(arr, i, v) / set(m, k, v)：原地写并返回 self（链式）
     BUILTIN_ARRAY_FIRST,  // first(arr)：首元素（空 → null）
     BUILTIN_ARRAY_LAST,   // last(arr)：尾元素（空 → null）
     BUILTIN_MAP_HAS,      // has(m, k)：键是否存在（m.has(k) 方法链）
@@ -352,6 +361,30 @@ typedef enum {
     BUILTIN_SKIP,            // skip(g, n)：跳过前 n 个元素
     BUILTIN_TAKE,            // take(g, n)：取前 n 个元素
     BUILTIN_ENUMERATE,       // enumerate(g)：枚举 [index, value]
+
+    /* ===== 数组补充（方法/全局两种形式，语义见方法×类型矩阵） ===== */
+    BUILTIN_OBJECT_INDEX,    // objectIndex(arr, obj)：按对象引用（指针身份）查下标，-1 未找到
+    BUILTIN_CHAR_AT,         // char_at(s, i)：取第 i 个字符（1 字符串）
+
+    /* ===== AI / 线性代数（嵌套数组矩阵 + TypedArray 向量，热路径零装箱） ===== */
+    BUILTIN_SHAPE,           // shape(arr)：各维长度 int[]（不规则报错）
+    BUILTIN_RESHAPE,         // reshape(arr, d0, d1, ...)：按新形状重排，返回新数组
+    BUILTIN_SLICE,           // slice(arr, start, end?)：顶层切片 [start, end)，返回新数组
+    BUILTIN_CONCAT,          // concat(a, b)：顶层拼接，返回新数组
+    BUILTIN_DOT,             // dot(a, b)：1D 点积 → 标量
+    BUILTIN_MATMUL,          // matmul(A, B)：2D×2D 矩阵乘 → 新嵌套数组
+    BUILTIN_TRANSPOSE,       // transpose(A)：2D 转置 → 新嵌套数组
+    BUILTIN_NORM,            // norm(v)：L2 范数 → 标量
+    BUILTIN_DET,             // det(A)：2D 方阵行列式（高斯消元，double）→ 标量
+    BUILTIN_INV,             // inv(A)：2D 方阵求逆（高斯消元）→ 新嵌套数组，行类型跟随输入
+    BUILTIN_MEAN,            // mean(v)：算术平均 → 标量（= avg 别名实现共用）
+    BUILTIN_STD,             // std(v)：总体标准差 → 标量
+    BUILTIN_VARIANCE,        // var(v)：总体方差 → 标量
+    BUILTIN_ARGMAX,          // argmax(v)：最大值下标，-1 空数组
+    BUILTIN_ARGMIN,          // argmin(v)：最小值下标，-1 空数组
+    BUILTIN_NORMALIZE,       // normalize(v)：L2 归一化 → 新数组/同型 TypedArray
+    BUILTIN_SOFTMAX,         // softmax(v)：softmax → 新数组/同型 TypedArray
+
     BUILTIN_COUNT
 } BuiltinId;
 
@@ -391,6 +424,16 @@ typedef struct CallSite {
 } CallSite;
 
 /* ============================================================
+ * SymHash：符号名 → 数组下标的开放寻址哈希索引（编译期使用）
+ * 替代线性数组扫描：符号数 N 很大时，bf_sym/c_find_var 由 O(N) 降为 O(1)，
+ * 消除大文件编译的 O(N^2) strcmp 开销。tab 存下标，-1 空槽；cap 为 2 的幂。
+ * ============================================================ */
+typedef struct {
+    int* tab;
+    int  cap;
+} SymHash;
+
+/* ============================================================
  * BytecodeFunc 结构体：一个可执行单元（main 或一个 lum 函数）
  * ============================================================ */
 typedef struct {
@@ -415,6 +458,7 @@ typedef struct {
     char* ret_type_name;        // 返回值类型名（如 "int"/"double"，NULL=无标注）
     CallSite* callsites;        // 本函数内全部调用点（OPC_CALL.a 索引）
     int callsite_cnt, callsite_cap;
+    SymHash sym_idx;            // syms 符号名 → 下标哈希（编译期 O(1) 查找）
 } BytecodeFunc;
 
 #endif // LUMYR_IR_BYTECODE_TYPE_H

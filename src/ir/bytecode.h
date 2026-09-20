@@ -11,6 +11,12 @@
 BytecodeFunc* bytecode_func_new(const char* name, int is_main);
 void bytecode_func_free(BytecodeFunc* fn);
 int bf_sym(BytecodeFunc* fn, const char* name);
+
+/* SymHash 符号哈希（开放寻址）：names 为 char* 符号名数组 */
+unsigned symhash_code(const char* s);                                   /* 字符串哈希 */
+int  symhash_lookup(const SymHash* h, char* const* names, const char* name); /* O(1) 查找，返回下标/-1 */
+void symhash_insert(SymHash* h, char* const* names, int cnt, int idx);  /* 登记 names[idx]，插入后表覆盖 [0..cnt) */
+void symhash_reset(SymHash* h);                                         /* 释放并清零 */
 int bf_add_i64_const(BytecodeFunc* fn, int64_t val);
 int bf_add_double_const(BytecodeFunc* fn, double val);
 int bf_add_str_const(BytecodeFunc* fn, const char* s);

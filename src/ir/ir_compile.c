@@ -37,15 +37,102 @@ static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs);  /* 记录变量
 static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result);  /* 方法调用编译 */
 
 /* ============================================================
+ * builtin_id_by_name：方法名/函数名 → BuiltinId（编译期静态表）
+ * 仅收录已有运行时实现的内置；驼峰/下划线别名多对一映射。
+ * 无运行时字符串查表：编译期一次解析为枚举编码进指令。
+ * 返回 -1 表示不是内置。
+ * ============================================================ */
+static int builtin_id_by_name(const char* name) {
+    static const struct { const char* n; BuiltinId id; } TBL[] = {
+        /* 通用 */
+        {"len", BUILTIN_LEN}, {"size", BUILTIN_LEN},
+        {"type", BUILTIN_TYPE},
+        {"range", BUILTIN_RANGE},
+        {"format", BUILTIN_FORMAT},
+        /* 字符串组 */
+        {"substr", BUILTIN_SUBSTR}, {"substring", BUILTIN_SUBSTR},
+        {"toupper", BUILTIN_TOUPPER}, {"toUpperCase", BUILTIN_TOUPPER}, {"upper", BUILTIN_TOUPPER},
+        {"tolower", BUILTIN_TOLOWER}, {"toLowerCase", BUILTIN_TOLOWER}, {"lower", BUILTIN_TOLOWER},
+        {"strip", BUILTIN_STRIP}, {"trim", BUILTIN_STRIP},
+        {"repeat", BUILTIN_REPEAT},
+        {"split", BUILTIN_SPLIT},
+        {"replace", BUILTIN_REPLACE},
+        {"startswith", BUILTIN_STARTSWITH}, {"startsWith", BUILTIN_STARTSWITH},
+        {"endswith", BUILTIN_ENDSWITH}, {"endsWith", BUILTIN_ENDSWITH},
+        {"char_at", BUILTIN_CHAR_AT}, {"charAt", BUILTIN_CHAR_AT},
+        /* 加密/编码/正则（kit/runtime 现成封装） */
+        {"md5", BUILTIN_MD5},
+        {"encodeBase64", BUILTIN_ENCODE_BASE64}, {"base64_encode", BUILTIN_ENCODE_BASE64},
+        {"decodeBase64", BUILTIN_DECODE_BASE64}, {"base64_decode", BUILTIN_DECODE_BASE64},
+        {"encodeURL", BUILTIN_ENCODE_URL}, {"url_encode", BUILTIN_ENCODE_URL},
+        {"decodeURL", BUILTIN_DECODE_URL}, {"url_decode", BUILTIN_DECODE_URL},
+        {"regex_match", BUILTIN_REGEX_MATCH},
+        {"regex_search", BUILTIN_REGEX_SEARCH},
+        {"regex_replace", BUILTIN_REGEX_REPLACE},
+        /* contains / 查找 */
+        {"contains", BUILTIN_CONTAINS},
+        {"indexOf", BUILTIN_ARRAY_INDEXOF}, {"index_of", BUILTIN_ARRAY_INDEXOF},
+        {"objectIndex", BUILTIN_OBJECT_INDEX},
+        /* 数组/字典修改类（原地 + 返回 self） */
+        {"add", BUILTIN_ARRAY_ADD},
+        {"insert", BUILTIN_INSERT},
+        {"remove", BUILTIN_ARRAY_REMOVE},
+        {"clear", BUILTIN_ARRAY_CLEAR},
+        {"addAll", BUILTIN_ARRAY_ADDALL},
+        {"set", BUILTIN_SET},
+        {"get", BUILTIN_GET},
+        {"first", BUILTIN_ARRAY_FIRST}, {"last", BUILTIN_ARRAY_LAST},
+        /* 排序/聚合 */
+        {"sort", BUILTIN_SORT},
+        {"reverse", BUILTIN_REVERSE},
+        {"sum", BUILTIN_SUM},
+        {"avg", BUILTIN_AVG}, {"mean", BUILTIN_MEAN},
+        {"std", BUILTIN_STD}, {"variance", BUILTIN_VARIANCE}, {"var", BUILTIN_VARIANCE},
+        {"min", BUILTIN_MIN}, {"max", BUILTIN_MAX},
+        {"argmax", BUILTIN_ARGMAX}, {"argmin", BUILTIN_ARGMIN},
+        {"norm", BUILTIN_NORM},
+        {"normalize", BUILTIN_NORMALIZE},
+        {"softmax", BUILTIN_SOFTMAX},
+        {"flat", BUILTIN_ARRAY_FLAT},
+        {"join", BUILTIN_JOIN},
+        /* 高阶函数 */
+        {"map", BUILTIN_MAP},
+        {"filter", BUILTIN_FILTER},
+        {"reduce", BUILTIN_REDUCE},
+        /* 字典组 */
+        {"keys", BUILTIN_KEYS},
+        {"values", BUILTIN_VALUES},
+        {"has", BUILTIN_MAP_HAS},
+        /* AI / 线性代数 */
+        {"shape", BUILTIN_SHAPE},
+        {"reshape", BUILTIN_RESHAPE},
+        {"slice", BUILTIN_SLICE},
+        {"concat", BUILTIN_CONCAT},
+        {"dot", BUILTIN_DOT},
+        {"matmul", BUILTIN_MATMUL},
+        {"transpose", BUILTIN_TRANSPOSE},
+        {"det", BUILTIN_DET},
+        {"inv", BUILTIN_INV},
+        /* 数学（全局形式） */
+        {"floor", BUILTIN_FLOOR}, {"ceil", BUILTIN_CEIL},
+        {"abs", BUILTIN_ABS}, {"sqrt", BUILTIN_SQRT},
+        {"del", BUILTIN_DEL},
+        {NULL, (BuiltinId)-1}
+    };
+    for(int i = 0; TBL[i].n; i++) {
+        if(strcmp(TBL[i].n, name) == 0) return (int)TBL[i].id;
+    }
+    return -1;
+}
+
+
+/* ============================================================
  * 表达式编译
  * ============================================================ */
 
 /* 查找变量索引，返回 -1 表示未找到 */
 static int c_find_var(Ctx* c, const char* name) {
-    for(int i = 0; i < c->var_cnt; i++) {
-        if(strcmp(c->var_names[i], name) == 0) return i;
-    }
-    return -1;
+    return symhash_lookup(&c->var_idx, c->var_names, name);
 }
 
 /* 注册新变量，返回索引 */
@@ -65,6 +152,8 @@ static int c_add_var(Ctx* c, const char* name, ExprType type) {
     idx = c->var_cnt++;
     c->var_names[idx] = strdup(name);
     c->var_types[idx] = type;
+    /* 登记 Ctx 变量哈希（var_names[idx] 已就绪） */
+    symhash_insert(&c->var_idx, c->var_names, c->var_cnt, idx);
     /* 同步到 BytecodeFunc 符号表（供 arith_get_expr_type 使用） */
     int bf_idx = bf_sym(c->fn, name);
     c->fn->var_type_tags[bf_idx] = (int)type;
@@ -75,25 +164,101 @@ static int c_add_var(Ctx* c, const char* name, ExprType type) {
  * 三元表达式辅助
  * ============================================================ */
 
-/* 在两个分支类型名之间选统一目标，优先级与 BINOP 类型提升一致 */
+/* CastKind → 4 栈架构规范类型名。
+ * 关键：所有整型（含 bool/char/byte/ascii/int64...）归一 "int"（INT64 栈），
+ * 所有浮点归一 "double"（DOUBLE 栈）；不能用 castkind_to_name 的精确名
+ * （"int64"/"bool"/"long long" ternary 无法识别，会误判为 PTR 导致跨栈错位）。
+ * 返回：int/double/string/bigint/decimal/bitdecimal/ptr/unknown */
+static const char* castkind_canonical_name(CastKind ck) {
+    switch(ck) {
+    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
+    case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
+    case CAST_UINT64: case CAST_ULONG: case CAST_SIZE_T: case CAST_SSIZE_T:
+        return "int";
+    case CAST_FLOAT: case CAST_DOUBLE: case CAST_LONG_DOUBLE:
+        return "double";
+    case CAST_STRING:     return "string";
+    case CAST_BIGINT:     return "bigint";
+    case CAST_BITDECIMAL: return "bitdecimal";
+    case CAST_DECIMAL:    return "decimal";
+    case CAST_PTR: case CAST_STRUCT_PTR: case CAST_CLASS_PTR:
+        return "ptr";
+    default:              return "unknown";
+    }
+}
+
+/* 在两个分支类型名之间选统一目标，优先级与类型吸收规则一致：
+ * string > bigint > bitdecimal > decimal > double > int（ptr 最低） */
 static const char* ternary_target_name(const char* a, const char* b) {
-    static const char* order[] = {"string", "bigint", "decimal", "double", "int"};
-    for(int i = 0; i < 5; i++) {
+    /* 任一分支为动态（unknown/null）→ 整体走 VALUE 栈（NONE），另一分支 box */
+    if(strcmp(a, "unknown") == 0 || strcmp(a, "null") == 0 ||
+       strcmp(b, "unknown") == 0 || strcmp(b, "null") == 0) return "unknown";
+    static const char* order[] = {"string", "bigint", "bitdecimal", "decimal", "double", "int", "ptr"};
+    for(int i = 0; i < 7; i++) {
         if(strcmp(a, order[i]) == 0 || strcmp(b, order[i]) == 0) return order[i];
     }
     return a;
 }
 
-/* 把栈顶值从 from 类型转换为 to 类型（仅处理本编译器已支持的转换指令） */
+/* 把栈顶值从 from 类型转换为 to 类型（仅 emit 本编译器已支持的转换指令） */
 static void ternary_cast_to(Ctx* c, const char* from, const char* to) {
     if(strcmp(from, to) == 0) return;
+
+    /* 目标动态 VALUE：typed → box（int/double/ptr 各有 BOX 指令） */
+    if(strcmp(to, "unknown") == 0) {
+        ExprType et = strcmp(from, "int") == 0 ? EXPR_TYPE_INT :
+                      strcmp(from, "double") == 0 ? EXPR_TYPE_DOUBLE : EXPR_TYPE_PTR;
+        CastKind ck = strcmp(from, "int") == 0 ? CAST_INT :
+                      strcmp(from, "double") == 0 ? CAST_DOUBLE : CAST_NONE;
+        emit_to_dynamic(c, et, ck);
+        return;
+    }
+
     if(strcmp(to, "double") == 0) {
         if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+        /* 高精度 → 字符串 → double */
+        else if(strcmp(from, "bigint") == 0) {
+            emit(c, OPC_BIGINT_TO_STRING, 0, 0); emit(c, OPC_STR_TO_DOUBLE, 0, 0);
+        }
+        else if(strcmp(from, "decimal") == 0) {
+            emit(c, OPC_DECIMAL_TO_STRING, 0, 0); emit(c, OPC_STR_TO_DOUBLE, 0, 0);
+        }
+        else if(strcmp(from, "bitdecimal") == 0) {
+            emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0); emit(c, OPC_STR_TO_DOUBLE, 0, 0);
+        }
     } else if(strcmp(to, "int") == 0) {
         if(strcmp(from, "double") == 0) emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
+        else if(strcmp(from, "ptr") == 0) emit(c, OPC_PTR_TO_INT64, 0, 0);
+        else if(strcmp(from, "bigint") == 0) {
+            emit(c, OPC_BIGINT_TO_STRING, 0, 0); emit(c, OPC_STR_TO_INT64, 0, 0);
+        }
+        else if(strcmp(from, "decimal") == 0) {
+            emit(c, OPC_DECIMAL_TO_STRING, 0, 0); emit(c, OPC_STR_TO_INT64, 0, 0);
+        }
+        else if(strcmp(from, "bitdecimal") == 0) {
+            emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0); emit(c, OPC_STR_TO_INT64, 0, 0);
+        }
     } else if(strcmp(to, "string") == 0) {
         if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_STRING, 0, 0);
         else if(strcmp(from, "double") == 0) emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+        else if(strcmp(from, "bigint") == 0) emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+        else if(strcmp(from, "decimal") == 0) emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+        else if(strcmp(from, "bitdecimal") == 0) emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+    } else if(strcmp(to, "bigint") == 0 || strcmp(to, "decimal") == 0 ||
+              strcmp(to, "bitdecimal") == 0) {
+        /* 统一经字符串（PTR 栈）走 *_FROM_STRING */
+        if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_STRING, 0, 0);
+        else if(strcmp(from, "double") == 0) emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+        else if(strcmp(from, "bigint") == 0) emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+        else if(strcmp(from, "decimal") == 0) emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+        else if(strcmp(from, "bitdecimal") == 0) emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+        if(strcmp(to, "bigint") == 0) emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
+        else if(strcmp(to, "decimal") == 0) emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
+        else emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+    } else if(strcmp(to, "ptr") == 0) {
+        if(strcmp(from, "int") == 0) emit(c, OPC_INT64_TO_PTR, 0, 0);
     }
 }
 
@@ -101,7 +266,8 @@ static void ternary_cast_to(Ctx* c, const char* from, const char* to) {
 static ExprType ternary_name_to_exprtype(const char* n) {
     if(strcmp(n, "double") == 0) return EXPR_TYPE_DOUBLE;
     if(strcmp(n, "int") == 0) return EXPR_TYPE_INT;
-    return EXPR_TYPE_PTR;
+    if(strcmp(n, "unknown") == 0) return EXPR_TYPE_NONE;  /* 动态 → VALUE 栈 */
+    return EXPR_TYPE_PTR;  /* string/bigint/decimal/bitdecimal/ptr */
 }
 
 /* CastKind 是否整型族（统一 INT64 存储栈） */
@@ -280,6 +446,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_INT64_TO_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_NONE) {
+                /* 动态 Value（VALUE 栈）→ 字符串（PTR 栈）出箱 */
+                emit(c, OPC_CAST_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
                 emit(c, OPC_BIGINT_TO_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
@@ -301,6 +470,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             else if(child_type == EXPR_TYPE_PTR) {
                 emit(c, OPC_PTR_TO_INT64, 0, 0);
             }
+            /* 动态 Value（VALUE 栈）→ 出箱到 INT64 栈（UNBOX 内含字符串/动态转换兜底） */
+            else if(child_type == EXPR_TYPE_NONE) {
+                emit(c, OPC_UNBOX_INT64, 0, 0);
+            }
             /* bigint → int：截断（后续实现） */
             /* decimal → int：截断（后续实现） */
             return EXPR_TYPE_INT;
@@ -311,6 +484,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(child_type == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
             }
+            /* 动态 Value（VALUE 栈）→ 出箱到 DOUBLE 栈 */
+            else if(child_type == EXPR_TYPE_NONE) {
+                emit(c, OPC_UNBOX_DOUBLE, 0, 0);
+            }
             return EXPR_TYPE_DOUBLE;
         }
         /* 转成 ptr：整数地址 → 裸指针 */
@@ -320,7 +497,39 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             } else if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
                 emit(c, OPC_INT64_TO_PTR, 0, 0);
+            } else if(child_type == EXPR_TYPE_NONE) {
+                /* 动态 Value → 取裸指针出箱（对象/地址语义） */
+                emit(c, OPC_UNBOX_PTR, 0, 0);
             }
+            return EXPR_TYPE_PTR;
+        }
+        /* 转成 bigint/decimal/bitdecimal：统一经字符串（PTR 栈）走 *_FROM_STRING，
+           与 AST_TYPE_ANNOTATION 分支语义一致；已是目标类型则透传 */
+        if(ct == CAST_BIGINT || ct == CAST_DECIMAL || ct == CAST_BITDECIMAL) {
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_NONE) {
+                /* 动态 Value → 字符串出箱 */
+                emit(c, OPC_CAST_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_PTR) {
+                if(child_ct == ct) {
+                    /* 已是目标类型：透传，零转换 */
+                    return EXPR_TYPE_PTR;
+                }
+                if(child_ct == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+                } else if(child_ct == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                } else if(child_ct == CAST_BITDECIMAL) {
+                    emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+                }
+                /* PTR(string)：保持字符串形式，直接 FROM_STRING */
+            }
+            if(ct == CAST_BIGINT) emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
+            else if(ct == CAST_DECIMAL) emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
+            else emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
         }
         return child_type;
@@ -362,6 +571,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             else if(child_type == EXPR_TYPE_PTR) {
                 emit(c, OPC_PTR_TO_INT64, 0, 0);
             }
+            /* 动态 Value（VALUE 栈）→ 出箱到 INT64 栈，防止 STORE 弹空栈 */
+            else if(child_type == EXPR_TYPE_NONE) {
+                emit(c, OPC_UNBOX_INT64, 0, 0);
+            }
             return EXPR_TYPE_INT;
         } else if(ct == CAST_PTR) {
             /* <ptr>expr：整数地址 → 裸指针，压 PTR 栈 */
@@ -370,12 +583,19 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             } else if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
                 emit(c, OPC_INT64_TO_PTR, 0, 0);
+            } else if(child_type == EXPR_TYPE_NONE) {
+                /* 动态 Value → 取裸指针出箱 */
+                emit(c, OPC_UNBOX_PTR, 0, 0);
             }
             return EXPR_TYPE_PTR;
         } else if(ct == CAST_DOUBLE || ct == CAST_FLOAT || ct == CAST_LONG_DOUBLE) {
             /* 如果子表达式是 INT，需要转成 DOUBLE */
             if(child_type == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+            }
+            /* 动态 Value（VALUE 栈）→ 出箱到 DOUBLE 栈 */
+            else if(child_type == EXPR_TYPE_NONE) {
+                emit(c, OPC_UNBOX_DOUBLE, 0, 0);
             }
             return EXPR_TYPE_DOUBLE;
         } else if(ct == CAST_BIGINT) {
@@ -403,11 +623,24 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_PUSH_CONST_IDX, idx, 0);
             } else {
                 /* 非字面量：先识别成原来的类型，再转换 */
+                CastKind child_ct = c_expr_cast_type(c, child);
+                if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
+                    /* 已是 bigint：透传，零转换（跳过 FROM_STRING） */
+                    return EXPR_TYPE_PTR;
+                }
                 if(child_type == EXPR_TYPE_INT) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
                 } else if(child_type == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_NONE) {
+                    /* 动态 Value（VALUE 栈）→ 字符串（PTR 栈）出箱，防止 FROM_STRING 弹空栈 */
+                    emit(c, OPC_CAST_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
+                    emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BITDECIMAL) {
+                    emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
                 }
+                /* PTR(string)：保持字符串形式，直接 FROM_STRING */
             }
             emit(c, OPC_BIGINT_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
@@ -436,11 +669,24 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_PUSH_CONST_IDX, idx, 0);
             } else {
                 /* 其他表达式：先识别成原来的类型，再转换 */
+                CastKind child_ct = c_expr_cast_type(c, child);
+                if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
+                    /* 已是 decimal：透传，零转换（跳过 FROM_STRING） */
+                    return EXPR_TYPE_PTR;
+                }
                 if(child_type == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
                 } else if(child_type == EXPR_TYPE_INT) {
                     emit(c, OPC_INT64_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_NONE) {
+                    /* 动态 Value（VALUE 栈）→ 字符串（PTR 栈）出箱，防止 FROM_STRING 弹空栈 */
+                    emit(c, OPC_CAST_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BITDECIMAL) {
+                    emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
                 }
+                /* PTR(string)：保持字符串形式，直接 FROM_STRING */
             }
             emit(c, OPC_DECIMAL_FROM_STRING, 0, 0);
             return EXPR_TYPE_PTR;
@@ -476,6 +722,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 } else if(child_type == EXPR_TYPE_DOUBLE) {
                     emit(c, OPC_BITDECIMAL_FROM_DOUBLE, 0, 0);
                     return EXPR_TYPE_PTR;
+                } else if(child_type == EXPR_TYPE_NONE) {
+                    /* 动态 Value（VALUE 栈）→ 字符串（PTR 栈）出箱，防止 FROM_STRING 弹空栈 */
+                    emit(c, OPC_CAST_STRING, 0, 0);
+                } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BITDECIMAL) {
+                    /* 已是 bitdecimal：透传，零转换 */
+                    return EXPR_TYPE_PTR;
                 } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BIGINT) {
                     emit(c, OPC_BIGINT_TO_STRING, 0, 0);
                 } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
@@ -493,6 +745,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_INT64_TO_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_NONE) {
+                /* 动态 Value（VALUE 栈）→ 字符串（PTR 栈）出箱，防止 STORE 弹空栈 */
+                emit(c, OPC_CAST_STRING, 0, 0);
             }
             return EXPR_TYPE_PTR;
         }
@@ -500,42 +755,13 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_CALL: {
-        /* 函数调用：识别内置函数 type() */
+        /* 函数调用：用户函数优先（允许同名覆盖内置），未命中走内置静态表，
+         * 最后兜底函数值变量的动态调用 */
         const char* func_name = node->u.call.name;
         AstNode* args = node->u.call.args;
-        int argc = 0;
-        /* 计算参数个数 */
-        AstNode* p = args;
-        while(p) {
-            argc++;
-            if(p->type == AST_SEQ) {
-                p = p->u.seq.second;
-            } else {
-                break;
-            }
-        }
-        /* 识别内置函数 */
-        if(strcmp(func_name, "type") == 0 && argc == 1) {
-            /* type(x)：运行时求值（下标取值/typed array 等动态情形编译期无法确定），
-             * 参数编译到 VALUE 栈，BUILTIN_TYPE 返回类型名字符串 Value */
-            AstNode* arg = args;
-            if(args && args->type == AST_SEQ) {
-                arg = args->u.seq.first;
-            }
-            c_expr_to_value(c, arg);
-            emit(c, OPC_BUILTIN, BUILTIN_TYPE, 1);
-            return EXPR_TYPE_NONE;
-        }
+
         /* 用户自定义函数：查函数表 + AST 表 */
         {
-            /* 内置函数 len(x)：数组/字符串长度，返回 int Value */
-            if(strcmp(func_name, "len") == 0 && argc == 1) {
-                AstNode* arg = args;
-                if(args && args->type == AST_SEQ) arg = args->u.seq.first;
-                c_expr_to_value(c, arg);
-                emit(c, OPC_BUILTIN, BUILTIN_LEN, 1);
-                return EXPR_TYPE_NONE;
-            }
             BytecodeFunc* callee = ir_func_table_lookup(func_name);
             AstNode* def_ast = func_ast_lookup(func_name);
             /* 方法内裸名自递归：扁平名查不到时匹配当前方法自身 */
@@ -547,29 +773,42 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(callee && def_ast) {
                 return compile_user_call(c, callee, def_ast, args, 1, NULL);
             }
-            /* 动态调用：func_name 是持有函数值的变量 */
-            {
-                /* 编译 callee 表达式（变量名 → 函数值） */
-                AstNode callee_var;
-                memset(&callee_var, 0, sizeof(callee_var));
-                callee_var.type = AST_VAR;
-                callee_var.u.varname = func_name;
-                c_expr(c, &callee_var);
-                /* 收集并编译实参，全部转 VALUE */
-                int dargc = 0, dacap = 0;
-                AstNode** dargv = NULL;
-                collect_call_args(args, &dargv, &dargc, &dacap);
-                for(int i = 0; i < dargc; i++) {
-                    c_expr_to_value(c, dargv[i]);
-                }
-                free(dargv);
-                emit(c, OPC_CALLV, 0, dargc);
-                return EXPR_TYPE_NONE;
-            }
         }
-        /* 未识别函数 */
-        fprintf(stderr, "IR: unknown function %s\n", func_name);
-        return EXPR_TYPE_NONE;
+
+        /* 内置函数：编译期静态表解析为 BuiltinId（无运行时字符串查表），
+         * 实参全部转 VALUE，OPC_BUILTIN 弹 argc 个（栈顶为最后一个）压返回值 */
+        int bid = builtin_id_by_name(func_name);
+        if(bid >= 0) {
+            int argc = 0, acap = 0;
+            AstNode** argv = NULL;
+            collect_call_args(args, &argv, &argc, &acap);
+            for(int i = 0; i < argc; i++) {
+                c_expr_to_value(c, argv[i]);
+            }
+            free(argv);
+            emit(c, OPC_BUILTIN, bid, argc);
+            return EXPR_TYPE_NONE;
+        }
+
+        /* 动态调用：func_name 是持有函数值的变量 */
+        {
+            /* 编译 callee 表达式（变量名 → 函数值） */
+            AstNode callee_var;
+            memset(&callee_var, 0, sizeof(callee_var));
+            callee_var.type = AST_VAR;
+            callee_var.u.varname = func_name;
+            c_expr(c, &callee_var);
+            /* 收集并编译实参，全部转 VALUE */
+            int dargc = 0, dacap = 0;
+            AstNode** dargv = NULL;
+            collect_call_args(args, &dargv, &dargc, &dacap);
+            for(int i = 0; i < dargc; i++) {
+                c_expr_to_value(c, dargv[i]);
+            }
+            free(dargv);
+            emit(c, OPC_CALLV, 0, dargc);
+            return EXPR_TYPE_NONE;
+        }
     }
 
     case AST_INDEX: {
@@ -602,6 +841,20 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     return (cls == 1) ? EXPR_TYPE_INT :
                            (cls == 2) ? EXPR_TYPE_DOUBLE : EXPR_TYPE_PTR;
                 }
+            }
+        }
+        /* 属性形式 x.len：idx 是字符串字面量 "len" 且 receiver 非用户自定义类型
+         * → 内置 BUILTIN_LEN（数组/字典/类型化数组/字符串通用，运行时零转换）。
+         * 用户类型的 len 字段访问仍走下方动态 INDEX_GET */
+        if(node->u.index.idx->type == AST_STRING &&
+           strcmp(node->u.index.idx->u.sval, "len") == 0) {
+            char* ot = c_expr_owner_type(c, node->u.index.arr);
+            int is_user = ot && type_lookup(ot);
+            free(ot);
+            if(!is_user) {
+                c_expr_to_value(c, node->u.index.arr);
+                emit(c, OPC_CALL_BUILTIN_METHOD, BUILTIN_LEN, 0);
+                return EXPR_TYPE_NONE;
             }
         }
         /* 默认：动态 INDEX_GET（VAL_STRUCT_PTR 在 vm_exec_index_get 中走 lumyr_field_get） */
@@ -1178,30 +1431,30 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 static const char* c_expr_type_name(Ctx* c, AstNode* node) {
     if(!node) return "null";
 
-    /* 字面量 */
+    /* 字面量（4 栈归一：bool/char 走 INT64 栈 → int） */
     if(node->type == AST_INT) return "int";
     if(node->type == AST_NUM) return "double";
-    if(node->type == AST_BOOL) return "bool";
-    if(node->type == AST_CHAR) return "char";
+    if(node->type == AST_BOOL) return "int";
+    if(node->type == AST_CHAR) return "int";
     if(node->type == AST_STRING) return "string";
     if(node->type == AST_NONE) return "null";
 
-    /* 类型标注 <int>expr → 返回标注的类型 */
+    /* 类型标注 <type>expr → 标注类型的规范名 */
     if(node->type == AST_TYPE_ANNOTATION) {
-        return castkind_to_name(node->u.type_annotation.cast_type);
+        return castkind_canonical_name(node->u.type_annotation.cast_type);
     }
 
-    /* 强转 (int)expr → 返回强转的类型 */
+    /* 强转 (type)expr → 强转类型的规范名 */
     if(node->type == AST_CAST) {
-        return castkind_to_name(node->u.cast.cast_type);
+        return castkind_canonical_name(node->u.cast.cast_type);
     }
 
-    /* 变量：查符号表，返回变量的精确类型 */
+    /* 变量：查符号表，返回变量类型的规范名 */
     if(node->type == AST_VAR) {
         int bf_idx = bf_sym(c->fn, node->u.varname);
         if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) {
             CastKind ck = (CastKind)c->fn->var_type_tags[bf_idx];
-            return castkind_to_name(ck);
+            return castkind_canonical_name(ck);
         }
         return "unknown";
     }
@@ -1842,40 +2095,59 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
     /* 1. 推断 receiver 类型名 + 定位 TypeDef */
     char* owner = c_expr_owner_type(c, recv);
     TypeDef* td = owner ? type_lookup(owner) : NULL;
-    if(!owner || !td) {
-        /* 无法确定类型：无静态签名，退化为动态调用（recv 与实参全 VALUE，CALLV）。
-         * 正常全类型标注路径不会进入；保留动态 map 函数值等场景 */
-        fprintf(stderr, "IR: 无法确定方法 \"%s\" 的接收者类型，退化为动态调用\n", mname);
+
+    /* 2. 用户类型方法（同名覆盖内置：用户方法优先，沿继承链解析 → 多态） */
+    if(td) {
+        AstNode* mdef_ast = type_find_method_ast(owner, mname);
+        BytecodeFunc* def_fn = NULL;
+        if(td->runtime_info) {
+            RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
+            if(rf && interp_func_is_payload(rf)) {
+                InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+                def_fn = pl->bytecode;
+            }
+        }
+        if(mdef_ast && def_fn) {
+            /* 复用统一参数绑定路径（method_recv=recv → OPC_CALL_METHOD，self 槽自动占位） */
+            ExprType ret = compile_user_call(c, def_fn, mdef_ast, margs, keep_result, recv);
+            free(owner);
+            return ret;
+        }
+    }
+
+    /* 3. 内置方法（字符串/数组/字典/高阶/AI 线代/加密编码等）：
+     * 编译期静态表解析 BuiltinId（无运行时字符串查表），receiver 与实参全部转 VALUE，
+     * OPC_CALL_BUILTIN_METHOD 弹 argc 个实参再弹 receiver，按运行时类型分派 */
+    int bid = builtin_id_by_name(mname);
+    if(bid >= 0) {
         c_expr_to_value(c, recv);
         AstNode** av = NULL; int ac = 0, acp = 0;
         collect_call_args(margs, &av, &ac, &acp);
         for(int i = 0; i < ac; i++) c_expr_to_value(c, av[i]);
         free(av);
+        free(owner);
+        emit(c, OPC_CALL_BUILTIN_METHOD, bid, ac);
+        if(!keep_result) emit(c, OPC_POP, 0, 0);
+        return EXPR_TYPE_NONE;
+    }
+
+    /* 4. 无法确定类型：无静态签名，退化为动态调用（recv 与实参全 VALUE，CALLV）。
+     * 正常全类型标注路径不会进入；保留动态 map 函数值等场景 */
+    if(!owner || !td) {
+        c_expr_to_value(c, recv);
+        AstNode** av = NULL; int ac = 0, acp = 0;
+        collect_call_args(margs, &av, &ac, &acp);
+        for(int i = 0; i < ac; i++) c_expr_to_value(c, av[i]);
+        free(av);
+        free(owner);
         emit(c, OPC_CALLV, 0, ac);
-        free(owner);
         return EXPR_TYPE_NONE;
     }
 
-    /* 2. 方法 AST（形参签名，沿继承链）；静态定义处 BytecodeFunc（继承时=父类实现） */
-    AstNode* mdef_ast = type_find_method_ast(owner, mname);
-    BytecodeFunc* def_fn = NULL;
-    if(td->runtime_info) {
-        RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
-        if(rf && interp_func_is_payload(rf)) {
-            InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
-            def_fn = pl->bytecode;
-        }
-    }
-    if(!mdef_ast || !def_fn) {
-        fprintf(stderr, "IR: 类型 \"%s\" 没有方法 \"%s\"\n", owner, mname);
-        free(owner);
-        return EXPR_TYPE_NONE;
-    }
-
-    /* 3. 复用统一参数绑定路径（method_recv=recv → OPC_CALL_METHOD，self 槽自动占位） */
-    ExprType ret = compile_user_call(c, def_fn, mdef_ast, margs, keep_result, recv);
+    /* 5. 用户类型既无该方法也非内置 */
+    fprintf(stderr, "IR: 类型 \"%s\" 没有方法 \"%s\"\n", owner, mname);
     free(owner);
-    return ret;
+    return EXPR_TYPE_NONE;
 }
 
 void c_stmt(Ctx* c, AstNode* node) {
@@ -2467,9 +2739,11 @@ static void ctx_register_param(Ctx* c, const char* name, ExprType t) {
         c->var_names = realloc(c->var_names, c->var_cap * sizeof(char*));
         c->var_types = realloc(c->var_types, c->var_cap * sizeof(ExprType));
     }
-    c->var_names[c->var_cnt] = strdup(name);
-    c->var_types[c->var_cnt] = t;
-    c->var_cnt++;
+    int idx = c->var_cnt++;
+    c->var_names[idx] = strdup(name);
+    c->var_types[idx] = t;
+    /* 形参直接写 var_names（不经 c_add_var），须同步哈希 */
+    symhash_insert(&c->var_idx, c->var_names, c->var_cnt, idx);
 }
 
 /* 释放编译上下文动态表（函数编译在 parse 期多次发生，避免 strdup 泄漏） */
@@ -2477,6 +2751,7 @@ static void ctx_cleanup(Ctx* c) {
     for(int i = 0; i < c->var_cnt; i++) free(c->var_names[i]);
     free(c->var_names);
     free(c->var_types);
+    symhash_reset(&c->var_idx);
     c->var_names = NULL; c->var_types = NULL;
     c->var_cnt = c->var_cap = 0;
 }

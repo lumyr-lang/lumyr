@@ -1625,8 +1625,8 @@ postfix_expr
               strcmp($3, "delete") == 0 || strcmp($3, "head") == 0 || strcmp($3, "patch") == 0)) {
               $$ = L(ast_call($3, margs));
           } else if(strcmp($3, "get") == 0) {
-              /* arr.get(i)：数组/容器安全取（内部名 arr_get，与 requests.get 区分） */
-              $$ = L(ast_call("arr_get", margs ? ast_seq_front(margs, recv) : recv));
+              /* x.get(k)：统一走方法分派（内置 BUILTIN_GET：数组/字典安全取，越界/缺键 → null） */
+              $$ = L(ast_method_call(recv, $3, margs));
           } else if(recv->type == AST_VAR && lm_is_module_alias(recv->u.varname)) {
               /* 模块命名空间 m.add(1,2) -> m["add"](1,2)：map 取值后动态调用，不把接收者当前参 */
               AstNode* fn = L(ast_index(recv, ast_string(strdup($3))));

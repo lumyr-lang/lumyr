@@ -140,7 +140,7 @@ print("RESULT_23:" + type(r23));
 
 /* 24: bool + char */
 a24 = <bool>true;
-b24 = <char>D;
+b24 = <char>'D';
 r24 = a24 + b24;
 print("RESULT_24:" + type(r24));
 
@@ -763,7 +763,7 @@ r127 = a127 / b127;
 print("RESULT_127:" + type(r127));
 
 /* 128: char + int */
-a128 = <char>L;
+a128 = <char>'L';
 b128 = <int>29;
 r128 = a128 + b128;
 print("RESULT_128:" + type(r128));
@@ -782,7 +782,7 @@ print("RESULT_130:" + type(r130));
 
 /* 131: int32 + char */
 a131 = <int32>578;
-b131 = <char>G;
+b131 = <char>'G';
 r131 = a131 + b131;
 print("RESULT_131:" + type(r131));
 
@@ -865,7 +865,7 @@ r144 = a144 / b144;
 print("RESULT_144:" + type(r144));
 
 /* 145: char - uint8 */
-a145 = <char>P;
+a145 = <char>'P';
 b145 = <uint8>23;
 r145 = a145 - b145;
 print("RESULT_145:" + type(r145));
@@ -890,7 +890,7 @@ print("RESULT_148:" + type(r148));
 
 /* 149: byte / char */
 a149 = <byte>459;
-b149 = <char>Z;
+b149 = <char>'Z';
 r149 = a149 / b149;
 print("RESULT_149:" + type(r149));
 
@@ -1022,7 +1022,7 @@ print("RESULT_170:" + type(r170));
 
 /* 171: string * char */
 a171 = <string>"str170";
-b171 = <char>B;
+b171 = <char>'B';
 r171 = a171 * b171;
 print("RESULT_171:" + type(r171));
 
@@ -1093,7 +1093,7 @@ r182 = a182 + b182;
 print("RESULT_182:" + type(r182));
 
 /* 183: char / bool */
-a183 = <char>I;
+a183 = <char>'I';
 b183 = <bool>true;
 r183 = a183 / b183;
 print("RESULT_183:" + type(r183));
@@ -1207,7 +1207,7 @@ r201 = a201 / b201;
 print("RESULT_201:" + type(r201));
 
 /* 202: char * uint16 */
-a202 = <char>R;
+a202 = <char>'R';
 b202 = <uint16>70;
 r202 = a202 * b202;
 print("RESULT_202:" + type(r202));
@@ -1267,7 +1267,7 @@ r211 = a211 / b211;
 print("RESULT_211:" + type(r211));
 
 /* 212: char + float */
-a212 = <char>T;
+a212 = <char>'T';
 b212 = <float>4.353;
 r212 = a212 + b212;
 print("RESULT_212:" + type(r212));
@@ -1393,7 +1393,7 @@ r232 = a232 * b232;
 print("RESULT_232:" + type(r232));
 
 /* 233: char * ushort */
-a233 = <char>Z;
+a233 = <char>'Z';
 b233 = <ushort>60;
 r233 = a233 * b233;
 print("RESULT_233:" + type(r233));
@@ -1537,7 +1537,7 @@ r256 = a256 + b256;
 print("RESULT_256:" + type(r256));
 
 /* 257: char * ulong */
-a257 = <char>Q;
+a257 = <char>'Q';
 b257 = <ulong>76;
 r257 = a257 * b257;
 print("RESULT_257:" + type(r257));
@@ -1556,12 +1556,12 @@ print("RESULT_259:" + type(r259));
 
 /* 260: short / char */
 a260 = <short>703;
-b260 = <char>D;
+b260 = <char>'D';
 r260 = a260 / b260;
 print("RESULT_260:" + type(r260));
 
 /* 261: char + ulong */
-a261 = <char>C;
+a261 = <char>'C';
 b261 = <ulong>42;
 r261 = a261 + b261;
 print("RESULT_261:" + type(r261));
@@ -2048,7 +2048,7 @@ print("RESULT_341:" + type(r341));
 
 /* 342: ushort - char */
 a342 = <ushort>723;
-b342 = <char>P;
+b342 = <char>'P';
 r342 = a342 - b342;
 print("RESULT_342:" + type(r342));
 
@@ -2083,7 +2083,7 @@ r347 = a347 / b347;
 print("RESULT_347:" + type(r347));
 
 /* 348: char + string */
-a348 = <char>U;
+a348 = <char>'U';
 b348 = <string>"val347";
 r348 = a348 + b348;
 print("RESULT_348:" + type(r348));
@@ -2137,7 +2137,7 @@ r356 = a356 - b356;
 print("RESULT_356:" + type(r356));
 
 /* 357: char - bigint */
-a357 = <char>Z;
+a357 = <char>'Z';
 b357 = <bigint>"1581999718801191663";
 r357 = a357 - b357;
 print("RESULT_357:" + type(r357));
@@ -2275,7 +2275,7 @@ r379 = a379 * b379;
 print("RESULT_379:" + type(r379));
 
 /* 380: char + long */
-a380 = <char>E;
+a380 = <char>'E';
 b380 = <long>10;
 r380 = a380 + b380;
 print("RESULT_380:" + type(r380));
@@ -2306,7 +2306,7 @@ print("RESULT_384:" + type(r384));
 
 /* 385: byte + char */
 a385 = <byte>370;
-b385 = <char>R;
+b385 = <char>'R';
 r385 = a385 + b385;
 print("RESULT_385:" + type(r385));
 
@@ -2323,7 +2323,7 @@ r387 = a387 + b387;
 print("RESULT_387:" + type(r387));
 
 /* 388: char / bool */
-a388 = <char>Y;
+a388 = <char>'Y';
 b388 = <bool>false;
 r388 = a388 / b388;
 print("RESULT_388:" + type(r388));
@@ -2473,7 +2473,7 @@ r412 = a412 * b412;
 print("RESULT_412:" + type(r412));
 
 /* 413: char / string */
-a413 = <char>J;
+a413 = <char>'J';
 b413 = <string>"val412";
 r413 = a413 / b413;
 print("RESULT_413:" + type(r413));
@@ -2594,7 +2594,7 @@ print("RESULT_432:" + type(r432));
 
 /* 433: decimal / char */
 a433 = <decimal>"322.277";
-b433 = <char>O;
+b433 = <char>'O';
 r433 = a433 / b433;
 print("RESULT_433:" + type(r433));
 
@@ -2623,7 +2623,7 @@ r437 = a437 - b437;
 print("RESULT_437:" + type(r437));
 
 /* 438: char * uint16 */
-a438 = <char>J;
+a438 = <char>'J';
 b438 = <uint16>74;
 r438 = a438 * b438;
 print("RESULT_438:" + type(r438));
@@ -2672,7 +2672,7 @@ print("RESULT_445:" + type(r445));
 
 /* 446: uint8 + char */
 a446 = <uint8>99;
-b446 = <char>E;
+b446 = <char>'E';
 r446 = a446 + b446;
 print("RESULT_446:" + type(r446));
 
@@ -2683,8 +2683,8 @@ r447 = a447 - b447;
 print("RESULT_447:" + type(r447));
 
 /* 448: char - char */
-a448 = <char>Y;
-b448 = <char>J;
+a448 = <char>'Y';
+b448 = <char>'J';
 r448 = a448 - b448;
 print("RESULT_448:" + type(r448));
 
@@ -2707,7 +2707,7 @@ r451 = a451 + b451;
 print("RESULT_451:" + type(r451));
 
 /* 452: char * int64 */
-a452 = <char>B;
+a452 = <char>'B';
 b452 = <int64>2;
 r452 = a452 * b452;
 print("RESULT_452:" + type(r452));
@@ -2798,7 +2798,7 @@ print("RESULT_466:" + type(r466));
 
 /* 467: int32 - char */
 a467 = <int32>466;
-b467 = <char>X;
+b467 = <char>'X';
 r467 = a467 - b467;
 print("RESULT_467:" + type(r467));
 
@@ -2809,7 +2809,7 @@ r468 = a468 / b468;
 print("RESULT_468:" + type(r468));
 
 /* 469: char - float */
-a469 = <char>Y;
+a469 = <char>'Y';
 b469 = <float>13.126;
 r469 = a469 - b469;
 print("RESULT_469:" + type(r469));
@@ -2840,7 +2840,7 @@ print("RESULT_473:" + type(r473));
 
 /* 474: double + char */
 a474 = <double>89.99;
-b474 = <char>O;
+b474 = <char>'O';
 r474 = a474 + b474;
 print("RESULT_474:" + type(r474));
 
@@ -2875,7 +2875,7 @@ r479 = a479 + b479;
 print("RESULT_479:" + type(r479));
 
 /* 480: char * short */
-a480 = <char>N;
+a480 = <char>'N';
 b480 = <short>99;
 r480 = a480 * b480;
 print("RESULT_480:" + type(r480));
@@ -2977,7 +2977,7 @@ r496 = a496 - b496;
 print("RESULT_496:" + type(r496));
 
 /* 497: char * short */
-a497 = <char>U;
+a497 = <char>'U';
 b497 = <short>49;
 r497 = a497 * b497;
 print("RESULT_497:" + type(r497));
@@ -3044,7 +3044,7 @@ print("RESULT_507:" + type(r507));
 
 /* 508: int16 - char */
 a508 = <int16>619;
-b508 = <char>W;
+b508 = <char>'W';
 r508 = a508 - b508;
 print("RESULT_508:" + type(r508));
 
@@ -3104,7 +3104,7 @@ print("RESULT_517:" + type(r517));
 
 /* 518: bigint / char */
 a518 = <bigint>"7758630910747302966";
-b518 = <char>Z;
+b518 = <char>'Z';
 r518 = a518 / b518;
 print("RESULT_518:" + type(r518));
 
@@ -3332,7 +3332,7 @@ print("RESULT_555:" + type(r555));
 
 /* 556: uint - char */
 a556 = <uint>65;
-b556 = <char>F;
+b556 = <char>'F';
 r556 = a556 - b556;
 print("RESULT_556:" + type(r556));
 
@@ -3349,7 +3349,7 @@ r558 = a558 * b558;
 print("RESULT_558:" + type(r558));
 
 /* 559: char - string */
-a559 = <char>O;
+a559 = <char>'O';
 b559 = <string>"val558";
 r559 = a559 - b559;
 print("RESULT_559:" + type(r559));
@@ -3392,7 +3392,7 @@ print("RESULT_565:" + type(r565));
 
 /* 566: bigint - char */
 a566 = <bigint>"4468497959084967895";
-b566 = <char>I;
+b566 = <char>'I';
 r566 = a566 - b566;
 print("RESULT_566:" + type(r566));
 
@@ -3475,7 +3475,7 @@ r579 = a579 - b579;
 print("RESULT_579:" + type(r579));
 
 /* 580: char * int16 */
-a580 = <char>N;
+a580 = <char>'N';
 b580 = <int16>15;
 r580 = a580 * b580;
 print("RESULT_580:" + type(r580));
@@ -3488,7 +3488,7 @@ print("RESULT_581:" + type(r581));
 
 /* 582: bool * char */
 a582 = <bool>false;
-b582 = <char>D;
+b582 = <char>'D';
 r582 = a582 * b582;
 print("RESULT_582:" + type(r582));
 
@@ -3553,7 +3553,7 @@ r592 = a592 - b592;
 print("RESULT_592:" + type(r592));
 
 /* 593: char * bool */
-a593 = <char>T;
+a593 = <char>'T';
 b593 = <bool>false;
 r593 = a593 * b593;
 print("RESULT_593:" + type(r593));
@@ -3644,7 +3644,7 @@ print("RESULT_607:" + type(r607));
 
 /* 608: double + char */
 a608 = <double>57.699;
-b608 = <char>I;
+b608 = <char>'I';
 r608 = a608 + b608;
 print("RESULT_608:" + type(r608));
 
@@ -3757,7 +3757,7 @@ r626 = a626 / b626;
 print("RESULT_626:" + type(r626));
 
 /* 627: char * uint */
-a627 = <char>J;
+a627 = <char>'J';
 b627 = <uint>44;
 r627 = a627 * b627;
 print("RESULT_627:" + type(r627));
@@ -3901,7 +3901,7 @@ r650 = a650 / b650;
 print("RESULT_650:" + type(r650));
 
 /* 651: char + bigint */
-a651 = <char>Q;
+a651 = <char>'Q';
 b651 = <bigint>"9613932229396065943";
 r651 = a651 + b651;
 print("RESULT_651:" + type(r651));
@@ -4004,7 +4004,7 @@ print("RESULT_667:" + type(r667));
 
 /* 668: short - char */
 a668 = <short>162;
-b668 = <char>I;
+b668 = <char>'I';
 r668 = a668 - b668;
 print("RESULT_668:" + type(r668));
 
@@ -4214,7 +4214,7 @@ print("RESULT_702:" + type(r702));
 
 /* 703: uint32 + char */
 a703 = <uint32>392;
-b703 = <char>V;
+b703 = <char>'V';
 r703 = a703 + b703;
 print("RESULT_703:" + type(r703));
 
@@ -4237,7 +4237,7 @@ r706 = a706 - b706;
 print("RESULT_706:" + type(r706));
 
 /* 707: char / uint64 */
-a707 = <char>B;
+a707 = <char>'B';
 b707 = <uint64>12;
 r707 = a707 / b707;
 print("RESULT_707:" + type(r707));
@@ -4274,7 +4274,7 @@ print("RESULT_712:" + type(r712));
 
 /* 713: short * char */
 a713 = <short>599;
-b713 = <char>H;
+b713 = <char>'H';
 r713 = a713 * b713;
 print("RESULT_713:" + type(r713));
 
@@ -4309,7 +4309,7 @@ r718 = a718 - b718;
 print("RESULT_718:" + type(r718));
 
 /* 719: char * float */
-a719 = <char>F;
+a719 = <char>'F';
 b719 = <float>25.031;
 r719 = a719 * b719;
 print("RESULT_719:" + type(r719));
@@ -4321,7 +4321,7 @@ r720 = a720 - b720;
 print("RESULT_720:" + type(r720));
 
 /* 721: char * int */
-a721 = <char>T;
+a721 = <char>'T';
 b721 = <int>26;
 r721 = a721 * b721;
 print("RESULT_721:" + type(r721));
@@ -4357,7 +4357,7 @@ r726 = a726 / b726;
 print("RESULT_726:" + type(r726));
 
 /* 727: char * bigint */
-a727 = <char>F;
+a727 = <char>'F';
 b727 = <bigint>"9935076148309258378";
 r727 = a727 * b727;
 print("RESULT_727:" + type(r727));
@@ -4424,7 +4424,7 @@ print("RESULT_737:" + type(r737));
 
 /* 738: uint64 / char */
 a738 = <uint64>360;
-b738 = <char>R;
+b738 = <char>'R';
 r738 = a738 / b738;
 print("RESULT_738:" + type(r738));
 
@@ -4459,7 +4459,7 @@ r743 = a743 + b743;
 print("RESULT_743:" + type(r743));
 
 /* 744: char / int */
-a744 = <char>U;
+a744 = <char>'U';
 b744 = <int>22;
 r744 = a744 / b744;
 print("RESULT_744:" + type(r744));
@@ -4508,13 +4508,13 @@ print("RESULT_751:" + type(r751));
 
 /* 752: int8 + char */
 a752 = <int8>101;
-b752 = <char>M;
+b752 = <char>'M';
 r752 = a752 + b752;
 print("RESULT_752:" + type(r752));
 
 /* 753: char * char */
-a753 = <char>C;
-b753 = <char>U;
+a753 = <char>'C';
+b753 = <char>'U';
 r753 = a753 * b753;
 print("RESULT_753:" + type(r753));
 
@@ -4561,7 +4561,7 @@ r760 = a760 / b760;
 print("RESULT_760:" + type(r760));
 
 /* 761: char + ushort */
-a761 = <char>M;
+a761 = <char>'M';
 b761 = <ushort>5;
 r761 = a761 + b761;
 print("RESULT_761:" + type(r761));
@@ -4633,7 +4633,7 @@ r772 = a772 / b772;
 print("RESULT_772:" + type(r772));
 
 /* 773: char - short */
-a773 = <char>I;
+a773 = <char>'I';
 b773 = <short>19;
 r773 = a773 - b773;
 print("RESULT_773:" + type(r773));
@@ -4651,7 +4651,7 @@ r775 = a775 * b775;
 print("RESULT_775:" + type(r775));
 
 /* 776: char * uint */
-a776 = <char>A;
+a776 = <char>'A';
 b776 = <uint>44;
 r776 = a776 * b776;
 print("RESULT_776:" + type(r776));
@@ -4681,7 +4681,7 @@ r780 = a780 - b780;
 print("RESULT_780:" + type(r780));
 
 /* 781: char * bool */
-a781 = <char>B;
+a781 = <char>'B';
 b781 = <bool>true;
 r781 = a781 * b781;
 print("RESULT_781:" + type(r781));
@@ -4718,7 +4718,7 @@ print("RESULT_786:" + type(r786));
 
 /* 787: uint16 / char */
 a787 = <uint16>984;
-b787 = <char>P;
+b787 = <char>'P';
 r787 = a787 / b787;
 print("RESULT_787:" + type(r787));
 
@@ -4784,7 +4784,7 @@ print("RESULT_797:" + type(r797));
 
 /* 798: int16 + char */
 a798 = <int16>284;
-b798 = <char>U;
+b798 = <char>'U';
 r798 = a798 + b798;
 print("RESULT_798:" + type(r798));
 
@@ -4910,7 +4910,7 @@ print("RESULT_818:" + type(r818));
 
 /* 819: uint64 / char */
 a819 = <uint64>5;
-b819 = <char>B;
+b819 = <char>'B';
 r819 = a819 / b819;
 print("RESULT_819:" + type(r819));
 
@@ -4994,7 +4994,7 @@ print("RESULT_832:" + type(r832));
 
 /* 833: uint - char */
 a833 = <uint>211;
-b833 = <char>W;
+b833 = <char>'W';
 r833 = a833 - b833;
 print("RESULT_833:" + type(r833));
 
@@ -5017,7 +5017,7 @@ r836 = a836 + b836;
 print("RESULT_836:" + type(r836));
 
 /* 837: char - long */
-a837 = <char>Y;
+a837 = <char>'Y';
 b837 = <long>34;
 r837 = a837 - b837;
 print("RESULT_837:" + type(r837));
@@ -5035,7 +5035,7 @@ r839 = a839 / b839;
 print("RESULT_839:" + type(r839));
 
 /* 840: char - uint8 */
-a840 = <char>A;
+a840 = <char>'A';
 b840 = <uint8>43;
 r840 = a840 - b840;
 print("RESULT_840:" + type(r840));
@@ -5107,7 +5107,7 @@ r851 = a851 + b851;
 print("RESULT_851:" + type(r851));
 
 /* 852: char / double */
-a852 = <char>F;
+a852 = <char>'F';
 b852 = <double>30.955;
 r852 = a852 / b852;
 print("RESULT_852:" + type(r852));
@@ -5120,7 +5120,7 @@ print("RESULT_853:" + type(r853));
 
 /* 854: int32 / char */
 a854 = <int32>116;
-b854 = <char>N;
+b854 = <char>'N';
 r854 = a854 / b854;
 print("RESULT_854:" + type(r854));
 
@@ -5143,7 +5143,7 @@ r857 = a857 + b857;
 print("RESULT_857:" + type(r857));
 
 /* 858: char / uint16 */
-a858 = <char>E;
+a858 = <char>'E';
 b858 = <uint16>79;
 r858 = a858 / b858;
 print("RESULT_858:" + type(r858));
@@ -5155,7 +5155,7 @@ r859 = a859 - b859;
 print("RESULT_859:" + type(r859));
 
 /* 860: char + int64 */
-a860 = <char>Y;
+a860 = <char>'Y';
 b860 = <int64>63;
 r860 = a860 + b860;
 print("RESULT_860:" + type(r860));
@@ -5180,7 +5180,7 @@ print("RESULT_863:" + type(r863));
 
 /* 864: int8 / char */
 a864 = <int8>16;
-b864 = <char>P;
+b864 = <char>'P';
 r864 = a864 / b864;
 print("RESULT_864:" + type(r864));
 
@@ -5240,7 +5240,7 @@ print("RESULT_873:" + type(r873));
 
 /* 874: int64 - char */
 a874 = <int64>842;
-b874 = <char>W;
+b874 = <char>'W';
 r874 = a874 - b874;
 print("RESULT_874:" + type(r874));
 
@@ -5270,7 +5270,7 @@ print("RESULT_878:" + type(r878));
 
 /* 879: int32 + char */
 a879 = <int32>544;
-b879 = <char>X;
+b879 = <char>'X';
 r879 = a879 + b879;
 print("RESULT_879:" + type(r879));
 
@@ -5461,7 +5461,7 @@ r910 = a910 - b910;
 print("RESULT_910:" + type(r910));
 
 /* 911: char + float */
-a911 = <char>D;
+a911 = <char>'D';
 b911 = <float>33.778;
 r911 = a911 + b911;
 print("RESULT_911:" + type(r911));
@@ -5629,7 +5629,7 @@ r938 = a938 * b938;
 print("RESULT_938:" + type(r938));
 
 /* 939: char * uint8 */
-a939 = <char>E;
+a939 = <char>'E';
 b939 = <uint8>42;
 r939 = a939 * b939;
 print("RESULT_939:" + type(r939));
@@ -5642,7 +5642,7 @@ print("RESULT_940:" + type(r940));
 
 /* 941: uint8 / char */
 a941 = <uint8>79;
-b941 = <char>V;
+b941 = <char>'V';
 r941 = a941 / b941;
 print("RESULT_941:" + type(r941));
 
@@ -5707,7 +5707,7 @@ r951 = a951 * b951;
 print("RESULT_951:" + type(r951));
 
 /* 952: char - bigint */
-a952 = <char>L;
+a952 = <char>'L';
 b952 = <bigint>"3059640238358840721";
 r952 = a952 - b952;
 print("RESULT_952:" + type(r952));
@@ -5839,7 +5839,7 @@ r973 = a973 + b973;
 print("RESULT_973:" + type(r973));
 
 /* 974: char - int64 */
-a974 = <char>N;
+a974 = <char>'N';
 b974 = <int64>77;
 r974 = a974 - b974;
 print("RESULT_974:" + type(r974));
@@ -5876,7 +5876,7 @@ print("RESULT_979:" + type(r979));
 
 /* 980: int64 + char */
 a980 = <int64>899;
-b980 = <char>Z;
+b980 = <char>'Z';
 r980 = a980 + b980;
 print("RESULT_980:" + type(r980));
 
@@ -5911,7 +5911,7 @@ r985 = a985 + b985;
 print("RESULT_985:" + type(r985));
 
 /* 986: char + byte */
-a986 = <char>J;
+a986 = <char>'J';
 b986 = <byte>77;
 r986 = a986 + b986;
 print("RESULT_986:" + type(r986));
@@ -5953,13 +5953,13 @@ r992 = a992 - b992;
 print("RESULT_992:" + type(r992));
 
 /* 993: char * int64 */
-a993 = <char>R;
+a993 = <char>'R';
 b993 = <int64>72;
 r993 = a993 * b993;
 print("RESULT_993:" + type(r993));
 
 /* 994: char * uint */
-a994 = <char>S;
+a994 = <char>'S';
 b994 = <uint>45;
 r994 = a994 * b994;
 print("RESULT_994:" + type(r994));
@@ -6074,7 +6074,7 @@ print("RESULT_1012:" + type(r1012));
 
 /* 1013: double - char */
 a1013 = <double>75.99;
-b1013 = <char>Y;
+b1013 = <char>'Y';
 r1013 = a1013 - b1013;
 print("RESULT_1013:" + type(r1013));
 
@@ -6086,7 +6086,7 @@ print("RESULT_1014:" + type(r1014));
 
 /* 1015: int + char */
 a1015 = <int>265;
-b1015 = <char>C;
+b1015 = <char>'C';
 r1015 = a1015 + b1015;
 print("RESULT_1015:" + type(r1015));
 
@@ -6175,7 +6175,7 @@ r1029 = a1029 + b1029;
 print("RESULT_1029:" + type(r1029));
 
 /* 1030: char + float */
-a1030 = <char>Q;
+a1030 = <char>'Q';
 b1030 = <float>18.017;
 r1030 = a1030 + b1030;
 print("RESULT_1030:" + type(r1030));
@@ -6290,7 +6290,7 @@ print("RESULT_1048:" + type(r1048));
 
 /* 1049: bool / char */
 a1049 = <bool>true;
-b1049 = <char>M;
+b1049 = <char>'M';
 r1049 = a1049 / b1049;
 print("RESULT_1049:" + type(r1049));
 
@@ -6344,7 +6344,7 @@ print("RESULT_1057:" + type(r1057));
 
 /* 1058: int8 + char */
 a1058 = <int8>99;
-b1058 = <char>M;
+b1058 = <char>'M';
 r1058 = a1058 + b1058;
 print("RESULT_1058:" + type(r1058));
 
@@ -6409,13 +6409,13 @@ r1068 = a1068 - b1068;
 print("RESULT_1068:" + type(r1068));
 
 /* 1069: char + float */
-a1069 = <char>W;
+a1069 = <char>'W';
 b1069 = <float>46.182;
 r1069 = a1069 + b1069;
 print("RESULT_1069:" + type(r1069));
 
 /* 1070: char + ushort */
-a1070 = <char>Y;
+a1070 = <char>'Y';
 b1070 = <ushort>38;
 r1070 = a1070 + b1070;
 print("RESULT_1070:" + type(r1070));
@@ -6476,7 +6476,7 @@ print("RESULT_1079:" + type(r1079));
 
 /* 1080: string - char */
 a1080 = <string>"str1079";
-b1080 = <char>K;
+b1080 = <char>'K';
 r1080 = a1080 - b1080;
 print("RESULT_1080:" + type(r1080));
 
@@ -6685,7 +6685,7 @@ r1114 = a1114 + b1114;
 print("RESULT_1114:" + type(r1114));
 
 /* 1115: char + long */
-a1115 = <char>B;
+a1115 = <char>'B';
 b1115 = <long>74;
 r1115 = a1115 + b1115;
 print("RESULT_1115:" + type(r1115));
@@ -6883,7 +6883,7 @@ r1147 = a1147 - b1147;
 print("RESULT_1147:" + type(r1147));
 
 /* 1148: char + double */
-a1148 = <char>R;
+a1148 = <char>'R';
 b1148 = <double>20.56;
 r1148 = a1148 + b1148;
 print("RESULT_1148:" + type(r1148));
@@ -6896,7 +6896,7 @@ print("RESULT_1149:" + type(r1149));
 
 /* 1150: int32 - char */
 a1150 = <int32>500;
-b1150 = <char>M;
+b1150 = <char>'M';
 r1150 = a1150 - b1150;
 print("RESULT_1150:" + type(r1150));
 
@@ -7010,7 +7010,7 @@ print("RESULT_1168:" + type(r1168));
 
 /* 1169: uint8 + char */
 a1169 = <uint8>26;
-b1169 = <char>Q;
+b1169 = <char>'Q';
 r1169 = a1169 + b1169;
 print("RESULT_1169:" + type(r1169));
 
@@ -7129,7 +7129,7 @@ r1188 = a1188 + b1188;
 print("RESULT_1188:" + type(r1188));
 
 /* 1189: char / int32 */
-a1189 = <char>W;
+a1189 = <char>'W';
 b1189 = <int32>84;
 r1189 = a1189 / b1189;
 print("RESULT_1189:" + type(r1189));
@@ -7160,7 +7160,7 @@ print("RESULT_1193:" + type(r1193));
 
 /* 1194: string * char */
 a1194 = <string>"str1193";
-b1194 = <char>O;
+b1194 = <char>'O';
 r1194 = a1194 * b1194;
 print("RESULT_1194:" + type(r1194));
 
@@ -7286,7 +7286,7 @@ print("RESULT_1214:" + type(r1214));
 
 /* 1215: ulong / char */
 a1215 = <ulong>557;
-b1215 = <char>Z;
+b1215 = <char>'Z';
 r1215 = a1215 / b1215;
 print("RESULT_1215:" + type(r1215));
 
@@ -7387,7 +7387,7 @@ r1231 = a1231 * b1231;
 print("RESULT_1231:" + type(r1231));
 
 /* 1232: char / bool */
-a1232 = <char>P;
+a1232 = <char>'P';
 b1232 = <bool>true;
 r1232 = a1232 / b1232;
 print("RESULT_1232:" + type(r1232));
@@ -7447,7 +7447,7 @@ r1241 = a1241 * b1241;
 print("RESULT_1241:" + type(r1241));
 
 /* 1242: char - short */
-a1242 = <char>P;
+a1242 = <char>'P';
 b1242 = <short>81;
 r1242 = a1242 - b1242;
 print("RESULT_1242:" + type(r1242));
@@ -7622,7 +7622,7 @@ print("RESULT_1270:" + type(r1270));
 
 /* 1271: ulong - char */
 a1271 = <ulong>971;
-b1271 = <char>H;
+b1271 = <char>'H';
 r1271 = a1271 - b1271;
 print("RESULT_1271:" + type(r1271));
 
@@ -7694,7 +7694,7 @@ print("RESULT_1282:" + type(r1282));
 
 /* 1283: double + char */
 a1283 = <double>59.624;
-b1283 = <char>O;
+b1283 = <char>'O';
 r1283 = a1283 + b1283;
 print("RESULT_1283:" + type(r1283));
 
@@ -7783,7 +7783,7 @@ r1297 = a1297 - b1297;
 print("RESULT_1297:" + type(r1297));
 
 /* 1298: char - int32 */
-a1298 = <char>R;
+a1298 = <char>'R';
 b1298 = <int32>50;
 r1298 = a1298 - b1298;
 print("RESULT_1298:" + type(r1298));
@@ -7832,7 +7832,7 @@ print("RESULT_1305:" + type(r1305));
 
 /* 1306: double - char */
 a1306 = <double>71.501;
-b1306 = <char>I;
+b1306 = <char>'I';
 r1306 = a1306 - b1306;
 print("RESULT_1306:" + type(r1306));
 
@@ -7844,7 +7844,7 @@ print("RESULT_1307:" + type(r1307));
 
 /* 1308: double * char */
 a1308 = <double>12.203;
-b1308 = <char>P;
+b1308 = <char>'P';
 r1308 = a1308 * b1308;
 print("RESULT_1308:" + type(r1308));
 
@@ -7861,7 +7861,7 @@ r1310 = a1310 + b1310;
 print("RESULT_1310:" + type(r1310));
 
 /* 1311: char + bigint */
-a1311 = <char>V;
+a1311 = <char>'V';
 b1311 = <bigint>"5973216469542853333";
 r1311 = a1311 + b1311;
 print("RESULT_1311:" + type(r1311));
@@ -7874,7 +7874,7 @@ print("RESULT_1312:" + type(r1312));
 
 /* 1313: int / char */
 a1313 = <int>525;
-b1313 = <char>P;
+b1313 = <char>'P';
 r1313 = a1313 / b1313;
 print("RESULT_1313:" + type(r1313));
 
@@ -7939,7 +7939,7 @@ r1323 = a1323 + b1323;
 print("RESULT_1323:" + type(r1323));
 
 /* 1324: char / uint64 */
-a1324 = <char>H;
+a1324 = <char>'H';
 b1324 = <uint64>85;
 r1324 = a1324 / b1324;
 print("RESULT_1324:" + type(r1324));
@@ -7963,14 +7963,14 @@ r1327 = a1327 / b1327;
 print("RESULT_1327:" + type(r1327));
 
 /* 1328: char - float */
-a1328 = <char>M;
+a1328 = <char>'M';
 b1328 = <float>34.492;
 r1328 = a1328 - b1328;
 print("RESULT_1328:" + type(r1328));
 
 /* 1329: uint32 * char */
 a1329 = <uint32>149;
-b1329 = <char>Q;
+b1329 = <char>'Q';
 r1329 = a1329 * b1329;
 print("RESULT_1329:" + type(r1329));
 
@@ -8077,13 +8077,13 @@ r1346 = a1346 * b1346;
 print("RESULT_1346:" + type(r1346));
 
 /* 1347: char / long */
-a1347 = <char>F;
+a1347 = <char>'F';
 b1347 = <long>83;
 r1347 = a1347 / b1347;
 print("RESULT_1347:" + type(r1347));
 
 /* 1348: char - int16 */
-a1348 = <char>R;
+a1348 = <char>'R';
 b1348 = <int16>56;
 r1348 = a1348 - b1348;
 print("RESULT_1348:" + type(r1348));
@@ -8107,7 +8107,7 @@ r1351 = a1351 * b1351;
 print("RESULT_1351:" + type(r1351));
 
 /* 1352: char + int32 */
-a1352 = <char>B;
+a1352 = <char>'B';
 b1352 = <int32>86;
 r1352 = a1352 + b1352;
 print("RESULT_1352:" + type(r1352));
@@ -8125,8 +8125,8 @@ r1354 = a1354 + b1354;
 print("RESULT_1354:" + type(r1354));
 
 /* 1355: char / char */
-a1355 = <char>M;
-b1355 = <char>X;
+a1355 = <char>'M';
+b1355 = <char>'X';
 r1355 = a1355 / b1355;
 print("RESULT_1355:" + type(r1355));
 
@@ -8137,7 +8137,7 @@ r1356 = a1356 - b1356;
 print("RESULT_1356:" + type(r1356));
 
 /* 1357: char * int16 */
-a1357 = <char>K;
+a1357 = <char>'K';
 b1357 = <int16>39;
 r1357 = a1357 * b1357;
 print("RESULT_1357:" + type(r1357));
@@ -8281,7 +8281,7 @@ r1380 = a1380 - b1380;
 print("RESULT_1380:" + type(r1380));
 
 /* 1381: char + int8 */
-a1381 = <char>A;
+a1381 = <char>'A';
 b1381 = <int8>6;
 r1381 = a1381 + b1381;
 print("RESULT_1381:" + type(r1381));
@@ -8293,7 +8293,7 @@ r1382 = a1382 * b1382;
 print("RESULT_1382:" + type(r1382));
 
 /* 1383: char - int32 */
-a1383 = <char>E;
+a1383 = <char>'E';
 b1383 = <int32>82;
 r1383 = a1383 - b1383;
 print("RESULT_1383:" + type(r1383));
@@ -8312,7 +8312,7 @@ print("RESULT_1385:" + type(r1385));
 
 /* 1386: int64 + char */
 a1386 = <int64>643;
-b1386 = <char>Z;
+b1386 = <char>'Z';
 r1386 = a1386 + b1386;
 print("RESULT_1386:" + type(r1386));
 
@@ -8390,7 +8390,7 @@ print("RESULT_1398:" + type(r1398));
 
 /* 1399: int8 / char */
 a1399 = <int8>114;
-b1399 = <char>N;
+b1399 = <char>'N';
 r1399 = a1399 / b1399;
 print("RESULT_1399:" + type(r1399));
 
@@ -8437,7 +8437,7 @@ r1406 = a1406 + b1406;
 print("RESULT_1406:" + type(r1406));
 
 /* 1407: char / long */
-a1407 = <char>O;
+a1407 = <char>'O';
 b1407 = <long>36;
 r1407 = a1407 / b1407;
 print("RESULT_1407:" + type(r1407));
@@ -8462,12 +8462,12 @@ print("RESULT_1410:" + type(r1410));
 
 /* 1411: short + char */
 a1411 = <short>544;
-b1411 = <char>M;
+b1411 = <char>'M';
 r1411 = a1411 + b1411;
 print("RESULT_1411:" + type(r1411));
 
 /* 1412: char / int16 */
-a1412 = <char>P;
+a1412 = <char>'P';
 b1412 = <int16>11;
 r1412 = a1412 / b1412;
 print("RESULT_1412:" + type(r1412));
@@ -8575,7 +8575,7 @@ r1429 = a1429 / b1429;
 print("RESULT_1429:" + type(r1429));
 
 /* 1430: char * float */
-a1430 = <char>O;
+a1430 = <char>'O';
 b1430 = <float>31.427;
 r1430 = a1430 * b1430;
 print("RESULT_1430:" + type(r1430));
@@ -8599,7 +8599,7 @@ r1433 = a1433 * b1433;
 print("RESULT_1433:" + type(r1433));
 
 /* 1434: char - int32 */
-a1434 = <char>Q;
+a1434 = <char>'Q';
 b1434 = <int32>81;
 r1434 = a1434 - b1434;
 print("RESULT_1434:" + type(r1434));
@@ -8612,7 +8612,7 @@ print("RESULT_1435:" + type(r1435));
 
 /* 1436: int32 * char */
 a1436 = <int32>431;
-b1436 = <char>O;
+b1436 = <char>'O';
 r1436 = a1436 * b1436;
 print("RESULT_1436:" + type(r1436));
 
@@ -8647,7 +8647,7 @@ r1441 = a1441 - b1441;
 print("RESULT_1441:" + type(r1441));
 
 /* 1442: char * uint16 */
-a1442 = <char>Y;
+a1442 = <char>'Y';
 b1442 = <uint16>19;
 r1442 = a1442 * b1442;
 print("RESULT_1442:" + type(r1442));
@@ -8707,7 +8707,7 @@ r1451 = a1451 * b1451;
 print("RESULT_1451:" + type(r1451));
 
 /* 1452: char - ushort */
-a1452 = <char>Z;
+a1452 = <char>'Z';
 b1452 = <ushort>94;
 r1452 = a1452 - b1452;
 print("RESULT_1452:" + type(r1452));
@@ -8797,7 +8797,7 @@ r1466 = a1466 - b1466;
 print("RESULT_1466:" + type(r1466));
 
 /* 1467: char * bool */
-a1467 = <char>C;
+a1467 = <char>'C';
 b1467 = <bool>false;
 r1467 = a1467 * b1467;
 print("RESULT_1467:" + type(r1467));
@@ -8857,7 +8857,7 @@ r1476 = a1476 + b1476;
 print("RESULT_1476:" + type(r1476));
 
 /* 1477: char * int8 */
-a1477 = <char>S;
+a1477 = <char>'S';
 b1477 = <int8>37;
 r1477 = a1477 * b1477;
 print("RESULT_1477:" + type(r1477));
