@@ -1,0 +1,171 @@
+// tests/nested_structure_test.lm
+// map / array / struct / type 嵌套结构综合测试
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+n = 0;
+
+// ===== 1. map 嵌套 map（多层） =====
+m1 = {
+    "outer": {
+        "inner": {
+            "deep": 42
+        }
+    }
+};
+check(m1["outer"]["inner"]["deep"] == 42, "1. map-map-map deep");
+check(type(m1["outer"]) == "map", "1. inner container type");
+check(type(m1["outer"]["inner"]) == "map", "1. deep container type");
+n = n + 1;
+
+// ===== 2. map 嵌套数组；数组嵌套 map =====
+m2 = {"list": [10, 20, 30]};
+check(m2["list"][0] == 10, "2. map-array value");
+check(m2["list"][2] == 30, "2. map-array last");
+
+m3 = [{"k": "a"}, {"k": "b"}, {"k": "c"}];
+check(m3[0]["k"] == "a", "2. array-map first");
+check(m3[2]["k"] == "c", "2. array-map last");
+n = n + 1;
+
+// ===== 3. 数组嵌套数组 =====
+m4 = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+check(m4[0][0] == 1, "3. arr-arr [0][0]");
+check(m4[2][2] == 9, "3. arr-arr [2][2]");
+check(m4[1][1] == 5, "3. arr-arr [1][1]");
+n = n + 1;
+
+// ===== 4. typed map 嵌套 map/array =====
+m5 = <string, map>{"a": {"x": 1}, "b": {"y": 2}};
+check(type(m5["a"]) == "map", "4. typed-map nested map type");
+check(m5["a"]["x"] == 1, "4. typed-map nested map value");
+check(m5["b"]["y"] == 2, "4. typed-map nested map value 2");
+
+m6 = <string, array>{"nums": [1, 2], "more": [3]};
+check(type(m6["nums"]) == "array", "4. typed-map nested array type");
+check(m6["nums"][1] == 2, "4. typed-map nested array value");
+n = n + 1;
+
+// ===== 5. struct 嵌套 struct（位置 + 命名） =====
+struct Point {
+    x: int;
+    y: int;
+}
+struct Segment {
+    start: Point;
+    end: Point;
+    label: string;
+}
+s1 = Segment(Point(1, 2), Point(3, 4), "seg");
+check(s1.start.x == 1, "5. struct nested positional");
+check(s1.end.y == 4, "5. struct nested positional 2");
+check(s1.label == "seg", "5. struct field after nested");
+
+s2 = <Segment>{label: "named", start: <Point>{x: 10, y: 20}, end: <Point>{x: 30, y: 40}};
+check(s2.start.x == 10, "5. struct nested named");
+check(s2.end.y == 40, "5. struct nested named 2");
+n = n + 1;
+
+// ===== 6. struct 含 map / array 字段 =====
+struct Store {
+    name: string;
+    data: map;
+    tags: array;
+}
+st1 = <Store>{name: "store", data: {"k": 7}, tags: [1, 2, 3]};
+check(st1.data["k"] == 7, "6. struct map field");
+check(type(st1.data) == "map", "6. struct map field type");
+check(st1.tags[0] == 1, "6. struct array field");
+check(st1.tags[2] == 3, "6. struct array field last");
+n = n + 1;
+
+// ===== 7. type 形状嵌套 type =====
+type Address {
+    city: string,
+    zip: int
+}
+type Person {
+    name: string,
+    age: int,
+    addr: Address
+}
+p1 = <Person>{name: "nick", age: 18, addr: <Address>{city: "BJ", zip: 100000}};
+check(p1.name == "nick", "7. type nested base");
+check(p1.addr.city == "BJ", "7. type-type nested");
+check(p1.addr.zip == 100000, "7. type-type nested 2");
+check(type(p1.addr) == "map", "7. type-type nested runtime type");
+n = n + 1;
+
+// ===== 8. type 形状含 map / array 字段 =====
+type Bag {
+    label: string,
+    things: map,
+    items: array
+}
+b1 = <Bag>{label: "bag", things: {"a": 1}, items: [5, 6]};
+check(b1.things["a"] == 1, "8. type map field");
+check(type(b1.things) == "map", "8. type map field type");
+check(b1.items[0] == 5, "8. type array field");
+check(b1.items[1] == 6, "8. type array field last");
+check(type(b1.items) == "array", "8. type array field type");
+n = n + 1;
+
+// ===== 9. 深度互嵌：struct → map → array → map =====
+struct Deep {
+    title: string;
+    body: map;
+}
+d1 = <Deep>{
+    title: "deep",
+    body: {
+        "rows": [
+            {"id": 1, "v": "a"},
+            {"id": 2, "v": "b"}
+        ]
+    }
+};
+check(d1.body["rows"][0]["id"] == 1, "9. deep mixed chain");
+check(d1.body["rows"][1]["v"] == "b", "9. deep mixed chain 2");
+check(d1.body["rows"].len == 2, "9. deep inner len");
+n = n + 1;
+
+// ===== 10. 嵌套结构的就地修改 =====
+m7 = {"a": {"x": 1}};
+m7["a"]["x"] = 99;
+check(m7["a"]["x"] == 99, "10. inner map write");
+m7["a"]["y"] = 100;
+check(m7["a"]["y"] == 100, "10. inner map new key");
+check(m7["a"].len == 2, "10. inner map len after add");
+
+m8 = {"list": [1, 2]};
+m8["list"][0] = 50;
+check(m8["list"][0] == 50, "10. inner array write");
+
+st2 = <Store>{name: "s", data: {"k": 1}, tags: [1]};
+st2.data["k"] = 88;
+check(st2.data["k"] == 88, "10. struct inner map write");
+st2.tags[0] = 77;
+check(st2.tags[0] == 77, "10. struct inner array write");
+n = n + 1;
+
+// ===== 11. 同一容器作为多个外层的值（引用共享） =====
+shared = {"v": 1};
+m9 = {"a": shared};
+m10 = {"b": shared};
+m9["a"]["v"] = 555;
+check(m10["b"]["v"] == 555, "11. shared nested reference");
+n = n + 1;
+
+// ===== 12. 空容器嵌套与构建 =====
+m11 = {"a": {}, "b": []};
+check(type(m11["a"]) == "map", "12. empty nested map");
+check(type(m11["b"]) == "array", "12. empty nested array");
+m11["a"]["k"] = 9;
+check(m11["a"]["k"] == 9, "12. fill nested map");
+check(m11["b"].len == 0, "12. empty nested array stays empty");
+n = n + 1;
+
+print("nested_structure_test cases =", n);
+print("nested_structure_test ALL PASS");

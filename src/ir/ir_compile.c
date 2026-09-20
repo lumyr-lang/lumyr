@@ -445,8 +445,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     case AST_CAST: {
         /* 类型强转 (type)expr：编译子表达式，根据目标类型 emit 转换指令 */
         CastKind ct = node->u.cast.cast_type;
-        /* cast 目标是数组字面量（(T)[e1,e2]）：逐元素强转构造类型化数组 */
-        if(node->u.cast.child && node->u.cast.child->type == AST_ARRAY_LIT) {
+        /* cast 目标是数组字面量（(T)[e1,e2]）：逐元素强转构造类型化数组。
+         * 例外：CAST_ARRAY（及容器类 cast）语义为透传，不应构造 typed_array，
+         * 否则 type 形状的 array 字段会被错误转为 typed_array */
+        if(node->u.cast.child && node->u.cast.child->type == AST_ARRAY_LIT &&
+           ct != CAST_ARRAY && ct != CAST_MAP && ct != CAST_TYPED_ARRAY &&
+           ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR) {
             compile_typed_array_lit(c, ct, node->u.cast.child->u.array_lit.elems, 1);
             return EXPR_TYPE_NONE;
         }
@@ -568,8 +572,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
-        /* 标注目标是数组字面量（<T>[e1,e2]）：逐元素转型构造类型化数组 */
-        if(ann_child && ann_child->type == AST_ARRAY_LIT) {
+        /* 标注目标是数组字面量（<T>[e1,e2]）：逐元素转型构造类型化数组。
+         * CAST_ARRAY/容器类标注语义为透传，不应构造 typed_array */
+        if(ann_child && ann_child->type == AST_ARRAY_LIT &&
+           ct != CAST_ARRAY && ct != CAST_MAP && ct != CAST_TYPED_ARRAY &&
+           ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR) {
             compile_typed_array_lit(c, ct, ann_child->u.array_lit.elems, 0);
             return EXPR_TYPE_NONE;
         }

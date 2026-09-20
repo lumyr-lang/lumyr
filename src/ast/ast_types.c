@@ -127,6 +127,9 @@ ValueType type_name_to_valtype(const char* tname)
     if(strcmp(tname, "bigint") == 0)     return VAL_BIGINT;
     if(strcmp(tname, "decimal") == 0)    return VAL_DECIMAL;
     if(strcmp(tname, "bitdecimal") == 0) return VAL_BITDECIMAL;
+    /* 容器类型：map/array 字段声明需正确识别，否则落 VAL_NONE 被 cast 成 long long */
+    if(strcmp(tname, "map") == 0)        return VAL_MAP;
+    if(strcmp(tname, "array") == 0)      return VAL_ARRAY;
     return VAL_NONE;
 }
 
@@ -163,6 +166,9 @@ ValueType castkind_to_valtype(int ck)
         case CAST_DECIMAL: return VAL_DECIMAL;
         case CAST_BITDECIMAL: return VAL_BITDECIMAL;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
+        /* 容器引用：字段持堆指针（8 字节） */
+        case CAST_MAP: return VAL_MAP;
+        case CAST_ARRAY: return VAL_ARRAY;
         /* 自定义类型引用：必须映射到对应实例指针，否则字段 valtype=VAL_NONE，
          * 构造写入走错分支、方法分派取错类型信息 */
         case CAST_STRUCT_PTR: return VAL_STRUCT_PTR;
@@ -204,6 +210,12 @@ int valuetype_to_castkind(int vt) {
         case VAL_BIGINT: return CAST_BIGINT;
         case VAL_DECIMAL: return CAST_DECIMAL;
         case VAL_BITDECIMAL: return CAST_BITDECIMAL;
+        /* 容器/引用类型：cast 语义为透传（保持容器不被标量化） */
+        case VAL_MAP: return CAST_MAP;
+        case VAL_ARRAY: return CAST_ARRAY;
+        case VAL_TYPED_ARRAY: return CAST_TYPED_ARRAY;
+        case VAL_STRUCT_PTR: return CAST_STRUCT_PTR;
+        case VAL_CLASS_PTR: return CAST_CLASS_PTR;
         default: return CAST_LONGLONG;
     }
 }

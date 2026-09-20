@@ -193,6 +193,10 @@ static void* value_to_typed_ptr(Value v) {
     case VAL_BIGINT:     return v.v.bigint;
     case VAL_DECIMAL:    return v.v.decimal;
     case VAL_BITDECIMAL: return v.v.bitdecimal;
+    /* 容器引用：字段直接持有 map/array/typed_array 堆指针 */
+    case VAL_MAP:        return v.v.map;
+    case VAL_ARRAY:      return v.v.array;
+    case VAL_TYPED_ARRAY: return v.v.typed_array;
     default: {
         /* 数值写入 string 数组：转字符串表示，复制为 GC 字符串 */
         char buf[40];

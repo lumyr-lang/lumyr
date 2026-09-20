@@ -1787,7 +1787,16 @@ type_prop_list
 type_prop
     : ID COLON type_name         {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
-          type_prop_push($1, $3, 0, sn);
+          ValueType vt = $3;
+          /* 命名字段类型（type_name_to_valtype 对自定义名返回 VAL_NONE）：
+             struct/class → 对应引用类型；type 形状运行时即 map → VAL_MAP。
+             此前统一落 VAL_NONE 被 cast 成 long long，嵌套值被销毁 */
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($1, vt, 0, sn);
           $$ = ast_none();
       }
     ;
@@ -1810,18 +1819,28 @@ struct_prop_list
 struct_prop
     : ID COLON builtin_type_name SEMI { struct_prop_push($1, $3, NULL); $$ = ast_none(); }
     | ID COLON ID SEMI {
+        /* 容器字段：map/array 引用语义（走 PTR 栈），此前被当未知 struct 引用致值丢失 */
+        if(strcmp($3, "map") == 0) {
+            struct_prop_push($1, CAST_MAP, NULL);
+            $$ = ast_none();
+        } else if(strcmp($3, "array") == 0) {
+            struct_prop_push($1, CAST_ARRAY, NULL);
+            $$ = ast_none();
+        }
         /* 自定义类型字段（引用语义，走 PTR 栈）：struct → STRUCT_PTR；class → CLASS_PTR。
          * 必须记录正确 CastKind，否则 receiver 被当 INT64，方法分派取错类型信息而崩溃 */
-        if(struct_lookup($3)) {
+        else if(struct_lookup($3)) {
             struct_prop_push($1, CAST_STRUCT_PTR, $3);
+            $$ = ast_none();
         } else if(class_lookup($3)) {
             struct_prop_push($1, CAST_CLASS_PTR, $3);
+            $$ = ast_none();
         } else {
             /* 前向引用/未知：仍记录类型名按 STRUCT_PTR，方法分派靠名字；给出提示 */
             fprintf(stderr, "parse: 字段 \"%s\" 的类型 \"%s\" 尚未注册，按 struct 引用处理\n", $1, $3);
             struct_prop_push($1, CAST_STRUCT_PTR, $3);
+            $$ = ast_none();
         }
-        $$ = ast_none();
       }
     ;
 /* class 声明属性清单（支持属性和方法定义） */
