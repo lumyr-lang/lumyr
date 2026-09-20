@@ -304,6 +304,13 @@ char* value_to_str(Value v) {
         }
         case VAL_MAP:
             return lumyr_json_stringify(v);
+        /* 高精度数值：动态 cast (string) 需经各自 to_string，此前落 default 返回空串 */
+        case VAL_BIGINT:
+            return v.v.bigint ? lumyr_bigint_to_string(v.v.bigint) : strdup("");
+        case VAL_DECIMAL:
+            return v.v.decimal ? lumyr_decimal_to_string(v.v.decimal) : strdup("");
+        case VAL_BITDECIMAL:
+            return v.v.bitdecimal ? lumyr_bitdecimal_to_string(v.v.bitdecimal) : strdup("");
         default:
             strcpy(buf, "");
             break;

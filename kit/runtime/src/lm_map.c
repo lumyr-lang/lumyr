@@ -19,7 +19,21 @@
 #define MAP_BLACK 1
 
 // ============ 哈希函数 ============
+/* 数值族：key_eq 支持跨数值子类型按值相等（int/uint/int64/double/bool/char/byte 等）。
+   float/long_double 不参与 key_eq 跨类型比较，string/array 等无整数数值，均排除。 */
+static int is_number_valtype(ValueType t) {
+    if(t == VAL_INT || t == VAL_DOUBLE || t == VAL_BOOL ||
+       t == VAL_CHAR || t == VAL_BYTE) return 1;
+    if(t >= VAL_INT8 && t <= VAL_SSIZE_T) return 1;  /* 101..118（VAL_VOID=100 排除） */
+    return 0;
+}
+
 static uint32_t value_hash(Value v) {
+    /* 数值族 hash 仅取决于提取的整数值，与 key_eq 跨子类型相等契约一致：
+       int 2 / uint 2 / int64 2 / 2.0 / char(2) 必须落同桶（此前混入 type 导致
+       泛型 map 的非 string 键用普通字面量查不到）。 */
+    if(is_number_valtype(v.type))
+        return (uint32_t)(lumyr_extract_ll(v) * 2654435761u);
     uint32_t h = (uint32_t)v.type * 2654435761u;
     switch(v.type) {
         /* 整数类型：每个类型独立 case，直接读对应字段，零转换开销 */

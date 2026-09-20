@@ -194,6 +194,23 @@ static AstNode* wrap_type_list(const char* tname, AstNode* chain)
     }
     return ast_call(strdup(tname), chain);
 }
+/* 泛型 map 字面量 <K,V>{k1:v1,...}：沿 SEQ 链给每个 entry 的键包 K cast、值包 V cast，
+   再生成普通 map_lit。编译器按 entry 目标 VALUE 编译，CAST 负责把键/值转到 K/V，
+   存储仍为 ValueMap（运行时键支持任意类型）。 */
+static AstNode* wrap_map_kv(AstNode* items, CastKind kck, CastKind vck)
+{
+    if(!items) return NULL;
+    if(items->type == AST_SEQ) {
+        items->u.seq.first  = wrap_map_kv(items->u.seq.first, kck, vck);
+        items->u.seq.second = wrap_map_kv(items->u.seq.second, kck, vck);
+        return items;
+    }
+    if(items->type == AST_MAP_ENTRY) {
+        items->u.map_entry.key   = new_cast_node(kck, items->u.map_entry.key);
+        items->u.map_entry.value = new_cast_node(vck, items->u.map_entry.value);
+    }
+    return items;
+}
 /* catch 子句辅助：创建单个 catch 子句节点（用 AST_SEQ 包装，first=type_string, second=var_body_seq） */
 static AstNode* make_catch_clause(char* type_name, char* var_name, AstNode* body)
 {
@@ -1550,7 +1567,7 @@ primary
           }
       }
     | LT type_name COMMA type_name GT MAP_OPEN map_items RBRACE
-        { $$ = new_cast_node(valuetype_to_castkind($4), ast_map_lit($7)); }
+        { $$ = ast_map_lit(wrap_map_kv($7, valuetype_to_castkind($2), valuetype_to_castkind($4))); }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
           /* 泛型自定义类型：<Person>[e1,e2] → [Person(e1), Person(e2)]（形状构造） */
           if(type_lookup($2) != NULL) {

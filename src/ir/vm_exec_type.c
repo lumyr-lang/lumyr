@@ -56,12 +56,37 @@ int vm_exec_vneg(VMExecCtx* ctx, Instruction* in) {
 
 /* ===== typed 栈 -> VALUE 栈装箱（实参 typed、形参动态 NONE 时绑定用） ===== */
 
-/* BOX_INT64：INT64 栈弹 1 -> Value -> VALUE 栈 */
+/* BOX_INT64：INT64 栈弹 1 -> Value -> VALUE 栈
+   a=CastKind 决定整型子类型（uint/char/bool/byte/...）；CAST_NONE 或未列出 → int64 */
 int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in) {
-    (void)ctx; (void)in;
+    (void)ctx;
     int64_t val;
     stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
-    Value v = lumyr_make_int64(val);
+    Value v;
+    switch ((CastKind)in->a) {
+    case CAST_BOOL:    v = lumyr_make_bool(val); break;
+    case CAST_CHAR:    v = lumyr_make_char((char)val); break;
+    case CAST_BYTE:    v = lumyr_make_byte((unsigned char)val); break;
+    case CAST_INT8:    v = lumyr_make_int8((int8_t)val); break;
+    case CAST_INT16:   v = lumyr_make_int16((int16_t)val); break;
+    case CAST_SHORT:   v = lumyr_make_short((int16_t)val); break;
+    case CAST_INT32:   v = lumyr_make_int32((int32_t)val); break;
+    case CAST_INT:
+    case CAST_ASCII:   v = lumyr_make_int((int)val); break;
+    case CAST_UINT8:   v = lumyr_make_uint8((uint8_t)val); break;
+    case CAST_UCHAR:   v = lumyr_make_uchar((unsigned char)val); break;
+    case CAST_UINT16:  v = lumyr_make_uint16((uint16_t)val); break;
+    case CAST_USHORT:  v = lumyr_make_ushort((unsigned short)val); break;
+    case CAST_UINT32:  v = lumyr_make_uint32((uint32_t)val); break;
+    case CAST_UINT:    v = lumyr_make_uint((unsigned int)val); break;
+    case CAST_UINT64:  v = lumyr_make_uint64((uint64_t)val); break;
+    case CAST_SIZE_T:  v = lumyr_make_size_t((size_t)val); break;
+    case CAST_SSIZE_T: v = lumyr_make_ssize_t((ssize_t)val); break;
+    case CAST_LONG:    v = lumyr_make_long((long)val); break;
+    case CAST_LONGLONG: v = lumyr_make_long_long(val); break;
+    case CAST_ULONG:   v = lumyr_make_ulong((unsigned long)val); break;
+    default:           v = lumyr_make_int64(val); break;
+    }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }

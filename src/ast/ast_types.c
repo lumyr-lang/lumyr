@@ -122,6 +122,11 @@ ValueType type_name_to_valtype(const char* tname)
     if(strcmp(tname, "char") == 0)    return VAL_CHAR;
     if(strcmp(tname, "ascii") == 0)   return VAL_INT;  /* ASCII 码值按 int 处理 */
     if(strcmp(tname, "byte") == 0)    return VAL_BYTE;
+    /* 高精度类型：lexer 将其作为普通标识符返回，在类型位置（含泛型 <K,V>）需正确识别，
+       此前落到 VAL_NONE 导致 <string,bigint> 的值被 cast 成 long long */
+    if(strcmp(tname, "bigint") == 0)     return VAL_BIGINT;
+    if(strcmp(tname, "decimal") == 0)    return VAL_DECIMAL;
+    if(strcmp(tname, "bitdecimal") == 0) return VAL_BITDECIMAL;
     return VAL_NONE;
 }
 

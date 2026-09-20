@@ -262,6 +262,18 @@ static void ternary_cast_to(Ctx* c, const char* from, const char* to) {
     }
 }
 
+/* 高精度 PTR 栈对象（bigint/decimal/bitdecimal）归一为字符串形式（PTR→PTR）；
+   string 已具字符串形式、裸 ptr 无数字语义，二者零操作。
+   用于字符串解析指令（STR_TO_INT64/STR_TO_DOUBLE）之前。 */
+static void emit_hiptr_to_string(Ctx* c, CastKind child_ct) {
+    if(child_ct == CAST_BIGINT)
+        emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+    else if(child_ct == CAST_DECIMAL)
+        emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+    else if(child_ct == CAST_BITDECIMAL)
+        emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+}
+
 /* 类型名 → ExprType */
 static ExprType ternary_name_to_exprtype(const char* n) {
     if(strcmp(n, "double") == 0) return EXPR_TYPE_DOUBLE;
@@ -453,7 +465,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_BIGINT_TO_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_DECIMAL) {
                 emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+            } else if(child_type == EXPR_TYPE_PTR && child_ct == CAST_BITDECIMAL) {
+                emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
             }
+            /* PTR(string) → string：透传，零转换 */
             return EXPR_TYPE_PTR;
         }
         /* 转成 int：根据源类型 emit 转换指令 */
@@ -466,16 +481,19 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
             }
-            /* ptr → int：取整数地址 */
+            /* ptr → int：真裸指针取地址；string/bigint/decimal/bitdecimal 经字符串解析 */
             else if(child_type == EXPR_TYPE_PTR) {
-                emit(c, OPC_PTR_TO_INT64, 0, 0);
+                if(child_ct == CAST_PTR) {
+                    emit(c, OPC_PTR_TO_INT64, 0, 0);
+                } else {
+                    emit_hiptr_to_string(c, child_ct);
+                    emit(c, OPC_STR_TO_INT64, 0, 0);
+                }
             }
             /* 动态 Value（VALUE 栈）→ 出箱到 INT64 栈（UNBOX 内含字符串/动态转换兜底） */
             else if(child_type == EXPR_TYPE_NONE) {
                 emit(c, OPC_UNBOX_INT64, 0, 0);
             }
-            /* bigint → int：截断（后续实现） */
-            /* decimal → int：截断（后续实现） */
             return EXPR_TYPE_INT;
         }
         /* 转成 double：根据源类型 emit 转换指令 */
@@ -483,6 +501,17 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             /* int → double */
             if(child_type == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+            }
+            /* ptr → double：真裸指针经 int64 中转；string/bigint/decimal/bitdecimal
+               经字符串解析（此前缺此分支，值滞留 PTR 栈造成错位） */
+            else if(child_type == EXPR_TYPE_PTR) {
+                if(child_ct == CAST_PTR) {
+                    emit(c, OPC_PTR_TO_INT64, 0, 0);
+                    emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                } else {
+                    emit_hiptr_to_string(c, child_ct);
+                    emit(c, OPC_STR_TO_DOUBLE, 0, 0);
+                }
             }
             /* 动态 Value（VALUE 栈）→ 出箱到 DOUBLE 栈 */
             else if(child_type == EXPR_TYPE_NONE) {
@@ -567,9 +596,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_INT64, 0, 0);
             }
-            /* ptr → int：取整数地址 */
+            /* ptr → int：真裸指针取地址；string/bigint/decimal/bitdecimal 经字符串解析 */
             else if(child_type == EXPR_TYPE_PTR) {
-                emit(c, OPC_PTR_TO_INT64, 0, 0);
+                if(c_expr_cast_type(c, ann_child) == CAST_PTR) {
+                    emit(c, OPC_PTR_TO_INT64, 0, 0);
+                } else {
+                    emit_hiptr_to_string(c, c_expr_cast_type(c, ann_child));
+                    emit(c, OPC_STR_TO_INT64, 0, 0);
+                }
             }
             /* 动态 Value（VALUE 栈）→ 出箱到 INT64 栈，防止 STORE 弹空栈 */
             else if(child_type == EXPR_TYPE_NONE) {
@@ -592,6 +626,17 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             /* 如果子表达式是 INT，需要转成 DOUBLE */
             if(child_type == EXPR_TYPE_INT) {
                 emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+            }
+            /* ptr → double：真裸指针经 int64 中转；string/高精度经字符串解析 */
+            else if(child_type == EXPR_TYPE_PTR) {
+                CastKind cct = c_expr_cast_type(c, ann_child);
+                if(cct == CAST_PTR) {
+                    emit(c, OPC_PTR_TO_INT64, 0, 0);
+                    emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+                } else {
+                    emit_hiptr_to_string(c, cct);
+                    emit(c, OPC_STR_TO_DOUBLE, 0, 0);
+                }
             }
             /* 动态 Value（VALUE 栈）→ 出箱到 DOUBLE 栈 */
             else if(child_type == EXPR_TYPE_NONE) {
@@ -1315,6 +1360,19 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             break;
         case OP_GT: case OP_LT: case OP_GE:
         case OP_LE: case OP_EQ: case OP_NE: {
+            /* 字符串（PTR 栈）相等比较：两操作数此时已在 PTR 栈（bottom=left/top=right）。
+               先各自 BOX_PTR 到 VALUE，再走 VEQ/VNE。此前误落到下面的 VEQ 直接弹
+               VALUE 栈（字符串却在 PTR 栈），导致 "a"=="a" 恒 false。
+               注意 bigint/decimal 比较在前面专用分支已提前 return，不会到达此处。 */
+            if(result == EXPR_TYPE_PTR) {
+                if(node->u.bin.op == OP_EQ || node->u.bin.op == OP_NE) {
+                    emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* right */
+                    emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* left */
+                    emit(c, node->u.bin.op == OP_EQ ? OPC_VEQ : OPC_VNE, 0, 0);
+                    return EXPR_TYPE_NONE;
+                }
+                /* 字符串的大小比较无明确语义，保持原路径不处理 */
+            }
             /* 比较结果统一压 INT64 栈（0/1），供条件跳转直接使用 */
             if(result == EXPR_TYPE_DOUBLE) {
                 switch(node->u.bin.op) {
@@ -1708,7 +1766,7 @@ static int is_numeric_expr(AstNode* n) {
 static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck) {
     if (from == EXPR_TYPE_NONE) return;   /* 已在 VALUE 栈 */
     if (from == EXPR_TYPE_INT)
-        emit(c, OPC_BOX_INT64, 0, 0);
+        emit(c, OPC_BOX_INT64, (int)ck, 0);   /* 携带整型子类型 uint/char/bool/... */
     else if (from == EXPR_TYPE_DOUBLE)
         emit(c, OPC_BOX_DOUBLE, 0, 0);
     else /* PTR */
