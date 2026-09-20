@@ -15,6 +15,7 @@
 #include "ast/ast_types.h"
 #include "ast/func_compile.h"
 #include "lm_value.h"
+#include "lm_type.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,8 +28,13 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck);
 static void c_expr_to_value(Ctx* c, AstNode* node);
 AstNode* func_ast_lookup(const char* name);   /* AST 函数表（func_compile.c） */
-static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result);
+static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result, AstNode* method_recv);
+static BytecodeFunc* resolve_self_recursive(Ctx* c, const char* func_name, AstNode* tmp_def);
 static void collect_call_args(AstNode* n, AstNode*** argv, int* argc, int* acap);
+static void emit_value_cast(Ctx* c, ExprType from, ExprType to);  /* typed → typed 栈转换 */
+static char* c_expr_owner_type(Ctx* c, AstNode* node);  /* 表达式持有的自定义类型名 */
+static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs);  /* 记录变量槽属主类型 */
+static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result);  /* 方法调用编译 */
 
 /* ============================================================
  * 表达式编译
@@ -532,8 +538,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             BytecodeFunc* callee = ir_func_table_lookup(func_name);
             AstNode* def_ast = func_ast_lookup(func_name);
+            /* 方法内裸名自递归：扁平名查不到时匹配当前方法自身 */
+            AstNode self_tmp;
+            BytecodeFunc* self_fn = resolve_self_recursive(c, func_name, &self_tmp);
+            if(!callee && self_fn) {
+                return compile_user_call(c, self_fn, &self_tmp, args, 1, NULL);
+            }
             if(callee && def_ast) {
-                return compile_user_call(c, callee, def_ast, args, 1);
+                return compile_user_call(c, callee, def_ast, args, 1, NULL);
             }
             /* 动态调用：func_name 是持有函数值的变量 */
             {
@@ -561,12 +573,147 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_INDEX: {
-        /* 数组/字符串下标读 arr[i]：arr、i 目标 VALUE，弹 i 再弹 arr，压元素 */
+        /* self.field 快路径：arr 是 AST_VAR "self"，且当前 fn 是 struct/class 方法，
+         * idx 是字符串字面量且能在 method_self_struct 类型中找到字段 → OPC_LOAD_FIELD
+         * 走 typed 栈路由（INT64/DOUBLE/PTR），不做 Value 装箱 */
+        if(node->u.index.arr->type == AST_VAR &&
+           strcmp(node->u.index.arr->u.varname, "self") == 0 &&
+           c->fn->method_self_struct &&
+           node->u.index.idx->type == AST_STRING) {
+            const char* field_name = node->u.index.idx->u.sval;
+            /* method_self_struct 可能带 "class:" 前缀（class_register 设置） */
+            const char* tname = c->fn->method_self_struct;
+            if(strncmp(tname, "class:", 6) == 0) tname += 6;
+            TypeDef* td = struct_lookup(tname);
+            if(!td) td = class_lookup(tname);
+            if(td && td->runtime_info) {
+                FieldInfo* fi = lumyr_type_find_field(td->runtime_info, field_name);
+                if(fi) {
+                    int fi_idx = (int)(fi - td->runtime_info->fields);
+                    int cls = lumyr_etype_stackcls(fi->valtype);
+                    /* 编译 self 到 PTR 栈（self 是指针，LOAD_PTR_VAR 直接加载） */
+                    ExprType arr_et = c_expr(c, node->u.index.arr);
+                    if(arr_et != EXPR_TYPE_PTR) {
+                        /* 兜底：非 PTR 则装箱到 VALUE，再 BOX_PTR 到 PTR 栈 */
+                        emit_to_dynamic(c, arr_et, c_expr_cast_type(c, node->u.index.arr));
+                        emit(c, OPC_BOX_PTR, (int)CAST_PTR, 0);
+                    }
+                    emit(c, OPC_LOAD_FIELD, cls, fi_idx);
+                    return (cls == 1) ? EXPR_TYPE_INT :
+                           (cls == 2) ? EXPR_TYPE_DOUBLE : EXPR_TYPE_PTR;
+                }
+            }
+        }
+        /* 默认：动态 INDEX_GET（VAL_STRUCT_PTR 在 vm_exec_index_get 中走 lumyr_field_get） */
         c_expr_to_value(c, node->u.index.arr);
         c_expr_to_value(c, node->u.index.idx);
         emit(c, OPC_INDEX_GET, 0, 0);
         return EXPR_TYPE_NONE;
     }
+
+    case AST_CLASS_NEW: {
+        /* class/struct 实例构造：TypeName(args)
+         * struct 无 __init__：实参压 VALUE 栈 → CLASS_NEW 弹参直接初始化字段
+         * class 有 __init__：CLASS_NEW(argc=0) → BOX_PTR(self 入 VALUE) → 编译实参 → CALL __init__ */
+        const char* tname = node->u.class_new.class_name;
+        TypeDef* td = struct_lookup(tname);
+        if(!td) td = class_lookup(tname);
+        if(!td || !td->runtime_info) {
+            /* 未注册类型：回退到普通函数调用（兼容旧语义） */
+            AstNode** argv = NULL;
+            int argc = 0, acap = 0;
+            collect_call_args(node->u.class_new.args, &argv, &argc, &acap);
+            for(int i = 0; i < argc; i++) c_expr_to_value(c, argv[i]);
+            free(argv);
+            AstNode callee_var;
+            memset(&callee_var, 0, sizeof(callee_var));
+            callee_var.type = AST_VAR;
+            callee_var.u.varname = (char*)tname;
+            c_expr(c, &callee_var);
+            emit(c, OPC_CALLV, 0, argc);
+            return EXPR_TYPE_NONE;
+        }
+        /* 计算实参个数 */
+        AstNode** argv = NULL;
+        int argc = 0, acap = 0;
+        collect_call_args(node->u.class_new.args, &argv, &argc, &acap);
+        free(argv);
+
+        /* 判断是否有 __init__ 构造函数（class 有 constructor 节点） */
+        int has_init = (td->is_class && td->constructor != NULL);
+
+        /* RuntimeTypeInfo* 存入常量池 */
+        int cp_idx = bf_add_u64_const(c->fn, (uint64_t)(uintptr_t)td->runtime_info);
+
+        if(has_init) {
+            /* class 有 __init__：CLASS_NEW 创建实例 → 存临时变量 → 编译实参 + 加载 self → CALL → POP ret → 加载临时变量
+             * CALL 会消耗 self 和实参，所以先存实例到临时变量，调用后恢复 */
+            emit(c, OPC_CLASS_NEW, cp_idx, 0);
+            /* 存实例到临时变量（编译期生成唯一名） */
+            static int ctor_tmp_seq = 0;
+            char tmp_name[64];
+            snprintf(tmp_name, sizeof(tmp_name), "__ctor_tmp_%d", ctor_tmp_seq++);
+            int tmp_idx = c_add_var(c, tmp_name, EXPR_TYPE_PTR);
+            int tmp_bf = bf_sym(c->fn, tmp_name);
+            c->fn->var_type_tags[tmp_bf] = (int)CAST_CLASS_PTR;
+            emit(c, OPC_STORE_PTR_VAR, tmp_idx, 0);
+            /* 构造函数名：<class>___init__ */
+            char ctor_name[256];
+            snprintf(ctor_name, sizeof(ctor_name), "%s___init__", tname);
+            BytecodeFunc* ctor_fn = ir_func_table_lookup(ctor_name);
+            AstNode* ctor_ast = func_ast_lookup(ctor_name);
+            if(ctor_fn && ctor_ast) {
+                /* 加载 self（临时变量）到 PTR 栈 */
+                emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
+                /* 按形参类型编译实参（slot 0 = self，已加载；slot 1+ = 用户实参） */
+                AstNode** argv2 = NULL;
+                int argc2 = 0, acap2 = 0;
+                collect_call_args(node->u.class_new.args, &argv2, &argc2, &acap2);
+                int slot = 1;
+                AstNode* p = ctor_ast->u.func_def.params;
+                if(p && p->u.param.name && strcmp(p->u.param.name, "self") == 0) {
+                    p = p->u.param.next;
+                }
+                int ai = 0;
+                while(p && ai < argc2) {
+                    if(p->u.param.is_ellipsis) break;
+                    CastKind pck = (slot < ctor_fn->sym_cnt) ? (CastKind)ctor_fn->var_type_tags[slot] : CAST_NONE;
+                    ExprType param_et = castkind_to_exprtype(pck);
+                    if(param_et != EXPR_TYPE_NONE) {
+                        ExprType at = c_expr(c, argv2[ai]);
+                        emit_value_cast(c, at, param_et);
+                    } else {
+                        c_expr_to_value(c, argv2[ai]);
+                    }
+                    slot++;
+                    ai++;
+                    p = p->u.param.next;
+                }
+                free(argv2);
+                /* emit CALL */
+                int total = 1 + argc2;
+                int cs = bf_add_callsite(c->fn, ctor_name, total, 0, (int)EXPR_TYPE_NONE);
+                emit(c, OPC_CALL, cs, total);
+            } else {
+                fprintf(stderr, "IR: 警告 - class %s 的 __init__ 未注册\n", tname);
+            }
+            /* 加载临时变量（实例）到 PTR 栈作为表达式结果 */
+            emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
+            return EXPR_TYPE_PTR;
+        } else {
+            /* struct 或 class 无 __init__：实参压 VALUE 栈，CLASS_NEW 弹参直接初始化 */
+            AstNode** argv2 = NULL;
+            int argc2 = 0, acap2 = 0;
+            collect_call_args(node->u.class_new.args, &argv2, &argc2, &acap2);
+            for(int i = 0; i < argc2; i++) c_expr_to_value(c, argv2[i]);
+            free(argv2);
+            emit(c, OPC_CLASS_NEW, cp_idx, argc2);
+            return EXPR_TYPE_PTR;
+        }
+    }
+
+    case AST_METHOD_CALL:
+        return compile_method_call_expr(c, node, 1);
 
     case AST_ARRAY_LIT: {
         /* 数组字面量 [e1,e2,...]：各元素目标 VALUE 压栈，ARRAY_LIT 弹出组装 */
@@ -599,7 +746,57 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_INDEX_ASSIGN: {
-        /* 下标写 arr[i] = v（表达式值为 v）：arr,idx,v 目标 VALUE 压栈，INDEX_SET */
+        /* self.field = val 快路径：arr 是 self，idx 是字符串字面量，且当前 fn 是方法
+         * → OPC_STORE_FIELD（typed 栈路由） */
+        if(node->u.index_assign.arr->type == AST_VAR &&
+           strcmp(node->u.index_assign.arr->u.varname, "self") == 0 &&
+           c->fn->method_self_struct &&
+           node->u.index_assign.idx->type == AST_STRING) {
+            const char* field_name = node->u.index_assign.idx->u.sval;
+            /* method_self_struct 可能带 "class:" 前缀（class_register 设置） */
+            const char* tname = c->fn->method_self_struct;
+            if(strncmp(tname, "class:", 6) == 0) tname += 6;
+            TypeDef* td = struct_lookup(tname);
+            if(!td) td = class_lookup(tname);
+            if(td && td->runtime_info) {
+                FieldInfo* fi = lumyr_type_find_field(td->runtime_info, field_name);
+                if(fi) {
+                    int fi_idx = (int)(fi - td->runtime_info->fields);
+                    int cls = lumyr_etype_stackcls(fi->valtype);
+                    /* 编译 val 到对应 typed 栈，不匹配则走动态路径 */
+                    ExprType val_et = c_expr(c, node->u.index_assign.value);
+                    int matched = 0;
+                    if(cls == 1) {
+                        if(val_et == EXPR_TYPE_INT) matched = 1;
+                        else if(val_et == EXPR_TYPE_DOUBLE) { emit(c, OPC_DOUBLE_TO_INT64, 0, 0); matched = 1; }
+                        else if(val_et == EXPR_TYPE_PTR) { emit(c, OPC_PTR_TO_INT64, 0, 0); matched = 1; }
+                    } else if(cls == 2) {
+                        if(val_et == EXPR_TYPE_DOUBLE) matched = 1;
+                        else if(val_et == EXPR_TYPE_INT) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); matched = 1; }
+                    } else {
+                        if(val_et == EXPR_TYPE_PTR) matched = 1;
+                    }
+                    if(matched) {
+                        /* 编译 self 到 PTR 栈 */
+                        ExprType arr_et = c_expr(c, node->u.index_assign.arr);
+                        if(arr_et != EXPR_TYPE_PTR) {
+                            emit_to_dynamic(c, arr_et, c_expr_cast_type(c, node->u.index_assign.arr));
+                            emit(c, OPC_BOX_PTR, (int)CAST_PTR, 0);
+                        }
+                        emit(c, OPC_STORE_FIELD, cls, fi_idx);
+                        return (cls == 1) ? EXPR_TYPE_INT :
+                               (cls == 2) ? EXPR_TYPE_DOUBLE : EXPR_TYPE_PTR;
+                    }
+                    /* 类型不匹配：已编译到 typed 栈但无法走 STORE_FIELD
+                     * Phase D1 暂不支持不匹配 case（typed field 应配 typed val） */
+                    fprintf(stderr, "IR: self.%s = val 类型不匹配 (field cls=%d, val et=%d)\n",
+                            field_name, cls, (int)val_et);
+                    /* 兜底：继续走动态路径会有栈不平衡，直接报错退出 */
+                    return EXPR_TYPE_NONE;
+                }
+            }
+        }
+        /* 默认：动态 INDEX_SET（VAL_STRUCT_PTR 走 lumyr_field_set） */
         c_expr_to_value(c, node->u.index_assign.arr);
         c_expr_to_value(c, node->u.index_assign.idx);
         c_expr_to_value(c, node->u.index_assign.value);
@@ -953,6 +1150,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 记录精确类型到 BytecodeFunc 的 var_type_tags */
         int bf_idx = bf_sym(c->fn, node->u.assign.varname);
         c->fn->var_type_tags[bf_idx] = (int)cast_type;
+        /* 记录变量持有的自定义类型名，供后续 recv.method() 推断接收者类型 */
+        record_var_owner(c, bf_idx, node->u.assign.expr);
         if(rt == EXPR_TYPE_INT) {
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
         } else if(rt == EXPR_TYPE_DOUBLE) {
@@ -1038,6 +1237,94 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
     return "unknown";
 }
 
+/* self_field_lookup：检测 node 是否是 self.<字段名> 访问
+ * 返回 FieldInfo*（含偏移/精确类型/嵌套类型名）；不匹配返回 NULL
+ * lumyr_self_field_castkind / c_expr_owner_type 共用，单点封装检测逻辑 */
+static FieldInfo* self_field_lookup(Ctx* c, AstNode* node) {
+    if(!node || node->type != AST_INDEX) return NULL;
+    if(!node->u.index.arr || node->u.index.arr->type != AST_VAR) return NULL;
+    if(strcmp(node->u.index.arr->u.varname, "self") != 0) return NULL;
+    if(!c->fn->method_self_struct) return NULL;
+    if(!node->u.index.idx || node->u.index.idx->type != AST_STRING) return NULL;
+
+    /* method_self_struct 可能带 "class:" 前缀（class 方法设置） */
+    const char* tname = c->fn->method_self_struct;
+    if(strncmp(tname, "class:", 6) == 0) tname += 6;
+    TypeDef* td = struct_lookup(tname);
+    if(!td) td = class_lookup(tname);
+    if(!td || !td->runtime_info) return NULL;
+
+    return lumyr_type_find_field(td->runtime_info, node->u.index.idx->u.sval);
+}
+
+/* lumyr_self_field_castkind：检测 node 是否是 self.field 访问
+ * 若是，返回字段的 CastKind（INT/DOUBLE/STRING 等）；否则返回 CAST_NONE
+ * 用于 arith_get_expr_type 和 c_expr_cast_type 统一识别 self.field 类型
+ * 使得 self.x + 1 等 BINOP 能走 typed 栈路径，而非全部压 VALUE 栈 */
+CastKind lumyr_self_field_castkind(Ctx* c, AstNode* node) {
+    FieldInfo* fi = self_field_lookup(c, node);
+    if(!fi) return CAST_NONE;
+
+    /* 仅当字段类型支持 typed 栈路由（INT64/DOUBLE/PTR）时返回 CastKind
+     * 否则返回 CAST_NONE 让表达式走 VALUE 栈动态路径 */
+    int cls = lumyr_etype_stackcls(fi->valtype);
+    if(cls == 0) return CAST_NONE;
+
+    return (CastKind)valuetype_to_castkind((int)fi->valtype);
+}
+
+/* c_expr_owner_type：推断表达式持有的自定义类型名（struct/class 实例）
+ * 覆盖形态：构造（AST_CLASS_NEW）、self、普通变量（var_struct_names）、self.field 嵌套字段
+ * 返回 strdup 的类型名（调用方释放）；非实例或类型未知返回 NULL
+ * 用于 AST_ASSIGN 记录变量属主类型、AST_METHOD_CALL 推断接收者类型 */
+static char* c_expr_owner_type(Ctx* c, AstNode* node) {
+    if(!node) return NULL;
+
+    /* 构造表达式：类型名直接可知 */
+    if(node->type == AST_CLASS_NEW) return strdup(node->u.class_new.class_name);
+
+    if(node->type == AST_VAR) {
+        const char* vn = node->u.varname;
+        /* self：方法属主类型 */
+        if(strcmp(vn, "self") == 0 && c->fn->method_self_struct) {
+            const char* t = c->fn->method_self_struct;
+            if(strncmp(t, "class:", 6) == 0) t += 6;
+            return strdup(t);
+        }
+        /* 普通变量：查平行数组 var_struct_names（由 AST_ASSIGN 记录） */
+        for(int i = 0; i < c->fn->sym_cnt; i++) {
+            if(c->fn->syms[i] && strcmp(c->fn->syms[i], vn) == 0) {
+                if(c->fn->var_struct_names && c->fn->var_struct_names[i])
+                    return strdup(c->fn->var_struct_names[i]);
+                return NULL;
+            }
+        }
+        return NULL;
+    }
+
+    /* self.field 嵌套字段：FieldInfo.type_name 记录字段的自定义类型名 */
+    if(node->type == AST_INDEX) {
+        FieldInfo* fi = self_field_lookup(c, node);
+        if(fi && fi->type_name) return strdup(fi->type_name);
+    }
+
+    return NULL;
+}
+
+/* record_var_owner：为变量槽 bf_idx 记录 RHS 持有的自定义类型名（struct/class）
+ * RHS 可推断（构造/变量传递/self.field）→ 替换；无法推断（动态返回值）→ 保留旧记录不清空。
+ * c_expr 与 c_stmt 的 AST_ASSIGN 共用，保证属主类型单点维护。 */
+static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs) {
+    char* owner = c_expr_owner_type(c, rhs);
+    if(!owner) return;
+    if(!c->fn->var_struct_names) {
+        int cap = c->fn->sym_cap > 0 ? c->fn->sym_cap : 16;
+        c->fn->var_struct_names = (char**)calloc((size_t)cap, sizeof(char*));
+    }
+    if(c->fn->var_struct_names[bf_idx]) free(c->fn->var_struct_names[bf_idx]);
+    c->fn->var_struct_names[bf_idx] = owner;
+}
+
 /* 获取表达式的精确类型（CastKind），用于打印格式化 */
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(!node) return CAST_NONE;
@@ -1075,6 +1362,22 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         if(callee && callee->ret_type_name)
             return ir_type_name_to_castkind(callee->ret_type_name);
         return CAST_NONE;
+    }
+
+    /* struct/class 构造：返回对应的 CAST_STRUCT_PTR/CAST_CLASS_PTR */
+    if(node->type == AST_CLASS_NEW) {
+        const char* tname = node->u.class_new.class_name;
+        if(struct_lookup(tname)) return CAST_STRUCT_PTR;
+        if(class_lookup(tname)) return CAST_CLASS_PTR;
+        return CAST_PTR;
+    }
+
+    /* self.field 访问（AST_INDEX）：委托 lumyr_self_field_castkind
+     * 让 self.x + 1 等 BINOP 的 c_expr_cast_type(self.x) 返回字段 CastKind
+     * 而非 CAST_NONE（导致 c_value_fallback 误压 VALUE 栈） */
+    if(node->type == AST_INDEX) {
+        CastKind ck = lumyr_self_field_castkind(c, node);
+        if(ck != CAST_NONE) return ck;
     }
 
     /* 二元运算：递归判断（严格遵循 C/C++ 算术类型提升规则） */
@@ -1399,32 +1702,62 @@ static void collect_call_args(AstNode* n, AstNode*** argv, int* argc, int* acap)
     }
 }
 
+/* resolve_self_recursive：方法体内以裸名调用自身（自递归）时，
+ * 函数表注册名是内部唯一名、扁平名查不到；此处匹配当前方法并构造仅含形参链的
+ * 临时 def 壳（compile_user_call 仅遍历 def 的形参签名），返回当前 fn；否则 NULL */
+static BytecodeFunc* resolve_self_recursive(Ctx* c, const char* func_name, AstNode* tmp_def) {
+    if(!c->fn->class_name || !c->fn->name) return NULL;
+    const char* msep = strstr(c->fn->name, "__m__");
+    if(!msep || strcmp(msep + 5, func_name) != 0) return NULL;
+    memset(tmp_def, 0, sizeof(AstNode));
+    tmp_def->type = AST_FUNC_DEF;
+    tmp_def->u.func_def.params = c->cur_params;
+    return c->fn;
+}
+
 /* 编译用户自定义函数调用。
  * 实参按形参声明左至右绑定，按形参类型转换；缺实参用默认值；个数校验。
  * 发 OPC_CALL(a=callsite 下标, b=绑定参数个数)，返回 callee 返回类型。
  * 注意：可变形参 ...args 由 Task 9 处理，本函数遇到即停（多余实参 Task 9 再组装）。 */
-static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result)
+static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result, AstNode* method_recv)
 {
     /* 1. 收集实参到数组（左至右，中序遍历左倾 SEQ 树） */
     int argc = 0, acap = 0;
     AstNode** argv = NULL;
     collect_call_args(args, &argv, &argc, &acap);
 
-    /* 2. 逐形参绑定（可变形参前停止） */
+    /* 方法调用：method_recv 非空。栈布局 slot 0=receiver（self），slot 1+=用户实参。
+     * 先编译 receiver 占底（VM 弹栈时实参在顶先弹，receiver 最后弹） */
+    int is_method = (method_recv != NULL);
+    int base_slot = is_method ? 1 : 0;
+    int total = 0;
+    if(is_method) {
+        ExprType rt0 = c_expr(c, method_recv);
+        if(rt0 != EXPR_TYPE_PTR) {
+            fprintf(stderr, "IR: %s 方法调用的接收者不是实例引用（receiver 类型=%d）\n",
+                    callee->name ? callee->name : "?", (int)rt0);
+        }
+        total = 1;
+    }
+
+    /* 2. 逐形参绑定（方法时第一个形参 self 已由 receiver 占据，跳过；可变形参前停止） */
     int bound = 0;
-    int* ref_flags = (int*)calloc(argc > 0 ? argc : 1, sizeof(int));
-    int* ref_slots = (int*)malloc((argc > 0 ? argc : 1) * sizeof(int));
-    for(int i = 0; i < (argc > 0 ? argc : 1); i++) ref_slots[i] = -1;
-    for(AstNode* p = def_ast->u.func_def.params; p; p = p->u.param.next) {
+    int nslots = base_slot + argc;
+    int* ref_flags = (int*)calloc(nslots > 0 ? nslots : 1, sizeof(int));
+    int* ref_slots = (int*)malloc((nslots > 0 ? nslots : 1) * sizeof(int));
+    for(int i = 0; i < (nslots > 0 ? nslots : 1); i++) ref_slots[i] = -1;
+    int pindex = 0;
+    for(AstNode* p = def_ast->u.func_def.params; p; p = p->u.param.next, pindex++) {
+        if(is_method && pindex == 0) continue;       /* self 槽已由 receiver 填 */
         if(p->u.param.is_ellipsis) break;      /* 可变槽 Task 9 */
-        int slot = bound;
+        int slot = base_slot + bound;
         /* 形参类型（slot==形参符号下标；var_type_tags 初值 -1） */
         CastKind pck = (slot < callee->sym_cnt) ? (CastKind)callee->var_type_tags[slot] : CAST_NONE;
         ExprType param_et = castkind_to_exprtype(pck);
 
-        if(p->u.param.is_ref && slot < argc) {
+        if(p->u.param.is_ref && bound < argc) {
             /* ref 形参：实参必须是左值（当前支持变量） */
-            AstNode* arg = argv[slot];
+            AstNode* arg = argv[bound];
             if(arg->type != AST_VAR) {
                 fprintf(stderr, "IR: 调用 %s 的 ref 形参 %s 需要左值（变量）\n",
                         callee->name ? callee->name : "?", p->u.param.name);
@@ -1437,12 +1770,12 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
             }
         }
 
-        if(slot < argc) {
+        if(bound < argc) {
             if(param_et != EXPR_TYPE_NONE) {
-                ExprType at = c_expr(c, argv[slot]);
+                ExprType at = c_expr(c, argv[bound]);
                 emit_value_cast(c, at, param_et);   /* typed -> typed */
             } else {
-                c_expr_to_value(c, argv[slot]);      /* 上下文目标 VALUE，免 BOX */
+                c_expr_to_value(c, argv[bound]);      /* 上下文目标 VALUE，免 BOX */
             }
         } else if(p->u.param.default_val) {
             if(param_et != EXPR_TYPE_NONE) {
@@ -1457,9 +1790,9 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
         }
         bound++;
     }
+    total += bound;
 
     /* 3. 可变参数：超出普通形参的实参组装为数组，绑定到可变槽（PTR/VALUE） */
-    int total = bound;
     if(callee->has_variadic) {
         int extra = argc - bound;
         if(extra < 0) extra = 0;
@@ -1467,7 +1800,7 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
             c_expr_to_value(c, argv[bound + i]);
         }
         emit(c, OPC_ARRAY_LIT, 0, extra);   /* 弹 extra 个 VALUE，压数组 */
-        total = bound + 1;                  /* 数组作为第 bound 个槽（可变形参） */
+        total += 1;                         /* 数组作为可变槽 */
     } else if(argc > bound) {
         fprintf(stderr, "IR: 调用 %s 实参过多：%d 个，最多 %d 个\n",
                 callee->name ? callee->name : "?", argc, bound);
@@ -1480,20 +1813,69 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
         ret_et = castkind_to_exprtype(rck);
     }
 
-    /* 5. 登记调用点并发 CALL */
+    /* 5. 登记调用点并发 CALL / CALL_METHOD。
+     * callee 名记录静态定义处内部名（签名来源）；CALL_METHOD 运行时按 receiver 实际类型重新解析 */
     int cs = bf_add_callsite(c->fn, callee->name ? callee->name : "?",
                              total, keep_result, (int)ret_et);
     CallSite* csp = &c->fn->callsites[cs];
-    for(int i = 0; i < bound; i++) {
+    for(int i = 0; i < total; i++) {
         csp->arg_is_ref[i] = ref_flags[i];
         csp->arg_ref_slots[i] = ref_slots[i];
     }
     free(ref_flags);
     free(ref_slots);
-    emit(c, OPC_CALL, cs, total);
+    emit(c, is_method ? OPC_CALL_METHOD : OPC_CALL, cs, total);
     free(argv);
 
     return ret_et;
+}
+
+/* 编译方法调用 recv.method(args)。
+ * 按 receiver 静态类型解析方法签名 → 参数 typed 路由 → OPC_CALL_METHOD；
+ * VM 运行时按 receiver 实际类型（方法表含继承槽位，重写覆盖在原位置）分派 → 多态。
+ * keep_result=1 表达式语境压返回值；0 语句语境丢弃。c_expr/c_stmt 共用。 */
+static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result) {
+    AstNode* recv = node->u.method_call.recv;
+    const char* mname = node->u.method_call.method;
+    AstNode* margs = node->u.method_call.args;
+
+    /* 1. 推断 receiver 类型名 + 定位 TypeDef */
+    char* owner = c_expr_owner_type(c, recv);
+    TypeDef* td = owner ? type_lookup(owner) : NULL;
+    if(!owner || !td) {
+        /* 无法确定类型：无静态签名，退化为动态调用（recv 与实参全 VALUE，CALLV）。
+         * 正常全类型标注路径不会进入；保留动态 map 函数值等场景 */
+        fprintf(stderr, "IR: 无法确定方法 \"%s\" 的接收者类型，退化为动态调用\n", mname);
+        c_expr_to_value(c, recv);
+        AstNode** av = NULL; int ac = 0, acp = 0;
+        collect_call_args(margs, &av, &ac, &acp);
+        for(int i = 0; i < ac; i++) c_expr_to_value(c, av[i]);
+        free(av);
+        emit(c, OPC_CALLV, 0, ac);
+        free(owner);
+        return EXPR_TYPE_NONE;
+    }
+
+    /* 2. 方法 AST（形参签名，沿继承链）；静态定义处 BytecodeFunc（继承时=父类实现） */
+    AstNode* mdef_ast = type_find_method_ast(owner, mname);
+    BytecodeFunc* def_fn = NULL;
+    if(td->runtime_info) {
+        RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
+        if(rf && interp_func_is_payload(rf)) {
+            InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+            def_fn = pl->bytecode;
+        }
+    }
+    if(!mdef_ast || !def_fn) {
+        fprintf(stderr, "IR: 类型 \"%s\" 没有方法 \"%s\"\n", owner, mname);
+        free(owner);
+        return EXPR_TYPE_NONE;
+    }
+
+    /* 3. 复用统一参数绑定路径（method_recv=recv → OPC_CALL_METHOD，self 槽自动占位） */
+    ExprType ret = compile_user_call(c, def_fn, mdef_ast, margs, keep_result, recv);
+    free(owner);
+    return ret;
 }
 
 void c_stmt(Ctx* c, AstNode* node) {
@@ -1591,6 +1973,8 @@ void c_stmt(Ctx* c, AstNode* node) {
             c->fn->var_type_tags[bf_idx] = (int)cast_type;
         else
             c->fn->var_type_tags[bf_idx] = (int)CAST_NONE;
+        /* 记录变量持有的自定义类型名（顶层语句赋值），供后续 recv.method() 推断接收者类型 */
+        record_var_owner(c, bf_idx, node->u.assign.expr);
         if(target_et == EXPR_TYPE_INT) {
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
         } else if(target_et == EXPR_TYPE_DOUBLE) {
@@ -1602,7 +1986,12 @@ void c_stmt(Ctx* c, AstNode* node) {
         }
         break;
     }
-    
+
+    case AST_METHOD_CALL:
+        /* 语句形式方法调用：keep_result=0，callsite 不压返回值，无需 POP */
+        compile_method_call_expr(c, node, 0);
+        break;
+
     case AST_SEQ: {
         /* 语句序列：迭代遍历，避免长链表导致栈溢出 */
         /* AST_SEQ 可能是左偏树或右偏树，用栈模拟递归。
@@ -1652,8 +2041,13 @@ void c_stmt(Ctx* c, AstNode* node) {
         const char* call_name = node->u.call.name;
         BytecodeFunc* callee = ir_func_table_lookup(call_name);
         AstNode* def_ast = func_ast_lookup(call_name);
-        if(callee && def_ast) {
-            compile_user_call(c, callee, def_ast, node->u.call.args, 0);
+        /* 方法内裸名自递归 fallback */
+        AstNode self_tmp;
+        BytecodeFunc* self_fn = resolve_self_recursive(c, call_name, &self_tmp);
+        if(!callee && self_fn) {
+            compile_user_call(c, self_fn, &self_tmp, node->u.call.args, 0, NULL);
+        } else if(callee && def_ast) {
+            compile_user_call(c, callee, def_ast, node->u.call.args, 0, NULL);
         } else {
             fprintf(stderr, "IR: unknown function %s\n", call_name);
         }
@@ -1993,6 +2387,7 @@ void c_stmt(Ctx* c, AstNode* node) {
     case AST_FUNC_DEF:
     case AST_EXTERN_FUNC:
     case AST_PARAM:
+    case AST_NONE:   /* no-op 语句（struct/class 声明注册后返回 ast_none()） */
         break;
 
     default:
@@ -2088,7 +2483,25 @@ static void ctx_cleanup(Ctx* c) {
 
 /* 编译函数 / Compile a lumin function into bytecode and register it */
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
-    BytecodeFunc* fn = bytecode_func_new(name, 0);
+    /* 方法唯一内部名：<属主>__m__<方法>，避免不同 struct/class 的同名方法
+     * 在全局函数表互相覆盖（分派必须通过接收者类型）。
+     * 构造函数名 <Class>___init__ 已唯一保持；普通函数 class_name==NULL 保持原名 */
+    const char* reg_name = name;
+    char* internal_name = NULL;
+    if(class_name && name) {
+        size_t nl = strlen(name);
+        int is_ctor = (nl >= 9 && strcmp(name + nl - 9, "___init__") == 0);
+        if(!is_ctor) {
+            size_t need = strlen(class_name) + nl + 6;  /* "__m__"(4) + \0 */
+            internal_name = (char*)malloc(need);
+            if(internal_name) {
+                snprintf(internal_name, need, "%s__m__%s", class_name, name);
+                reg_name = internal_name;
+            }
+        }
+    }
+    BytecodeFunc* fn = bytecode_func_new(reg_name, 0);
+    free(internal_name);  /* bytecode_func_new 已 strdup */
     fn->is_generator = is_generator ? 1 : 0;
     fn->class_name = class_name ? strdup(class_name) : NULL;
     fn->ret_type_name = ret_type_name ? strdup(ret_type_name) : NULL;
@@ -2097,6 +2510,7 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     Ctx c;
     memset(&c, 0, sizeof(Ctx));
     c.fn = fn;
+    c.cur_params = params;
 
     int total = 0, pcap = 0;
     for(AstNode* p = params; p; p = p->u.param.next) {
@@ -2112,7 +2526,27 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
         fn->param_is_ref[total] = p->u.param.is_ref;
         /* 形参类型标注：写 var_type_tags，并据此确定 Ctx 参数类型 */
         CastKind pck = ir_type_name_to_castkind(p->u.param.constraint);
-        if(pck != CAST_NONE) fn->var_type_tags[slot] = (int)pck;
+        /* 特例：self 参数约束为自定义类型名时，struct_register 可能尚未调用
+         * （struct 方法在 struct 定义体内即编译），此时 pck=CAST_NONE。
+         * 但约束名实际就是 struct/class 名 → 视为 STRUCT_PTR/CLASS_PTR。
+         * 这里仅设置 method_self_struct 和 var_type_tags，让后续 LOAD_FIELD 走 fast path */
+        int is_self_struct = (strcmp(p->u.param.name, "self") == 0 &&
+                              p->u.param.constraint &&
+                              pck == CAST_NONE);
+        if(is_self_struct) {
+            /* 约束名是自定义类型（struct/class），无法此时确定是 struct 还是 class，
+             * 统一标记为 CAST_STRUCT_PTR（IR 端 STRUCT_PTR 和 CLASS_PTR 行为一致） */
+            pck = CAST_STRUCT_PTR;
+            fn->var_type_tags[slot] = (int)pck;
+            if(!fn->method_self_struct) fn->method_self_struct = strdup(p->u.param.constraint);
+        } else {
+            if(pck != CAST_NONE) fn->var_type_tags[slot] = (int)pck;
+            /* 若是 self 参数且已识别为 struct/class：也设 method_self_struct */
+            if(strcmp(p->u.param.name, "self") == 0 && p->u.param.constraint &&
+               (pck == CAST_STRUCT_PTR || pck == CAST_CLASS_PTR)) {
+                if(!fn->method_self_struct) fn->method_self_struct = strdup(p->u.param.constraint);
+            }
+        }
         ExprType et = castkind_to_exprtype(pck);   /* 无标注 → NONE（动态） */
         ctx_register_param(&c, p->u.param.name, et);
         if(p->u.param.is_ellipsis) fn->has_variadic = 1;

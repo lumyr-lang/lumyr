@@ -1,7 +1,6 @@
 #include "lm_value.h"
 #include "lm_json.h"
-#include "lm_class.h"
-#include "lm_struct.h"
+#include "lm_type.h"
 #include "lm_bigint.h"
 #include "lm_decimal.h"
 #include "lm_bitdecimal.h"
@@ -474,11 +473,7 @@ Value lumyr_index_get(Value c, Value idx) {
     if(c.type == VAL_STRUCT_PTR || c.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            if(c.type == VAL_CLASS_PTR) {
-                return lumyr_class_get_field(c, idxcs);
-            } else {
-                return lumyr_struct_get_field(c, idxcs);
-            }
+            return lumyr_field_get(c, idxcs);
         }
         runtime_error("结构体属性访问必须是字符串键");
         return val_none();
@@ -595,8 +590,14 @@ Value lumyr_type(Value v) {
         case VAL_MAP:    return lumyr_make_string("map");
         case VAL_ERROR:  return lumyr_make_string("error");
         case VAL_GENERATOR: return lumyr_make_string("generator");
-        case VAL_STRUCT_PTR: return lumyr_make_string("struct");
-        case VAL_CLASS_PTR: return lumyr_make_string("class");
+        case VAL_STRUCT_PTR: {
+            const char* n = lumyr_instance_get_name(v);
+            return lumyr_make_string(n ? n : "struct");
+        }
+        case VAL_CLASS_PTR: {
+            const char* n = lumyr_instance_get_name(v);
+            return lumyr_make_string(n ? n : "class");
+        }
         case VAL_TYPED_ARRAY: return lumyr_make_string("typed_array");
         // C类型（各类型专用，不混用）
         case VAL_VOID:     return lumyr_make_string("void");
@@ -677,11 +678,7 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
         if(idx.type == VAL_STRING) {
             const char* idxcs = lumyr_str_cstr(&idx);
-            if(lumyr_is_class_instance(arr)) {
-                lumyr_class_set_field(arr, idxcs, val);
-            } else {
-                lumyr_struct_set_field(arr, idxcs, val);
-            }
+            lumyr_field_set(arr, idxcs, val);
             return val;
         }
         runtime_error("结构体属性写入必须是字符串键");
@@ -926,12 +923,12 @@ Value lumyr_eq(Value a, Value b) {
     if(a.type == VAL_STRUCT_PTR || b.type == VAL_STRUCT_PTR) {
         if((a.type != VAL_STRUCT_PTR && a.type != VAL_CLASS_PTR) || (b.type != VAL_STRUCT_PTR && b.type != VAL_CLASS_PTR)) return lumyr_make_bool(0);
         if(!a.v.struct_ptr || !b.v.struct_ptr) return lumyr_make_bool(a.v.struct_ptr == b.v.struct_ptr);
-        /* class 是引用类型，按指针比较 */
-        if(lumyr_is_class_instance(a) || lumyr_is_class_instance(b)) {
+        /* class 是引用类型，按指针比较；struct 是值类型，按字段比较 */
+        RuntimeTypeInfo* info = lumyr_instance_get_info(a);
+        if(info && info->kind == TYPE_KIND_CLASS) {
             return lumyr_make_bool(a.v.struct_ptr == b.v.struct_ptr);
         }
-        /* struct 是值类型，按字段比较 */
-        return lumyr_make_bool(lumyr_struct_eq(a, b));
+        return lumyr_make_bool(lumyr_instance_eq(a, b));
     }
     if(a.type == VAL_MAP || b.type == VAL_MAP) {
         if(a.type != VAL_MAP || b.type != VAL_MAP) return lumyr_make_bool(0);

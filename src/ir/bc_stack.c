@@ -1,6 +1,7 @@
 // lumyr-lang 字节码栈深度分析实现
 // 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
 #include "bc_stack.h"
+#include "ir_types.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,17 +30,41 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_NEG: case OPC_POS: case OPC_LOGIC_NOT:
         case OPC_TO_BOOL:
         case OPC_INDEX_GET:
-        case OPC_LOAD_FIELD:
         case OPC_LOAD_STRUCT_PTR:
         case OPC_BUILTIN:
         case OPC_CALLV:
         case OPC_RETURN:
         case OPC_RETURN_NIL:
         case OPC_GET_ERR:
-        case OPC_CLASS_NEW:
         case OPC_ARRAY_LIT:
         case OPC_MAP_LIT:
             d.value = +1;
+            break;
+
+        /* LOAD_FIELD：弹 1 个 PTR，压 1 个 typed（按 a=stackcls 路由） */
+        case OPC_LOAD_FIELD:
+            d.ptr = -1;
+            if(in.a == 1)        d.int64 = +1;        /* INT64 栈 */
+            else if(in.a == 2)   d.double_stk = +1;   /* DOUBLE 栈 */
+            /* cls==3 时 ptr -1+1=0，无需额外设置 */
+            break;
+
+        /* CLASS_NEW：压 1 个 PTR（实例指针） */
+        case OPC_CLASS_NEW:
+            d.ptr = +1;
+            break;
+
+        /* CALL_METHOD：实参（含 receiver）已分散压入 4 栈，保守不扣减（同 OPC_CALL，
+         * 计入最大栈深避免误报）；keep_result 时按 callsite.ret_stack 压返回值到对应栈 */
+        case OPC_CALL_METHOD:
+            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result) {
+                switch((ExprType)fn->callsites[in.a].ret_stack) {
+                case EXPR_TYPE_INT:         d.int64 = +1; break;
+                case EXPR_TYPE_DOUBLE:      d.double_stk = +1; break;
+                case EXPR_TYPE_PTR:         d.ptr = +1; break;
+                default:                    d.value = +1; break;
+                }
+            }
             break;
 
         /* ===== Value 栈弹出指令 ===== */
@@ -52,8 +77,9 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INDEX_SET:
             d.value = -3; /* idx + val + receiver */
             break;
+        /* STORE_FIELD：弹 typed(值) + 弹 ptr(obj) + 压回 typed(值) = ptr -1 */
         case OPC_STORE_FIELD:
-            d.value = -2; /* obj + val */
+            d.ptr = -1;
             break;
         case OPC_STORE_NESTED_FIELD:
             d.value = -2; /* obj + val */
@@ -306,6 +332,7 @@ int op_stack_push(OpCode op)
         case OPC_BUILTIN:
         case OPC_CALL:
         case OPC_CALLV:
+        case OPC_CALL_METHOD:
         case OPC_RETURN:
         case OPC_RETURN_NIL:
         case OPC_GET_ERR:

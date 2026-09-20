@@ -12,6 +12,7 @@
 #include "lumyr_value.h"
 #include "lm_value.h"
 #include "gc_runtime.h"
+#include "lm_type.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,6 +160,12 @@ int vm_exec_veq(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vne(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in);
+
+/* struct/class 字段访问 */
+int vm_exec_load_field(VMExecCtx* ctx, Instruction* in);
+int vm_exec_store_field(VMExecCtx* ctx, Instruction* in);
+int vm_exec_class_new(VMExecCtx* ctx, Instruction* in);
+int vm_exec_call_method(VMExecCtx* ctx, Instruction* in);
 
 /* ========== 返回值独立化：堆字符串拷贝为独立副本（帧销毁后仍有效）；SSO/数值按值拷贝即可 ========== */
 Value ret_value_detach(Value v) {
@@ -344,6 +351,12 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_GETFUNC: handled = vm_exec_getfunc(ctx, &in); break;
         case OPC_CALLV: handled = vm_exec_callv(ctx, &in); break;
         case OPC_MKCLOSURE: handled = vm_exec_mkclosure(ctx, &in); break;
+
+        /* ===== struct/class ===== */
+        case OPC_LOAD_FIELD: handled = vm_exec_load_field(ctx, &in); break;
+        case OPC_STORE_FIELD: handled = vm_exec_store_field(ctx, &in); break;
+        case OPC_CLASS_NEW: handled = vm_exec_class_new(ctx, &in); break;
+        case OPC_CALL_METHOD: handled = vm_exec_call_method(ctx, &in); break;
 
         /* ===== 打印 ===== */
         case OPC_PRINT: handled = vm_exec_io_print(ctx, &in); break;

@@ -56,6 +56,7 @@ typedef enum {
     AST_TYPE_ANNOTATION, // 类型标注 <type>expr：给变量打类型标记（等价 C 的类型声明）
     AST_INTERFACE_ANNOTATION, // 接口类型标注 <Interface>expr：给变量打接口引用类型标记
     AST_CLASS_NEW,       // 创建 class 实例（C 结构体）：ClassNew("Animal")
+    AST_METHOD_CALL,     // 接收者绑定的方法调用 recv.method(args)：类型化分派（含继承/多态）
 } AstType;
 
 // 二元运算符

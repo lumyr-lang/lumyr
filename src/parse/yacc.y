@@ -12,30 +12,43 @@
 #include <stdio.h>
 #include <string.h>
 
+/* 最近一次 type_name 归约中的自定义类型名（ID 分支；builtin 分支为 NULL）
+ * 归约后立即由上层字段声明动作消费（所有权转移），仅作单次传递，不持久保存 */
+static char* g_last_custom_type_name = NULL;
+
 /* type 声明属性收集器（yacc 动作顺序填充，声明语句动作消费后清空） */
 static char** g_prop_names = NULL;
 static ValueType* g_prop_types = NULL;
 static int* g_prop_access_modifiers = NULL;
+/* 自定义类型名（字段为 struct/class 类型时记录，如 inner: Inner → "Inner"；其余为 NULL） */
+static char** g_prop_struct_names = NULL;
 static int g_prop_n = 0, g_prop_cap = 0;
-static void type_prop_push(char* name, ValueType vt, int access_modifier)
+static void type_prop_push(char* name, ValueType vt, int access_modifier, char* struct_name)
 {
     if(g_prop_n >= g_prop_cap) {
         int nc = g_prop_cap > 0 ? g_prop_cap * 2 : 8;
         g_prop_names = (char**)realloc(g_prop_names, (size_t)nc * sizeof(char*));
         g_prop_types = (ValueType*)realloc(g_prop_types, (size_t)nc * sizeof(ValueType));
         g_prop_access_modifiers = (int*)realloc(g_prop_access_modifiers, (size_t)nc * sizeof(int));
+        g_prop_struct_names = (char**)realloc(g_prop_struct_names, (size_t)nc * sizeof(char*));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
     g_prop_types[g_prop_n] = vt;
     g_prop_access_modifiers[g_prop_n] = access_modifier;
+    g_prop_struct_names[g_prop_n] = struct_name;  /* 不复制：归约动作的 $3 所有权转移 */
     g_prop_n++;
 }
 static void type_prop_clear(void)
 {
-    for(int i = 0; i < g_prop_n; i++) free(g_prop_names[i]);
+    for(int i = 0; i < g_prop_n; i++) {
+        free(g_prop_names[i]);
+        free(g_prop_struct_names[i]);
+    }
     free(g_prop_names); free(g_prop_types); free(g_prop_access_modifiers);
+    free(g_prop_struct_names);
     g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
+    g_prop_struct_names = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -103,16 +116,30 @@ static void class_prop_clear(void) {
 /* 辅助：如果在 struct 定义内部，给 self 参数加上 struct 类型标注 */
 static void annotate_self_if_in_struct(AstNode* func_def) {
     if(!func_def || func_def->type != AST_FUNC_DEF) return;
-    if(!g_current_struct_name) return;
+    /* struct 和 class 方法都需要 self 作为首参 */
+    if(!g_current_struct_name && !g_current_class_name) return;
+    /* 选择 self 的类型约束：struct 用 struct 名，class 由 class_add_method 后续覆写为 class:<名> */
+    const char* self_type = g_current_struct_name ? g_current_struct_name : g_current_class_name;
+    /* 检查是否已有 self 参数；若否则自动添加为首参 */
     AstNode* p = func_def->u.func_def.params;
+    int has_self = 0;
     while(p) {
         if(p->u.param.name && strcmp(p->u.param.name, "self") == 0) {
             if(!p->u.param.constraint) {
-                p->u.param.constraint = strdup(g_current_struct_name);
+                p->u.param.constraint = strdup(self_type);
             }
+            has_self = 1;
             break;
         }
         p = p->u.param.next;
+    }
+    if(!has_self) {
+        /* 自动添加 self 为首参（约束为当前类型名，IR 编译期作为 PTR 参数）
+         * class 方法的 constraint 会被 class_add_method 覆写为 "class:<名>" */
+        AstNode* self_param = ast_param(strdup("self"), 0, NULL);
+        self_param->u.param.constraint = strdup(self_type);
+        self_param->u.param.next = func_def->u.func_def.params;
+        func_def->u.func_def.params = self_param;
     }
 }
 static AstNode** g_struct_methods = NULL; /* 当前 struct 的方法定义临时列表 */
@@ -590,31 +617,25 @@ closed_stmt
           /* struct Point { x: int, y: int, func dist(): int {...} }：编译期注册 struct 类型 */
           /* g_current_struct_name 已在 struct_header 中设置 */
           struct_register(g_current_struct_name, g_struct_prop_names, g_struct_cast_kinds, g_struct_prop_struct_names, g_struct_prop_n);
-          /* 只添加方法到方法表（用于查找），不在这里编译方法 */
-          /* 方法 AST 节点返回后作为独立函数定义被正常处理一次，避免重复定义 */
+          /* struct_register 已完成，struct_lookup 现在可用；
+           * struct_add_method 内部统一完成：self 约束、字节码编译（唯一内部名）、
+           * TypeDef + RuntimeTypeInfo 方法表登记 */
           for(int mi = 0; mi < g_struct_method_n; mi++) {
               AstNode* mnode = g_struct_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF) {
                   struct_add_method(g_current_struct_name, mnode->u.func_def.name, mnode);
               }
           }
-          /* 把方法定义的 AST 节点保存到临时列表 */
-          AstNode* method_list = NULL;
-          for(int mi = 0; mi < g_struct_method_n; mi++) {
-              AstNode* mnode = g_struct_methods[mi];
-              /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
-          }
           g_struct_method_clear();
           struct_prop_clear();
           g_current_struct_name = NULL;
-          /* 返回方法定义的 AST 节点，让它们作为独立函数定义被正常处理一次 */
-          $$ = method_list ? L(method_list) : L(ast_none());
+          $$ = L(ast_none());
       }
     | annotation_list class_header class_prop_list RBRACE {
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -656,7 +677,7 @@ closed_stmt
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
@@ -703,7 +724,7 @@ closed_stmt
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -729,7 +750,7 @@ closed_stmt
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -760,7 +781,7 @@ closed_stmt
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -794,7 +815,7 @@ closed_stmt
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -834,7 +855,7 @@ closed_stmt
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -866,7 +887,7 @@ closed_stmt
       }
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -897,7 +918,7 @@ closed_stmt
       }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1038,7 +1059,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1056,8 +1077,10 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
-              /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+          if(!g_current_class_name && !g_current_struct_name) {
+              /* 只有全局函数才在这里编译；class 方法在 class_add_method 中编译；
+               * struct 方法在 struct RBRACE 规则中（struct_register 后）统一编译，
+               * 否则 struct_lookup 在编译时返回 NULL，无法走 typed 栈 fast path */
               rf = compile_func_from_ast($$);
           }
           Value func_val = {0};
@@ -1074,7 +1097,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.ret_type_name = $7;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
           }
           Value func_val = {0};
@@ -1090,7 +1113,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.annotations = NULL;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1108,7 +1131,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           annotate_self_if_in_struct($$);
           /* 语义分析阶段：编译这个函数定义，生成RuntimeFunc，注册到全局符号 */
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1126,7 +1149,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.is_generator = 1;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1144,7 +1167,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           annotate_self_if_in_struct($$);
           $$->u.func_def.generic_params = $2;
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1439,10 +1462,15 @@ primary
           if(macro_is_defined($1)) {
               AstNode* mdef = macro_lookup($1);
               $$ = L(macro_expand(mdef, $3));
+          } else if(struct_lookup($1) || class_lookup($1)) {
+              /* 已注册的 struct/class 名：构造调用 → ast_class_new */
+              int argc = 0;
+              for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
+              $$ = L(ast_class_new($1, argc, $3));
           } else {
               $$ = L(ast_call($1, $3));
           }
-      }  /* 函数调用 foo(a,b,c) 或宏调用 */
+      }  /* 函数调用 foo(a,b,c) 或宏调用 或构造调用 */
     | ARRAY_OPEN arg_list RBRACKET { $$ = ast_array_lit($2, -1); }  /* 数组字面量 [1,2,3] / []（lexer 按上下文消歧） */
     | MAP_OPEN map_items RBRACE   { $$ = ast_map_lit($2); }    /* 字典字面量 {"k": v, name: 1} / {}（lexer 上下文消歧：表达式位置） */
     | LPAREN expr RPAREN      { $$ = $2; }
@@ -1542,7 +1570,7 @@ primary
           snprintf(nm, sizeof nm, "_lambda_%d", g_lambda_seq++);
           $$ = L(ast_func_def(nm, $3, $5));
           RuntimeFunc* rf = NULL;
-          if(!g_current_class_name) {
+          if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
               rf = compile_func_from_ast($$);
           }
@@ -1613,7 +1641,9 @@ postfix_expr
               snprintf(super_call_name, sizeof(super_call_name), "__super_call_%s_%s", g_current_class_name ? g_current_class_name : "unknown", $3);
               $$ = L(ast_call(strdup(super_call_name), all_args));
           } else {
-              $$ = L(ast_call($3, margs ? ast_seq_front(margs, recv) : recv));
+              /* 接收者绑定的方法调用 recv.method(args)：运行时按 recv 实际类型分派
+               * （方法表含继承槽位，重写覆盖在原位置 → 多态），不再拍平为全局函数名调用 */
+              $$ = L(ast_method_call(recv, $3, margs));
           }
       }
     /* 属性访问 a.b → a["b"]（map 点属性；无参方法链语法不再保留） */
@@ -1671,7 +1701,11 @@ type_prop_list
     | type_prop_list COMMA type_prop { $$ = ast_seq($1, $3); }
     ;
 type_prop
-    : ID COLON type_name         { type_prop_push($1, $3, 0); $$ = ast_none(); }
+    : ID COLON type_name         {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          type_prop_push($1, $3, 0, sn);
+          $$ = ast_none();
+      }
     ;
 struct_prop_list
     : %empty                     { $$ = NULL; }
@@ -1680,17 +1714,10 @@ struct_prop_list
     | struct_prop_list func_def  {
         /* struct 方法定义：保存到临时列表，struct 注册后再统一处理 */
         if($2 && $2->type == AST_FUNC_DEF) {
-            /* 给 self 参数加上 struct 类型标注（g_current_struct_name 已在 struct_header 中设置） */
-            AstNode* _p = $2->u.func_def.params;
-            while(_p) {
-                if(_p->u.param.name && strcmp(_p->u.param.name, "self") == 0) {
-                    if(!_p->u.param.constraint && g_current_struct_name) {
-                        _p->u.param.constraint = strdup(g_current_struct_name);
-                    }
-                    break;
-                }
-                _p = _p->u.param.next;
-            }
+            /* 统一处理 self：无显式 self 时注入首参（约束=当前 struct 名），
+             * 已有 self 则补 constraint。与 class 方法规则保持一致，
+             * 否则无 self 方法 param_cnt=0、method_self_struct 缺失，方法体 self 未定义 */
+            annotate_self_if_in_struct($2);
             g_struct_method_push($2);
         }
         $$ = ast_seq($1, $2);
@@ -1699,11 +1726,16 @@ struct_prop_list
 struct_prop
     : ID COLON builtin_type_name SEMI { struct_prop_push($1, $3, NULL); $$ = ast_none(); }
     | ID COLON ID SEMI {
-        /* 嵌套 struct 类型：struct Rect { top_left: Point } */
+        /* 自定义类型字段（引用语义，走 PTR 栈）：struct → STRUCT_PTR；class → CLASS_PTR。
+         * 必须记录正确 CastKind，否则 receiver 被当 INT64，方法分派取错类型信息而崩溃 */
         if(struct_lookup($3)) {
-            struct_prop_push($1, CAST_LONGLONG, $3);
+            struct_prop_push($1, CAST_STRUCT_PTR, $3);
+        } else if(class_lookup($3)) {
+            struct_prop_push($1, CAST_CLASS_PTR, $3);
         } else {
-            struct_prop_push($1, CAST_LONGLONG, NULL);
+            /* 前向引用/未知：仍记录类型名按 STRUCT_PTR，方法分派靠名字；给出提示 */
+            fprintf(stderr, "parse: 字段 \"%s\" 的类型 \"%s\" 尚未注册，按 struct 引用处理\n", $1, $3);
+            struct_prop_push($1, CAST_STRUCT_PTR, $3);
         }
         $$ = ast_none();
       }
@@ -1741,7 +1773,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -1787,7 +1819,7 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -1831,7 +1863,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_n, g_current_class_parent, g_class_interfaces);
+                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -1859,8 +1891,16 @@ access_modifier
     ;
 
 class_prop
-    : ID COLON type_name SEMI    { type_prop_push($1, $3, 0); $$ = ast_none(); }
-    | access_modifier ID COLON type_name SEMI    { type_prop_push($2, $4, $1); $$ = ast_none(); }
+    : ID COLON type_name SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          type_prop_push($1, $3, 0, sn);
+          $$ = ast_none();
+      }
+    | access_modifier ID COLON type_name SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          type_prop_push($2, $4, $1, sn);
+          $$ = ast_none();
+      }
     ;
 builtin_type_name
     : TOK_STRING                 { $$ = CAST_STRING; }
@@ -1893,8 +1933,8 @@ builtin_type_name
     | TOK_PTR                    { $$ = CAST_PTR; }
     ;
 type_name
-    : builtin_type_name          { $$ = castkind_to_valtype($1); }
-    | ID                         { $$ = type_name_to_valtype($1); }
+    : builtin_type_name          { g_last_custom_type_name = NULL; $$ = castkind_to_valtype($1); }
+    | ID                         { g_last_custom_type_name = $1; $$ = type_name_to_valtype($1); }
     ;
 
 /* 类型名字符串（用于 FFI 参数类型标注，直接返回原始字符串，避免 ValueType 枚举冲突） */

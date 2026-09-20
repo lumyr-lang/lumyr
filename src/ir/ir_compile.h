@@ -35,4 +35,8 @@ void ir_func_table_foreach(void (*callback)(const char* class_name, const char* 
 // 字符串常量缓存（编译期全局去重，避免重复分配；编译完成后调用 reset 清理）
 void string_cache_reset(void);
 
+/* 检测 node 是否是 self.field 访问；若是则返回字段 CastKind，否则 CAST_NONE
+ * 供 arith_get_expr_type / c_expr_cast_type 统一识别 self.field 类型 */
+CastKind lumyr_self_field_castkind(Ctx* c, AstNode* node);
+
 #endif // LUMYR_IR_COMPILE_H

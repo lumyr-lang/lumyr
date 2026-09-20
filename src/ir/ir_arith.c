@@ -47,7 +47,9 @@ ExprType castkind_to_exprtype(CastKind ct) {
         case CAST_BIGINT:
         case CAST_DECIMAL:
         case CAST_BITDECIMAL:
-            return EXPR_TYPE_PTR;  /* 字符串/bigint/decimal/bitdecimal → PTR 栈 */
+        case CAST_STRUCT_PTR:
+        case CAST_CLASS_PTR:
+            return EXPR_TYPE_PTR;  /* 字符串/bigint/decimal/struct/class 实例 → PTR 栈 */
 
         default:
             return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */
@@ -89,6 +91,14 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             return castkind_to_exprtype(ir_type_name_to_castkind(callee->ret_type_name));
         }
         return EXPR_TYPE_NONE;
+    }
+
+    /* self.field 访问（AST_INDEX）：委托 lumyr_self_field_castkind
+     * 让 self.x + 1 等 BINOP 的 arith_get_expr_type(self.x) 返回 EXPR_TYPE_INT
+     * 而非 EXPR_TYPE_NONE（导致整个 BINOP 走 VALUE 栈路径） */
+    if(node->type == AST_INDEX) {
+        CastKind ck = lumyr_self_field_castkind(c, node);
+        if(ck != CAST_NONE) return castkind_to_exprtype(ck);
     }
 
     /* 二元运算：递归判断左右操作数类型 */

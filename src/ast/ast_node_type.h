@@ -225,6 +225,12 @@ struct AstNode {
             int argc;            // 构造函数参数数量
             AstNode* args;       // 构造函数参数列表（AST_SEQ 树）
         } class_new;
+
+        struct {
+            AstNode* recv;       // 接收者表达式（编译后压 PTR 栈作为 self）
+            char* method;        // 方法名（不含类前缀，运行时按 recv 实际类型分派）
+            AstNode* args;       // 实参列表（AST_SEQ 链，不含 self）
+        } method_call;
     } u;
 };
 

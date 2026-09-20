@@ -113,6 +113,19 @@ int bf_add_str_const(BytecodeFunc* fn, const char* s) {
     return fn->const_cnt++;
 }
 
+/* 添加 uint64 到大常量池（用于 RuntimeTypeInfo* 指针存储），返回索引
+ * 注意：指针值不参与去重，每次注册都新增条目（不同实例可能恰好共用同一 RuntimeTypeInfo*） */
+int bf_add_u64_const(BytecodeFunc* fn, uint64_t val) {
+    if(fn->const_cnt >= fn->const_cap) {
+        fn->const_cap = fn->const_cap ? fn->const_cap * 2 : 16;
+        fn->const_pool = (ConstEntry*)realloc(fn->const_pool, sizeof(ConstEntry) * fn->const_cap);
+        if(!fn->const_pool) { perror("bf_add_u64_const"); exit(EXIT_FAILURE); }
+    }
+    fn->const_pool[fn->const_cnt].type = CONST_UINT64;
+    fn->const_pool[fn->const_cnt].u64 = val;
+    return fn->const_cnt++;
+}
+
 void bf_emit(BytecodeFunc* fn, OpCode op, int a, int b)
 {
     if(fn->code_len >= fn->code_cap) {
@@ -372,6 +385,7 @@ const char* opc_name(OpCode op)
         case OPC_RETURN_NIL: return "RETURN_NIL";
         case OPC_YIELD: return "YIELD";
         case OPC_CLASS_NEW: return "CLASS_NEW";
+        case OPC_CALL_METHOD: return "CALL_METHOD";
         case OPC_HALT: return "HALT";
         case OPC_VADD: return "VADD";
         case OPC_VSUB: return "VSUB";

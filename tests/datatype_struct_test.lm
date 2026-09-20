@@ -1,0 +1,198 @@
+// ============================================================
+// E1: struct/class 全类型矩阵 + 继承/多态/注解测试
+// 覆盖：整型族 20 种 + 浮点族 3 种 + PTR 族 4 种 + 嵌套 struct
+//       + class 继承 + 方法重写（多态）+ 注解
+// ============================================================
+
+// ------------------------------------------------------------
+// S1-S20：整型族字段（统一 INT64 栈）
+// 每种类型：构造、读字段、type() 校验、写字段回读
+// ------------------------------------------------------------
+struct IntBox {
+    a: int;
+    b: int8;
+    c: int16;
+    d: int32;
+    e: int64;
+    f: uint8;
+    g: uint16;
+    h: uint32;
+    i: uint64;
+    j: short;
+    k: ushort;
+    l: long;
+    m: long long;
+    n: ulong;
+    o: size_t;
+    p: ssize_t;
+    q: byte;
+    r: uchar;
+    s: bool;
+    t: char;
+    func <int> get_a() { return self.a; }
+    func <int> get_t() { return self.t; }
+    func set_a(<int> v) { self.a = v; }
+    func inc_a() { self.a = self.a + 1; }
+}
+
+b = IntBox(10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 1, 65);
+print("S1 type", type(b));
+print("S2 a(int)", b.a);
+print("S3 b(int8)", b.b);
+print("S4 c(int16)", b.c);
+print("S5 d(int32)", b.d);
+print("S6 e(int64)", b.e);
+print("S7 f(uint8)", b.f);
+print("S8 g(uint16)", b.g);
+print("S9 h(uint32)", b.h);
+print("S10 i(uint64)", b.i);
+print("S11 j(short)", b.j);
+print("S12 k(ushort)", b.k);
+print("S13 l(long)", b.l);
+print("S14 m(long long)", b.m);
+print("S15 n(ulong)", b.n);
+print("S16 o(size_t)", b.o);
+print("S17 p(ssize_t)", b.p);
+print("S18 q(byte)", b.q);
+print("S19 r(uchar)", b.r);
+print("S20 s(bool)", b.s);
+print("S21 t(char)", b.t);
+print("S22 get_a()", b.get_a());
+print("S23 get_t() char", b.get_t());
+b.inc_a();
+print("S24 after inc_a get_a()", b.get_a());
+b.set_a(999);
+print("S25 after set_a(999)", b.get_a());
+
+// ------------------------------------------------------------
+// F1-F3：浮点族字段（统一 DOUBLE 栈）
+// ------------------------------------------------------------
+struct FloatBox {
+    x: double;
+    y: float;
+    z: long double;
+    func <double> get_x() { return self.x; }
+    func set_x(<double> v) { self.x = v; }
+    func bump_x() { self.x = self.x + 0.5; }
+}
+
+fb = FloatBox(1.5, 2.5, 3.5);
+print("F1 type", type(fb));
+print("F2 x(double)", fb.x);
+print("F3 y(float)", fb.y);
+print("F4 z(long double)", fb.z);
+print("F5 get_x()", fb.get_x());
+fb.bump_x();
+print("F6 after bump_x", fb.get_x());
+fb.set_x(42.0);
+print("F7 after set_x(42.0)", fb.get_x());
+
+// ------------------------------------------------------------
+// P1-P4：PTR 族字段（string/ptr + 嵌套 struct）
+// ------------------------------------------------------------
+struct PtrBox {
+    name: string;
+    tag: ptr;
+    func <string> get_name() { return self.name; }
+    func set_name(<string> s) { self.name = s; }
+    func append_name(<string> s) { self.name = self.name + s; }
+}
+
+pb = PtrBox("hello", 0);
+print("P1 type", type(pb));
+print("P2 name(string)", pb.name);
+print("P3 get_name()", pb.get_name());
+pb.set_name("world");
+print("P4 after set_name", pb.get_name());
+pb.append_name("!");
+print("P5 after append_name", pb.get_name());
+
+// ------------------------------------------------------------
+// N1-N6：嵌套 struct 字段 + 嵌套方法链调用 self.inner.method()
+// 覆盖：嵌套字段读写 + 外层方法内对内层接收者的方法分派
+// ------------------------------------------------------------
+struct Inner {
+    val: int;
+    func <int> get_val() { return self.val; }
+    func <int> double_val() { return self.val * 2; }
+}
+struct Outer {
+    inner: Inner;
+    count: int;
+    func <int> get_count() { return self.count; }
+    func set_count(<int> v) { self.count = v; }
+    /* 嵌套方法链：receiver 是 self.inner（FieldInfo.type_name="Inner"） */
+    func <int> inner_val() { return self.inner.get_val(); }
+    func <int> inner_doubled() { return self.inner.double_val(); }
+}
+
+inner = Inner(100);
+outer = Outer(inner, 5);
+print("N1 type", type(outer));
+print("N2 outer.count", outer.count);
+print("N3 get_count()", outer.get_count());
+outer.set_count(99);
+print("N4 after set_count(99)", outer.get_count());
+print("N5 nested self.inner.get_val()", outer.inner_val());
+print("N6 nested self.inner.double_val()", outer.inner_doubled());
+
+// ------------------------------------------------------------
+// C1-C5：class 基本功能（构造、字段、方法）
+// ------------------------------------------------------------
+class Animal {
+    name: string;
+    sound: string;
+    func __init__(<string> n, <string> s) {
+        self.name = n;
+        self.sound = s;
+    }
+    func <string> get_name() { return self.name; }
+    func <string> get_sound() { return self.sound; }
+    func <string> speak() { return self.name + " says " + self.sound; }
+}
+
+a = Animal("Dog", "Woof");
+print("C1 type", type(a));
+print("C2 name", a.name);
+print("C3 sound", a.sound);
+print("C4 get_name()", a.get_name());
+print("C5 speak()", a.speak());
+
+// ------------------------------------------------------------
+// I1-I3：class 继承 + 多态（方法重写）
+// ------------------------------------------------------------
+class Cat extends Animal {
+    color: string;
+    func __init__(<string> n, <string> c) {
+        self.name = n;
+        self.sound = "Meow";
+        self.color = c;
+    }
+    func <string> speak() { return self.name + " the " + self.color + " cat purrs"; }
+}
+
+cat = Cat("Whiskers", "black");
+print("I1 type", type(cat));
+print("I2 inherited name", cat.name);
+print("I3 inherited sound", cat.sound);
+print("I4 color", cat.color);
+print("I5 overridden speak()", cat.speak());
+
+// ------------------------------------------------------------
+// A1-A3：注解（@decorator）
+// ------------------------------------------------------------
+interface Printable {
+    func to_string(): string;
+}
+class Book implements Printable {
+    title: string;
+    func __init__(<string> t) { self.title = t; }
+    func <string> to_string() { return "Book: " + self.title; }
+}
+
+book = Book("Lumin Lang Guide");
+print("A1 type", type(book));
+print("A2 title", book.title);
+print("A3 to_string()", book.to_string());
+
+print("STRUCT_TEST_DONE");

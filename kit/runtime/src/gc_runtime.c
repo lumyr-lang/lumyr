@@ -68,6 +68,9 @@ __attribute__((weak)) void lumyr_gc_mark_generator(Value v) {
 /* 编译期断言：GCObject 必须保持 16 字节（user_size 利用原填充空间） */
 _Static_assert(sizeof(GCObject) == 16, "GCObject must be 16 bytes");
 
+/* 前向声明：gc_cstack_set_contains 在文件后部定义，但 gc_mark/gc_mark_one 等需提前调用 */
+static int gc_cstack_set_contains(void* ptr);
+
 /* ---- TLA 常量 ---- */
 #define TLA_MAX_SIZE   256   /* 用户数据 <=256 字节走 TLA */
 #define TLA_BATCH      16    /* 本地链表空时批量分配/取用的对象数 */

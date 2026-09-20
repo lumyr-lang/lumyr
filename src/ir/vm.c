@@ -54,3 +54,15 @@ Value vm_run_main(BytecodeFunc* main_fn) {
     vm_run(main_fn);
     return val_none();
 }
+
+/* FuncEntry 签名入口（注册到 RuntimeFunc.entry，由 OP_CALL 调用）
+ * 弱定义桩：编译通道用 vm_run_main 直接执行 main 字节码，函数调用走解释器 payload；
+ * 此桩保证链接符号存在，实际 VM 字节码函数调用分派待 Phase C 完善。
+ * 原 lm_class.c 中的弱定义随统一架构删除，迁移至此处（VM 入口归 vm.c） */
+__attribute__((weak)) Value vm_func_entry(int arg_cnt, const Value* args, EvalCtx* ctx, StackFrame* frame) {
+    (void)arg_cnt;
+    (void)args;
+    (void)ctx;
+    (void)frame;
+    return val_none();
+}

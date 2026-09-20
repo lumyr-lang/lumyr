@@ -64,6 +64,9 @@ typedef struct {
     ExprType* var_types;
     int var_cnt;
     int var_cap;
+    /* 当前编译函数的形参 AST 链头：方法注册名为内部唯一名，
+     * 方法体内裸名自递归时用它构造临时 def 壳（仅遍历形参签名） */
+    AstNode* cur_params;
 } Ctx;
 
 #endif /* LUMYR_IR_TYPES_H */

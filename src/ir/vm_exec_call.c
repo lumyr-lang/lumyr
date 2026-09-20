@@ -13,8 +13,10 @@
 #include "ast/func_compile.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
+#include "lm_type.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* 暂存一个已弹出的实参（跨 4 核心栈，按形参宽类型解释） */
 typedef struct {
@@ -37,37 +39,29 @@ typedef struct {
     int           sym_cnt;
 } SavedState;
 
-/* ========== 函数调用 ========== */
-int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
-    int cs_idx = in->a;
-    CallSite* cs = &ctx->fn->callsites[cs_idx];
-    int argc = cs->argc;
+/* ========== 共用调用辅助 ========== */
 
-    BytecodeFunc* callee = ir_func_table_lookup(cs->callee);
-    if (!callee) {
-        fprintf(stderr, "VM: 调用未定义函数 %s\n", cs->callee);
-        return 0;
+/* pop_arg_slot：按 callee 形参 slot 的宽类型，从对应核心栈弹一个实参到 out */
+static void pop_arg_slot(BytecodeFunc* callee, int slot, ArgTmp* out) {
+    CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
+                   ? (CastKind)callee->var_type_tags[slot]
+                   : CAST_NONE;
+    ExprType et = castkind_to_exprtype(pck);
+    out->et = et;
+    switch (et) {
+    case EXPR_TYPE_INT:    out->i = POP_INT64();  break;
+    case EXPR_TYPE_DOUBLE: out->d = POP_DOUBLE(); break;
+    case EXPR_TYPE_PTR:    out->p = POP_PTR();    break;
+    default:               out->v = POP_VALUE();  break;
     }
+}
 
-    /* 1. 逆序弹实参（栈顶是最后一个实参），按各形参宽类型，暂存以便顺序绑定 */
-    ArgTmp* args = (ArgTmp*)malloc(sizeof(ArgTmp) * (argc > 0 ? argc : 1));
-    if (!args) { perror("vm_exec_call args"); return 0; }
-
-    for (int slot = argc - 1; slot >= 0; --slot) {
-        CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
-                       ? (CastKind)callee->var_type_tags[slot]
-                       : CAST_NONE;
-        ExprType et = castkind_to_exprtype(pck);
-        args[slot].et = et;
-        switch (et) {
-        case EXPR_TYPE_INT:    args[slot].i = POP_INT64();  break;
-        case EXPR_TYPE_DOUBLE: args[slot].d = POP_DOUBLE(); break;
-        case EXPR_TYPE_PTR:    args[slot].p = POP_PTR();    break;
-        default:               args[slot].v = POP_VALUE();  break;
-        }
-    }
-
-    /* 2. 新建帧并按形参声明顺序绑定（保证帧槽 i == 形参符号槽 i） */
+/* vm_bind_and_run：参数已弹出到 args[0..argc-1]。
+ * 建帧按形参顺序绑定（ref 别名调用方槽位）→ 保存/切换执行状态 → 运行 callee →
+ * 恢复状态 → 销毁帧。返回 loop 状态；ret 输出返回槽（detach 独立副本）。不处理返回值压栈。
+ * 普通 CALL 与多态 CALL_METHOD 共用，保证建帧/状态切换语义单点维护。 */
+static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
+                           int argc, ArgTmp* args, RetSlot* ret) {
     StackFrame* caller_frame = ctx->frame;   /* ref 形参需引用调用方槽位 */
     StackFrame* new_frame = stackframe_new(ctx->frame);
     int name_slots = callee->param_cnt + callee->has_variadic;
@@ -95,9 +89,8 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
             break;
         }
     }
-    free(args);
 
-    /* 3. 保存调用方执行状态 */
+    /* 保存调用方执行状态 */
     SavedState save;
     save.fn         = ctx->fn;
     save.code       = ctx->code;
@@ -108,7 +101,7 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     save.const_cnt  = ctx->const_cnt;
     save.sym_cnt    = ctx->sym_cnt;
 
-    /* 4. 切换到 callee 的字节码/帧/常量池/符号表 */
+    /* 切换到 callee 的字节码/帧/常量池/符号表 */
     ctx->fn         = callee;
     ctx->code       = callee->code;
     ctx->pc         = 0;
@@ -118,11 +111,10 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     ctx->const_cnt  = callee->const_cnt;
     ctx->sym_cnt    = callee->sym_cnt;
 
-    /* 5. 可重入执行 callee（嵌套 CALL 会再次进入 vm_exec_loop） */
-    RetSlot ret;
-    int status = vm_exec_loop(ctx, &ret);
+    /* 可重入执行 callee（嵌套调用会再次进入 vm_exec_loop） */
+    int status = vm_exec_loop(ctx, ret);
 
-    /* 6. 恢复调用方执行状态 */
+    /* 恢复调用方执行状态 */
     ctx->fn         = save.fn;
     ctx->code       = save.code;
     ctx->pc         = save.pc;
@@ -132,30 +124,117 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     ctx->const_cnt  = save.const_cnt;
     ctx->sym_cnt    = save.sym_cnt;
 
-    /* 7. 销毁 callee 帧（返回值已在 RETURN 处 detach 为独立副本） */
+    /* 销毁 callee 帧（返回值已在 RETURN 处 detach 为独立副本） */
     stackframe_destroy(new_frame);
+    return status;
+}
 
-    /* 异常穿过本调用：不压返回值，恢复后继续向调用方传播 */
-    if (status == VM_LOOP_UNWIND)
-        return VM_LOOP_UNWIND;
-
-    /* 8. 按调用点需要处理返回值：表达式语境压入对应栈；表达式语句丢弃 */
-    if (cs->keep_result) {
-        switch ((ExprType)cs->ret_stack) {
-        case EXPR_TYPE_INT:
-            PUSH_INT64(ret.i);
-            break;
-        case EXPR_TYPE_DOUBLE:
-            PUSH_DOUBLE(ret.d);
-            break;
-        case EXPR_TYPE_PTR:
-            PUSH_PTR(ret.p);
-            break;
-        default:
-            stack_vm_push(g_stack_mgr, STACK_VALUE, &ret.v);
-            break;
-        }
+/* push_call_result：表达式语境按 callsite 记录的返回栈压入返回值；语句语境丢弃 */
+static void push_call_result(CallSite* cs, RetSlot ret) {
+    if (!cs->keep_result) return;
+    switch ((ExprType)cs->ret_stack) {
+    case EXPR_TYPE_INT:    PUSH_INT64(ret.i); break;
+    case EXPR_TYPE_DOUBLE: PUSH_DOUBLE(ret.d); break;
+    case EXPR_TYPE_PTR:    PUSH_PTR(ret.p); break;
+    default:               stack_vm_push(g_stack_mgr, STACK_VALUE, &ret.v); break;
     }
+}
+
+/* ========== 普通函数调用 ========== */
+int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
+    int cs_idx = in->a;
+    CallSite* cs = &ctx->fn->callsites[cs_idx];
+    int argc = cs->argc;
+
+    BytecodeFunc* callee = ir_func_table_lookup(cs->callee);
+    if (!callee) {
+        fprintf(stderr, "VM: 调用未定义函数 %s\n", cs->callee);
+        return 0;
+    }
+
+    /* 逆序弹实参（栈顶是最后一个实参），暂存以便顺序绑定 */
+    ArgTmp* args = (ArgTmp*)malloc(sizeof(ArgTmp) * (argc > 0 ? argc : 1));
+    if (!args) { perror("vm_exec_call args"); return 0; }
+    for (int slot = argc - 1; slot >= 0; --slot)
+        pop_arg_slot(callee, slot, &args[slot]);
+
+    RetSlot ret;
+    int status = vm_bind_and_run(ctx, callee, cs, argc, args, &ret);
+    free(args);
+
+    /* 异常穿过本调用：不压返回值，继续向调用方传播 */
+    if (status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;
+
+    push_call_result(cs, ret);
+    return 1;
+}
+
+/* ========== 多态方法调用 CALL_METHOD ==========
+ * 栈布局（自底向上）：receiver(PTR), 用户实参 slot1..argc-1（栈顶为最后一个）
+ * cs->argc 含 receiver；cs->callee 为静态定义内部名 <DefClass>__m__<method>。
+ * 实参按静态签名弹栈（重写方法签名兼容）；执行目标按 receiver 实际类型方法表解析 → 多态。 */
+int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
+    int cs_idx = in->a;
+    CallSite* cs = &ctx->fn->callsites[cs_idx];
+    int argc = cs->argc;
+    if (argc < 1) {
+        fprintf(stderr, "VM: CALL_METHOD 缺少 receiver\n");
+        return 0;
+    }
+
+    /* 静态签名 callee：用于用户实参的栈类型解析 */
+    BytecodeFunc* static_fn = ir_func_table_lookup(cs->callee);
+    if (!static_fn) {
+        fprintf(stderr, "VM: 方法静态签名未注册 %s\n", cs->callee);
+        return 0;
+    }
+
+    /* 1. 逆序弹用户实参 slot argc-1..1（receiver 留栈底最后弹） */
+    ArgTmp* args = (ArgTmp*)calloc((size_t)argc, sizeof(ArgTmp));
+    if (!args) { perror("vm_exec_call_method args"); return 0; }
+    for (int slot = argc - 1; slot >= 1; --slot)
+        pop_arg_slot(static_fn, slot, &args[slot]);
+
+    /* 2. 弹 receiver（PTR），作为 slot 0（self） */
+    void* recv_ptr = POP_PTR();
+    args[0].et = EXPR_TYPE_PTR;
+    args[0].p = recv_ptr;
+
+    /* 3. 实例偏移 0 取 RuntimeTypeInfo → 按方法名查实际 RuntimeFunc */
+    RuntimeTypeInfo* ri = recv_ptr ? *(RuntimeTypeInfo**)recv_ptr : NULL;
+    if (!ri) {
+        fprintf(stderr, "VM: 方法接收者缺少类型信息\n");
+        free(args);
+        return 0;
+    }
+
+    /* 方法名：从静态内部名解析 "__m__" 后缀 */
+    const char* msep = strstr(cs->callee, "__m__");
+    const char* mname = msep ? msep + 5 : NULL;
+    RuntimeFunc* actual_rf = mname ? lumyr_type_find_method(ri, mname) : NULL;
+
+    /* 取实际 BytecodeFunc（解释器方法）；FFI/原生方法当前不走本路径 */
+    BytecodeFunc* actual_fn = NULL;
+    if (actual_rf && interp_func_is_payload(actual_rf)) {
+        InterpFuncPayload* pl = (InterpFuncPayload*)actual_rf->captures;
+        actual_fn = pl->bytecode;
+    }
+    if (!actual_fn) {
+        fprintf(stderr, "VM: 类型 \"%s\" 未找到方法 \"%s\" 的可执行实现\n",
+                ri->name ? ri->name : "?", mname ? mname : "?");
+        free(args);
+        return 0;
+    }
+
+    /* 4. 建帧绑定（slot0=self, slot1+=实参）并执行实际方法 */
+    RetSlot ret;
+    int status = vm_bind_and_run(ctx, actual_fn, cs, argc, args, &ret);
+    free(args);
+
+    if (status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;
+
+    /* 5. 按 callsite 静态返回类型压栈 */
+    push_call_result(cs, ret);
     return 1;
 }
 

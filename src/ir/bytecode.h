@@ -14,6 +14,8 @@ int bf_sym(BytecodeFunc* fn, const char* name);
 int bf_add_i64_const(BytecodeFunc* fn, int64_t val);
 int bf_add_double_const(BytecodeFunc* fn, double val);
 int bf_add_str_const(BytecodeFunc* fn, const char* s);
+/* 添加 uint64 到大常量池（用于 RuntimeTypeInfo* 指针存储），返回索引 */
+int bf_add_u64_const(BytecodeFunc* fn, uint64_t val);
 void bf_emit(BytecodeFunc* fn, OpCode op, int a, int b);
 int bf_emit_here(BytecodeFunc* fn, OpCode op, int a, int b);
 const char* opc_name(OpCode op);

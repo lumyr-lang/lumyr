@@ -631,6 +631,15 @@ AstNode* ast_class_new(char* class_name, int argc, AstNode* args) {
     return n;
 }
 
+/* 接收者绑定的方法调用 recv.method(args)：recv 由调用方拥有（不复制），method 需堆字符串 */
+AstNode* ast_method_call(AstNode* recv, char* method, AstNode* args) {
+    AstNode* n = ast_new(AST_METHOD_CALL);
+    n->u.method_call.recv = recv;
+    n->u.method_call.method = method;
+    n->u.method_call.args = args;
+    return n;
+}
+
 AstNode* ast_try(AstNode* body, char* catch_var, AstNode* catch_body, AstNode* finally_body) {
     AstNode* n = ast_new(AST_TRY);
     n->u.trynode.body = body;
@@ -852,6 +861,15 @@ void ast_free(AstNode* node) {
             ast_free(node->u.index_assign.arr);
             ast_free(node->u.index_assign.idx);
             ast_free(node->u.index_assign.value);
+            break;
+        case AST_CLASS_NEW:
+            free(node->u.class_new.class_name);
+            ast_free(node->u.class_new.args);
+            break;
+        case AST_METHOD_CALL:
+            ast_free(node->u.method_call.recv);
+            free(node->u.method_call.method);
+            ast_free(node->u.method_call.args);
             break;
         case AST_ARRAY_LIT:
             ast_free(node->u.array_lit.elems);

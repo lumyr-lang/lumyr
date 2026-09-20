@@ -4,7 +4,8 @@
 #include "ir/ir_compile.h"
 #include "ir/rbtree.h"
 #include "ast_node.h"
-#include "lm_class.h"
+#include "lm_type.h"
+#include "lumyr_value.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -157,6 +158,10 @@ ValueType castkind_to_valtype(int ck)
         case CAST_DECIMAL: return VAL_DECIMAL;
         case CAST_BITDECIMAL: return VAL_BITDECIMAL;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
+        /* 自定义类型引用：必须映射到对应实例指针，否则字段 valtype=VAL_NONE，
+         * 构造写入走错分支、方法分派取错类型信息 */
+        case CAST_STRUCT_PTR: return VAL_STRUCT_PTR;
+        case CAST_CLASS_PTR: return VAL_CLASS_PTR;
         case CAST_VOID: return VAL_NONE;
         default: return VAL_NONE;
     }
@@ -166,12 +171,35 @@ ValueType castkind_to_valtype(int ck)
 int valuetype_to_castkind(int vt) {
     switch(vt) {
         case VAL_INT: return CAST_INT;
-        case VAL_DOUBLE: return CAST_DOUBLE;
+        case VAL_INT8: return CAST_INT8;
+        case VAL_INT16: return CAST_INT16;
+        case VAL_INT32: return CAST_INT32;
+        case VAL_INT64: return CAST_INT64;
+        case VAL_LONG: return CAST_LONG;
+        case VAL_LONG_LONG: return CAST_LONGLONG;
+        case VAL_SHORT: return CAST_SHORT;
+        case VAL_UINT8: return CAST_UINT8;
+        case VAL_UINT16: return CAST_UINT16;
+        case VAL_UINT32: return CAST_UINT32;
+        case VAL_UINT: return CAST_UINT;
+        case VAL_UINT64: return CAST_UINT64;
+        case VAL_ULONG: return CAST_ULONG;
+        case VAL_UCHAR: return CAST_UCHAR;
+        case VAL_USHORT: return CAST_USHORT;
+        case VAL_SIZE_T: return CAST_SIZE_T;
+        case VAL_SSIZE_T: return CAST_SSIZE_T;
         case VAL_BOOL: return CAST_BOOL;
         case VAL_CHAR: return CAST_CHAR;
-        case VAL_STRING: return CAST_STRING;
         case VAL_BYTE: return CAST_BYTE;
-        default: return CAST_LONGLONG;  /* 默认整数类型 */
+        case VAL_DOUBLE: return CAST_DOUBLE;
+        case VAL_FLOAT: return CAST_FLOAT;
+        case VAL_LONG_DOUBLE: return CAST_LONG_DOUBLE;
+        case VAL_STRING: return CAST_STRING;
+        case VAL_PTR: return CAST_PTR;
+        case VAL_BIGINT: return CAST_BIGINT;
+        case VAL_DECIMAL: return CAST_DECIMAL;
+        case VAL_BITDECIMAL: return CAST_BITDECIMAL;
+        default: return CAST_LONGLONG;
     }
 }
 
@@ -342,13 +370,52 @@ TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, c
             td->field_struct_names[k] = strdup(struct_names[k]);
         }
     }
-    td->field_offsets = NULL; // 编译通道计算偏移时填充
+    td->field_offsets = NULL; // 下方 lumyr_type_register 后填充
     td->method_names = NULL;
     td->method_nodes = NULL;
     td->method_funcs = NULL;
     td->nmethods = 0;
     td->constructor = NULL;
     td->constructor_func = NULL;
+
+    /* 创建统一 RuntimeTypeInfo 并注册到运行时 */
+    {
+        int nfields = nprops;
+        FieldInfo* fields = NULL;
+        int instance_size = 8;  /* 偏移 0: RuntimeTypeInfo* 指针 */
+
+        if(nfields > 0) {
+            fields = (FieldInfo*)calloc(nfields, sizeof(FieldInfo));
+            for(int i = 0; i < nfields; i++) {
+                ValueType vt = castkind_to_valtype(cast_kinds[i]);
+                size_t sz = lumyr_etype_itemsz(vt);
+                int align = (sz <= 2) ? (int)sz : ((sz <= 4) ? 4 : ((sz >= 16) ? 16 : 8));
+                instance_size = (instance_size + align - 1) & ~(align - 1);
+                fields[i].name = strdup(props[i]);
+                fields[i].offset = instance_size;
+                fields[i].valtype = vt;
+                fields[i].size = (int)sz;
+                fields[i].access = ACCESS_PUBLIC;
+                fields[i].type_name = (struct_names && struct_names[i]) ? strdup(struct_names[i]) : NULL;
+                fields[i].annotation_count = 0;
+                fields[i].annotations = NULL;
+                instance_size += (int)sz;
+            }
+            instance_size = (instance_size + 7) & ~7;
+        }
+
+        td->runtime_info = lumyr_type_register(
+            name, nfields, fields, instance_size,
+            TYPE_KIND_STRUCT, NULL, 0, NULL,
+            NULL, 0, NULL, 0
+        );
+        /* 填充 field_offsets 供编译器使用 */
+        td->field_offsets = (int*)calloc(nfields > 0 ? nfields : 1, sizeof(int));
+        for(int i = 0; i < nfields; i++) {
+            td->field_offsets[i] = fields[i].offset;
+        }
+    }
+
     return td;
 }
 
@@ -357,12 +424,34 @@ void struct_add_method(const char* struct_name, const char* method_name, struct 
 {
     TypeDef* td = struct_lookup(struct_name);
     if(!td) return;
+
+    /* 给 self 参数设置 constraint（struct 名），让编译期识别为 STRUCT_PTR */
+    if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.params) {
+        AstNode* self_param = method_node->u.func_def.params;
+        if(self_param->u.param.name && strcmp(self_param->u.param.name, "self") == 0) {
+            if(self_param->u.param.constraint) free(self_param->u.param.constraint);
+            self_param->u.param.constraint = strdup(struct_name);
+        }
+    }
+
+    /* 编译方法（传 struct_name 作为属主：BytecodeFunc 用唯一内部名 <Struct>__m__<method>，
+     * 避免多个 struct 的同名方法在函数表互相覆盖） */
+    RuntimeFunc* rf = compile_func_from_ast_with_class(method_node, struct_name);
+
+    /* 登记到 TypeDef 方法表 */
     int n = td->nmethods + 1;
     td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
     td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
+    td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
     td->method_names[td->nmethods] = strdup(method_name);
     td->method_nodes[td->nmethods] = method_node;
+    td->method_funcs[td->nmethods] = rf;
     td->nmethods = n;
+
+    /* 同步到 RuntimeTypeInfo 方法表（VM OPC_CALL_METHOD 分派依据） */
+    if(td->runtime_info) lumyr_type_set_method(td->runtime_info, method_name, rf);
+
+    /* 不再以扁平方法名全局注册：方法必须通过接收者类型分派（recv.method()） */
 }
 
 // 查找 struct 方法
@@ -388,12 +477,13 @@ TypeDef* struct_lookup(const char* name)
 }
 
 /* ===== class 注册 ===== */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int nprops, const char* parent, char** interfaces)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, char** struct_names, int nprops, const char* parent, char** interfaces)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
     ValueType* merged_ptypes = ptypes;
     int* merged_access_modifiers = prop_access_modifiers;
+    char** merged_struct_names = struct_names;
     int merged_nprops = nprops;
 
     if(parent) {
@@ -406,17 +496,22 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 merged_props = (char**)malloc((size_t)merged_nprops * sizeof(char*));
                 merged_ptypes = (ValueType*)malloc((size_t)merged_nprops * sizeof(ValueType));
                 merged_access_modifiers = (int*)malloc((size_t)merged_nprops * sizeof(int));
+                merged_struct_names = (char**)calloc((size_t)merged_nprops, sizeof(char*));
                 // 父类属性在前
                 for(int i = 0; i < parent_nprops; i++) {
                     merged_props[i] = strdup(parent_td->props[i]);
                     merged_ptypes[i] = parent_td->ptypes[i];
                     merged_access_modifiers[i] = parent_td->prop_access_modifiers ? parent_td->prop_access_modifiers[i] : 0;
+                    if(parent_td->field_struct_names && parent_td->field_struct_names[i])
+                        merged_struct_names[i] = strdup(parent_td->field_struct_names[i]);
                 }
                 // 子类属性在后
                 for(int i = 0; i < nprops; i++) {
                     merged_props[parent_nprops + i] = strdup(props[i]);
                     merged_ptypes[parent_nprops + i] = ptypes[i];
                     merged_access_modifiers[parent_nprops + i] = prop_access_modifiers ? prop_access_modifiers[i] : 0;
+                    if(struct_names && struct_names[i])
+                        merged_struct_names[parent_nprops + i] = strdup(struct_names[i]);
                 }
             }
         }
@@ -437,6 +532,9 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
     for(int k = 0; k < merged_nprops; k++) {
         td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);
+        /* strdup：merged_struct_names 归解析期收集器所有（clear 时释放），td 需长期存活 */
+        if(merged_struct_names && merged_struct_names[k])
+            td->field_struct_names[k] = strdup(merged_struct_names[k]);
     }
     td->field_offsets = NULL; // 编译通道计算偏移时填充
     td->method_names = NULL;
@@ -455,68 +553,53 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
         td->prop_access_modifiers = NULL;
     }
 
-    /* 创建并注册 ClassVTable（VM 模式下使用结构体+虚表） */
+    /* 创建统一 RuntimeTypeInfo 并注册到运行时 */
     {
-        ClassVTable* vt = (ClassVTable*)malloc(sizeof(ClassVTable));
-        memset(vt, 0, sizeof(ClassVTable));
-        vt->class_name = strdup(name);
-        vt->nfields = merged_nprops;
-        if(merged_nprops > 0) {
-            vt->field_names = (const char**)malloc((size_t)merged_nprops * sizeof(const char*));
-            vt->field_offsets = (int*)malloc((size_t)merged_nprops * sizeof(int));
-            vt->field_types = (ClassFieldType*)malloc((size_t)merged_nprops * sizeof(ClassFieldType));
-            int offset = 0;
-            for(int i = 0; i < merged_nprops; i++) {
-                vt->field_names[i] = strdup(merged_props[i]);
-                vt->field_offsets[i] = offset;
-                /* 根据 ValueType 转换为 ClassFieldType，并计算字段大小 */
-                switch(merged_ptypes[i]) {
-                    case VAL_INT:
-                        vt->field_types[i] = CLASS_FIELD_INT;
-                        offset += sizeof(long long);
-                        break;
-                    case VAL_DOUBLE:
-                        vt->field_types[i] = CLASS_FIELD_DOUBLE;
-                        offset += sizeof(double);
-                        break;
-                    case VAL_BOOL:
-                        vt->field_types[i] = CLASS_FIELD_BOOL;
-                        offset += sizeof(int);
-                        break;
-                    case VAL_STRING:
-                        vt->field_types[i] = CLASS_FIELD_STRING;
-                        offset += sizeof(char*);
-                        break;
-                    default:
-                        vt->field_types[i] = CLASS_FIELD_PTR;
-                        offset += sizeof(void*);
-                        break;
-                }
+        int nfields = merged_nprops;
+        FieldInfo* fields = NULL;
+        int instance_size = 8;  /* 偏移 0: RuntimeTypeInfo* 指针 */
+
+        if(nfields > 0) {
+            fields = (FieldInfo*)calloc(nfields, sizeof(FieldInfo));
+            for(int i = 0; i < nfields; i++) {
+                ValueType vt = merged_ptypes[i];
+                size_t sz = lumyr_etype_itemsz(vt);
+                /* 自然对齐 */
+                int align = (sz <= 2) ? (int)sz : ((sz <= 4) ? 4 : ((sz >= 16) ? 16 : 8));
+                instance_size = (instance_size + align - 1) & ~(align - 1);
+                fields[i].name = strdup(merged_props[i]);
+                fields[i].offset = instance_size;
+                fields[i].valtype = vt;
+                fields[i].size = (int)sz;
+                fields[i].access = merged_access_modifiers ?
+                    (AccessModifier)merged_access_modifiers[i] : ACCESS_PUBLIC;
+                fields[i].type_name = (merged_struct_names && merged_struct_names[i]) ?
+                    strdup(merged_struct_names[i]) : NULL;
+                fields[i].annotation_count = 0;
+                fields[i].annotations = NULL;
+                instance_size += (int)sz;
             }
-            vt->instance_size = offset;
-        } else {
-            vt->field_names = NULL;
-            vt->field_offsets = NULL;
-            vt->field_types = NULL;
-            vt->instance_size = 0;
+            /* 末尾对齐到最大对齐（至少 8） */
+            instance_size = (instance_size + 7) & ~7;
         }
-        /* 方法表暂时为空，后续在编译阶段填充 */
-        vt->nmethods = 0;
-        vt->methods = NULL;
-        vt->method_names = NULL;
-        vt->parent = NULL;
-        /* 填充接口信息 */
-        vt->ninterfaces = td->ninterfaces;
-        if(td->ninterfaces > 0 && td->interfaces) {
-            vt->interfaces = (const char**)malloc((size_t)td->ninterfaces * sizeof(const char*));
-            for(int ii = 0; ii < td->ninterfaces; ii++) {
-                vt->interfaces[ii] = strdup(td->interfaces[ii]);
-            }
-        } else {
-            vt->interfaces = NULL;
+
+        /* 查找父类 RuntimeTypeInfo（用于继承链） */
+        RuntimeTypeInfo* parent_info = NULL;
+        if(parent) {
+            parent_info = lumyr_type_lookup(parent);
         }
-        /* 注册到运行时库的红黑树中 */
-        lumyr_class_vtable_register(vt);
+
+        td->runtime_info = lumyr_type_register(
+            name, nfields, fields, instance_size,
+            TYPE_KIND_CLASS, NULL, 0, NULL,
+            parent_info, td->ninterfaces, td->interfaces,
+            (uint8_t)td->is_abstract
+        );
+        /* 填充 field_offsets 供编译器使用 */
+        td->field_offsets = (int*)calloc(nfields > 0 ? nfields : 1, sizeof(int));
+        for(int i = 0; i < nfields; i++) {
+            td->field_offsets[i] = fields[i].offset;
+        }
     }
 
     return td;
@@ -597,44 +680,29 @@ void class_add_method(const char* class_name, const char* method_name, struct As
             }
         }
     }
-    // 检查是否已有同名方法（方法重写）
+    /* 登记 TypeDef 方法表：同名覆盖（重写），新名追加 */
+    int found = 0;
     for(int i = 0; i < td->nmethods; i++) {
         if(strcmp(td->method_names[i], method_name) == 0) {
-            // 方法重写：替换旧方法
             td->method_nodes[i] = method_node;
             td->method_funcs[i] = rf;
-            // 同时更新 vtable 中的方法
-            ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
-            if(vt) {
-                for(int vi = 0; vi < vt->nmethods; vi++) {
-                    if(strcmp(vt->method_names[vi], method_name) == 0) {
-                        vt->methods[vi] = rf;
-                        break;
-                    }
-                }
-            }
-            return;
+            found = 1;
+            break;
         }
     }
-    // 新方法：添加到方法表
-    int n = td->nmethods + 1;
-    td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
-    td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
-    td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
-    td->method_names[td->nmethods] = strdup(method_name);
-    td->method_nodes[td->nmethods] = method_node;
-    td->method_funcs[td->nmethods] = rf;
-    td->nmethods = n;
-    // 同时添加到 vtable 中
-    ClassVTable* vt = lumyr_class_vtable_lookup(class_name);
-    if(vt) {
-        int vn = vt->nmethods + 1;
-        vt->method_names = (const char**)realloc(vt->method_names, (size_t)vn * sizeof(const char*));
-        vt->methods = (RuntimeFunc**)realloc(vt->methods, (size_t)vn * sizeof(RuntimeFunc*));
-        vt->method_names[vt->nmethods] = strdup(method_name);
-        vt->methods[vt->nmethods] = rf;
-        vt->nmethods = vn;
+    if(!found) {
+        int n = td->nmethods + 1;
+        td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
+        td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
+        td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
+        td->method_names[td->nmethods] = strdup(method_name);
+        td->method_nodes[td->nmethods] = method_node;
+        td->method_funcs[td->nmethods] = rf;
+        td->nmethods = n;
     }
+
+    /* 同步 RuntimeTypeInfo 方法表（含父类继承槽位，重写覆盖在原位置）→ 多态分派依据 */
+    if(td->runtime_info) lumyr_type_set_method(td->runtime_info, method_name, rf);
 }
 
 // 查找 class 方法的 RuntimeFunc（支持继承链查找）
@@ -693,6 +761,20 @@ struct AstNode* class_find_method(const char* class_name, const char* method_nam
     if(td->parent) {
         return class_find_method(td->parent, method_name);
     }
+    return NULL;
+}
+
+/* type_find_method_ast：按类型名（struct/class 统一 type_lookup）查方法 AST 节点，
+ * 沿 parent 继承链回溯。用于 recv.method() 编译期获取方法形参签名。 */
+struct AstNode* type_find_method_ast(const char* type_name, const char* method_name)
+{
+    TypeDef* td = type_lookup(type_name);
+    if(!td) return NULL;
+    for(int i = 0; i < td->nmethods; i++) {
+        if(strcmp(td->method_names[i], method_name) == 0)
+            return td->method_nodes[i];
+    }
+    if(td->parent) return type_find_method_ast(td->parent, method_name);
     return NULL;
 }
 

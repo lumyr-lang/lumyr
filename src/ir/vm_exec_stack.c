@@ -7,6 +7,7 @@
 #include "lumyr_value.h"
 #include "gc_runtime.h"
 #include "lm_map.h"
+#include "lm_type.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
 static inline int typed_ptr_ok(const void* p) {
@@ -184,6 +185,9 @@ static void* value_to_typed_ptr(Value v) {
         }
         return v.v.s;
     case VAL_PTR:        return v.v.struct_ptr;
+    /* struct/class 实例引用：字段直接持有实例指针 */
+    case VAL_STRUCT_PTR:
+    case VAL_CLASS_PTR:  return v.v.struct_ptr;
     case VAL_BIGINT:     return v.v.bigint;
     case VAL_DECIMAL:    return v.v.decimal;
     case VAL_BITDECIMAL: return v.v.bitdecimal;
@@ -242,6 +246,10 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             if(i >= 0 && i < (int64_t)ta->len && ta->items)
                 r = typed_box_elem(ta->elem_type, ta->items, (int)i);
         }
+    } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
+        /* 动态字段访问：idx 是字段名字符串（struct/class 实例统一处理） */
+        const char* fname = lumyr_str_cstr(&idx);
+        if(fname) r = lumyr_field_get(arr, fname);
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
@@ -276,6 +284,10 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
                 ((void**)ta->items)[i] = value_to_typed_ptr(val);
             }
         }
+    } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
+        /* 动态字段写：idx 是字段名字符串（struct/class 实例统一处理） */
+        const char* fname = lumyr_str_cstr(&idx);
+        if(fname) lumyr_field_set(arr, fname, val);
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &val);
     return 1;
@@ -373,3 +385,204 @@ int vm_exec_map_lit(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
 }
+
+/* ============================================================
+ * ===== struct/class 字段访问（Phase C） =====
+ * ============================================================ */
+
+/* 按字段类型从实例内存读取 int64（整型族） */
+static int64_t field_read_i64(ValueType et, const void* base, int offset) {
+    const char* p = (const char*)base + offset;
+    switch(et) {
+    case VAL_INT:       return *(const int*)p;
+    case VAL_INT8:      return *(const int8_t*)p;
+    case VAL_INT16:     return *(const int16_t*)p;
+    case VAL_INT32:     return *(const int32_t*)p;
+    case VAL_INT64:     return *(const int64_t*)p;
+    case VAL_LONG_LONG: return *(const long long*)p;
+    case VAL_LONG:      return *(const long*)p;
+    case VAL_UINT8:     return *(const uint8_t*)p;
+    case VAL_UINT16:    return *(const uint16_t*)p;
+    case VAL_UINT32:    return *(const uint32_t*)p;
+    case VAL_UINT:      return *(const unsigned int*)p;
+    case VAL_UINT64:    return *(const uint64_t*)p;
+    case VAL_ULONG:     return *(const unsigned long*)p;
+    case VAL_UCHAR:     return *(const unsigned char*)p;
+    case VAL_SHORT:     return *(const short*)p;
+    case VAL_USHORT:    return *(const unsigned short*)p;
+    case VAL_SIZE_T:    return (int64_t)*(const size_t*)p;
+    case VAL_SSIZE_T:   return (int64_t)*(const ssize_t*)p;
+    case VAL_BOOL:      return *(const _Bool*)p;
+    case VAL_CHAR:      return *(const char*)p;
+    case VAL_BYTE:      return *(const unsigned char*)p;
+    default:            return 0;
+    }
+}
+
+/* 按字段类型把 int64 截断写入实例内存（整型族） */
+static void field_write_i64(ValueType et, void* base, int offset, int64_t v) {
+    char* p = (char*)base + offset;
+    switch(et) {
+    case VAL_INT:       *(int*)p = (int)v; break;
+    case VAL_INT8:      *(int8_t*)p = (int8_t)v; break;
+    case VAL_INT16:     *(int16_t*)p = (int16_t)v; break;
+    case VAL_INT32:     *(int32_t*)p = (int32_t)v; break;
+    case VAL_INT64:     *(int64_t*)p = v; break;
+    case VAL_LONG_LONG: *(long long*)p = (long long)v; break;
+    case VAL_LONG:      *(long*)p = (long)v; break;
+    case VAL_UINT8:     *(uint8_t*)p = (uint8_t)v; break;
+    case VAL_UINT16:    *(uint16_t*)p = (uint16_t)v; break;
+    case VAL_UINT32:    *(uint32_t*)p = (uint32_t)v; break;
+    case VAL_UINT:      *(unsigned int*)p = (unsigned int)v; break;
+    case VAL_UINT64:    *(uint64_t*)p = (uint64_t)v; break;
+    case VAL_ULONG:     *(unsigned long*)p = (unsigned long)v; break;
+    case VAL_UCHAR:     *(unsigned char*)p = (unsigned char)v; break;
+    case VAL_SHORT:     *(short*)p = (short)v; break;
+    case VAL_USHORT:    *(unsigned short*)p = (unsigned short)v; break;
+    case VAL_SIZE_T:    *(size_t*)p = (size_t)v; break;
+    case VAL_SSIZE_T:   *(ssize_t*)p = (ssize_t)v; break;
+    case VAL_BOOL:      *(_Bool*)p = (_Bool)v; break;
+    case VAL_CHAR:      *(char*)p = (char)v; break;
+    case VAL_BYTE:      *(unsigned char*)p = (unsigned char)v; break;
+    default: break;
+    }
+}
+
+/* LOAD_FIELD：a=stackcls(1/2/3)，b=字段索引
+ * 从 PTR 栈弹 struct ptr → 取 info → fields[b] 得 offset+valtype → 精确读 → 路由压 typed 栈 */
+int vm_exec_load_field(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    void* ptr; stack_vm_pop(g_stack_mgr, STACK_PTR, &ptr);
+    if(!typed_ptr_ok(ptr)) {
+        /* 空指针：压默认值 */
+        int cls = in->a;
+        if(cls == 1) { int64_t z=0; stack_vm_push(g_stack_mgr, STACK_INT64, &z); }
+        else if(cls == 2) { double z=0.0; stack_vm_push(g_stack_mgr, STACK_DOUBLE, &z); }
+        else { void* z=NULL; stack_vm_push(g_stack_mgr, STACK_PTR, &z); }
+        return 1;
+    }
+    RuntimeTypeInfo* info = *(RuntimeTypeInfo**)ptr;
+    int fi_idx = in->b;
+    if(!info || fi_idx < 0 || fi_idx >= info->nfields) {
+        int64_t z=0; stack_vm_push(g_stack_mgr, STACK_INT64, &z);
+        return 1;
+    }
+    FieldInfo* fi = &info->fields[fi_idx];
+    int cls = in->a;
+    if(cls == 1) {
+        int64_t v = field_read_i64(fi->valtype, ptr, fi->offset);
+        stack_vm_push(g_stack_mgr, STACK_INT64, &v);
+    } else if(cls == 2) {
+        char* fp = (char*)ptr + fi->offset;
+        double v;
+        if(fi->valtype == VAL_FLOAT) v = (double)*(float*)fp;
+        else if(fi->valtype == VAL_LONG_DOUBLE) v = (double)*(long double*)fp;
+        else v = *(double*)fp;
+        stack_vm_push(g_stack_mgr, STACK_DOUBLE, &v);
+    } else {
+        void* fp = *(void**)((char*)ptr + fi->offset);
+        stack_vm_push(g_stack_mgr, STACK_PTR, &fp);
+    }
+    return 1;
+}
+
+/* STORE_FIELD：a=stackcls(1/2/3)，b=字段索引
+ * 编译顺序：value 先入 typed 栈，arr 后入 PTR 栈
+ * 弹出顺序：先弹 arr（PTR 栈顶），再弹 value（typed 栈）
+ * 写入字段后压回 value（表达式语义）到 typed 栈 */
+int vm_exec_store_field(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    int cls = in->a;
+    int fi_idx = in->b;
+    /* 编译顺序：value 先入栈（底），arr 后入栈（顶）
+     * 对 cls==3（PTR），value 和 arr 都在 PTR 栈，必须先弹 arr（顶）再弹 value（底）
+     * 对 cls==1/2，value 在 INT64/DOUBLE 栈，arr 在 PTR 栈，顺序无影响 */
+    void* ptr=NULL; int64_t iv=0; double dv=0.0; void* pv=NULL;
+    /* 先弹 arr（struct 指针，在 PTR 栈顶） */
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &ptr);
+    /* 再弹 value（在 typed 栈） */
+    if(cls == 1) stack_vm_pop(g_stack_mgr, STACK_INT64, &iv);
+    else if(cls == 2) stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &dv);
+    else stack_vm_pop(g_stack_mgr, STACK_PTR, &pv);
+
+    if(typed_ptr_ok(ptr)) {
+        RuntimeTypeInfo* info = *(RuntimeTypeInfo**)ptr;
+        if(info && fi_idx >= 0 && fi_idx < info->nfields) {
+            FieldInfo* fi = &info->fields[fi_idx];
+            if(cls == 1) field_write_i64(fi->valtype, ptr, fi->offset, iv);
+            else if(cls == 2) {
+                char* fp = (char*)ptr + fi->offset;
+                if(fi->valtype == VAL_FLOAT) *(float*)fp = (float)dv;
+                else if(fi->valtype == VAL_LONG_DOUBLE) *(long double*)fp = (long double)dv;
+                else *(double*)fp = dv;
+            } else {
+                /* 字符串字段：GC 分配拷贝 */
+                if(fi->valtype == VAL_STRING && pv) {
+                    size_t l = strlen((const char*)pv);
+                    char* gs = (char*)gc_alloc(l+1, VAL_STRING);
+                    memcpy(gs, pv, l+1);
+                    *(void**)((char*)ptr + fi->offset) = gs;
+                } else {
+                    *(void**)((char*)ptr + fi->offset) = pv;
+                }
+            }
+        }
+    }
+    /* 压回值（表达式语义） */
+    if(cls == 1) stack_vm_push(g_stack_mgr, STACK_INT64, &iv);
+    else if(cls == 2) stack_vm_push(g_stack_mgr, STACK_DOUBLE, &dv);
+    else stack_vm_push(g_stack_mgr, STACK_PTR, &pv);
+    return 1;
+}
+
+/* CLASS_NEW：a=常量池下标（RuntimeTypeInfo*），b=实参个数
+ * struct：弹 b 个 VALUE 栈实参，按声明序直接初始化字段（typed 写入）
+ * class 有 __init__：仅创建实例，__init__ 由编译期 emit 的 OPC_CALL 调用
+ *   （编译期已知类型，若 TypeDef 有 constructor 则 emit 调用） */
+int vm_exec_class_new(VMExecCtx* ctx, Instruction* in) {
+    int idx = in->a;
+    int argc = in->b;
+    RuntimeTypeInfo* info = (RuntimeTypeInfo*)(uintptr_t)ctx->const_pool[idx].u64;
+    Value v = lumyr_instance_new(info);
+    void* p = v.v.struct_ptr;
+
+    /* struct（kind == TYPE_KIND_STRUCT）且无 __init__：直接按字段顺序初始化 */
+    if(p && info && info->kind == TYPE_KIND_STRUCT && argc > 0 && argc <= info->nfields) {
+        /* 逆序弹参（栈顶是最后一个实参）暂存 */
+        Value* args = (Value*)malloc(sizeof(Value) * argc);
+        if(!args) { stack_vm_push(g_stack_mgr, STACK_PTR, &p); return 1; }
+        for(int i = argc - 1; i >= 0; --i) {
+            stack_vm_pop(g_stack_mgr, STACK_VALUE, &args[i]);
+        }
+        /* 按字段声明顺序写入（typed 栈路由：INT64/DOUBLE/PTR） */
+        for(int i = 0; i < argc && i < info->nfields; ++i) {
+            FieldInfo* fi = &info->fields[i];
+            int cls = lumyr_etype_stackcls(fi->valtype);
+            if(cls == 1) {
+                field_write_i64(fi->valtype, p, fi->offset, value_to_i64_all(args[i]));
+            } else if(cls == 2) {
+                char* fp = (char*)p + fi->offset;
+                if(fi->valtype == VAL_FLOAT) *(float*)fp = (float)value_to_dbl_all(args[i]);
+                else if(fi->valtype == VAL_LONG_DOUBLE) *(long double*)fp = (long double)value_to_dbl_all(args[i]);
+                else *(double*)fp = value_to_dbl_all(args[i]);
+            } else if(cls == 3) {
+                void* sp = value_to_typed_ptr(args[i]);
+                /* string 字段：GC 分配拷贝 */
+                if(fi->valtype == VAL_STRING && sp) {
+                    size_t l = strlen((const char*)sp);
+                    char* gs = (char*)gc_alloc(l+1, VAL_STRING);
+                    memcpy(gs, sp, l+1);
+                    *(void**)((char*)p + fi->offset) = gs;
+                } else {
+                    *(void**)((char*)p + fi->offset) = sp;
+                }
+            }
+        }
+        free(args);
+    }
+    /* class（有 __init__）：argc 个实参留在 VALUE 栈，由编译期 emit 的 OPC_CALL 调用 __init__ */
+    stack_vm_push(g_stack_mgr, STACK_PTR, &p);
+    return 1;
+}
+
+/* CALL_METHOD（多态方法分派）实现在 vm_exec_call.c，与普通 CALL 共用建帧/状态切换链路 */

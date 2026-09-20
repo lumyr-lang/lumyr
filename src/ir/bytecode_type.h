@@ -184,7 +184,8 @@ typedef enum {
     OPC_YIELD,          // 生成器 yield：弹值，保存执行状态，返回给调用者
 
     /* ===== 类 ===== */
-    OPC_CLASS_NEW,      // a=class名符号下标：创建 C 结构体实例并包装成 Value
+    OPC_CLASS_NEW,      // a=常量池下标（RuntimeTypeInfo* 存为 CONST_UINT64）：创建实例压 PTR 栈
+    OPC_CALL_METHOD,    // a=方法名常量下标，b=实参个数（不含 self）；多态分派
 
     OPC_HALT,
 

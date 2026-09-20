@@ -35,10 +35,12 @@ typedef struct {
     /* class 构造函数（__init__ 方法，NULL=使用默认构造函数） */
     struct AstNode* constructor;  // 构造函数 AST 节点
     void* constructor_func;       // 构造函数 RuntimeFunc*
+    /* 统一运行时类型信息指针（struct/class 注册时由 lumyr_type_register 返回） */
+    struct RuntimeTypeInfo* runtime_info;
 } TypeDef;
 
-/* class 注册（属性用 ValueType 类型） */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int nprops, const char* parent, char** interfaces);
+/* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL） */
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, char** struct_names, int nprops, const char* parent, char** interfaces);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -47,6 +49,8 @@ void class_add_method(const char* class_name, const char* method_name, struct As
 struct AstNode* class_find_method(const char* class_name, const char* method_name);
 /* 查找 class 方法的 RuntimeFunc（支持继承链查找） */
 void* class_find_method_func(const char* class_name, const char* method_name);
+/* 按类型名（struct/class 统一）查方法 AST，沿继承链回溯（方法调用签名） */
+struct AstNode* type_find_method_ast(const char* type_name, const char* method_name);
 /* 设置 class 构造函数（__init__ 方法） */
 void class_set_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func);
 /* 获取 class 构造函数的 RuntimeFunc（支持继承链查找） */
