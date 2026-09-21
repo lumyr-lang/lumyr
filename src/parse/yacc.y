@@ -432,6 +432,66 @@ int lm_is_module_alias(const char* name);
 // AST 构造辅助：报错定位用（节点行号 = 当前 lookahead 行）
 static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; return __n; }
 #define L(n) l_set_line(n)
+
+/* enum 自动递增值：未显式赋值的成员取此值并自增；显式赋值会重置此值 */
+static long long g_enum_next_val = 0;
+
+/* enum 字面量表：编译期存储 enum 名 → map_lit AST，用于在 case Enum.MEMBER
+ * 上下文中编译期求值为对应字面量值（如 case Op.ADD → case 1），避免函数内
+ * 无法访问全局 enum 变量的作用域限制。 */
+typedef struct EnumTableEntry {
+    char* name;
+    AstNode* map_lit;
+    struct EnumTableEntry* next;
+} EnumTableEntry;
+static EnumTableEntry* g_enum_table = NULL;
+
+static void enum_table_register(const char* name, AstNode* map_lit) {
+    /* 重复注册则更新 map_lit */
+    EnumTableEntry* e;
+    for(e = g_enum_table; e; e = e->next) {
+        if(strcmp(e->name, name) == 0) { e->map_lit = map_lit; return; }
+    }
+    e = (EnumTableEntry*)malloc(sizeof(EnumTableEntry));
+    e->name = strdup(name);
+    e->map_lit = map_lit;
+    e->next = g_enum_table;
+    g_enum_table = e;
+}
+
+/* 在 enum_name 的 map 字面量中查找 member_name 对应的 value，返回其克隆节点；
+ * map 字面量结构：entries 是 AST_SEQ 链表，每项 first 是 AST_MAP_ENTRY，key/value 分别在 u.map_entry.key/value */
+static AstNode* enum_table_lookup_member(const char* enum_name, const char* member_name) {
+    EnumTableEntry* e;
+    for(e = g_enum_table; e; e = e->next) {
+        if(strcmp(e->name, enum_name) == 0 && e->map_lit) {
+            /* enum_members 规则: enum_members COMMA enum_member → ast_seq($1, $3)
+             * 即 AST_SEQ{first=之前列表, second=当前 entry}，链表是 left-leaning
+             * 遍历方向：取 second 作当前 entry，first 作 next 指针 */
+            AstNode* p = e->map_lit->u.map_lit.entries;
+            while(p) {
+                AstNode* entry = NULL;
+                if(p->type == AST_SEQ) {
+                    entry = p->u.seq.second;
+                    p = p->u.seq.first;
+                } else if(p->type == AST_MAP_ENTRY) {
+                    entry = p;
+                    p = NULL;
+                } else {
+                    break;
+                }
+                if(entry && entry->type == AST_MAP_ENTRY) {
+                    AstNode* key = entry->u.map_entry.key;
+                    if(key && key->type == AST_STRING && strcmp(key->u.sval, member_name) == 0) {
+                        return ast_clone_node(entry->u.map_entry.value);
+                    }
+                }
+            }
+            return NULL;
+        }
+    }
+    return NULL;
+}
 %}
 
 %union {
@@ -1037,9 +1097,15 @@ closed_stmt
           g_class_ninterfaces = 0;
           $$ = method_list3 ? L(method_list3) : L(ast_none());
       }
-    | TOK_ENUM ID LBRACE enum_members RBRACE {
-          /* enum Color { RED, GREEN } → Color = {"RED":"RED","GREEN":"GREEN"} */
-          $$ = L(ast_assign($2, ast_map_lit($4)));
+    | TOK_ENUM ID LBRACE {
+          /* 进入 enum 体前重置自动递增计数器 */
+          g_enum_next_val = 0;
+      } enum_members RBRACE {
+          /* enum Color { RED, GREEN } → Color = {"RED":0,"GREEN":1}
+           * enum Op { ADD = 1, SUB, MUL, DIV } → Op = {"ADD":1, "SUB":2, "MUL":3, "DIV":4} */
+          AstNode* ml = ast_map_lit($5);
+          enum_table_register($2, ml);
+          $$ = L(ast_assign($2, ml));
       }
     | TOK_INTERFACE ID LBRACE interface_methods RBRACE {
           /* interface Printable { func to_string(): string }：注册接口到符号表 */
@@ -1494,7 +1560,7 @@ type_keyword
     | TOK_CHAR     { $$ = VAL_CHAR; }
     ;
 
-/* case后面只能是编译期常量：数字、整数、char字面量、字符串字面量 */
+/* case后面只能是编译期常量：数字、整数、char字面量、字符串字面量、enum 成员（ID.ID） */
 const_expr
     : NUMBER                  { $$ = ast_num($1); }
     | INTEGER                 { $$ = ast_int($1); }
@@ -1504,6 +1570,18 @@ const_expr
     | STRING_LIT              { $$ = ast_string($1); free($1); }
     | TRUE                    { $$ = ast_bool(1); }
     | FALSE                   { $$ = ast_bool(0); }
+    | ID DOT ID               {
+          /* enum 成员访问：编译期在 enum 字面量表中查 member_name 对应的值，
+           * 找到则替换为字面量值（如 case Op.ADD → case 1），避免函数内无法访问
+           * 全局 enum 变量的作用域限制；未找到则回退为运行时 ast_index 表达式 */
+          AstNode* v = enum_table_lookup_member($1, $3);
+          if(v) {
+              $$ = v;
+          } else {
+              $$ = ast_index(ast_var($1), ast_string($3));
+          }
+          free($1); free($3);
+      }
     ;
 
 elif_clause_list
@@ -1760,7 +1838,17 @@ postfix_expr
           }
       }
     /* 属性访问 a.b → a["b"]（map 点属性；无参方法链语法不再保留） */
-    | postfix_expr DOT ID { $$ = L(ast_index($1, ast_string($3))); }
+    | postfix_expr DOT ID {
+          /* 枚举成员访问：recv 是简单 ID 且 ID 是已注册 enum 名 → 编译期求值为字面量值
+           * 避免函数内访问全局 enum 变量的作用域限制（case Op.ADD 和 op==Op.ADD 都受益） */
+          if($1->type == AST_VAR) {
+              AstNode* v = enum_table_lookup_member($1->u.varname, $3);
+              if(v) { $$ = L(v); free($3); }
+              else  $$ = L(ast_index($1, ast_string($3)));
+          } else {
+              $$ = L(ast_index($1, ast_string($3)));
+          }
+      }
     /* 生成器 .throw(err)：throw 是关键字，特殊处理，转换成 GenThrow(recv, err) */
     | postfix_expr DOT THROW LPAREN arg_list RPAREN {
           AstNode* recv = $1;
@@ -2205,14 +2293,20 @@ map_generic_type
       }
     ;
 
-/* 枚举成员：值 = 成员名字符串 */
+/* 枚举成员（C 风格自动递增）：
+ *   ID            → 值 = g_enum_next_val，随后自增
+ *   ID = INTEGER  → 值 = INTEGER，并将 g_enum_next_val 重置为 INTEGER+1
+ * 例：enum Color { RED, GREEN }   → {RED:0, GREEN:1}
+ *     enum Op { ADD=1, SUB, MUL } → {ADD:1, SUB:2, MUL:3} */
 enum_members
     : %empty                     { $$ = NULL; }
     | enum_member                { $$ = $1; }
     | enum_members COMMA enum_member { $$ = ast_seq($1, $3); }
     ;
 enum_member
-    : ID                         { $$ = ast_map_entry(ast_string(strdup($1)), ast_string(strdup($1))); free($1); }
+    : ID                         { $$ = ast_map_entry(ast_string(strdup($1)), ast_int(g_enum_next_val)); free($1); g_enum_next_val++; }
+    | ID ASSIGN INTEGER          { $$ = ast_map_entry(ast_string(strdup($1)), ast_int($3)); free($1); g_enum_next_val = $3 + 1; }
+    | ID ASSIGN MINUS INTEGER    { $$ = ast_map_entry(ast_string(strdup($1)), ast_int(-$4)); free($1); g_enum_next_val = -$4 + 1; }
     ;
 
 unary_expr

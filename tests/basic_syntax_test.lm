@@ -236,17 +236,17 @@ check(nested_switch(9, 9) == "?-?", "nested switch: default");
 // ------------------------------------------------------------
 enum Color { RED, GREEN, BLUE }
 check(type(Color) == "map", "enum: container is map");
-check(Color.RED == "RED", "enum: RED member");
-check(Color.GREEN == "GREEN", "enum: GREEN member");
-check(Color.BLUE == "BLUE", "enum: BLUE member");
+check(Color.RED == 0, "enum: RED member = 0");
+check(Color.GREEN == 1, "enum: GREEN member = 1");
+check(Color.BLUE == 2, "enum: BLUE member = 2");
 check(len(Color) == 3, "enum: 3 members");
 
-// enum 作为 switch 值（case 后必须是字面量，不支持 Color.RED 表达式）
+// enum 作为 switch 值（C 风格整数匹配；case 后必须是字面量，不支持 Color.RED 表达式）
 func color_name(c) {
     switch (c) {
-        case "RED": return "Red";
-        case "GREEN": return "Green";
-        case "BLUE": return "Blue";
+        case 0: return "Red";
+        case 1: return "Green";
+        case 2: return "Blue";
         default: return "Unknown";
     }
 }
@@ -371,10 +371,10 @@ check(fizzbuzz_counts(30) == 30, "fizzbuzz: total 30");
 enum Op { ADD, SUB, MUL, DIV }
 func compute(op, a, b) {
     switch (op) {
-        case "ADD": return a + b;
-        case "SUB": return a - b;
-        case "MUL": return a * b;
-        case "DIV": return a / b;
+        case 0: return a + b;
+        case 1: return a - b;
+        case 2: return a * b;
+        case 3: return a / b;
         default: return 0;
     }
 }
@@ -382,5 +382,91 @@ check(compute(Op.ADD, 10, 3) == 13, "enum switch: ADD");
 check(compute(Op.SUB, 10, 3) == 7, "enum switch: SUB");
 check(compute(Op.MUL, 10, 3) == 30, "enum switch: MUL");
 check(compute(Op.DIV, 10.0, 4.0) == 2.5, "enum switch: DIV");
+
+// ------------------------------------------------------------
+// 20. enum 赋值（C 风格自动递增）
+// ------------------------------------------------------------
+// 首成员显式赋值，后续自动递增
+enum OpCode { ADD = 1, SUB, MUL, DIV }
+check(type(OpCode) == "map", "enum assign: container is map");
+check(OpCode.ADD == 1, "enum assign: ADD = 1");
+check(OpCode.SUB == 2, "enum assign: SUB = 2 (auto)");
+check(OpCode.MUL == 3, "enum assign: MUL = 3 (auto)");
+check(OpCode.DIV == 4, "enum assign: DIV = 4 (auto)");
+check(len(OpCode) == 4, "enum assign: 4 members");
+
+// 全部显式赋值
+enum Level { LOW = 10, MID = 20, HIGH = 30 }
+check(Level.LOW == 10, "enum assign: LOW = 10");
+check(Level.MID == 20, "enum assign: MID = 20");
+check(Level.HIGH == 30, "enum assign: HIGH = 30");
+
+// 跳跃赋值：显式赋值后重置计数器，后续从新值开始递增
+enum Jump { A = 5, B, C = 10, D }
+check(Jump.A == 5, "enum assign: A = 5");
+check(Jump.B == 6, "enum assign: B = 6 (auto from 5)");
+check(Jump.C == 10, "enum assign: C = 10 (reset)");
+check(Jump.D == 11, "enum assign: D = 11 (auto from 10)");
+
+// 负数赋值
+enum Sign { NEG = -1, ZERO = 0, POS = 1 }
+check(Sign.NEG == -1, "enum assign: NEG = -1");
+check(Sign.ZERO == 0, "enum assign: ZERO = 0");
+check(Sign.POS == 1, "enum assign: POS = 1");
+
+// enum + switch 组合：case 直接用 enum 成员作标签（case EnumName.MEMBER）
+func op_name(op) {
+    switch (op) {
+        case OpCode.ADD: return "ADD";
+        case OpCode.SUB: return "SUB";
+        case OpCode.MUL: return "MUL";
+        case OpCode.DIV: return "DIV";
+        default: return "UNK";
+    }
+}
+check(op_name(OpCode.ADD) == "ADD", "enum member case: ADD");
+check(op_name(OpCode.SUB) == "SUB", "enum member case: SUB");
+check(op_name(OpCode.MUL) == "MUL", "enum member case: MUL");
+check(op_name(OpCode.DIV) == "DIV", "enum member case: DIV");
+check(op_name(99) == "UNK", "enum member case: default");
+
+// enum + switch：Color 成员作 case 标签
+func color_to_hex(c) {
+    switch (c) {
+        case Color.RED: return "#FF0000";
+        case Color.GREEN: return "#00FF00";
+        case Color.BLUE: return "#0000FF";
+        default: return "#000000";
+    }
+}
+check(color_to_hex(Color.RED) == "#FF0000", "enum member case: Color.RED");
+check(color_to_hex(Color.GREEN) == "#00FF00", "enum member case: Color.GREEN");
+check(color_to_hex(Color.BLUE) == "#0000FF", "enum member case: Color.BLUE");
+check(color_to_hex(99) == "#000000", "enum member case: Color default");
+
+// enum 遍历验证值类型
+enum_role_val = 0;
+for k, v in OpCode {
+    enum_role_val = enum_role_val + v;
+}
+check(enum_role_val == 10, "enum assign: iterate sum = 1+2+3+4");
+
+// 函数内访问全局 enum 成员（编译期求值，绕过函数作用域限制）
+func is_add(op) {
+    return op == OpCode.ADD;
+}
+check(is_add(1) == true, "enum global: op == OpCode.ADD (true)");
+check(is_add(2) == false, "enum global: op == OpCode.ADD (false)");
+check(is_add(OpCode.ADD) == true, "enum global: op == OpCode.ADD via member");
+
+func get_mul() {
+    return OpCode.MUL;
+}
+check(get_mul() == 3, "enum global: return OpCode.MUL");
+
+func sum_all_members() {
+    return OpCode.ADD + OpCode.SUB + OpCode.MUL + OpCode.DIV;
+}
+check(sum_all_members() == 10, "enum global: sum 1+2+3+4 = 10");
 
 print("basic_syntax_test ALL PASS");
