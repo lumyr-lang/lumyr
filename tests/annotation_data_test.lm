@@ -1,9 +1,12 @@
 // ============================================================
-// @Data 注解测试（Lombok 风格实体类）
+// @Data / @Getter / @Setter 注解测试（Lombok 风格实体类）
 // 覆盖：自动生成 getXxx / setXxx（驼峰）、public class 前缀、
 //       字段初始化器（name: type = expr）、显式 ctor 与初始化顺序、
 //       const 字段只生成 getter、bool 字段 isXxx、手写访问器优先、
-//       implements、继承链
+//       implements、继承链；
+//       字段级 @Getter/@Setter：独立生效、按 bool 参数决定、优先级覆盖 @Data；
+//       全类型字段（struct/class/array/typed array/map/typed map）访问器；
+//       继承 × 字段注解：父类访问器继承、父子策略独立、三层链、@Data 不随继承传递
 // 全部为合法用法（应全部通过、exit 0）
 // ============================================================
 
@@ -265,10 +268,148 @@ at = After();
 check(at.getS() == "x", "多类顺序：字段注解类字符串动态读");
 check(at.getN() == 5, "多类顺序：普通字段读");
 
+// ============================================================
+// 继承 × @Data / @Getter / @Setter
+// ============================================================
+
+// ------------------------------------------------------------
+// D14: 父类字段注解生成的访问器被子类继承
+// ------------------------------------------------------------
+class IHP {
+    @Getter @Setter
+    v: int = 1;
+    @Getter @Setter(false)
+    ro: int = 2;
+}
+class IHC extends IHP {
+    w: int = 3;
+}
+ihc = IHC();
+check(ihc.getV() == 1, "继承：父类 @Getter 读");
+ihc.setV(10);
+check(ihc.getV() == 10, "继承：父类 @Setter 写");
+check(ihc.getRo() == 2, "继承：父类 @Getter @Setter(false) 字段读");
+
+// ------------------------------------------------------------
+// D15: 父类 @Data，子类无 @Data，子类自有字段独立字段注解
+// ------------------------------------------------------------
+@Data
+class IDP {
+    a: int = 1;
+}
+class IDC extends IDP {
+    @Getter @Setter
+    b: int = 2;
+}
+idc = IDC();
+check(idc.getA() == 1, "继承父类 @Data getter");
+idc.setA(11);
+check(idc.getA() == 11, "继承父类 @Data setter");
+check(idc.getB() == 2, "子类自有字段 @Getter");
+idc.setB(22);
+check(idc.getB() == 22, "子类自有字段 @Setter");
+
+// ------------------------------------------------------------
+// D16: 子类 @Data + 字段注解覆盖，父类 @Data —— 父子策略各自独立
+// ------------------------------------------------------------
+@Data
+class IOP {
+    a: int = 1;
+}
+@Data
+class IOC extends IOP {
+    @Getter(false)
+    noGet: int = 5;
+    @Setter(false)
+    noSet: int = 6;
+    func readNoGet() { return self.noGet; }
+}
+ioc = IOC();
+ioc.setNoGet(50);
+check(ioc.readNoGet() == 50, "子类 @Getter(false) 关读，写仍随子类 @Data");
+check(ioc.getNoSet() == 6, "子类 @Setter(false) 关写，读仍随子类 @Data");
+check(ioc.getA() == 1, "父类 @Data 访问器仍继承可用");
+
+// ------------------------------------------------------------
+// D17: 子类手写同名方法覆盖父类生成访问器；父类 const 字段 getter 继承
+// ------------------------------------------------------------
+@Data
+class IMP {
+    v: int = 1;
+}
+@Data
+class IMC extends IMP {
+    func getV() { return 777; }
+}
+check(IMC().getV() == 777, "子类手写 getter 覆盖父类 @Data 生成");
+
+@Data
+class ICP {
+    const id: int;
+    func ICP(i) { self.id = i; }
+}
+@Data
+class ICC extends ICP {
+    n: int = 9;
+    func ICC(i) { super(i); }
+}
+icc2 = ICC(42);
+check(icc2.getId() == 42, "继承父类 const 字段 getter");
+check(icc2.getN() == 9, "子类自身字段 getter");
+
+// ------------------------------------------------------------
+// D18: 父类关闭方向的访问器随继承保持；三层继承链字段注解一路传递
+// ------------------------------------------------------------
+@Data
+class IFP {
+    @Getter(false)
+    ng: int = 1;
+    @Setter(false)
+    ns: int = 2;
+}
+class IFC extends IFP {
+    x: int = 0;
+}
+ifc = IFC();
+check(ifc.getNs() == 2, "父类 @Setter(false) 字段 getter 继承可用");
+ifc.setNg(10);   /* ng 关 getter，其 setter 随父类 @Data 生成 */
+
+class IG {
+    @Getter @Setter
+    gv: int = 1;
+}
+class IM extends IG {
+    mv: int = 2;
+}
+class IS extends IM {
+    sv: int = 3;
+}
+is7 = IS();
+check(is7.getGv() == 1, "三层链：孙类继承祖父字段 @Getter");
+is7.setGv(100);
+check(is7.getGv() == 100, "三层链：孙类继承祖父字段 @Setter");
+
+// ------------------------------------------------------------
+// D19: @Data 不随继承传递 —— 子类无 @Data，自有字段无生成访问器；
+//      父类访问器仍继承，自有字段类内可直接访问
+// ------------------------------------------------------------
+@Data
+class IP8 {
+    a: int = 1;
+}
+class IC8 extends IP8 {
+    own: int = 2;
+    func readOwn() { return self.own; }
+}
+ic8 = IC8();
+check(ic8.getA() == 1, "父类 @Data 访问器继承可用");
+check(ic8.readOwn() == 2, "子类自有字段无生成访问器，类内可直接访问");
+
 /* ------------------------------------------------------------
  * 编译中止场景（exit 1，单独验证，不放入本文件以保证全绿）：
  *  - 类有字段初始化器但无 ctor，父类 ctor 含必填参数 → 语法错误中止
  *  - @Data 不随继承传递：未标注的子类不会为自有字段生成访问器
+ *  - 继承：父类 @Getter(false)/@Setter(false) 关闭的方向，子类调用仍中止
  * ------------------------------------------------------------
  */
 
