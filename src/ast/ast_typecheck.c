@@ -829,6 +829,19 @@ static int count_args(AstNode* args)
 static int typecheck_call(AstNode* node)
 {
     int err = 0;
+    /* 静态成员方法（Class_method 全局名）访问控制：
+     * class_static_member_lookup 命中且为 private/protected 时按当前上下文检查 */
+    {
+        const char* sm_owner = NULL;
+        int sm_access = 0;
+        if(class_static_member_lookup(node->u.call.name, &sm_owner, &sm_access) &&
+           !tc_access_ok(sm_owner, sm_access)) {
+            LOG_ERROR("语义错误(第%d行)：静态方法 '%s' 为 %s，当前上下文不可调用\n",
+                      node->line, node->u.call.name,
+                      sm_access == ACCESS_PRIVATE ? "private" : "protected");
+            err = 1;
+        }
+    }
             // 默认参数填充：如果实参不足，用函数定义中的默认值表达式填充
             {
                 if(sym_has(node->u.call.name)) {
@@ -981,6 +994,19 @@ int typecheck_expr(AstNode* node)
             }
             ValueType t;
             if(static_sym_get(node->u.varname, &t)) {
+                /* 静态成员（Class_prop / Class_method 全局名）访问控制：
+                 * 引用命中 class_static_member 表且为 private/protected 时检查上下文 */
+                {
+                    const char* sm_owner = NULL;
+                    int sm_access = 0;
+                    if(class_static_member_lookup(node->u.varname, &sm_owner, &sm_access) &&
+                       !tc_access_ok(sm_owner, sm_access)) {
+                        LOG_ERROR("语义错误(第%d行)：静态成员 '%s' 为 %s，当前上下文不可访问\n",
+                                  node->line, node->u.varname,
+                                  sm_access == ACCESS_PRIVATE ? "private" : "protected");
+                        err = 1;
+                    }
+                }
                 if(t == VAL_FUNC) {
                     // 函数名引用：就地转 AST_FUNCREF（函数作为值）
                     node->type = AST_FUNCREF;

@@ -159,6 +159,18 @@ static void annotate_self_if_in_struct(AstNode* func_def) {
         func_def->u.func_def.params = self_param;
     }
 }
+/* 静态方法无实例语义：移除解析期 annotate_self_if_in_struct 自动注入的 self 首参，
+ * 否则顶层以 Class_method(args) 调用时实参会错位绑定到 self 槽 */
+static void strip_static_self(AstNode* fn) {
+    if(!fn || fn->type != AST_FUNC_DEF) return;
+    AstNode* sp = fn->u.func_def.params;
+    if(sp && sp->u.param.name && strcmp(sp->u.param.name, "self") == 0) {
+        fn->u.func_def.params = sp->u.param.next;
+        free(sp->u.param.name);
+        if(sp->u.param.constraint) free(sp->u.param.constraint);
+        free(sp);
+    }
+}
 static AstNode** g_struct_methods = NULL; /* 当前 struct 的方法定义临时列表 */
 static int g_struct_method_n = 0, g_struct_method_cap = 0;
 static void g_struct_method_push(AstNode* m) {
@@ -2373,6 +2385,7 @@ class_prop_list
             $3->u.func_def.is_class_method = 0;
             $3->u.func_def.is_static_method = 1;
             $3->u.func_def.access_modifier = $1;
+            strip_static_self($3);
             class_static_member_register(static_name, g_current_class_name, $1);
             RuntimeFunc* rf = compile_func_from_ast($3);
             if(rf) {
@@ -2485,6 +2498,7 @@ class_prop_list
             /* 标记为静态方法 */
             $3->u.func_def.is_class_method = 0;  // 不标记为 class 方法，作为普通全局函数处理
             $3->u.func_def.is_static_method = 1;
+            strip_static_self($3);
             /* 注册静态成员访问表（默认 public） */
             class_static_member_register(static_name, g_current_class_name, 0);
             /* 立即注册到符号表，以便语义检查阶段能找到 */
@@ -2532,6 +2546,7 @@ class_prop_list
             $4->u.func_def.is_class_method = 0;
             $4->u.func_def.is_static_method = 1;
             $4->u.func_def.access_modifier = $2;
+            strip_static_self($4);
             class_static_member_register(static_name, g_current_class_name, $2);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {
@@ -2559,6 +2574,7 @@ class_prop_list
             $4->u.func_def.is_class_method = 0;
             $4->u.func_def.is_static_method = 1;
             $4->u.func_def.access_modifier = $3;
+            strip_static_self($4);
             class_static_member_register(static_name, g_current_class_name, $3);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {

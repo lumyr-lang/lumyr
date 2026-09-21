@@ -1,0 +1,197 @@
+// ============================================================
+// 修饰符 × 全数据类型综合测试
+// 覆盖：const/static/public/private/protected 与 嵌套数组、map、
+//       typed map、struct、type、class 实例、静态类、静态成员组合
+// 仅含合法用法（应全部通过、exit 0）；违规拦截见编译期语义检查
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// T1: const × 嵌套数组 / map（const 锁重绑定，元素可变）
+// ------------------------------------------------------------
+const grid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+check(grid[1][1] == 5, "const 嵌套数组读取");
+check(grid[2][0] == 7, "const 嵌套数组末行");
+
+grid[0][0] = 100;
+check(grid[0][0] == 100, "const 数组元素可写（const 只锁变量重绑定）");
+
+const conf = {"db": {"host": "local", "ports": [8080, 9090]}};
+check(conf["db"]["host"] == "local", "const map 嵌套 map");
+check(conf["db"]["ports"][1] == 9090, "const map 嵌套数组");
+
+const tmap = <string, map>{"a": {"x": 1}, "b": {"y": 2}};
+check(tmap["b"]["y"] == 2, "const typed map 嵌套");
+check(type(tmap) == "map", "const typed map 类型");
+
+// ------------------------------------------------------------
+// T2: private/protected 字段 × 嵌套数组 / map
+// ------------------------------------------------------------
+class Grid {
+    private rows: array;
+    protected index: map;
+    func Grid() {
+        self.rows = [[1, 2], [3, 4]];
+        self.index = {"first": [10, 20], "meta": {"depth": 2}};
+    }
+    func at(i, j): int { return self.rows[i][j]; }
+    func set_at(i, j, v) { self.rows[i][j] = v; }
+    func first_second(): int { return self.index["first"][1]; }
+    func meta_depth(): int { return self.index["meta"]["depth"]; }
+}
+g = Grid();
+check(g.at(1, 1) == 4, "private 嵌套数组字段同类访问");
+g.set_at(0, 0, 55);
+check(g.at(0, 0) == 55, "private 嵌套数组同类写入");
+check(g.first_second() == 20, "protected map 嵌套数组字段");
+check(g.meta_depth() == 2, "protected map 嵌套 map 字段");
+
+// ------------------------------------------------------------
+// T3: private/protected 字段 × struct / type 实例
+// ------------------------------------------------------------
+struct Point {
+    x: int;
+    y: int;
+    func sum() { return self.x + self.y; }
+}
+type Label {
+    text: string,
+    weight: int
+}
+class Shape3 {
+    private origin: Point;
+    protected label: Label;
+    func Shape3() {
+        self.origin = Point(3, 4);
+        self.label = <Label>{text: "tri", weight: 9};
+    }
+    func area_hint(): int { return self.origin.sum(); }
+    func title(): string { return self.label.text; }
+    func weight(): int { return self.label.weight; }
+}
+s3 = Shape3();
+check(s3.area_hint() == 7, "private struct 字段 + 方法链");
+check(s3.title() == "tri", "protected type 字段读取");
+check(s3.weight() == 9, "protected type 字段 int");
+
+// struct 嵌套 struct 做私有字段
+struct Seg {
+    start: Point;
+    end: Point;
+}
+class Route {
+    private seg: Seg;
+    func Route() { self.seg = Seg(Point(1, 1), Point(4, 5)); }
+    func len2(): int {
+        dx = self.seg.end.x - self.seg.start.x;
+        dy = self.seg.end.y - self.seg.start.y;
+        return dx * dx + dy * dy;
+    }
+}
+r = Route();
+check(r.len2() == 25, "private 嵌套 struct 字段（3-4-5 三角形）");
+
+// ------------------------------------------------------------
+// T4: class 实例做 private 字段 + 嵌套数组中的 class 实例
+// ------------------------------------------------------------
+class Node {
+    private val: int;
+    func Node(v: int) { self.val = v; }
+    func get(): int { return self.val; }
+}
+class NodeBag {
+    private nodes: array;
+    func NodeBag() { self.nodes = [Node(7), Node(8), Node(9)]; }
+    func total(): int {
+        acc = 0;
+        for n in self.nodes { acc = acc + n.get(); }
+        return acc;
+    }
+}
+nb = NodeBag();
+check(nb.total() == 24, "private 数组字段存 class 实例（3 项求和）");
+
+// ------------------------------------------------------------
+// T5: static 属性 × 容器（顶层访问与修改）
+// ------------------------------------------------------------
+class Registry {
+    static items = [10, 20, 30];
+    static conf = {"env": "dev", "levels": [1, 2]};
+    func Registry() {}
+}
+check(Registry_items[2] == 30, "static 数组属性顶层读取");
+check(Registry_conf["env"] == "dev", "static map 属性顶层读取");
+check(Registry_conf["levels"][1] == 2, "static map 嵌套数组属性");
+
+Registry_items[0] = 11;
+check(Registry_items[0] == 11, "static 数组属性顶层修改");
+Registry_conf["env"] = "prod";
+check(Registry_conf["env"] == "prod", "static map 属性顶层修改");
+
+// ------------------------------------------------------------
+// T6: 静态类（全 static 成员）+ static func（两种修饰符顺序）
+// ------------------------------------------------------------
+class MathUtil {
+    static factor = 3;
+    public static func triple(x): int { return x * 3; }
+    static func twice(x): int { return x * 2; }
+    func MathUtil() {}
+}
+check(MathUtil_triple(5) == 15, "public static func（public static 顺序）");
+check(MathUtil_twice(8) == 16, "static func 无修饰符");
+
+class Guard {
+    private static func key(): int { return 42; }
+    static protected func token(): int { return 7; }
+    public static func open_key(): int { return 1; }
+    func Guard() {}
+}
+check(Guard_open_key() == 1, "public static func（无前缀 public）");
+
+// ------------------------------------------------------------
+// T7: class const 字段 × 容器（构造函数初始化）
+// ------------------------------------------------------------
+class Table {
+    const size: int;
+    const tags: array;
+    func Table(n: int) {
+        self.size = n;
+        self.tags = ["a", "b"];
+    }
+    func second_tag(): string { return self.tags[1]; }
+    func twice_size(): int { return self.size * 2; }
+}
+tb = Table(21);
+check(tb.twice_size() == 42, "const int 字段");
+check(tb.second_tag() == "b", "const 数组字段读取");
+check(tb.tags[0] == "a", "const 数组字段下标读取");
+
+// ------------------------------------------------------------
+// T8: protected 继承链 × 容器字段
+// ------------------------------------------------------------
+class BaseStore {
+    protected data: map;
+    func BaseStore() { self.data = {"k": [1, 2, 3]}; }
+}
+class SubStore extends BaseStore {
+    func SubStore() { self.data = {"k": [9, 9]}; }
+    func sum(): int {
+        acc = 0;
+        for v in self.data["k"] { acc = acc + v; }
+        return acc;
+    }
+}
+ss2 = SubStore();
+check(ss2.sum() == 18, "protected map 字段子类构造与遍历");
+
+// ------------------------------------------------------------
+// T9: const func × 容器字面量入参折叠
+// ------------------------------------------------------------
+const func pick_sum(a, b): int { const s = a + b; return s; }
+const folded = pick_sum(20, 22);
+check(folded == 42, "const func 折叠（带类型标注）");
+
+print("modifier_types_test ALL PASS");

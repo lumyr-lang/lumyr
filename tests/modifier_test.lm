@@ -112,9 +112,9 @@ class Counter {
     func Counter() {}
 }
 check(Counter_base == 100, "static 属性初始化");
-check(Counter_secret == 1, "private static 属性（private static 顺序）");
-check(Counter_data == 2, "protected static 属性（static protected 顺序）");
 check(Counter_open == 3, "public static 属性");
+// 注：private/protected static 属性顶层访问被语义检查拦截（负面用例）；
+// 方法体内读取静态属性受"函数不捕获全局"既有语义限制，暂无运行时读通道。
 
 // 顶层修改 static 属性
 Counter_base = Counter_base + 5;
