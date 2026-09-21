@@ -174,4 +174,66 @@ check(a.name == "nick", "user case: name");
 check(a.age == 10, "user case: age");
 check(a.price == 1.0, "user case: price");
 
+// ------------------------------------------------------------
+// 6. 简写命名构造 ClassName{field: value}（不带 <>）
+// 等价于 <ClassName>{field: value}，更友好的构造语法
+// ------------------------------------------------------------
+struct Pt2 {
+    x: int;
+    y: int;
+    func <int> sum() { return self.x + self.y; }
+}
+// struct 简写：顺序无关
+p2a = Pt2{x: 3, y: 4};
+p2b = Pt2{y: 10, x: 20};
+check(type(p2a) == "Pt2", "shorthand struct: type");
+check(p2a.x == 3, "shorthand struct: x");
+check(p2a.y == 4, "shorthand struct: y");
+check(p2a.sum() == 7, "shorthand struct: method");
+check(p2b.x == 20, "shorthand struct: out-of-order x");
+check(p2b.y == 10, "shorthand struct: out-of-order y");
+
+// class 简写：命名构造调构造函数（按字段名映射位置参数）
+class Animal2 {
+    name: string;
+    sound: string;
+    func Animal2(<string> n, <string> s) { self.name = n; self.sound = s; }
+    func <string> speak() { return self.name + " says " + self.sound; }
+}
+a2 = Animal2{name: "Dog", sound: "Woof"};
+check(type(a2) == "Animal2", "shorthand class: type");
+check(a2.name == "Dog", "shorthand class: name");
+check(a2.sound == "Woof", "shorthand class: sound");
+check(a2.speak() == "Dog says Woof", "shorthand class: method");
+
+// class 简写：字段含嵌套容器
+class Cfg {
+    name: string;
+    data: map;
+    func Cfg(<string> n, <map> m) { self.name = n; self.data = m; }
+}
+c2 = Cfg{name: "config1", data: <string, int>{"key": 42}};
+check(c2.name == "config1", "shorthand class: nested map name");
+check(c2.data["key"] == 42, "shorthand class: nested map value");
+check(type(c2.data) == "map", "shorthand class: nested map type");
+
+// type 形状简写
+type Shape2 { x: int, y: int }
+sh3 = Shape2{x: 5, y: 6};
+check(type(sh3) == "map", "shorthand type shape: container");
+check(sh3.x == 5, "shorthand type shape: x");
+check(sh3.y == 6, "shorthand type shape: y");
+
+// 用户原始用例简写形式
+type CustomType2 {
+    name: string,
+    age: int,
+    price: float
+}
+b2 = CustomType2{name: "nick", age: 10, price: 1.0};
+check(type(b2) == "map", "shorthand user case: container");
+check(b2.name == "nick", "shorthand user case: name");
+check(b2.age == 10, "shorthand user case: age");
+check(b2.price == 1.0, "shorthand user case: price");
+
 print("named_construct_test ALL PASS");

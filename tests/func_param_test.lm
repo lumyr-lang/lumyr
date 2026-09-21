@@ -1,0 +1,288 @@
+// ============================================================
+// 函数参数冒号后缀类型标注测试
+// 语法：func foo(name: type, ...) — 与 <type> name 等价，更友好
+// 覆盖：基本类型、自定义类型、map/array、默认值、ref、混合语法
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 1. 基本类型参数（冒号语法 vs 尖括号语法等价性）
+// ------------------------------------------------------------
+func add_colon(a: int, b: int) { return a + b; }
+func add_angle(<int> a, <int> b) { return a + b; }
+check(add_colon(3, 4) == 7, "colon: int add");
+check(add_angle(3, 4) == 7, "angle: int add");
+check(add_colon(3, 4) == add_angle(3, 4), "colon == angle");
+
+func greet(name: string, msg: string) { return msg + ", " + name; }
+check(greet("World", "Hello") == "Hello, World", "colon: string");
+
+func compute(x: double, y: double) { return x * y + 1; }
+check(compute(2.5, 4.0) == 11.0, "colon: double");
+
+func flag_test(a: bool, b: bool) { return a; }
+check(flag_test(true, false) == true, "colon: bool");
+
+func char_test(c: char) { return c; }
+check(char_test(65) == 65, "colon: char");
+
+// ------------------------------------------------------------
+// 2. 默认值 + 冒号类型标注
+// ------------------------------------------------------------
+func power(base: int, exp: int = 2) {
+    r = 1;
+    for (i = 0; i < exp; i = i + 1) { r = r * base; }
+    return r;
+}
+check(power(3) == 9, "colon: default param power(3)");
+check(power(2, 4) == 16, "colon: default param power(2,4)");
+
+func welcome(name: string, prefix: string = "Mr") {
+    return prefix + " " + name;
+}
+check(welcome("Smith") == "Mr Smith", "colon: default string");
+check(welcome("Jones", "Dr") == "Dr Jones", "colon: override default");
+
+// ------------------------------------------------------------
+// 3. 自定义类型参数
+// ------------------------------------------------------------
+struct Vec {
+    x: int;
+    y: int;
+    func <int> mag() { return self.x + self.y; }
+}
+func vec_sum(v: Vec) { return v.mag(); }
+v = Vec(3, 4);
+check(vec_sum(v) == 7, "colon: custom type param");
+
+class Box {
+    val: int;
+    func Box(v: int) { self.val = v; }
+    func <int> get() { return self.val; }
+}
+func box_val(b: Box) { return b.get(); }
+bx = Box(42);
+check(box_val(bx) == 42, "colon: class type param");
+
+// ------------------------------------------------------------
+// 4. map / array 类型参数
+// ------------------------------------------------------------
+func map_get(m: map, k: string) { return m[k]; }
+check(map_get({"key": 42}, "key") == 42, "colon: map param");
+
+func arr_first(a: array) { return a[0]; }
+check(arr_first([10, 20, 30]) == 10, "colon: array param");
+
+func typed_map_get(m: map, k: int) { return m[k]; }
+check(typed_map_get({1: "a", 2: "b"}, 2) == "b", "colon: map with int key");
+
+// ------------------------------------------------------------
+// 5. 可变参数 + 冒号语法
+// ------------------------------------------------------------
+func sum_var(n: int, ...args) {
+    s = n;
+    for (i = 0; i < len(args); i = i + 1) { s = s + args[i]; }
+    return s;
+}
+check(sum_var(10, 1, 2, 3) == 16, "colon: variadic");
+check(sum_var(5) == 5, "colon: variadic empty");
+
+// ------------------------------------------------------------
+// 6. 混合语法：<type> name 和 name: type 在同一函数签名
+// ------------------------------------------------------------
+func mixed(a: int, <string> b, c: map) {
+    return a + len(b) + len(c);
+}
+check(mixed(10, "hi", {"x": 1}) == 13, "colon: mixed syntax");
+
+func mixed2(<int> a, b: string, c: double) {
+    return a + 1;
+}
+check(mixed2(5, "test", 3.14) == 6, "colon: mixed2 syntax");
+
+// ------------------------------------------------------------
+// 7. class 构造函数全用冒号语法
+// ------------------------------------------------------------
+class Cfg {
+    name: string;
+    data: map;
+    count: int;
+    func Cfg(n: string, m: map, c: int = 0) {
+        self.name = n;
+        self.data = m;
+        self.count = c;
+    }
+    func <string> get_name() { return self.name; }
+}
+cfg = Cfg("config1", {"key": 99}, 5);
+check(cfg.name == "config1", "colon: ctor name");
+check(cfg.data["key"] == 99, "colon: ctor map");
+check(cfg.count == 5, "colon: ctor count");
+check(cfg.get_name() == "config1", "colon: ctor method");
+
+cfg2 = Cfg("config2", {"x": 1});
+check(cfg2.count == 0, "colon: ctor default count");
+
+// ------------------------------------------------------------
+// 8. 返回类型标注 + 冒号参数语法组合
+// ------------------------------------------------------------
+func calc(a: int, b: int): int { return a * b + 1; }
+check(calc(3, 4) == 13, "colon: return annotation + colon params");
+
+func concat(s1: string, s2: string): string { return s1 + s2; }
+check(concat("Hello, ", "World") == "Hello, World", "colon: string return + params");
+
+// ------------------------------------------------------------
+// 9. 全数据类型作冒号返回类型标注（29 种）
+// 验证 func name(): type 语法与 func <type> name() 等价
+// ------------------------------------------------------------
+func r_int(): int { return 42; }
+func r_int8(): int8 { return 7; }
+func r_int16(): int16 { return 7; }
+func r_int32(): int32 { return 7; }
+func r_int64(): int64 { return 7000000000; }
+func r_uint8(): uint8 { return 7; }
+func r_uint16(): uint16 { return 7; }
+func r_uint32(): uint32 { return 7; }
+func r_uint64(): uint64 { return 7000000000; }
+func r_uint(): uint { return 7000000000; }
+func r_short(): short { return 7; }
+func r_ushort(): ushort { return 7; }
+func r_long(): long { return 7000000000; }
+func r_ulong(): ulong { return 7000000000; }
+func r_ll(): long long { return 7000000000; }
+func r_size_t(): size_t { return 7000000000; }
+func r_ssize_t(): ssize_t { return 7; }
+func r_byte(): byte { return 7; }
+func r_uchar(): uchar { return 7; }
+func r_char(): char { return 65; }
+func r_ascii(): ascii { return 7; }
+func r_bool(): bool { return true; }
+func r_double(): double { return 3.14; }
+func r_float(): float { return 2.5; }
+func r_longdouble(): long double { return 1.5; }
+func r_string(): string { return "hello"; }
+func r_bigint(): bigint { return <bigint>99; }
+func r_decimal(): decimal { return <decimal>88; }
+func r_bitdecimal(): bitdecimal { return <bitdecimal>77; }
+
+check(r_int() == 42, "ret: int");
+check(r_int8() == 7, "ret: int8");
+check(r_int16() == 7, "ret: int16");
+check(r_int32() == 7, "ret: int32");
+check(r_int64() == 7000000000, "ret: int64");
+check(r_uint8() == 7, "ret: uint8");
+check(r_uint16() == 7, "ret: uint16");
+check(r_uint32() == 7, "ret: uint32");
+check(r_uint64() == 7000000000, "ret: uint64");
+check(r_uint() == 7000000000, "ret: uint");
+check(r_short() == 7, "ret: short");
+check(r_ushort() == 7, "ret: ushort");
+check(r_long() == 7000000000, "ret: long");
+check(r_ulong() == 7000000000, "ret: ulong");
+check(r_ll() == 7000000000, "ret: long long");
+check(r_size_t() == 7000000000, "ret: size_t");
+check(r_ssize_t() == 7, "ret: ssize_t");
+check(r_byte() == 7, "ret: byte");
+check(r_uchar() == 7, "ret: uchar");
+check(r_char() == 65, "ret: char");
+check(r_ascii() == 7, "ret: ascii");
+check(r_bool() == true, "ret: bool");
+check(r_double() == 3.14, "ret: double");
+check(r_float() == 2.5, "ret: float");
+check(r_longdouble() == 1.5, "ret: long double");
+check(r_string() == "hello", "ret: string");
+check((string)r_bigint() == "99", "ret: bigint");
+check((string)r_decimal() == "88", "ret: decimal");
+check((string)r_bitdecimal() == "77", "ret: bitdecimal");
+
+// 返回类型 type() 校验
+check(type(r_int()) == "int", "ret type: int");
+check(type(r_char()) == "char", "ret type: char");
+check(type(r_bool()) == "bool", "ret type: bool");
+check(type(r_double()) == "double", "ret type: double");
+check(type(r_string()) == "string", "ret type: string");
+check(type(r_bigint()) == "bigint", "ret type: bigint");
+check(type(r_decimal()) == "decimal", "ret type: decimal");
+check(type(r_bitdecimal()) == "bitdecimal", "ret type: bitdecimal");
+
+// ------------------------------------------------------------
+// 10. struct/class 方法用冒号返回类型标注
+// ------------------------------------------------------------
+struct Calculator {
+    val: int;
+    func <int> get() { return self.val; }            /* 尖括号语法 */
+    func set(v: int) { self.val = v; }               /* 冒号参数 */
+    func doubled(): int { return self.val * 2; }      /* 冒号返回 */
+    func quad(): int {                               /* 冒号返回 + 方法体多行 */
+        x = self.val;
+        return x * 4;
+    }
+    func label(prefix: string): string {             /* 冒号参数 + 冒号返回 */
+        return prefix + ":" + self.val;
+    }
+}
+calc_obj = Calculator(10);
+calc_obj.set(5);
+check(calc_obj.get() == 5, "method: angle return + colon param");
+check(calc_obj.doubled() == 10, "method: colon return");
+check(calc_obj.quad() == 20, "method: colon return multiline");
+check(calc_obj.label("x") == "x:5", "method: colon param + colon return");
+
+class Stack {
+    items: array;
+    func Stack() { self.items = [1, 2, 3]; }
+    func peek(): int { return self.items[0]; }       /* 冒号返回（替代尖括号） */
+    func name(): string { return "Stack"; }
+    func data(): array { return self.items; }
+    func top(): int { return self.items[len(self.items) - 1]; }  /* 冒号返回 + 字段计算 */
+    func size(): int { return len(self.items); }
+    func set_first(v: int): int {                     /* 冒号参数 + 冒号返回 */
+        self.items[0] = v;
+        return self.items[0];
+    }
+}
+stk = Stack();
+check(stk.peek() == 1, "class: colon return");
+check(stk.name() == "Stack", "class: colon string return");
+check(stk.data()[2] == 3, "class: colon array return");
+check(stk.top() == 3, "class: colon return + field");
+check(stk.size() == 3, "class: colon size");
+check(stk.set_first(99) == 99, "class: colon param+return");
+check(stk.peek() == 99, "class: after set_first");
+check(stk.size() == 3, "class: size unchanged");
+
+// ------------------------------------------------------------
+// 11. 冒号返回 vs 尖括号返回等价性
+// ------------------------------------------------------------
+func angle_add(a: int, b: int) { return a + b; }      /* 无返回标注 */
+func colon_add(a: int, b: int): int { return a + b; }
+func <int> prefix_add(a: int, b: int) { return a + b; }
+
+check(colon_add(3, 4) == angle_add(3, 4), "colon ret == no ret");
+check(colon_add(3, 4) == prefix_add(3, 4), "colon ret == prefix ret");
+check(type(colon_add(3, 4)) == type(prefix_add(3, 4)), "colon ret type == prefix ret type");
+
+// void 返回类型
+func noop(): void { x = 1; }
+check(true, "ret: void no crash");
+func void_test(): void { return; }
+check(true, "ret: void explicit return");
+
+// ------------------------------------------------------------
+// 12. 嵌套调用 + 冒号返回链
+// ------------------------------------------------------------
+func step1(n: int): int { return n + 1; }
+func step2(n: int): int { return n * 2; }
+func step3(n: int): int { return n - 3; }
+check(step3(step2(step1(5))) == 9, "chain: colon return pipeline");
+check(step1(step2(step3(10))) == 15, "chain: colon return reverse");
+
+func build(s: string): string { return "[" + s + "]"; }
+func wrap(s: string): string { return "{" + s + "}"; }
+check(wrap(build("hi")) == "{[hi]}", "chain: string colon return");
+
+print("func_param_test ALL PASS");

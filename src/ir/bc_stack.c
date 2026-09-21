@@ -159,10 +159,18 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             break;
 
         /* CALL：压返回值与否取决于 callsite.keep_result。
-         * argc 个实参分散在各栈，此处不精确扣减（保守计入最大栈深，避免误报）。 */
+         * argc 个实参分散在各栈，此处不精确扣减（保守计入最大栈深，避免误报）。
+         * 按 callsite.ret_stack 路由到对应栈（与 OPC_CALL_METHOD 一致），
+         * 否则 <string>/<bigint> 等返回值被误算到 VALUE 栈，PTR 栈深度低估致溢出。 */
         case OPC_CALL:
-            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result)
-                d.value = +1;
+            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result) {
+                switch((ExprType)fn->callsites[in.a].ret_stack) {
+                case EXPR_TYPE_INT:         d.int64 = +1; break;
+                case EXPR_TYPE_DOUBLE:      d.double_stk = +1; break;
+                case EXPR_TYPE_PTR:         d.ptr = +1; break;
+                default:                    d.value = +1; break;
+                }
+            }
             break;
 
         /* ===== INT64 栈压入指令 ===== */

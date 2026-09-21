@@ -2,6 +2,9 @@
 // 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
 #include "ir_arith.h"
 #include "ir_compile.h"
+#include "ast/ast_types.h"        /* type_lookup / TypeDef */
+#include "ast/func_compile.h"    /* interp_func_is_payload / InterpFuncPayload */
+#include "lm_type.h"             /* lumyr_type_find_method */
 
 /* 获取变量的类型标记 */
 CastKind get_var_cast_type(Ctx* c, const char* name) {
@@ -91,6 +94,28 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
             return castkind_to_exprtype(ir_type_name_to_castkind(callee->ret_type_name));
         }
         return EXPR_TYPE_NONE;
+    }
+
+    /* 方法调用 recv.method(args)：按属主类型方法签名返回类型判断
+     * 否则 "str" + obj.method() 整个 BINOP 落到 EXPR_TYPE_NONE 走 VALUE 栈路径，
+     * 与 c_expr 返回的 EXPR_TYPE_PTR 不一致，导致栈错位/拼接乱码 */
+    if(node->type == AST_METHOD_CALL) {
+        AstNode* recv = node->u.method_call.recv;
+        const char* mname = node->u.method_call.method;
+        char* owner = c_expr_owner_type(c, recv);
+        TypeDef* td = owner ? type_lookup(owner) : NULL;
+        ExprType et = EXPR_TYPE_NONE;
+        if(td && td->runtime_info) {
+            RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
+            if(rf && interp_func_is_payload(rf)) {
+                InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+                BytecodeFunc* def_fn = pl->bytecode;
+                if(def_fn && def_fn->ret_type_name)
+                    et = castkind_to_exprtype(ir_type_name_to_castkind(def_fn->ret_type_name));
+            }
+        }
+        free(owner);
+        return et;
     }
 
     /* self.field 访问（AST_INDEX）：委托 lumyr_self_field_castkind

@@ -142,7 +142,7 @@ print("N6 nested self.inner.double_val()", outer.inner_doubled());
 class Animal {
     name: string;
     sound: string;
-    func __init__(<string> n, <string> s) {
+    func Animal(<string> n, <string> s) {
         self.name = n;
         self.sound = s;
     }
@@ -163,7 +163,7 @@ print("C5 speak()", a.speak());
 // ------------------------------------------------------------
 class Cat extends Animal {
     color: string;
-    func __init__(<string> n, <string> c) {
+    func Cat(<string> n, <string> c) {
         self.name = n;
         self.sound = "Meow";
         self.color = c;
@@ -186,7 +186,7 @@ interface Printable {
 }
 class Book implements Printable {
     title: string;
-    func __init__(<string> t) { self.title = t; }
+    func Book(<string> t) { self.title = t; }
     func <string> to_string() { return "Book: " + self.title; }
 }
 
@@ -306,7 +306,7 @@ interface Derived extends Base {
 }
 class DerivedImpl implements Derived {
     v: int;
-    func __init__(<int> v) { self.v = v; }
+    func DerivedImpl(<int> v) { self.v = v; }
     func <string> id() { return "DerivedImpl"; }
     func <int> base_val() { return self.v; }
     func <string> extra() { return "extra:" + self.v; }
@@ -319,16 +319,16 @@ print("IC3 interface chain extra", di.extra());
 // IC4-IC6: 多层 class 继承 A extends B extends C
 class C0 {
     tag: string;
-    func __init__(<string> t) { self.tag = t; }
+    func C0(<string> t) { self.tag = t; }
     func <string> get_tag() { return self.tag; }
     func <string> who() { return "C0"; }
 }
 class C1 extends C0 {
-    func __init__(<string> t) { self.tag = t; }
+    func C1(<string> t) { self.tag = t; }
     func <string> who() { return "C1"; }
 }
 class C2 extends C1 {
-    func __init__(<string> t) { self.tag = t; }
+    func C2(<string> t) { self.tag = t; }
     func <string> who() { return "C2"; }
 }
 c2 = C2("deep");
@@ -342,12 +342,12 @@ interface Greeter {
 }
 class GreeterBase {
     name: string;
-    func __init__(<string> n) { self.name = n; }
+    func GreeterBase(<string> n) { self.name = n; }
     func <string> greet() { return "Hello, " + self.name; }
 }
 class GreeterEx extends GreeterBase implements Greeter {
     suffix: string;
-    func __init__(<string> n, <string> s) { self.name = n; self.suffix = s; }
+    func GreeterEx(<string> n, <string> s) { self.name = n; self.suffix = s; }
     func <string> greet() { return "Hi, " + self.name + self.suffix; }
 }
 gx = GreeterEx("World", "!");
@@ -361,13 +361,13 @@ class Shape {
 }
 class Circle extends Shape {
     r: int;
-    func __init__(<int> r) { self.r = r; }
+    func Circle(<int> r) { self.r = r; }
     func <int> area() { return 3 * self.r * self.r; }
 }
 class Rect extends Shape {
     w: int;
     h: int;
-    func __init__(<int> w, <int> h) { self.w = w; self.h = h; }
+    func Rect(<int> w, <int> h) { self.w = w; self.h = h; }
     func <int> area() { return self.w * self.h; }
 }
 shapes = [Circle(5), Rect(4, 6), Shape()];
@@ -387,7 +387,7 @@ interface IWriter {
 }
 class ReadWriter implements IReader, IWriter {
     buf: string;
-    func __init__() { self.buf = ""; }
+    func ReadWriter() { self.buf = ""; }
     func <string> fetch() { return self.buf; }
     func <string> store(<string> s) { self.buf = self.buf + s; return self.buf; }
 }
@@ -406,12 +406,12 @@ interface ICount {
 class TagBase {
     label: string;
     n: int;
-    func __init__(<string> l, <int> n) { self.label = l; self.n = n; }
+    func TagBase(<string> l, <int> n) { self.label = l; self.n = n; }
     func <string> tag() { return self.label; }
     func <int> count() { return self.n; }
 }
 class TagEx extends TagBase implements ITag, ICount {
-    func __init__(<string> l, <int> n) { self.label = l; self.n = n; }
+    func TagEx(<string> l, <int> n) { self.label = l; self.n = n; }
     func <string> tag() { return "[" + self.label + "]"; }
     func <int> count() { return self.n + 1; }
 }
@@ -419,5 +419,159 @@ te = TagEx("K", 5);
 print("IS4 combo tag", te.tag());
 print("IS5 combo count", te.count());
 print("IS6 combo type", type(te));
+
+// ------------------------------------------------------------
+// SU: super 全场景测试（全数据类型属性 + 继承链 + 父类构造）
+// ------------------------------------------------------------
+// SU1-SU29: super.field 全 29 数据类型属性访问
+class SuperBase {
+    a: int; b: int8; c: int16; d: int32; e: int64;
+    f: uint8; g: uint16; h: uint32; i: uint64; j: short;
+    k: ushort; l: long; m: long long; n: ulong; o: size_t;
+    p: ssize_t; q: byte; r: uchar; s: bool; t: char;
+    u: ascii; v: double; w: float; x: long double; y: string;
+    z: bigint; aa: decimal; ab: bitdecimal; ac: uint;
+    func SuperBase() {
+        self.a = 7; self.b = 7; self.c = 7; self.d = 7; self.e = 7000000000;
+        self.f = 7; self.g = 7; self.h = 7; self.i = 7000000000; self.j = 7;
+        self.k = 7; self.l = 7000000000; self.m = 7000000000; self.n = 7000000000; self.o = 7000000000;
+        self.p = 7; self.q = 7; self.r = 7; self.s = true; self.t = 'G';
+        self.u = 7; self.v = 3.5; self.w = 3.5; self.x = 3.5; self.y = "v7";
+        self.z = <bigint>99; self.aa = <decimal>99; self.ab = <bitdecimal>99; self.ac = 7;
+    }
+    func <int> get_a() { return self.a; }
+    func <int> get_b() { return self.b; }
+    func <int> get_c() { return self.c; }
+    func <int> get_d() { return self.d; }
+    func <int64> get_e() { return self.e; }
+    func <int> get_f() { return self.f; }
+    func <int> get_g() { return self.g; }
+    func <int> get_h() { return self.h; }
+    func <int64> get_i() { return self.i; }
+    func <int> get_j() { return self.j; }
+    func <int> get_k() { return self.k; }
+    func <int64> get_l() { return self.l; }
+    func <int64> get_m() { return self.m; }
+    func <int64> get_n() { return self.n; }
+    func <int64> get_o() { return self.o; }
+    func <int> get_p() { return self.p; }
+    func <int> get_q() { return self.q; }
+    func <int> get_r() { return self.r; }
+    func <bool> get_s() { return self.s; }
+    func <char> get_t() { return self.t; }
+    func <int> get_u() { return self.u; }
+    func <double> get_v() { return self.v; }
+    func <double> get_w() { return self.w; }
+    func <double> get_x() { return self.x; }
+    func <string> get_y() { return self.y; }
+    func <bigint> get_z() { return self.z; }
+    func <decimal> get_aa() { return self.aa; }
+    func <bitdecimal> get_ab() { return self.ab; }
+    func <int> get_ac() { return self.ac; }
+}
+class SuperSub extends SuperBase {
+    func <int> get_a() { return super.a; }
+    func <int> get_b() { return super.b; }
+    func <int> get_c() { return super.c; }
+    func <int> get_d() { return super.d; }
+    func <int64> get_e() { return super.e; }
+    func <int> get_f() { return super.f; }
+    func <int> get_g() { return super.g; }
+    func <int> get_h() { return super.h; }
+    func <int64> get_i() { return super.i; }
+    func <int> get_j() { return super.j; }
+    func <int> get_k() { return super.k; }
+    func <int64> get_l() { return super.l; }
+    func <int64> get_m() { return super.m; }
+    func <int64> get_n() { return super.n; }
+    func <int64> get_o() { return super.o; }
+    func <int> get_p() { return super.p; }
+    func <int> get_q() { return super.q; }
+    func <int> get_r() { return super.r; }
+    func <bool> get_s() { return super.s; }
+    func <char> get_t() { return super.t; }
+    func <int> get_u() { return super.u; }
+    func <double> get_v() { return super.v; }
+    func <double> get_w() { return super.w; }
+    func <double> get_x() { return super.x; }
+    func <string> get_y() { return super.y; }
+    func <bigint> get_z() { return super.z; }
+    func <decimal> get_aa() { return super.aa; }
+    func <bitdecimal> get_ab() { return super.ab; }
+    func <int> get_ac() { return super.ac; }
+}
+ss = SuperSub();
+print("SU1 super.a(int)", ss.get_a());
+print("SU2 super.b(int8)", ss.get_b());
+print("SU3 super.c(int16)", ss.get_c());
+print("SU4 super.d(int32)", ss.get_d());
+print("SU5 super.e(int64)", ss.get_e());
+print("SU6 super.f(uint8)", ss.get_f());
+print("SU7 super.g(uint16)", ss.get_g());
+print("SU8 super.h(uint32)", ss.get_h());
+print("SU9 super.i(uint64)", ss.get_i());
+print("SU10 super.j(short)", ss.get_j());
+print("SU11 super.k(ushort)", ss.get_k());
+print("SU12 super.l(long)", ss.get_l());
+print("SU13 super.m(ll)", ss.get_m());
+print("SU14 super.n(ulong)", ss.get_n());
+print("SU15 super.o(size_t)", ss.get_o());
+print("SU16 super.p(ssize_t)", ss.get_p());
+print("SU17 super.q(byte)", ss.get_q());
+print("SU18 super.r(uchar)", ss.get_r());
+print("SU19 super.s(bool)", ss.get_s());
+print("SU20 super.t(char)", ss.get_t());
+print("SU21 super.u(ascii)", ss.get_u());
+print("SU22 super.v(double)", ss.get_v());
+print("SU23 super.w(float)", ss.get_w());
+print("SU24 super.x(ld)", ss.get_x());
+print("SU25 super.y(string)", ss.get_y());
+print("SU26 super.z(bigint)", ss.get_z());
+print("SU27 super.aa(decimal)", ss.get_aa());
+print("SU28 super.ab(bitdecimal)", ss.get_ab());
+print("SU29 super.ac(uint)", ss.get_ac());
+
+// SU30-SU33: super.method() 三层继承链
+class S0 {
+    func <string> who() { return "S0"; }
+    func <int> calc() { return 1; }
+}
+class S1 extends S0 {
+    func <string> who() { return "S1>" + super.who(); }
+    func <int> calc() { return super.calc() + 10; }
+}
+class S2 extends S1 {
+    func <string> who() { return "S2>" + super.who(); }
+    func <int> calc() { return super.calc() + 100; }
+}
+s2obj = S2();
+print("SU30 super chain who", s2obj.who());
+print("SU31 super chain calc", s2obj.calc());
+print("SU32 super chain type", type(s2obj));
+
+// SU33: super 在中间层调父类（S1 调 S0 的 who）
+s1obj = S1();
+print("SU33 mid super.who", s1obj.who());
+
+// SU34-SU36: super(args) 父类构造函数
+class CtorBase {
+    name: string;
+    val: int;
+    func CtorBase(<string> n, <int> v) { self.name = n; self.val = v; }
+    func <string> get_name() { return self.name; }
+    func <int> get_val() { return self.val; }
+}
+class CtorSub extends CtorBase {
+    extra: int;
+    func CtorSub(<string> n, <int> v, <int> e) {
+        super(n, v);
+        self.extra = e;
+    }
+    func <int> total() { return self.val + self.extra; }
+}
+cs = CtorSub("base", 10, 5);
+print("SU34 super-ctor name", cs.get_name());
+print("SU35 super-ctor val+extra", cs.total());
+print("SU36 super-ctor type", type(cs));
 
 print("STRUCT_TEST_DONE");

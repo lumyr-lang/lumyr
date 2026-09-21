@@ -22,7 +22,7 @@ type BoxT {
 class Kls {
     label: string;
     n: int;
-    func __init__(label, n) {
+    func Kls(label, n) {
         self.label = label;
         self.n = n;
     }
@@ -334,7 +334,7 @@ check(d_mkc[d_ckey] == 88, "D.class key");
 class EHolder {
     items: array;
     info: map;
-    func __init__() {
+    func EHolder() {
         self.items = [10, 20, 30];
         self.info = {"a": 1};
     }
@@ -398,7 +398,7 @@ check(gt.mp["c"] == 3, "E2.typed map add");
 class GTypedC {
     nums: <int>array;
     mp: <string, int>map;
-    func __init__() {
+    func GTypedC() {
         self.nums = <int>[10, 20, 30];
         self.mp = <string, int>{"x": 100};
     }
@@ -442,7 +442,7 @@ check(fd.layers["L1"][0]["k"].getn() == 52, "F.chain1 modify");
 class FTree {
     children: array;
     node: Pt;
-    func __init__() {
+    func FTree() {
         self.children = [Pt(1, 1), Pt(2, 2)];
         self.node = Pt(9, 9);
     }

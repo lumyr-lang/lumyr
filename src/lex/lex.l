@@ -2,6 +2,7 @@
 %{
 #include "yacc.tab.h"
 #include "lumyr_value_type.h"
+#include "ast/ast_types.h"  /* struct_lookup / class_lookup / type_lookup */
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -9,6 +10,11 @@
 
 // 前一个 token：用于区分 `[` 是下标（表达式后）还是数组字面量（表达式开始）
 static int prev_token = 0;
+// 前前一个 token：用于判断 `{` 前的 ID 是否处于声明上下文（extends/implements/struct/class/type）
+static int prev_prev_token = 0;
+
+// 上一个 ID 文本：用于判断 `{` 前的 ID 是否为已注册类型名（ClassName{field: value} 命名构造）
+static char g_last_id_text[256] = {0};
 
 // 表达式结束类 token（其后 `[` 是下标）
 static int in_case_expr = 0;   /* case 值后的冒号 → CASE_COLON（与字典/三元冒号区分） */
@@ -39,7 +45,7 @@ static int is_expr_end(int t)
     }
 }
 
-#define LEX_RET(t) do { prev_token = (t); return (t); } while(0)
+#define LEX_RET(t) do { prev_prev_token = prev_token; prev_token = (t); return (t); } while(0)
 %}
 
 %option yylineno
@@ -156,6 +162,7 @@ f\"([^"\\]|\\.)*\"   {
 [a-zA-Z_][a-zA-Z0-9_]*  {
     if(strcmp(yytext, "read") == 0) { LEX_RET(READ); }
     if(strcmp(yytext, "write") == 0) { LEX_RET(WRITE); }
+    snprintf(g_last_id_text, sizeof(g_last_id_text), "%s", yytext);
     yylval.s = strdup(yytext);
     LEX_RET(ID);
 }
@@ -263,7 +270,19 @@ f\"([^"\\]|\\.)*\"   {
 "("             { LEX_RET(LPAREN); }
 ")"             { LEX_RET(RPAREN); }
 "{"             {
-                  if(is_expr_end(prev_token)) LEX_RET(LBRACE);
+                  if(is_expr_end(prev_token)) {
+                      /* 类型名后跟 { → 命名构造 ClassName{field: value}，按 MAP_OPEN 处理
+                       * 排除声明上下文（extends/implements/struct/class/type 关键字后的类型名，
+                       * 其 { 是类/结构体块而非命名构造） */
+                      if(prev_token == ID && g_last_id_text[0] &&
+                         prev_prev_token != TOK_EXTENDS && prev_prev_token != TOK_IMPLEMENTS &&
+                         prev_prev_token != TOK_STRUCT && prev_prev_token != TOK_CLASS &&
+                         prev_prev_token != TOK_TYPE &&
+                         (struct_lookup(g_last_id_text) || class_lookup(g_last_id_text) || type_lookup(g_last_id_text))) {
+                          prev_token = MAP_OPEN; return MAP_OPEN;
+                      }
+                      LEX_RET(LBRACE);
+                  }
                   else { prev_token = MAP_OPEN; return MAP_OPEN; } }
 "}"             { LEX_RET(RBRACE); }
 "["             {

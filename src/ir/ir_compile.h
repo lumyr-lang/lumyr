@@ -11,6 +11,11 @@
 /* 编译表达式（递归），返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node);
 
+/* 推断表达式持有的自定义类型名（struct/class 实例）
+ * 返回 strdup 的类型名（调用方释放）；非实例或类型未知返回 NULL
+ * 供 arith_get_expr_type / c_expr_cast_type 共享方法返回类型解析 */
+char* c_expr_owner_type(Ctx* c, AstNode* node);
+
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
 // 重编译已注册函数（typecheck 转换 AST_VAR→AST_FUNCREF 后原位替换字节码）

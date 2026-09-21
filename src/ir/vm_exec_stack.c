@@ -252,7 +252,7 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
     Value r = val_none();
     if(arr.type == VAL_ARRAY) {
         int64_t i = value_to_index(idx);
-        if(i >= 0 && i < (int64_t)arr.v.array->len)
+        if(arr.v.array && i >= 0 && i < (int64_t)arr.v.array->len)
             r = arr.v.array->items[i];
     } else if(arr.type == VAL_MAP) {
         r = lumyr_map_get(arr, idx);

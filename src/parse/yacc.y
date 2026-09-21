@@ -1315,6 +1315,16 @@ param
     | TOK_REF ID             { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; } /*引用传递参数 ref p */
     | TOK_REF TOK_TYPE_ANNOT ID { $$ = ast_param($3, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($2)); } /*带基本类型标注的ref参数 ref <int> p */
     | TOK_REF LT ID GT ID    { $$ = ast_param($5, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($3); } /*带自定义类型标注的ref参数 ref <Point> p */
+    /* 冒号后缀类型标注：n: string, m: map, p: Point（与 <type> name 等价，更友好）
+     * 直接用 builtin_type_name / ID 而非 type_name_str，避免与返回类型/三元/map 上下文冲突 */
+    | ID COLON builtin_type_name { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型 n: int */
+    | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
+    | ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型+默认值 n: int = 5 */
+    | ID COLON ID ASSIGN expr   { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup($3); } /*自定义类型+默认值 n: Point = ... */
+    | TOK_REF ID COLON builtin_type_name { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型 ref p: int */
+    | TOK_REF ID COLON ID       { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型 ref p: Point */
+    | TOK_REF ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型+默认值 */
+    | TOK_REF ID COLON ID ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型+默认值 */
 ;
 
 /* 注解：@name 或 @name(args) */
@@ -1558,6 +1568,19 @@ primary
       }  /* 函数调用 foo(a,b,c) 或宏调用 或构造调用 */
     | ARRAY_OPEN arg_list RBRACKET { $$ = ast_array_lit($2, -1); }  /* 数组字面量 [1,2,3] / []（lexer 按上下文消歧） */
     | MAP_OPEN map_items RBRACE   { $$ = ast_map_lit($2); }    /* 字典字面量 {"k": v, name: 1} / {}（lexer 上下文消歧：表达式位置） */
+    /* 命名构造简写 ClassName{field: value, ...}：lexer 在类型名后的 { 识别为 MAP_OPEN
+     * 等价于 <ClassName>{field: value}，复用 wrap_struct_named 按字段名映射位置参数 */
+    | ID MAP_OPEN map_items RBRACE {
+          if(struct_lookup($1) || class_lookup($1) || type_lookup($1)) {
+              $$ = L(wrap_struct_named($1, $3));
+          } else {
+              /* 非类型名：回退为普通 map 字面量（ID 作 map 前缀不合法） */
+              char buf[256];
+              snprintf(buf, sizeof buf, "'%s' 不是已注册的类型，无法使用命名构造 %s{...}", $1, $1);
+              yyerror(buf);
+              $$ = L(ast_map_lit($3));
+          }
+      }
     | LPAREN expr RPAREN      { $$ = $2; }
     /* 强转 (int)x 接 postfix_expr：C 语义，(int)a[0] = (int)(a[0])（cast 作用于整个后缀表达式） */
     | LPAREN TOK_INT RPAREN postfix_expr   { $$ = new_cast_node(CAST_INT, $4); }
@@ -1697,13 +1720,13 @@ postfix_expr
     | postfix_expr MINUSMINUS { $$ = ast_unary(OP_POST_DEC, $1); }
     /* 调用链 f(1)(2)：callee 为表达式（函数值），动态调用 */
     | postfix_expr LPAREN arg_list RPAREN {
-          /* super(args)：调用父类构造函数，转换为 __super_ctor_<当前类名>(self, args) */
+          /* super(args)：调用父类构造函数 <parent>___init__(self, args) */
           if($1->type == AST_VAR && strcmp($1->u.varname, "super") == 0) {
               AstNode* self_arg = L(ast_var(strdup("self")));
               AstNode* all_args = $3 ? ast_seq_front($3, self_arg) : self_arg;
-              /* 生成特殊的函数名：__super_ctor_<当前类名> */
+              /* 父类构造函数名：<parent>___init__ */
               char ctor_name[256];
-              snprintf(ctor_name, sizeof(ctor_name), "__super_ctor_%s", g_current_class_name ? g_current_class_name : "unknown");
+              snprintf(ctor_name, sizeof(ctor_name), "%s___init__", g_current_class_parent ? g_current_class_parent : "unknown");
               $$ = L(ast_call(strdup(ctor_name), all_args));
           } else {
               $$ = L(ast_dyn_call($1, $3));
@@ -1728,13 +1751,8 @@ postfix_expr
               free($3);
               $$ = L(ast_dyn_call(fn, margs));
           } else if(recv->type == AST_VAR && strcmp(recv->u.varname, "super") == 0) {
-              /* super.method(args)：调用父类方法，转换为 __super_call_<当前类名>_<方法名>(self, args) */
-              AstNode* self_arg = L(ast_var(strdup("self")));
-              AstNode* all_args = margs ? ast_seq_front(margs, self_arg) : self_arg;
-              /* 生成特殊的函数名：__super_call_<当前类名>_<方法名> */
-              char super_call_name[256];
-              snprintf(super_call_name, sizeof(super_call_name), "__super_call_%s_%s", g_current_class_name ? g_current_class_name : "unknown", $3);
-              $$ = L(ast_call(strdup(super_call_name), all_args));
+              /* super.method(args)：保留 method_call 节点，编译器用父类方法表分派 */
+              $$ = L(ast_method_call(recv, $3, margs));
           } else {
               /* 接收者绑定的方法调用 recv.method(args)：运行时按 recv 实际类型分派
                * （方法表含继承槽位，重写覆盖在原位置 → 多态），不再拍平为全局函数名调用 */
@@ -1920,8 +1938,8 @@ class_prop_list
         if($2 && $2->type == AST_FUNC_DEF) {
             /* 标记为 class 方法，跳过顶层重复定义检查 */
             $2->u.func_def.is_class_method = 1;
-            /* __init__ 方法作为构造函数，不加入方法表，单独保存 */
-            if(strcmp($2->u.func_def.name, "__init__") == 0) {
+            /* 构造函数：方法名与类名相同，不加入方法表，单独保存 */
+            if(g_current_class_name && strcmp($2->u.func_def.name, g_current_class_name) == 0) {
                 /* 给构造函数一个唯一的名字 <类名>___init__，避免 CC 模式下多个类的构造函数冲突 */
                 char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
                 sprintf(ctor_name, "%s___init__", g_current_class_name);
@@ -2012,7 +2030,7 @@ class_prop_list
         /* public/private/protected func ...：带访问修饰符的 class 方法定义 */
         if($3 && $3->type == AST_FUNC_DEF) {
             $3->u.func_def.is_class_method = 1;
-            if(strcmp($3->u.func_def.name, "__init__") == 0) {
+            if(g_current_class_name && strcmp($3->u.func_def.name, g_current_class_name) == 0) {
                 char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
                 sprintf(ctor_name, "%s___init__", g_current_class_name);
                 free($3->u.func_def.name);
