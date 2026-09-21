@@ -131,6 +131,17 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
         ExprType right_type = arith_get_expr_type(c, node->u.bin.right);
 
+        /* 算术运算（OP_ADD/MUL/DIV/SUB）：任一操作数是 PTR（字符串）→ 字符串拼接
+         * 即使另一操作数是动态（NONE，如 next(g) 返回值），也走字符串拼接路径，
+         * 避免变量类型在编译期（CAST_STRING）与运行期（动态）存储位置不一致。
+         * 比较运算（OP_EQ/NE/GT/LT/GE/LE）保持原逻辑：两操作数都非 NONE 才返回 PTR，
+         * 否则动态比较走 VEQ/VNE（VALUE 栈），避免 BOX_PTR 从 PTR 栈弹错动态值。 */
+        int is_arith = (node->u.bin.op == OP_ADD || node->u.bin.op == OP_MUL
+                        || node->u.bin.op == OP_DIV || node->u.bin.op == OP_SUB);
+        if(is_arith && (left_type == EXPR_TYPE_PTR || right_type == EXPR_TYPE_PTR)) {
+            return EXPR_TYPE_PTR;
+        }
+
         /* 两个都是已知类型，取较高优先级 */
         if(left_type != EXPR_TYPE_NONE && right_type != EXPR_TYPE_NONE) {
             /* string 优先级最高（字符串拼接） */

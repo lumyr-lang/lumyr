@@ -12,6 +12,7 @@
  */
 #include "vm_types.h"
 #include "vm_exec.h"
+#include "vm_generator.h"
 #include "stack_manager.h"
 #include "lumyr_value.h"
 #include "gc_runtime.h"
@@ -1367,6 +1368,52 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(!bi_need_args("del", argc, 1)) return 0;
         *out = lumyr_del(&recv, argv[1]);
         return 1;
+
+    /* ===== 生成器 ===== */
+    case BUILTIN_NEXT: {
+        /* next(gen)：恢复生成器执行；返回 yield 值；结束返回 null */
+        if(!bi_need_args("next", argc, 1)) return 0;
+        if(recv.type != VAL_GENERATOR || !recv.v.generator)
+            return bi_type_err("next", recv);
+        GeneratorObject* gen = (GeneratorObject*)recv.v.generator;
+        Value result;
+        int ok = wrapped_gen_next(gen, &result, ctx->frame, NULL);
+        (void)ok;  /* 0 = 生成器结束，结果为 NONE；1 = 正常 yield */
+        *out = result;
+        return 1;
+    }
+    case BUILTIN_SEND: {
+        /* send(gen, val)：向生成器发送值，返回下一个 yield 值 */
+        if(!bi_need_args("send", argc, 2)) return 0;
+        if(recv.type != VAL_GENERATOR || !recv.v.generator)
+            return bi_type_err("send", recv);
+        GeneratorObject* gen = (GeneratorObject*)recv.v.generator;
+        Value result;
+        int ok = generator_resume(gen, &result, &argv[1], ctx->frame, NULL);
+        (void)ok;
+        *out = result;
+        return 1;
+    }
+    case BUILTIN_RECEIVE: {
+        /* receive()：在生成器内获取 send() 发送的值 */
+        GeneratorObject* gen = vm_get_current_generator();
+        if(!gen) {
+            fprintf(stderr, "VM: receive() 必须在生成器函数内调用\n");
+            return 0;
+        }
+        *out = gen->send_value;
+        return 1;
+    }
+    case BUILTIN_CLOSE: {
+        /* close(gen)：关闭生成器，释放资源 */
+        if(!bi_need_args("close", argc, 1)) return 0;
+        if(recv.type != VAL_GENERATOR || !recv.v.generator)
+            return bi_type_err("close", recv);
+        GeneratorObject* gen = (GeneratorObject*)recv.v.generator;
+        gen->finished = 1;
+        *out = val_none();
+        return 1;
+    }
 
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);

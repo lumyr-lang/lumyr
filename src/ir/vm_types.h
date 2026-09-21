@@ -37,19 +37,25 @@ typedef enum {
     WRAP_ZIP = 7
 } WrapType;
 
-/* 生成器对象 */
+/* 生成器对象
+ * 4 核心栈备份设计：yield 时把生成器自身压栈的数据 [base_sp, sp) 拷贝到 gen 备份；
+ * resume 时把备份数据还原到全局栈 [base_sp, base_sp+gen_sp) 区域，sp 一起恢复。
+ * 调用方栈 [0, base_sp) 不动，挂起期间生成器数据安全保留在 gen 中。 */
 typedef struct GeneratorObject {
     BytecodeFunc* bf;
     StackFrame* frame;
-    Value* stack;
-    int sp;
-    int pc;
-    int max_stack;
+    /* 4 核心栈备份数据（生成器挂起时保存，恢复时还原到全局栈） */
+    Value*   val_backup;     /* VALUE 栈备份 */
+    int64_t* i64_backup;     /* INT64 栈备份 */
+    double*  dbl_backup;     /* DOUBLE 栈备份 */
+    void**   ptr_backup;     /* PTR 栈备份 */
+    int sp_val, sp_i64, sp_dbl, sp_ptr;  /* 各栈当前深度（生成器自身压栈数） */
+    int cap_val, cap_i64, cap_dbl, cap_ptr;  /* 各备份容量 */
+    int pc;                  /* 挂起时的 pc（下次从这里继续） */
     int finished;
     int started;
-    jmp_buf resume_point;
-    Value yield_value;
-    Value send_value;
+    Value yield_value;       /* 上次 yield 的值 */
+    Value send_value;        /* send() 发送的值 */
 } GeneratorObject;
 
 /* ========== 一层函数执行结束时的返回槽 ==========

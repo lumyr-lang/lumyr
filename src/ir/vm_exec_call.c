@@ -11,6 +11,7 @@
 #include "ir_arith.h"
 #include "ir_types.h"
 #include "ast/func_compile.h"
+#include "vm_generator.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
 #include "lm_type.h"
@@ -56,14 +57,12 @@ static void pop_arg_slot(BytecodeFunc* callee, int slot, ArgTmp* out) {
     }
 }
 
-/* vm_bind_and_run：参数已弹出到 args[0..argc-1]。
- * 建帧按形参顺序绑定（ref 别名调用方槽位）→ 保存/切换执行状态 → 运行 callee →
- * 恢复状态 → 销毁帧。返回 loop 状态；ret 输出返回槽（detach 独立副本）。不处理返回值压栈。
- * 普通 CALL 与多态 CALL_METHOD 共用，保证建帧/状态切换语义单点维护。 */
-static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
-                           int argc, ArgTmp* args, RetSlot* ret) {
-    StackFrame* caller_frame = ctx->frame;   /* ref 形参需引用调用方槽位 */
-    StackFrame* new_frame = stackframe_new(ctx->frame);
+/* vm_bind_only：建帧并按形参顺序绑定参数（ref 别名调用方槽位）。
+ * 返回新建帧；调用方负责销毁（或由生成器接管）。 */
+static StackFrame* vm_bind_only(BytecodeFunc* callee, CallSite* cs,
+                                int argc, ArgTmp* args, StackFrame* parent_frame) {
+    StackFrame* caller_frame = parent_frame;   /* ref 形参需引用调用方槽位 */
+    StackFrame* new_frame = stackframe_new(parent_frame);
     int name_slots = callee->param_cnt + callee->has_variadic;
     for (int slot = 0; slot < argc; ++slot) {
         const char* pname = (slot < name_slots && callee->params[slot])
@@ -89,6 +88,16 @@ static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
             break;
         }
     }
+    return new_frame;
+}
+
+/* vm_bind_and_run：参数已弹出到 args[0..argc-1]。
+ * 建帧按形参顺序绑定（ref 别名调用方槽位）→ 保存/切换执行状态 → 运行 callee →
+ * 恢复状态 → 销毁帧。返回 loop 状态；ret 输出返回槽（detach 独立副本）。不处理返回值压栈。
+ * 普通 CALL 与多态 CALL_METHOD 共用，保证建帧/状态切换语义单点维护。 */
+static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
+                           int argc, ArgTmp* args, RetSlot* ret) {
+    StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame);
 
     /* 保存调用方执行状态 */
     SavedState save;
@@ -157,6 +166,25 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     if (!args) { perror("vm_exec_call args"); return 0; }
     for (int slot = argc - 1; slot >= 0; --slot)
         pop_arg_slot(callee, slot, &args[slot]);
+
+    /* 生成器函数：建帧绑定参数，创建生成器对象压栈（不进入 vm_exec_loop） */
+    if (callee->is_generator) {
+        StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame);
+        free(args);
+        GeneratorObject* gen = generator_new_with_frame(callee, new_frame);
+        if (!gen) {
+            fprintf(stderr, "VM: 创建生成器失败 %s\n", cs->callee);
+            stackframe_destroy(new_frame);
+            return 0;
+        }
+        RetSlot ret;
+        memset(&ret, 0, sizeof(ret));
+        ret.et = EXPR_TYPE_NONE;
+        ret.v.type = VAL_GENERATOR;
+        ret.v.v.generator = gen;
+        push_call_result(cs, ret);
+        return 1;
+    }
 
     RetSlot ret;
     int status = vm_bind_and_run(ctx, callee, cs, argc, args, &ret);

@@ -53,6 +53,9 @@ void vm_set_gen_yielded(int yielded);
 /* 创建生成器对象（不开始执行） */
 GeneratorObject* generator_new(BytecodeFunc* bf, StackFrame* parent_frame, int arg_cnt, const Value* args);
 
+/* 创建生成器对象（frame 已由调用方建好并绑定参数；生成器接管 frame 生命周期） */
+GeneratorObject* generator_new_with_frame(BytecodeFunc* bf, StackFrame* frame);
+
 /* 销毁生成器对象 */
 void generator_free(GeneratorObject* gen);
 

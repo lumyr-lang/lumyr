@@ -260,4 +260,98 @@ try {
 // 单一 catch 时 lumin 不做严格类型过滤，typed_caught 应为 1
 check(typed_caught == 1, "try-catch: typed catch (single)");
 
+// ------------------------------------------------------------
+// 8. yield 生成器
+// ------------------------------------------------------------
+// 简单生成器：yield 多个值
+gen func counter() {
+    yield 1;
+    yield 2;
+    yield 3;
+}
+
+g = counter();
+v1 = next(g);
+check(v1 == 1, "yield: first next() = 1");
+v2 = next(g);
+check(v2 == 2, "yield: second next() = 2");
+v3 = next(g);
+check(v3 == 3, "yield: third next() = 3");
+v4 = next(g);
+check(v4 == null, "yield: fourth next() = null (end)");
+
+// 生成器参数：yield 参数化值
+gen func range_gen(n) {
+    i = 0;
+    while (i < n) {
+        yield i;
+        i = i + 1;
+    }
+}
+
+g2 = range_gen(4);
+collected = "";
+for (j = 0; j < 8; j = j + 1) {
+    x = next(g2);
+    if (x == null) { break; }
+    collected = collected + x;
+}
+check(collected == "0123", "yield: range_gen(4) produces 0,1,2,3");
+
+// 生成器内调用普通函数 + 复杂表达式
+gen func fib_gen(n) {
+    a = 0;
+    b = 1;
+    cnt = 0;
+    while (cnt < n) {
+        yield a;
+        tmp = a + b;
+        a = b;
+        b = tmp;
+        cnt = cnt + 1;
+    }
+}
+
+g3 = fib_gen(6);
+fib_str = "";
+for (k = 0; k < 10; k = k + 1) {
+    fx = next(g3);
+    if (fx == null) { break; }
+    fib_str = fib_str + fx + ",";
+}
+check(fib_str == "0,1,1,2,3,5,", "yield: fib_gen(6) = 0,1,1,2,3,5");
+
+// 生成器 yield 字符串
+gen func greet_gen() {
+    yield "hello";
+    yield "world";
+}
+
+g4 = greet_gen();
+s1 = next(g4);
+check(s1 == "hello", "yield: string first = hello");
+s2 = next(g4);
+check(s2 == "world", "yield: string second = world");
+s3 = next(g4);
+check(s3 == null, "yield: string end = null");
+
+// 生成器 for-in 迭代（语法糖：for x iter gen）
+// 注：当前 lumin for-in 迭代生成器需要 next() 显式调用，所以这里用循环测试
+gen func squares(n) {
+    i = 1;
+    while (i <= n) {
+        yield i * i;
+        i = i + 1;
+    }
+}
+
+g5 = squares(5);
+sq_sum = 0;
+for (m = 0; m < 10; m = m + 1) {
+    sq = next(g5);
+    if (sq == null) { break; }
+    sq_sum = sq_sum + sq;
+}
+check(sq_sum == 55, "yield: squares(5) sum = 1+4+9+16+25 = 55");
+
 print("basic_syntax_test2 PART2 PASS");

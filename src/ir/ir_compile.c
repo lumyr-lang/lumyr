@@ -117,6 +117,9 @@ static int builtin_id_by_name(const char* name) {
         {"floor", BUILTIN_FLOOR}, {"ceil", BUILTIN_CEIL},
         {"abs", BUILTIN_ABS}, {"sqrt", BUILTIN_SQRT},
         {"del", BUILTIN_DEL},
+        /* 生成器 */
+        {"next", BUILTIN_NEXT}, {"send", BUILTIN_SEND},
+        {"receive", BUILTIN_RECEIVE}, {"close", BUILTIN_CLOSE},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {
@@ -1359,6 +1362,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
             } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BITDECIMAL) {
                 emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+            } else if(lt == EXPR_TYPE_NONE) {
+                /* 动态类型（如 next(g) 返回值）：从 VALUE 栈转字符串到 PTR 栈 */
+                emit(c, OPC_CAST_STRING, 0, 0);
             }
             ExprType rt = c_expr(c, node->u.bin.right);
             if(rt == EXPR_TYPE_INT) {
@@ -1371,6 +1377,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
             } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BITDECIMAL) {
                 emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
+            } else if(rt == EXPR_TYPE_NONE) {
+                /* 动态类型（如 next(g) 返回值）：从 VALUE 栈转字符串到 PTR 栈 */
+                emit(c, OPC_CAST_STRING, 0, 0);
             }
             switch(node->u.bin.op) {
             case OP_ADD:
@@ -3147,6 +3156,24 @@ void c_stmt(Ctx* c, AstNode* node) {
     case AST_PARAM:
     case AST_NONE:   /* no-op 语句（struct/class 声明注册后返回 ast_none()） */
         break;
+
+    /* yield 表达式（生成器函数体内）：编译 yield 值到 VALUE 栈，emit OPC_YIELD。
+     * 无值 yield;（仅恢复控制流）：emit OPC_YIELD（值压入 NONE）。 */
+    case AST_YIELD: {
+        AstNode* v = node->u.yieldnode.value;
+        if(v) {
+            ExprType vt = c_expr(c, v);
+            /* yield 值统一 box 到 VALUE 栈（动态返回给 next() 调用方） */
+            CastKind ck = c_expr_cast_type(c, v);
+            emit_to_dynamic(c, vt, ck);
+        } else {
+            /* 无值 yield：压入 NONE */
+            Value none; none.type = VAL_NONE; none.v.i = 0;
+            (void)none;  /* 编译期不需要常量，OPC_YIELD 自己处理空 yield */
+        }
+        emit(c, OPC_YIELD, v ? 1 : 0, 0);  /* a=是否有 yield 值 */
+        break;
+    }
 
     default:
         fprintf(stderr, "IR: unknown stmt type %d\n", node->type);

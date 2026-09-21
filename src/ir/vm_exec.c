@@ -6,6 +6,7 @@
 #include "vm_types.h"
 #include "vm_exec.h"
 #include "vm.h"
+#include "vm_generator.h"
 #include "ir_types.h"
 #include "stack_manager.h"
 #include "ast/stackframe.h"
@@ -408,6 +409,25 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
             ret->et = EXPR_TYPE_NONE;
             ret->v  = val_none();
             return 0;
+
+        /* ===== 生成器 yield：弹 yield 值写入线程局部变量，结束 vm_exec_loop =====
+         * a=1 表示有 yield 值（从 VALUE 栈弹）；a=0 表示无值 yield（值为 NONE）。
+         * s_current_gen 必须由 generator_resume 在进入前设置；yield 后由其负责
+         * 保存栈状态/pc，恢复调用方 sp。 */
+        case OPC_YIELD: {
+            if(in.a) {
+                Value yv;
+                stack_vm_pop(g_stack_mgr, STACK_VALUE, &yv);
+                s_gen_yield_result = ret_value_detach(yv);
+            } else {
+                s_gen_yield_result = val_none();
+            }
+            s_gen_yielded = 1;
+            if(s_current_gen) {
+                s_current_gen->pc = ctx->pc;  /* 下次 resume 从 yield 下一条指令开始 */
+            }
+            return 0;
+        }
 
         default:
             fprintf(stderr, "VM: unknown opcode %d at pc %d\n", (int)in.op, ctx->pc-1);
