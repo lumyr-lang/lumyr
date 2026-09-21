@@ -1179,6 +1179,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             fprintf(stderr, "IR: ++/-- only supports simple variable\n");
             return EXPR_TYPE_NONE;
         }
+        /* 逻辑非 !a：a 转 VALUE 栈，假则跳到 true 分支，结果 0/1 压 VALUE 栈 */
+        if(op == OP_LOGIC_NOT) {
+            ExprType ct = c_expr(c, node->u.uny.child);
+            if(ct != EXPR_TYPE_NONE) emit_to_dynamic(c, ct, c_expr_cast_type(c, node->u.uny.child));
+            int jtrue = emit_here(c, OPC_JMP_IF_FALSE_V, 0, 0);   /* a 假 → !a = true */
+            emit(c, OPC_PUSH_INT_VAL, 0, 0);                       /* a 真 → !a = false */
+            int jend = emit_here(c, OPC_JMP, 0, 0);
+            patch_to(c, jtrue);
+            emit(c, OPC_PUSH_INT_VAL, 1, 0);                       /* a 假 → !a = true */
+            patch_to(c, jend);
+            return EXPR_TYPE_NONE;
+        }
         /* 一元运算：负号 */
         ExprType child_type = c_expr(c, node->u.uny.child);
         if(op == OP_UNARY_MINUS) {
@@ -1192,6 +1204,24 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_BINOP: {
+        /* 逻辑运算 && || 短路求值：left/right 转 VALUE 栈，结果（0/1 或原值）压 VALUE 栈 */
+        if(node->u.bin.op == OP_LOGIC_AND || node->u.bin.op == OP_LOGIC_OR) {
+            int is_and = (node->u.bin.op == OP_LOGIC_AND);
+            /* left 压 VALUE 栈 */
+            ExprType lt = c_expr(c, node->u.bin.left);
+            if(lt != EXPR_TYPE_NONE) emit_to_dynamic(c, lt, c_expr_cast_type(c, node->u.bin.left));
+            /* 短路：AND 假则跳 push_short；OR 真则跳 push_short */
+            int jshort = emit_here(c, is_and ? OPC_JMP_IF_FALSE_V : OPC_JMP_IF_TRUE_V, 0, 0);
+            /* right 压 VALUE 栈（作为正常路径结果） */
+            ExprType rt = c_expr(c, node->u.bin.right);
+            if(rt != EXPR_TYPE_NONE) emit_to_dynamic(c, rt, c_expr_cast_type(c, node->u.bin.right));
+            int jend = emit_here(c, OPC_JMP, 0, 0);
+            /* short 分支：AND push 0；OR push 1 */
+            patch_to(c, jshort);
+            emit(c, OPC_PUSH_INT_VAL, is_and ? 0 : 1, 0);
+            patch_to(c, jend);
+            return EXPR_TYPE_NONE;
+        }
         /* 二元运算 */
         /* 特殊处理：字符串拼接（PTR 栈）需要按顺序转换操作数 */
         ExprType result = arith_get_expr_type(c, node);
@@ -1536,6 +1566,55 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             emit(c, OPC_STORE_VAR, var_idx, 0);
         }
         return rt;
+    }
+
+    /* null 合并 a ?? b：a truthy 用 a，否则用 b */
+    case AST_NULL_COALESCE: {
+        ExprType lt = c_expr(c, node->u.null_coalesce.left);
+        CastKind lk = c_expr_cast_type(c, node->u.null_coalesce.left);
+        if(lt != EXPR_TYPE_NONE) emit_to_dynamic(c, lt, lk);
+        emit(c, OPC_DUP, 0, 0);                                /* 栈顶：left, left */
+        int jfalse = emit_here(c, OPC_JMP_IF_FALSE_V, 0, 0);    /* 弹一个 left，falsy 跳 push_right */
+        int jend = emit_here(c, OPC_JMP, 0, 0);                 /* 栈顶剩 left，跳 end */
+        patch_to(c, jfalse);
+        emit(c, OPC_POP, 0, 0);                                /* 弹掉 left 副本 */
+        ExprType rt = c_expr(c, node->u.null_coalesce.right);
+        if(rt != EXPR_TYPE_NONE) emit_to_dynamic(c, rt, c_expr_cast_type(c, node->u.null_coalesce.right));
+        patch_to(c, jend);
+        return EXPR_TYPE_NONE;
+    }
+
+    /* 安全调用 obj?.method(args) / obj?.field
+     * 实现：obj 编译存临时变量，DUP+null 检查跳到 push_null，
+     * truthy 时调用 method（用 ast_method_call(ast_var(tmp), method, args)），
+     * null 时压 PUSH_NONE */
+    case AST_SAFE_CALL: {
+        AstNode* obj = node->u.safe_call.obj;
+        const char* method = node->u.safe_call.method;
+        AstNode* args = node->u.safe_call.args;
+        static int safe_call_counter = 0;
+        char tmp_name[64];
+        snprintf(tmp_name, sizeof(tmp_name), "__safe_call_recv_%d", safe_call_counter++);
+        /* 编译 obj 到 VALUE 栈，存临时变量（避免 obj 副作用重复执行） */
+        ExprType ot = c_expr(c, obj);
+        if(ot != EXPR_TYPE_NONE) emit_to_dynamic(c, ot, c_expr_cast_type(c, obj));
+        int recv_idx = c_add_var(c, tmp_name, EXPR_TYPE_NONE);
+        int recv_bf = bf_sym(c->fn, tmp_name);
+        if(recv_bf >= 0 && recv_bf < c->fn->sym_cnt) c->fn->var_type_tags[recv_bf] = -1;
+        emit(c, OPC_STORE_VAR, recv_idx, 0);
+        /* DUP+null 检查 */
+        emit(c, OPC_LOAD_VAR, recv_idx, 0);
+        int jfalse = emit_here(c, OPC_JMP_IF_FALSE_V, 0, 0);   /* null 跳 push_null */
+        /* truthy：调用 method(recv) */
+        AstNode* method_call = ast_method_call(ast_var(strdup(tmp_name)), strdup(method), args);
+        ExprType mt = c_expr(c, method_call);
+        if(mt != EXPR_TYPE_NONE) emit_to_dynamic(c, mt, c_expr_cast_type(c, method_call));
+        int jend = emit_here(c, OPC_JMP, 0, 0);
+        /* push_null: PUSH_NONE */
+        patch_to(c, jfalse);
+        emit(c, OPC_PUSH_NONE, 0, 0);
+        patch_to(c, jend);
+        return EXPR_TYPE_NONE;
     }
 
     default:
@@ -2561,6 +2640,58 @@ void c_stmt(Ctx* c, AstNode* node) {
         break;
     }
 
+    case AST_DESTRUCT: {
+        /* 解构赋值：a, b, c = [1, 2, 3]
+         * 实现：把 rhs 求值后存到临时变量 __destruct_tmp_N，然后对每个 i
+         * 生成 names[i] = __destruct_tmp_N[i]，避免 rhs 重复执行
+         * 注意：dst 变量可能已 typed（INT64/DOUBLE/PTR），需按其 var_type_tags
+         * 选择对应 STORE 指令，避免 VALUE 槽位与 typed 槽位错位 */
+        int n = node->u.destruct.count;
+        char** names = node->u.destruct.names;
+        static int destruct_counter = 0;
+        char tmp_name[64];
+        snprintf(tmp_name, sizeof(tmp_name), "__destruct_tmp_%d", destruct_counter++);
+        /* 编译 rhs（数组/可索引容器），结果压 VALUE 栈 */
+        ExprType rt = c_expr(c, node->u.destruct.rhs);
+        if(rt != EXPR_TYPE_NONE) emit_to_dynamic(c, rt, c_expr_cast_type(c, node->u.destruct.rhs));
+        /* 存到临时变量（VALUE 槽位） */
+        int var_idx = c_add_var(c, tmp_name, EXPR_TYPE_NONE);
+        int bf_idx = bf_sym(c->fn, tmp_name);
+        if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) c->fn->var_type_tags[bf_idx] = -1;
+        emit(c, OPC_STORE_VAR, var_idx, 0);
+        /* 对每个 i：names[i] = __destruct_tmp_N[i] */
+        for(int i = 0; i < n; i++) {
+            /* 加载临时数组到 VALUE 栈 */
+            emit(c, OPC_LOAD_VAR, var_idx, 0);
+            /* 压索引 i 到 VALUE 栈 */
+            emit(c, OPC_PUSH_INT_VAL, i, 0);
+            /* arr[i] -> VALUE 栈（动态 Value） */
+            emit(c, OPC_INDEX_GET, 0, 0);
+            /* 按 dst 变量现有类型选择 STORE 指令 */
+            int dst_idx = c_find_var(c, names[i]);
+            if(dst_idx < 0) dst_idx = c_add_var(c, names[i], EXPR_TYPE_NONE);
+            int dst_bf = bf_sym(c->fn, names[i]);
+            CastKind dst_ck = (dst_bf >= 0 && dst_bf < c->fn->sym_cnt)
+                              ? (CastKind)c->fn->var_type_tags[dst_bf] : CAST_NONE;
+            ExprType dst_et = castkind_to_exprtype(dst_ck);
+            if(dst_et == EXPR_TYPE_INT) {
+                emit(c, OPC_UNBOX_INT64, (int)dst_ck, 0);   /* VALUE -> INT64 栈 */
+                emit(c, OPC_STORE_INT64_VAR, dst_idx, 0);
+            } else if(dst_et == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_UNBOX_DOUBLE, 0, 0);            /* VALUE -> DOUBLE 栈 */
+                emit(c, OPC_STORE_DOUBLE_VAR, dst_idx, 0);
+            } else if(dst_et == EXPR_TYPE_PTR) {
+                emit(c, OPC_UNBOX_PTR, (int)dst_ck, 0);     /* VALUE -> PTR 栈 */
+                emit(c, OPC_STORE_PTR_VAR, dst_idx, 0);
+            } else {
+                /* 动态：VALUE 栈直接存 */
+                if(dst_bf >= 0 && dst_bf < c->fn->sym_cnt) c->fn->var_type_tags[dst_bf] = -1;
+                emit(c, OPC_STORE_VAR, dst_idx, 0);
+            }
+        }
+        break;
+    }
+
     case AST_UNARY:
     case AST_BINOP:
     case AST_TERNARY:
@@ -2626,7 +2757,7 @@ void c_stmt(Ctx* c, AstNode* node) {
                 prev_match = emit_here(c, OPC_CATCH_MATCH, tc, 0);
                 emit(c, OPC_GET_ERR, 0, 0);
                 if(cl[i].var) {
-                    int vi = bf_sym(c->fn, cl[i].var);
+                    int vi = c_add_var(c, cl[i].var, EXPR_TYPE_NONE);
                     emit(c, OPC_STORE_VAR, vi, 0);
                 } else {
                     emit(c, OPC_POP, 0, 0);

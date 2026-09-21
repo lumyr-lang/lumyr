@@ -1,0 +1,263 @@
+// ============================================================
+// 基础语法综合测试 II：复合赋值 / 逻辑运算 / null /
+//                       f-string / 解构 / nullish / safe-call /
+//                       try-catch / yield
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 1. 复合赋值 += -= *= /=
+// ------------------------------------------------------------
+a = 10;
+a += 5;
+check(a == 15, "compound: 10 += 5 = 15");
+a -= 3;
+check(a == 12, "compound: 12 -= 3 = 12");
+a *= 4;
+check(a == 48, "compound: 12 *= 4 = 48");
+a /= 6;
+check(a == 8, "compound: 48 /= 6 = 8");
+
+b = 100;
+b += 10;
+b -= 5;
+b *= 2;
+check(b == 210, "compound: chained 100+10-5*2 = 210");
+
+c = 0;
+for (i = 0; i < 5; i = i + 1) {
+    c += i;
+}
+check(c == 10, "compound: loop sum 0+1+2+3+4 = 10");
+
+// ------------------------------------------------------------
+// 2. 逻辑运算 && || !
+// ------------------------------------------------------------
+check(true && true, "logic: true && true");
+check(!(true && false), "logic: !(true && false)");
+check(true || false, "logic: true || false");
+check(!false, "logic: !false");
+check(!true == false, "logic: !true == false");
+
+short_circuit = 0;
+func side_effect() {
+    short_circuit = short_circuit + 1;
+    return true;
+}
+r = false && side_effect();
+check(short_circuit == 0, "logic: && short-circuit");
+check(r == false, "logic: && returns false");
+
+r2 = true || side_effect();
+check(short_circuit == 0, "logic: || short-circuit");
+check(r2 == true, "logic: || returns true");
+
+check((5 > 3) && (10 > 5), "logic: (5>3) && (10>5)");
+check((5 > 3) || (1 > 5), "logic: (5>3) || (1>5)");
+check((5 > 3) && !(1 > 5), "logic: (5>3) && !(1>5)");
+
+// ------------------------------------------------------------
+// 3. null 字面量与比较
+// ------------------------------------------------------------
+x = null;
+check(x == null, "null: x == null");
+check(type(x) == "none", "null: type(x) == 'none'");
+check(x == null && !(x != null), "null: double-check");
+check(x != 1, "null: x != 1");
+
+y = null;
+if (y == null) { y = 42; }
+check(y == 42, "null: default value assignment");
+
+arr = [1, null, 3];
+check(arr[0] == 1, "null: array[0] == 1");
+check(arr[1] == null, "null: array[1] == null");
+check(arr[2] == 3, "null: array[2] == 3");
+check(len(arr) == 3, "null: len(arr) == 3");
+
+// ------------------------------------------------------------
+// 4. f-string 模板字符串
+// ------------------------------------------------------------
+name = "world";
+greeting = f"hello, {name}!";
+check(greeting == "hello, world!", "fstring: basic interpolation");
+
+n = 42;
+s = f"n = {n}, n+1 = {n + 1}";
+check(s == "n = 42, n+1 = 43", "fstring: expression interpolation");
+
+pi = 3.14;
+fs = f"pi = {pi}";
+check(fs == "pi = 3.14", "fstring: double interpolation");
+
+b_val = true;
+fb = f"b = {b_val}";
+check(fb == "b = 1", "fstring: bool interpolation (1/0)");
+
+a1 = 1; b1 = 2; c1 = 3;
+fmulti = f"{a1}+{b1}+{c1} = {a1 + b1 + c1}";
+check(fmulti == "1+2+3 = 6", "fstring: multi interpolation");
+
+// ------------------------------------------------------------
+// 5. 解构赋值 a, b = [1, 2]
+// ------------------------------------------------------------
+p, q = [10, 20];
+check(p == 10, "destruct: p = 10");
+check(q == 20, "destruct: q = 20");
+
+x1 = 1; y1 = 2;
+x1, y1 = [y1, x1];
+check(x1 == 2, "destruct: swap x1 = 2");
+check(y1 == 1, "destruct: swap y1 = 1");
+
+r1, r2, r3 = [100, 200, 300];
+check(r1 == 100, "destruct: r1 = 100");
+check(r2 == 200, "destruct: r2 = 200");
+check(r3 == 300, "destruct: r3 = 300");
+
+m, n = [1, 2, 3, 4];
+check(m == 1, "destruct: m = 1");
+check(n == 2, "destruct: n = 2");
+
+// 解构 + 函数返回数组
+func min_max(arr) {
+    mn = arr[0];
+    mx = arr[0];
+    for v in arr {
+        if (v < mn) { mn = v; }
+        if (v > mx) { mx = v; }
+    }
+    return [mn, mx];
+}
+lo, hi = min_max([5, 1, 9, 3, 7]);
+check(lo == 1, "destruct: min_max min = 1");
+check(hi == 9, "destruct: min_max max = 9");
+
+// ------------------------------------------------------------
+// 6. null 合并 ?? 与安全调用 ?.
+// ------------------------------------------------------------
+// null 合并：null ?? default
+v1 = null;
+v2 = v1 ?? "default";
+check(v2 == "default", "nullish: null ?? 'default'");
+
+v3 = 42;
+v4 = v3 ?? "fallback";
+check(v4 == 42, "nullish: 42 ?? fallback = 42");
+
+// 链式 null 合并
+config = null;
+timeout = (config ?? null) ?? 3000;
+check(timeout == 3000, "nullish: chained ?? fallback");
+
+// 安全调用：a?.method() / a?.field
+maybe_null = null;
+result = maybe_null?.foo();
+check(result == null, "safe-call: null?.foo() = null");
+
+maybe_arr = [1, 2, 3];
+result2 = maybe_arr?.len();
+check(result2 == 3, "safe-call: [1,2,3]?.len() = 3");
+
+// 安全调用 + 默认值组合
+val = null;
+final = (val?.transform()) ?? "safe-default";
+check(final == "safe-default", "safe-call + nullish combined");
+
+print("basic_syntax_test2 PART1 PASS");
+
+// ------------------------------------------------------------
+// 7. try/catch/throw/finally 异常控制流
+// ------------------------------------------------------------
+// 基本 throw + catch
+func divide(a, b) {
+    if (b == 0) { throw "Division by zero"; }
+    return a / b;
+}
+
+caught = 0;
+try {
+    divide(10, 0);
+} catch (e) {
+    caught = 1;
+    check(e == "Division by zero", "try-catch: catch message");
+}
+check(caught == 1, "try-catch: catch block executed");
+
+// try 无异常时不进入 catch
+no_catch = 1;
+try {
+    divide(10, 2);
+} catch (e) {
+    no_catch = 0;
+}
+check(no_catch == 1, "try-catch: no throw skips catch");
+
+// finally 必定执行
+finally_ran = 0;
+try {
+    divide(10, 2);
+} catch (e) {
+    finally_ran = -1;
+} finally {
+    finally_ran = 1;
+}
+check(finally_ran == 1, "try-finally: finally runs on success");
+
+// throw 后 finally 仍执行
+finally_after_throw = 0;
+try {
+    throw "boom";
+} catch (e) {
+    check(e == "boom", "try-catch: throw boom caught");
+} finally {
+    finally_after_throw = 1;
+}
+check(finally_after_throw == 1, "try-finally: finally runs after throw");
+
+// 函数内 throw，调用处 catch
+func risky(n) {
+    if (n < 0) { throw "negative"; }
+    return n * 2;
+}
+
+err_msg = "none";
+try {
+    risky(-5);
+} catch (e) {
+    err_msg = e;
+}
+check(err_msg == "negative", "try-catch: cross-function throw");
+
+// 嵌套 try/catch
+nested_inner = 0;
+nested_outer = 0;
+try {
+    try {
+        throw "inner";
+    } catch (e) {
+        nested_inner = 1;
+        throw "outer";
+    }
+} catch (e2) {
+    nested_outer = 1;
+    check(e2 == "outer", "try-catch: nested rethrow");
+}
+check(nested_inner == 1, "try-catch: nested inner caught");
+check(nested_outer == 1, "try-catch: nested outer caught");
+
+// 带类型 catch（Type e 形式）
+typed_caught = 0;
+try {
+    throw "typed error";
+} catch (RuntimeError e) {
+    typed_caught = 1;
+}
+// 注：RuntimeError 类型不匹配字符串时跳过该 catch；
+// 单一 catch 时 lumin 不做严格类型过滤，typed_caught 应为 1
+check(typed_caught == 1, "try-catch: typed catch (single)");
+
+print("basic_syntax_test2 PART2 PASS");

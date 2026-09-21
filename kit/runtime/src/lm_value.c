@@ -994,16 +994,49 @@ Value lumyr_ne(Value a, Value b) {
 _Bool lumyr_to_bool(Value v) {
     switch(v.type)
     {
-        case VAL_INT:    return v.v.i != 0;
-        case VAL_DOUBLE: return v.v.d != 0.0;
-        case VAL_BOOL:   return v.v.b;
-        case VAL_CHAR:   return (unsigned char)v.v.c != 0;
-        case VAL_BYTE:   return v.v.by != 0;
-        case VAL_STRING: return v.v.s && v.v.s[0] != '\0';
-        case VAL_ARRAY:  return v.v.array && v.v.array->len > 0;
-        case VAL_MAP:    return v.v.map && v.v.map->len > 0;
-        case VAL_NONE:   return 0;
-        default: return 1;  // 其他类型（如函数、线程等）默认为 true
+        case VAL_NONE:    return 0;
+        case VAL_INT:     return v.v.i != 0;
+        case VAL_DOUBLE:  return v.v.d != 0.0;
+        case VAL_BOOL:    return v.v.b;
+        case VAL_CHAR:    return (unsigned char)v.v.c != 0;
+        case VAL_BYTE:    return v.v.by != 0;
+        case VAL_STRING: {
+            const char* s = v.str_inline ? v.v.sso.data : v.v.s;
+            return s && s[0] != '\0';
+        }
+        case VAL_ARRAY:   return v.v.array && v.v.array->len > 0;
+        case VAL_TYPED_ARRAY: return v.v.typed_array && v.v.typed_array->len > 0;
+        case VAL_MAP:     return v.v.map && v.v.map->len > 0;
+        /* 所有 C 整数子类型按数值判定 truthy */
+        case VAL_INT8:    return v.v.i8 != 0;
+        case VAL_INT16:   return v.v.i16 != 0;
+        case VAL_INT32:   return v.v.i32 != 0;
+        case VAL_INT64:   return v.v.i64 != 0;
+        case VAL_LONG_LONG: return v.v.ll != 0;
+        case VAL_LONG:    return v.v.l != 0;
+        case VAL_UINT8:   return v.v.u8 != 0;
+        case VAL_UCHAR:   return v.v.uc != 0;
+        case VAL_UINT16:  return v.v.u16 != 0;
+        case VAL_USHORT:  return v.v.us != 0;
+        case VAL_UINT32:  return v.v.u32 != 0;
+        case VAL_UINT:    return v.v.ui != 0;
+        case VAL_UINT64:  return v.v.u64 != 0;
+        case VAL_ULONG:   return v.v.ul != 0;
+        case VAL_SHORT:   return v.v.sh != 0;
+        case VAL_SIZE_T:  return v.v.st != 0;
+        case VAL_SSIZE_T: return v.v.sst != 0;
+        case VAL_FLOAT:   return v.v.f != 0.0f;
+        case VAL_LONG_DOUBLE: return v.v.ld != 0.0L;
+        /* 指针类型：非空即 truthy */
+        case VAL_PTR:
+        case VAL_STRUCT_PTR:
+        case VAL_CLASS_PTR:
+        case VAL_BIGINT:
+        case VAL_DECIMAL:
+        case VAL_BITDECIMAL:
+        case VAL_FUNC:
+        case VAL_GENERATOR: return v.v.struct_ptr != NULL;
+        default: return 1;  // 其他未知类型默认为 true
     }
 }
 

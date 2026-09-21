@@ -32,37 +32,21 @@ int vm_exec_control_jmp_if_false(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* ========== 条件跳转（VALUE 栈非零则跳转） ========== */
+/* ========== 条件跳转（VALUE 栈 truthy 则跳转） ========== */
 int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in) {
     Value cond;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &cond);
-    int truthy = 0;
-    switch (cond.type) {
-        case VAL_INT: truthy = (cond.v.i != 0); break;
-        case VAL_DOUBLE: truthy = (cond.v.d != 0.0); break;
-        case VAL_BOOL: truthy = cond.v.b; break;
-        case VAL_STRING: truthy = (cond.v.s && cond.v.s[0] != '\0'); break;
-        default: truthy = 0; break;
-    }
-    if (truthy) {
+    if (lumyr_to_bool(cond)) {
         ctx->pc = in->a;
     }
     return 1;
 }
 
-/* ========== 条件跳转（VALUE 栈为零则跳转） ========== */
+/* ========== 条件跳转（VALUE 栈 falsy 则跳转） ========== */
 int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in) {
     Value cond;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &cond);
-    int truthy = 0;
-    switch (cond.type) {
-        case VAL_INT: truthy = (cond.v.i != 0); break;
-        case VAL_DOUBLE: truthy = (cond.v.d != 0.0); break;
-        case VAL_BOOL: truthy = cond.v.b; break;
-        case VAL_STRING: truthy = (cond.v.s && cond.v.s[0] != '\0'); break;
-        default: truthy = 0; break;
-    }
-    if (!truthy) {
+    if (!lumyr_to_bool(cond)) {
         ctx->pc = in->a;
     }
     return 1;

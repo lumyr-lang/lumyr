@@ -28,6 +28,7 @@ static TryCtxNode* g_try_stack = NULL;
 typedef struct {
     int active;
     Value error;
+    Value throw_val;     /* 原始 throw 值（跨帧展开时同步给 GET_ERR） */
     StackFrame* target_frame;
     int catch_pc;
 } UnwindState;
@@ -35,6 +36,8 @@ static UnwindState g_unwind;
 
 /* 当前已捕获错误（GET_ERR 读取） */
 static Value g_current_error;
+/* 原始 throw 值（catch 变量绑定它，而非包装后的 ValueError） */
+static Value g_current_throw_val;
 
 /* 把任意抛出值规范化为 VAL_ERROR */
 static Value ensure_error(Value v) {
@@ -104,24 +107,31 @@ int vm_exec_throw(VMExecCtx* ctx, Instruction* in) {
     }
 
     if (t->frame == ctx->frame) {
-        /* 同层捕获：直接定位 catch */
+        /* 同层捕获：先弹出当前 try 处理器，避免 catch 块内 throw 被同一 catch 重复捕获 */
+        int cpc = t->catch_pc;
+        if (g_try_stack == t) {
+            g_try_stack = t->prev;
+            free(t);
+        }
         g_current_error = err;
-        ctx->pc = t->catch_pc;
+        g_current_throw_val = v;
+        ctx->pc = cpc;
     } else {
         /* 跨帧：启动协作式展开，由 vm_except_check_unwind 驱动 */
         g_unwind.active = 1;
         g_unwind.error = err;
+        g_unwind.throw_val = v;
         g_unwind.target_frame = t->frame;
         g_unwind.catch_pc = t->catch_pc;
     }
     return 1;
 }
 
-/* ========== GET_ERR：把当前捕获错误压 VALUE 栈 ========== */
+/* ========== GET_ERR：把原始 throw 值压 VALUE 栈（catch 变量绑定它） ========== */
 int vm_exec_get_err(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;
     (void)in;
-    Value e = g_current_error;
+    Value e = g_current_throw_val;
     stack_vm_push(g_stack_mgr, STACK_VALUE, &e);
     return 1;
 }
@@ -130,7 +140,14 @@ int vm_exec_get_err(VMExecCtx* ctx, Instruction* in) {
 int vm_except_check_unwind(VMExecCtx* ctx) {
     if (!g_unwind.active) return 0;
     if (g_unwind.target_frame == ctx->frame) {
+        /* 到达捕获帧：弹出当前 try 处理器，避免 catch 块内 throw 被同一 catch 重复捕获 */
+        if (g_try_stack) {
+            TryCtxNode* n = g_try_stack;
+            g_try_stack = n->prev;
+            free(n);
+        }
         g_current_error = g_unwind.error;
+        g_current_throw_val = g_unwind.throw_val;
         ctx->pc = g_unwind.catch_pc;
         g_unwind.active = 0;
         return 1;
