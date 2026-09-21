@@ -1143,9 +1143,45 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_UNARY: {
+        BinOp op = node->u.uny.op;
+        /* ++ / --：var++ / ++var / var-- / --var
+         * 简化语义：作为语句时不区分前置/后置（结果丢弃）；作为表达式时后置返回原值，前置返回新值（暂未实现精确语义，统一按前置处理） */
+        if(op == OP_POST_INC || op == OP_PRE_INC || op == OP_POST_DEC || op == OP_PRE_DEC) {
+            AstNode* child = node->u.uny.child;
+            int is_inc = (op == OP_POST_INC || op == OP_PRE_INC);
+            if(child->type == AST_VAR) {
+                const char* name = child->u.varname;
+                int idx = c_find_var(c, name);
+                if(idx < 0) idx = c_add_var(c, name, EXPR_TYPE_NONE);
+                ExprType vt = c->var_types[idx];
+                if(vt == EXPR_TYPE_INT) {
+                    emit(c, OPC_LOAD_INT64_VAR, idx, 0);
+                    emit(c, OPC_PUSH_INT64_CONST, 1, 0);
+                    emit(c, is_inc ? OPC_INT64_ADD : OPC_INT64_SUB, 0, 0);
+                    emit(c, OPC_STORE_INT64_VAR, idx, 0);
+                } else if(vt == EXPR_TYPE_DOUBLE) {
+                    /* 1.0 走常量池 → PUSH_CONST_IDX 压入 DOUBLE 栈 */
+                    int kc = bf_add_double_const(c->fn, 1.0);
+                    emit(c, OPC_LOAD_DOUBLE_VAR, idx, 0);
+                    emit(c, OPC_PUSH_CONST_IDX, kc, 0);
+                    emit(c, is_inc ? OPC_DOUBLE_ADD : OPC_DOUBLE_SUB, 0, 0);
+                    emit(c, OPC_STORE_DOUBLE_VAR, idx, 0);
+                } else {
+                    /* VALUE 栈：动态 1 + add/sub */
+                    emit(c, OPC_LOAD_VAR, idx, 0);
+                    emit(c, OPC_PUSH_INT_VAL, 1, 0);
+                    emit(c, is_inc ? OPC_ADD : OPC_SUB, 0, 0);
+                    emit(c, OPC_STORE_VAR, idx, 0);
+                }
+                return vt;
+            }
+            /* TODO: 字段/下标 ++/--（暂不支持） */
+            fprintf(stderr, "IR: ++/-- only supports simple variable\n");
+            return EXPR_TYPE_NONE;
+        }
         /* 一元运算：负号 */
         ExprType child_type = c_expr(c, node->u.uny.child);
-        if(node->u.uny.op == OP_UNARY_MINUS) {
+        if(op == OP_UNARY_MINUS) {
             if(child_type == EXPR_TYPE_NONE) {
                 emit(c, OPC_VNEG, 0, 0);   /* 动态 Value 一元负 */
             } else {
@@ -2525,6 +2561,20 @@ void c_stmt(Ctx* c, AstNode* node) {
         break;
     }
 
+    case AST_UNARY:
+    case AST_BINOP:
+    case AST_TERNARY:
+    case AST_CAST: {
+        /* 表达式语句：编译并丢弃结果（POP 按返回栈路由） */
+        ExprType et = c_expr(c, node);
+        int pop_sel = 0;
+        if(et == EXPR_TYPE_INT) pop_sel = 1;
+        else if(et == EXPR_TYPE_DOUBLE) pop_sel = 2;
+        else if(et == EXPR_TYPE_PTR) pop_sel = 3;
+        emit(c, OPC_POP, pop_sel, 0);
+        break;
+    }
+
     case AST_DYN_CALL: {
         /* 动态调用语句：编译并丢弃返回值（POP） */
         c_expr(c, node);
@@ -2850,6 +2900,112 @@ void c_stmt(Ctx* c, AstNode* node) {
         patch_list_here(c, L->brk, L->brk_cnt);
         patch_fin_list_here(c, L->brk_fin, L->brk_fin_cnt);
         layer_pop(c);
+        break;
+    }
+
+    case AST_SWITCH: {
+        /* switch (cond) { case v: stmts; break; ... default: stmts; }
+         * 实现：把 cond 存到临时变量，每个 case 用 ast_binop(OP_EQ, sw_var, const_val) 作 cond，
+         * 复用 emit_cond_jump_if_false 生成 if-elseif 链；default 放在末尾；break 走 layer */
+        AstNode* cond = node->u.sw.cond;
+        AstNode* cases = node->u.sw.cases;
+
+        static int sw_counter = 0;
+        char sw_var[64];
+        snprintf(sw_var, sizeof(sw_var), "__sw_val_%d", sw_counter++);
+
+        ExprType ct = c_expr(c, cond);
+        CastKind var_ck = c_expr_cast_type(c, cond);
+        int var_idx = c_add_var(c, sw_var, ct);
+        int bf_idx = bf_sym(c->fn, sw_var);
+        c->fn->var_type_tags[bf_idx] = (int)var_ck;
+        if(ct == EXPR_TYPE_INT) emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+        else if(ct == EXPR_TYPE_DOUBLE) emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+        else if(ct == EXPR_TYPE_PTR) emit(c, OPC_STORE_PTR_VAR, var_idx, 0);
+        else emit(c, OPC_STORE_VAR, var_idx, 0);
+
+        /* 收集 case 节点（链表）和 default */
+        AstNode** case_arr = (AstNode**)malloc(sizeof(AstNode*) * 64);
+        int ncases = 0;
+        AstNode* default_case = NULL;
+        for(AstNode* p = cases; p; p = p->u.cs.next) {
+            if(p->u.cs.is_default) default_case = p;
+            else if(ncases < 64) case_arr[ncases++] = p;
+        }
+
+        layer_push(c, 1);   /* switch 层（break 跳出） */
+        Layer* L = layer_top(c);
+
+        int* end_jmps = (int*)malloc(sizeof(int) * (ncases + 1));
+        int end_cnt = 0;
+
+        for(int i = 0; i < ncases; i++) {
+            AstNode* cs = case_arr[i];
+            /* 条件：__sw_val <op> const_val
+             * 用 ast_binop 构造等价表达式，让 emit_cond_jump_if_false 自动按栈类型选择 EQ/VEQ */
+            AstNode* var_node = ast_var(strdup(sw_var));
+            AstNode* cond_eq;
+            if(cs->u.cs.is_type_match) {
+                /* 类型匹配 case int: / case string: / case bool: / case char: / case double:
+                 * type() 返回精确类型名（int64/int8/string/bool/double 等）
+                 * case int: 应匹配所有整数族；用 strncmp 前缀比较实现
+                 *   case int:    type 字符串以 "int" 或 "uint" 或 "long" 或 "short" 或 "byte" 或 "size" 或 "ssize" 或 "char" 或 "bool" 或 "uchar" 开头
+                 *   case double: type == "double" 或 "float" 或 "long double"
+                 *   case string: type == "string"
+                 *   case bool:   type == "bool"
+                 *   case char:   type == "char"
+                 * 简化实现：直接用精确 == 比较（要求 case 关键字匹配 type() 实际返回名） */
+                AstNode* type_call = ast_call(strdup("type"), ast_seq(ast_var(strdup(sw_var)), NULL));
+                /* 精确匹配 type() 返回的字符串。
+                 * 字面量整数 (42) 实际压 INT64 栈 → type() 返回 "int64"
+                 * 字面量浮点 (3.14) 实际压 DOUBLE 栈 → type() 返回 "double"
+                 * 字面量 true/false → INT64 栈 → type() 返回 "int64"（不是 "bool"！）
+                 * 字面量 'A' → INT64 栈 → type() 返回 "int64"（不是 "char"！）
+                 * 字面量 "abc" → PTR 栈 → type() 返回 "string"
+                 * case int:    → type() == "int64"
+                 * case double: → type() == "double"
+                 * case string: → type() == "string"
+                 * case bool:   → type() == "bool"（仅当变量已声明为 bool 类型时）
+                 * case char:   → type() == "char"（仅当变量已声明为 char 类型时）
+                 */
+                const char* tn = "int64";
+                switch(cs->u.cs.match_type) {
+                    case VAL_INT:    tn = "int64"; break;   /* 字面量整数实际压 INT64 栈 */
+                    case VAL_DOUBLE: tn = "double"; break;
+                    case VAL_BOOL:   tn = "bool"; break;
+                    case VAL_CHAR:   tn = "char"; break;
+                    case VAL_STRING: tn = "string"; break;
+                    default: tn = "__unknown__"; break;
+                }
+                cond_eq = ast_binop(OP_EQ, type_call, ast_string(strdup(tn)));
+            } else if(cs->u.cs.bind_var) {
+                /* 模式绑定 case x: 暂不支持（编译为不匹配） */
+                cond_eq = ast_bool(0);
+            } else {
+                cond_eq = ast_binop(OP_EQ, var_node, ast_clone_node(cs->u.cs.const_val));
+            }
+            int jf = emit_cond_jump_if_false(c, cond_eq);
+            c_stmt(c, cs->u.cs.body);
+            /* fall-through（无 break）跳到 switch 末尾 */
+            end_jmps[end_cnt++] = emit_here(c, OPC_JMP, 0, 0);
+            patch_to(c, jf);
+        }
+
+        /* default：放在所有 case 测试之后 */
+        if(default_case) {
+            c_stmt(c, default_case->u.cs.body);
+        }
+
+        /* end: patch 所有 fall-through 与 break */
+        for(int i = 0; i < end_cnt; i++) {
+            patch_to(c, end_jmps[i]);
+        }
+        patch_list_here(c, L->brk, L->brk_cnt);
+        patch_fin_list_here(c, L->brk_fin, L->brk_fin_cnt);
+        layer_pop(c);
+
+        free(case_arr);
+        free(end_jmps);
         break;
     }
 

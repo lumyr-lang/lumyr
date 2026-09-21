@@ -104,7 +104,8 @@ int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
         Value v = ref_box(f->refs[idx]);
         stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     } else {
-        stack_vm_push(g_stack_mgr, STACK_VALUE, &f->vals[idx]);
+        Value v = f->vals[idx];
+        stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     }
     return 1;
 }
