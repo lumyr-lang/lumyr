@@ -1810,6 +1810,32 @@ type_prop
           type_prop_push($1, vt, 0, sn);
           $$ = ast_none();
       }
+    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
+    | ID COLON TOK_TYPE_ANNOT {
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON TOK_TYPE_ANNOT ID {
+        if(strcmp($4, "array") != 0) {
+            yyerror("泛型数组字段后缀须为 'array'");
+        }
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        free($4);
+        $$ = ast_none();
+    }
+    /* 泛型 map 字段：<K,V> 或 <K,V>map */
+    | ID COLON LT map_generic_type COMMA map_generic_type GT {
+        type_prop_push($1, VAL_MAP, 0, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON LT map_generic_type COMMA map_generic_type GT ID {
+        if(strcmp($8, "map") != 0) {
+            yyerror("泛型 map 字段后缀须为 'map'");
+        }
+        type_prop_push($1, VAL_MAP, 0, NULL);
+        free($8);
+        $$ = ast_none();
+    }
     ;
 struct_prop_list
     : %empty                     { $$ = NULL; }
@@ -1853,6 +1879,32 @@ struct_prop
             $$ = ast_none();
         }
       }
+    /* 泛型数组字段：<int> 或 <int>array（词法器把 <int> 整体识别为 TOK_TYPE_ANNOT） */
+    | ID COLON TOK_TYPE_ANNOT SEMI {
+        struct_prop_push($1, CAST_TYPED_ARRAY, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON TOK_TYPE_ANNOT ID SEMI {
+        if(strcmp($4, "array") != 0) {
+            yyerror("泛型数组字段后缀须为 'array'");
+        }
+        struct_prop_push($1, CAST_TYPED_ARRAY, NULL);
+        free($4);
+        $$ = ast_none();
+    }
+    /* 泛型 map 字段：<K,V> 或 <K,V>map */
+    | ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
+        struct_prop_push($1, CAST_MAP, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
+        if(strcmp($8, "map") != 0) {
+            yyerror("泛型 map 字段后缀须为 'map'");
+        }
+        struct_prop_push($1, CAST_MAP, NULL);
+        free($8);
+        $$ = ast_none();
+    }
     ;
 /* class 声明属性清单（支持属性和方法定义） */
 class_prop_list
@@ -2029,6 +2081,32 @@ class_prop
           type_prop_push($2, vt, $1, sn);
           $$ = ast_none();
       }
+    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
+    | ID COLON TOK_TYPE_ANNOT SEMI {
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON TOK_TYPE_ANNOT ID SEMI {
+        if(strcmp($4, "array") != 0) {
+            yyerror("泛型数组字段后缀须为 'array'");
+        }
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        free($4);
+        $$ = ast_none();
+    }
+    /* 泛型 map 字段：<K,V> 或 <K,V>map */
+    | ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
+        type_prop_push($1, VAL_MAP, 0, NULL);
+        $$ = ast_none();
+    }
+    | ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
+        if(strcmp($8, "map") != 0) {
+            yyerror("泛型 map 字段后缀须为 'map'");
+        }
+        type_prop_push($1, VAL_MAP, 0, NULL);
+        free($8);
+        $$ = ast_none();
+    }
     ;
 builtin_type_name
     : TOK_STRING                 { $$ = CAST_STRING; }

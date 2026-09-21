@@ -378,6 +378,58 @@ check(et.p.sum() == 5, "E.type nested method");
 et.items[0] = 40;
 check(et.items[0] == 40, "E.type in-place modify");
 
+// ===== E2. 泛型数组/map 字段声明 =====
+struct GTyped {
+    nums: <int>array;
+    mp: <string, int>map;
+}
+gt = <GTyped>{nums: <int>[1, 2, 3], mp: <string, int>{"a": 1, "b": 2}};
+check(type(gt.nums) == "typed_array", "E2.typed array field");
+check(gt.nums[0] == 1, "E2.typed array elem0");
+check(gt.nums[2] == 3, "E2.typed array elem2");
+gt.nums[1] = 20;
+check(gt.nums[1] == 20, "E2.typed array modify");
+check(type(gt.mp) == "map", "E2.typed map field");
+check(gt.mp["a"] == 1, "E2.typed map value a");
+check(gt.mp["b"] == 2, "E2.typed map value b");
+gt.mp["c"] = 3;
+check(gt.mp["c"] == 3, "E2.typed map add");
+
+class GTypedC {
+    nums: <int>array;
+    mp: <string, int>map;
+    func __init__() {
+        self.nums = <int>[10, 20, 30];
+        self.mp = <string, int>{"x": 100};
+    }
+    func sum() {
+        return self.nums[0] + self.nums[1] + self.nums[2];
+    }
+}
+gtc = GTypedC();
+check(type(gtc.nums) == "typed_array", "E2.class typed array field");
+check(gtc.sum() == 60, "E2.class method");
+check(type(gtc.mp) == "map", "E2.class typed map field");
+check(gtc.mp["x"] == 100, "E2.class typed map value");
+gtc.nums[0] = 0;
+check(gtc.sum() == 50, "E2.class typed array modify");
+gtc.mp["y"] = 200;
+check(gtc.mp["y"] == 200, "E2.class typed map add");
+
+type GTypedT {
+    nums: <int>array,
+    mp: <string, int>map
+}
+gtt = <GTypedT>{nums: <int>[7, 8], mp: <string, int>{"k": 9}};
+check(type(gtt.nums) == "typed_array", "E2.type typed array field");
+check(gtt.nums[0] == 7, "E2.type typed array elem");
+gtt.nums[1] = 80;
+check(gtt.nums[1] == 80, "E2.type typed array modify");
+check(type(gtt.mp) == "map", "E2.type typed map field");
+check(gtt.mp["k"] == 9, "E2.type typed map value");
+gtt.mp["j"] = 10;
+check(gtt.mp["j"] == 10, "E2.type typed map add");
+
 // ===== F. 深度混合链 =====
 struct FDeep {
     layers: map;

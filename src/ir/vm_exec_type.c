@@ -195,6 +195,7 @@ int vm_exec_unbox_ptr(VMExecCtx* ctx, Instruction* in) {
     case VAL_DECIMAL:    p = v.v.decimal; break;
     case VAL_BITDECIMAL: p = v.v.bitdecimal; break;
     case VAL_ARRAY:      p = v.v.array; break;
+    case VAL_TYPED_ARRAY: p = v.v.typed_array; break;
     case VAL_MAP:        p = v.v.map; break;
     case VAL_STRING:
         p = v.str_inline ? strdup(v.v.sso.data) : strdup(v.v.s);
