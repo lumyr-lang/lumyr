@@ -245,6 +245,20 @@ def main():
     o.append('check(fmix["b"]["c"][0].getn() == 6, "F.chain3 deep modify");')
     o.append("")
 
+    # ---- F2. 纯 struct→struct→struct 多层链 ----
+    o.append("// ===== F2. 纯 struct 多层链 =====")
+    o.append("struct SInner { v: int; }")
+    o.append("struct SMid { inner: SInner; }")
+    o.append("struct SOuter { mid: SMid; }")
+    o.append('s_out = <SOuter>{mid: <SMid>{inner: <SInner>{v: 42}}};')
+    o.append('check(type(s_out.mid) == "SMid", "F2.outer field type");')
+    o.append('check(type(s_out.mid.inner) == "SInner", "F2.mid field type");')
+    o.append('check(s_out.mid.inner.v == 42, "F2.deep value read");')
+    o.append("s_out.mid.inner.v = 99;")
+    o.append('check(s_out.mid.inner.v == 99, "F2.deep value write");')
+    o.append('check(type(s_out.mid.inner) == "SInner", "F2.vtype after write");')
+    o.append("")
+
     # ---- G. 数组装容器 / 实例 ----
     o.append("// ===== G. 数组装容器 / 实例 =====")
     o.append('g_coll = [{"a": 1}, [10, 20], Pt(7, 8), Kls("g", 3)];')
