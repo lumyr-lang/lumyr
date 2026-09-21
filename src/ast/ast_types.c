@@ -790,6 +790,26 @@ struct AstNode* class_find_method(const char* class_name, const char* method_nam
     return NULL;
 }
 
+/* class_find_method_owner：class_find_method 的扩展版，同时输出方法的
+ * "定义类"名（沿继承链回溯时实际声明该方法的类）。private/protected
+ * 访问控制必须以定义类为准，而非接收者的静态类型——否则子类方法内
+ * self.父类private方法 会因 owner 等于接收者类型而被错误放行。 */
+struct AstNode* class_find_method_owner(const char* class_name, const char* method_name, const char** def_owner)
+{
+    TypeDef* td = class_lookup(class_name);
+    if(!td) return NULL;
+    for(int i = 0; i < td->nmethods; i++) {
+        if(strcmp(td->method_names[i], method_name) == 0) {
+            if(def_owner) *def_owner = td->name;
+            return td->method_nodes[i];
+        }
+    }
+    if(td->parent) {
+        return class_find_method_owner(td->parent, method_name, def_owner);
+    }
+    return NULL;
+}
+
 /* type_find_method_ast：按类型名（struct/class 统一 type_lookup）查方法 AST 节点，
  * 沿 parent 继承链回溯。用于 recv.method() 编译期获取方法形参签名。 */
 struct AstNode* type_find_method_ast(const char* type_name, const char* method_name)

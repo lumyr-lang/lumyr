@@ -1,0 +1,210 @@
+// ============================================================
+// 修饰符 × 继承 / interface 综合测试
+// 覆盖：十层继承（protected 字段链、方法重写多态、十层 super 链）、
+//       多接口 implements、5 层接口继承链、const 字段继承初始化、
+//       private/protected 方法跨层可见性（合法用法，全部应通过）
+//
+// 违规拦截用例（编译期语义检查，exit 1，已单独验证）见文件末尾清单
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// H1: 十层继承 protected 字段链 + 方法重写多态
+//     L0→L10 每层构造函数改写 protected tag，最深层聚合读取
+// ------------------------------------------------------------
+class L0 {
+    protected tag: int;
+    func L0() { self.tag = 0; }
+    func bump(): int { self.tag = self.tag + 1; return self.tag; }
+}
+class L1 extends L0 {
+    func L1() { self.tag = 1; }
+    func who(): int { return 1; }
+}
+class L2 extends L1 {
+    func L2() { self.tag = 2; }
+    func who(): int { return 2; }
+}
+class L3 extends L2 {
+    func L3() { self.tag = 3; }
+}
+class L4 extends L3 {
+    func L4() { self.tag = 4; }
+}
+class L5 extends L4 {
+    func L5() { self.tag = 5; }
+}
+class L6 extends L5 {
+    func L6() { self.tag = 6; }
+}
+class L7 extends L6 {
+    func L7() { self.tag = 7; }
+}
+class L8 extends L7 {
+    func L8() { self.tag = 8; }
+}
+class L9 extends L8 {
+    func L9() { self.tag = 9; }
+}
+class L10 extends L9 {
+    func L10() { self.tag = 10; }
+    func deep(): int { return self.tag + self.bump(); }
+}
+d10 = L10();
+check(d10.deep() == 21, "十层继承 protected 字段链（tag=10 + bump=11）");
+check(d10.who() == 2, "方法重写多态（L2 版本 who）");
+
+// ------------------------------------------------------------
+// H2: 十层 super 构造链 + protected 字段与 const 字段继承初始化
+//     S10(0) 逐层 super(n+1)，S0 收到 10
+// ------------------------------------------------------------
+class S0 {
+    protected acc: int;
+    const base_num: int;
+    func S0(n: int) { self.acc = n; self.base_num = 1; }
+    func get_acc(): int { return self.acc; }
+    func get_base(): int { return self.base_num; }
+}
+class S1 extends S0 {
+    func S1(n: int) { super(n + 1); }
+}
+class S2 extends S1 {
+    func S2(n: int) { super(n + 1); }
+}
+class S3 extends S2 {
+    func S3(n: int) { super(n + 1); }
+}
+class S4 extends S3 {
+    func S4(n: int) { super(n + 1); }
+}
+class S5 extends S4 {
+    func S5(n: int) { super(n + 1); }
+}
+class S6 extends S5 {
+    func S6(n: int) { super(n + 1); }
+}
+class S7 extends S6 {
+    func S7(n: int) { super(n + 1); }
+}
+class S8 extends S7 {
+    func S8(n: int) { super(n + 1); }
+}
+class S9 extends S8 {
+    func S9(n: int) { super(n + 1); }
+}
+class S10 extends S9 {
+    func S10(n: int) { super(n + 1); }
+}
+s10 = S10(0);
+check(s10.get_acc() == 10, "十层 super 构造链传参（0 逐层 +1 到 10）");
+check(s10.get_base() == 1, "const 字段经十层 super 链初始化");
+
+// ------------------------------------------------------------
+// H3: protected 方法跨层合法调用（定义类 P0，调用层 P1/P2）
+// ------------------------------------------------------------
+class P0 {
+    protected base_val: int;
+    const seed: int;
+    func P0(v: int) { self.base_val = v; self.seed = v * 2; }
+    protected func hidden(): int { return self.seed; }
+    func get_seed(): int { return self.seed; }
+}
+class P1 extends P0 {
+    func P1(v: int) { super(v); self.base_val = self.base_val + 1; }
+    func use_hidden(): int { return self.hidden(); }
+}
+class P2 extends P1 {
+    func P2(v: int) { super(v); }
+    func deep_hidden(): int { return self.hidden(); }
+}
+p2 = P2(10);
+check(p2.use_hidden() == 20, "protected 方法子类调用");
+check(p2.deep_hidden() == 20, "protected 方法隔层（孙类）调用");
+check(p2.get_seed() == 20, "const 字段经 super 链求值（v*2）");
+
+// ------------------------------------------------------------
+// H4: interface 实现 × private 成员（同类内互调合法）
+// ------------------------------------------------------------
+interface IDraw { func draw(): string; }
+class Drawer implements IDraw {
+    private secret: int;
+    func Drawer(s: int) { self.secret = s; }
+    private func make(): string { return "S"; }
+    func draw(): string { return self.make(); }
+    func sn(): int { return self.secret; }
+}
+dr = Drawer(7);
+check(dr.draw() == "S", "interface 方法实现内调 private helper");
+check(dr.sn() == 7, "同类读 private 字段");
+
+// ------------------------------------------------------------
+// H5: 多接口 implements（模拟多继承）
+// ------------------------------------------------------------
+interface IA { func a(): int; }
+interface IB { func b(): string; }
+interface IC { func c(): int; }
+class Impl implements IA, IB, IC {
+    v: int;
+    func Impl(x: int) { self.v = x; }
+    func a(): int { return self.v; }
+    func b(): string { return "ib"; }
+    func c(): int { return self.v + 1; }
+}
+im = Impl(5);
+check(im.a() == 5, "多接口方法一");
+check(im.b() == "ib", "多接口方法二");
+check(im.c() == 6, "多接口方法三");
+
+// ------------------------------------------------------------
+// H6: 5 层接口继承链（interface extends），类实现链尾接口需实现全部方法
+// ------------------------------------------------------------
+interface I0 { func f0(): int; }
+interface I1 extends I0 { func f1(): int; }
+interface I2 extends I1 { func f2(): int; }
+interface I3 extends I2 { func f3(): int; }
+interface I4 extends I3 { func f4(): int; }
+class DeepImpl implements I4 {
+    v: int;
+    func DeepImpl(x: int) { self.v = x; }
+    func f0(): int { return self.v + 0; }
+    func f1(): int { return self.v + 1; }
+    func f2(): int { return self.v + 2; }
+    func f3(): int { return self.v + 3; }
+    func f4(): int { return self.v + 4; }
+}
+di = DeepImpl(10);
+check(di.f0() + di.f1() + di.f2() + di.f3() + di.f4() == 60, "5 层接口继承链全方法实现");
+
+// ------------------------------------------------------------
+// H7: static 成员与继承共存（静态属性/静态方法顶层访问）
+// ------------------------------------------------------------
+class StaticBase {
+    static counter = 100;
+    func StaticBase() {}
+    static func id10(): int { return 10; }
+}
+class StaticSub extends StaticBase {
+    func StaticSub() {}
+    func ping(): int { return 1; }
+}
+check(StaticBase_counter == 100, "父类静态属性顶层读取");
+StaticBase_counter = 200;
+check(StaticBase_counter == 200, "父类静态属性顶层写入");
+check(StaticBase_id10() == 10, "父类 static func 顶层调用");
+ss = StaticSub();
+check(ss.ping() == 1, "子类实例与父类静态成员共存");
+
+/* ------------------------------------------------------------
+ * 违规拦截清单（编译期语义检查，exit 1；不放入本文件以保证全绿）
+ * 1. 子类方法内调用父类 private 方法（self.secret()）→ 拦截
+ *    （访问控制以方法"定义类"为准，而非接收者静态类型）
+ * 2. 外部上下文调用 private 方法（b.secret()，无论首成员还是非首成员）→ 拦截
+ * 3. interface 方法以 private 实现后被外部调用 → 拦截
+ * 4. protected / private 字段外部直接访问 → 拦截
+ * ------------------------------------------------------------
+ */
+
+print("modifier_inherit_test ALL PASS");

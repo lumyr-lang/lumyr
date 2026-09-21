@@ -1481,10 +1481,13 @@ int typecheck_expr(AstNode* node)
             err |= typecheck_call_args(node->u.method_call.args);
             const char* cow = tc_owner(node->u.method_call.recv);
             if(cow) {
-                AstNode* mdef = class_find_method(cow, node->u.method_call.method);
+                /* 访问控制以方法的"定义类"为准：接收者可能是子类实例，
+                 * 但 private 成员的可见性仍限定在声明它的类内部 */
+                const char* def_owner = NULL;
+                AstNode* mdef = class_find_method_owner(cow, node->u.method_call.method, &def_owner);
                 if(mdef && mdef->type == AST_FUNC_DEF) {
                     int mam = mdef->u.func_def.access_modifier;
-                    if(!tc_access_ok(cow, mam)) {
+                    if(!tc_access_ok(def_owner ? def_owner : cow, mam)) {
                         LOG_ERROR("语义错误(第%d行)：方法 '%s' 为 %s，当前上下文不可调用\n",
                                   node->line, node->u.method_call.method,
                                   mam == ACCESS_PRIVATE ? "private" : "protected");
