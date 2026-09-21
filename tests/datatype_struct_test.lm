@@ -293,4 +293,86 @@ print("IT27 m_bigint", impl.m_bigint(<bigint>99));
 print("IT28 m_decimal", impl.m_decimal(<decimal>99));
 print("IT29 m_bitdecimal", impl.m_bitdecimal(<bitdecimal>99));
 
+// ------------------------------------------------------------
+// IC: interface 继承链 + class 多层继承 + 多态分派
+// ------------------------------------------------------------
+// IC1-IC2: interface extends interface
+interface Base {
+    func id(): string;
+    func base_val(): int;
+}
+interface Derived extends Base {
+    func extra(): string;
+}
+class DerivedImpl implements Derived {
+    v: int;
+    func __init__(<int> v) { self.v = v; }
+    func <string> id() { return "DerivedImpl"; }
+    func <int> base_val() { return self.v; }
+    func <string> extra() { return "extra:" + self.v; }
+}
+di = DerivedImpl(42);
+print("IC1 interface chain id", di.id());
+print("IC2 interface chain base_val", di.base_val());
+print("IC3 interface chain extra", di.extra());
+
+// IC4-IC6: 多层 class 继承 A extends B extends C
+class C0 {
+    tag: string;
+    func __init__(<string> t) { self.tag = t; }
+    func <string> get_tag() { return self.tag; }
+    func <string> who() { return "C0"; }
+}
+class C1 extends C0 {
+    func __init__(<string> t) { self.tag = t; }
+    func <string> who() { return "C1"; }
+}
+class C2 extends C1 {
+    func __init__(<string> t) { self.tag = t; }
+    func <string> who() { return "C2"; }
+}
+c2 = C2("deep");
+print("IC4 multi-level get_tag", c2.get_tag());
+print("IC5 multi-level who()", c2.who());
+print("IC6 multi-level type", type(c2));
+
+// IC7-IC9: class 同时 extends + implements
+interface Greeter {
+    func greet(): string;
+}
+class GreeterBase {
+    name: string;
+    func __init__(<string> n) { self.name = n; }
+    func <string> greet() { return "Hello, " + self.name; }
+}
+class GreeterEx extends GreeterBase implements Greeter {
+    suffix: string;
+    func __init__(<string> n, <string> s) { self.name = n; self.suffix = s; }
+    func <string> greet() { return "Hi, " + self.name + self.suffix; }
+}
+gx = GreeterEx("World", "!");
+print("IC7 extends+impls greet", gx.greet());
+print("IC8 extends+impls inherited name", gx.name);
+print("IC9 extends+impls type", type(gx));
+
+// IC10-IC12: 多态分派——同方法不同实现
+class Shape {
+    func <int> area() { return 0; }
+}
+class Circle extends Shape {
+    r: int;
+    func __init__(<int> r) { self.r = r; }
+    func <int> area() { return 3 * self.r * self.r; }
+}
+class Rect extends Shape {
+    w: int;
+    h: int;
+    func __init__(<int> w, <int> h) { self.w = w; self.h = h; }
+    func <int> area() { return self.w * self.h; }
+}
+shapes = [Circle(5), Rect(4, 6), Shape()];
+print("IC10 polymorphism circle area", shapes[0].area());
+print("IC11 polymorphism rect area", shapes[1].area());
+print("IC12 polymorphism base area", shapes[2].area());
+
 print("STRUCT_TEST_DONE");
