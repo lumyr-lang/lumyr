@@ -1,0 +1,148 @@
+// ============================================================
+// @Data 注解测试（Lombok 风格实体类）
+// 覆盖：自动生成 getXxx / setXxx（驼峰）、public class 前缀、
+//       字段初始化器（name: type = expr）、显式 ctor 与初始化顺序、
+//       const 字段只生成 getter、bool 字段 isXxx、手写访问器优先、
+//       implements、继承链
+// 全部为合法用法（应全部通过、exit 0）
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// D1: 用户示例 —— @Data + public class + private 字段初始化器
+// ------------------------------------------------------------
+@Data
+public class CustomClass {
+    private name: string = "name";
+    private age: int = 0;
+}
+c = CustomClass();
+check(c.getName() == "name", "@Data 字符串字段默认值");
+check(c.getAge() == 0, "@Data 整数字段默认值");
+c.setName("tom");
+c.setAge(18);
+check(c.getName() == "tom", "@Data setName 写字符串");
+check(c.getAge() == 18, "@Data setAge 写整数");
+
+// ------------------------------------------------------------
+// D2: 全标量字段类型 × getter/setter（bool getter 为 isXxx）
+// ------------------------------------------------------------
+@Data
+class Scalars {
+    vi: int = 100;
+    vd: double = 1.5;
+    vs: string = "ab";
+    vb: bool = true;
+    vc: char = 'Z';
+}
+sc = Scalars();
+check(sc.getVi() == 100, "int getter");
+check(sc.getVd() == 1.5, "double getter");
+check(sc.getVs() == "ab", "string getter");
+check(sc.isVb() == true, "bool getter isXxx");
+check(sc.getVc() == 'Z', "char getter");
+sc.setVi(-7);
+sc.setVd(2.5);
+sc.setVs("xy");
+sc.setVb(false);
+sc.setVc('Q');
+check(sc.getVi() == -7, "int setter");
+check(sc.getVd() == 2.5, "double setter");
+check(sc.getVs() == "xy", "string setter");
+check(sc.isVb() == false, "bool setter");
+check(sc.getVc() == 'Q', "char setter");
+
+// ------------------------------------------------------------
+// D3: 显式 ctor + 字段初始化器 —— 初始化器先于 ctor 体执行
+//     v 初始为 1，ctor 再 +10 → 11
+// ------------------------------------------------------------
+@Data
+class Ordered {
+    v: int = 1;
+    func Ordered() { self.v = self.v + 10; }
+}
+check(Ordered().getV() == 11, "字段初始化器先于构造函数体执行");
+
+// ------------------------------------------------------------
+// D4: const 字段 + @Data —— 只生成 getter（无 setter，final 语义）
+// ------------------------------------------------------------
+@Data
+class Item {
+    const id: int;
+    name: string = "item";
+    func Item(n: int) { self.id = n; }
+}
+it = Item(42);
+check(it.getId() == 42, "const 字段 getter");
+check(it.getName() == "item", "普通字段与 const 共存");
+
+// ------------------------------------------------------------
+// D5: 手写访问器优先 —— @Data 不覆盖已存在的同名方法
+// ------------------------------------------------------------
+@Data
+class Manual {
+    v: int = 5;
+    func getV(): int { return 999; }
+}
+check(Manual().getV() == 999, "手写 getter 优先于 @Data 生成");
+
+// ------------------------------------------------------------
+// D6: @Data + implements interface
+// ------------------------------------------------------------
+interface IGreet { func greet(): string; }
+@Data
+class Greeter implements IGreet {
+    msg: string = "hi";
+    func greet(): string { return self.msg; }
+}
+g = Greeter();
+check(g.greet() == "hi", "@Data 类实现接口方法");
+check(g.getMsg() == "hi", "@Data 与接口方法共存");
+
+// ------------------------------------------------------------
+// D7: 继承链 —— 子类 @Data 合成 ctor 自动调用父类无参 ctor，
+//     父、子字段初始化器均执行（@Data 不随继承自动传递，子类显式标注）
+// ------------------------------------------------------------
+@Data
+class DataBase {
+    bn: int = 10;
+}
+@Data
+class DataSub extends DataBase {
+    sn: int = 20;
+}
+ds = DataSub();
+check(ds.getBn() == 10, "子类实例执行父类初始化器（自动 super）");
+check(ds.getSn() == 20, "子类自身初始化器执行");
+
+// ------------------------------------------------------------
+// D8: 字段初始化器配合带参显式 ctor（super(args) 显式调用）
+// ------------------------------------------------------------
+@Data
+class DataBase2 {
+    bv: int;
+    func DataBase2(v: int) { self.bv = v; }
+}
+@Data
+class DataSub2 extends DataBase2 {
+    sv: int = 1;
+    func DataSub2(v: int) {
+        super(v);
+        self.sv = self.bv + 1;
+    }
+}
+d2 = DataSub2(40);
+check(d2.getBv() == 40, "子类 super(args) 后父类字段生效");
+check(d2.getSv() == 41, "子类 ctor 读取父类字段");
+
+/* ------------------------------------------------------------
+ * 编译中止场景（exit 1，单独验证，不放入本文件以保证全绿）：
+ *  - 类有字段初始化器但无 ctor，父类 ctor 含必填参数 → 语法错误中止
+ *  - @Data 不随继承传递：未标注的子类不会为自有字段生成访问器
+ * ------------------------------------------------------------
+ */
+
+print("annotation_data_test ALL PASS");
