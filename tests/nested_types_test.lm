@@ -9,7 +9,7 @@ func check(cond, msg) {
 struct Pt {
     x: int;
     y: int;
-    func sum(self) {
+    func sum() {
         return self.x + self.y;
     }
 }
@@ -22,11 +22,11 @@ type BoxT {
 class Kls {
     label: string;
     n: int;
-    func __init__(self, label, n) {
+    func __init__(label, n) {
         self.label = label;
         self.n = n;
     }
-    func getn(self) {
+    func getn() {
         return self.n;
     }
 }
@@ -334,11 +334,11 @@ check(d_mkc[d_ckey] == 88, "D.class key");
 class EHolder {
     items: array;
     info: map;
-    func __init__(self) {
+    func __init__() {
         self.items = [10, 20, 30];
         self.info = {"a": 1};
     }
-    func total(self) {
+    func total() {
         return self.items[0] + self.items[1] + self.items[2];
     }
 }
@@ -390,11 +390,11 @@ check(fd.layers["L1"][0]["k"].getn() == 52, "F.chain1 modify");
 class FTree {
     children: array;
     node: Pt;
-    func __init__(self) {
+    func __init__() {
         self.children = [Pt(1, 1), Pt(2, 2)];
         self.node = Pt(9, 9);
     }
-    func childSum(self, i) {
+    func childSum(i) {
         return self.children[i].sum();
     }
 }
