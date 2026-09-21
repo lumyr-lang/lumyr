@@ -260,6 +260,18 @@ try {
 // 单一 catch 时 lumin 不做严格类型过滤，typed_caught 应为 1
 check(typed_caught == 1, "try-catch: typed catch (single)");
 
+// 带类型 catch（e: Type 冒号后缀形式，用户更易书写）
+colon_caught = 0;
+colon_err = "none";
+try {
+    throw "colon-form error";
+} catch (e: Error) {
+    colon_caught = 1;
+    colon_err = e;
+}
+check(colon_caught == 1, "try-catch: colon-form catch (e: Error) executed");
+check(colon_err == "colon-form error", "try-catch: colon-form catch binds e");
+
 // ------------------------------------------------------------
 // 8. yield 生成器
 // ------------------------------------------------------------

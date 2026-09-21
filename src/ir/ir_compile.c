@@ -2309,9 +2309,11 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
                 callee->name ? callee->name : "?", argc, bound);
     }
 
-    /* 4. 按 callee 返回标注确定结果类型（无标注→动态 NONE），供 callsite 记录压栈目标 */
+    /* 4. 按 callee 返回标注确定结果类型（无标注→动态 NONE），供 callsite 记录压栈目标。
+     *    生成器函数例外：调用返回的是生成器对象（VALUE 栈），声明的返回类型描述
+     *    的是 yield 产出的值类型，不应影响调用结果压栈路由。 */
     ExprType ret_et = EXPR_TYPE_NONE;
-    if(callee->ret_type_name) {
+    if(callee->ret_type_name && !callee->is_generator) {
         CastKind rck = ir_type_name_to_castkind(callee->ret_type_name);
         ret_et = castkind_to_exprtype(rck);
     }

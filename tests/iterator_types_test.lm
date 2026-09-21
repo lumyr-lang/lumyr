@@ -1,0 +1,705 @@
+// ============================================================
+// 迭代器（yield 生成器）全数据类型测试
+// 覆盖：基础类型 / array / map / typed array / generic map /
+//       struct / class / type 作为 yield 值；
+//       同时测试 gen func 声明返回类型的两种语法
+//       （gen func <T> name() 形式 与 gen func name(): T 形式）
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// 辅助：把生成器产出的所有值收集到数组
+func collect(g) {
+    out = [];
+    while (1) {
+        v = next(g);
+        if (v == null) { break; }
+        out = out + v;  // 末尾追加（标量场景）
+    }
+    return out;
+}
+
+// ============================================================
+// PART 1：基础标量类型作为 yield 值
+// ============================================================
+
+// 1.1 int
+gen func int_gen() {
+    yield 10;
+    yield 20;
+    yield 30;
+}
+g = int_gen();
+check(next(g) == 10, "int: first yield = 10");
+check(next(g) == 20, "int: second yield = 20");
+check(next(g) == 30, "int: third yield = 30");
+check(next(g) == null, "int: end = null");
+
+// 1.2 double
+gen func dbl_gen() {
+    yield 1.5;
+    yield 2.5;
+    yield 3.5;
+}
+g = dbl_gen();
+check(next(g) == 1.5, "double: first = 1.5");
+check(next(g) == 2.5, "double: second = 2.5");
+check(next(g) == 3.5, "double: third = 3.5");
+check(next(g) == null, "double: end = null");
+
+// 1.3 string
+gen func str_gen() {
+    yield "alpha";
+    yield "beta";
+    yield "gamma";
+}
+g = str_gen();
+check(next(g) == "alpha", "string: first = alpha");
+check(next(g) == "beta", "string: second = beta");
+check(next(g) == "gamma", "string: third = gamma");
+check(next(g) == null, "string: end = null");
+
+// 1.4 bool
+gen func bool_gen() {
+    yield true;
+    yield false;
+    yield true;
+}
+g = bool_gen();
+check(next(g) == true, "bool: first = true");
+check(next(g) == false, "bool: second = false");
+check(next(g) == true, "bool: third = true");
+check(next(g) == null, "bool: end = null");
+
+// 1.5 char
+gen func char_gen() {
+    yield 'A';
+    yield 'B';
+    yield 'C';
+}
+g = char_gen();
+check(next(g) == 'A', "char: first = A");
+check(next(g) == 'B', "char: second = B");
+check(next(g) == 'C', "char: third = C");
+check(next(g) == null, "char: end = null");
+
+// 1.6 null
+gen func null_gen() {
+    yield null;
+    yield null;
+}
+g = null_gen();
+check(next(g) == null, "null: first = null");
+check(next(g) == null, "null: second = null");
+check(next(g) == null, "null: end = null (no more)");
+
+// 1.7 负数 / 大整数 / 混合表达式
+gen func expr_gen() {
+    yield -5;
+    yield 1000000;
+    yield 2 * 3 + 1;
+}
+g = expr_gen();
+check(next(g) == -5, "expr: negative = -5");
+check(next(g) == 1000000, "expr: big int = 1000000");
+check(next(g) == 7, "expr: 2*3+1 = 7");
+check(next(g) == null, "expr: end = null");
+
+print("iterator_types_test PART1 (基础标量) PASS");
+
+// ============================================================
+// PART 2：array（普通数组）作为 yield 值
+// ============================================================
+
+// 2.1 yield 整个数组（每次 yield 同一数组的不同状态）
+gen func arr_gen() {
+    yield [1, 2, 3];
+    yield [4, 5];
+    yield [6];
+}
+g = arr_gen();
+a1 = next(g);
+check(type(a1) == "array", "array: type(a1) == array");
+check(len(a1) == 3, "array: len(a1) == 3");
+check(a1[0] == 1 && a1[1] == 2 && a1[2] == 3, "array: a1 elements");
+a2 = next(g);
+check(len(a2) == 2, "array: len(a2) == 2");
+check(a2[0] == 4 && a2[1] == 5, "array: a2 elements");
+a3 = next(g);
+check(len(a3) == 1 && a3[0] == 6, "array: a3 single element");
+check(next(g) == null, "array: end = null");
+
+// 2.2 yield 混合类型数组
+gen func mixed_arr_gen() {
+    yield [1, "two", 3.0, true, null];
+    yield ["only string"];
+}
+g = mixed_arr_gen();
+m1 = next(g);
+check(len(m1) == 5, "mixed array: len = 5");
+check(m1[0] == 1, "mixed array: [0] = 1");
+check(m1[1] == "two", "mixed array: [1] = two");
+check(m1[2] == 3.0, "mixed array: [2] = 3.0");
+check(m1[3] == true, "mixed array: [3] = true");
+check(m1[4] == null, "mixed array: [4] = null");
+m2 = next(g);
+check(type(m2) == "array" && len(m2) == 1 && m2[0] == "only string", "mixed array: second yield");
+
+// 2.3 yield 嵌套数组
+gen func nested_arr_gen() {
+    yield [[1, 2], [3, 4], [5, 6]];
+    yield [[7, 8]];
+}
+g = nested_arr_gen();
+n1 = next(g);
+check(type(n1) == "array" && len(n1) == 3, "nested array: outer len = 3");
+check(type(n1[0]) == "array" && n1[0][0] == 1 && n1[0][1] == 2, "nested array: [0] = [1,2]");
+check(type(n1[2]) == "array" && n1[2][0] == 5 && n1[2][1] == 6, "nested array: [2] = [5,6]");
+n2 = next(g);
+check(len(n2) == 1 && n2[0][0] == 7 && n2[0][1] == 8, "nested array: second yield");
+
+// 2.4 yield 空数组
+gen func empty_arr_gen() {
+    yield [];
+    yield [42];
+    yield [];
+}
+g = empty_arr_gen();
+e1 = next(g);
+check(type(e1) == "array" && len(e1) == 0, "empty array: first = []");
+e2 = next(g);
+check(len(e2) == 1 && e2[0] == 42, "empty array: second = [42]");
+e3 = next(g);
+check(len(e3) == 0, "empty array: third = []");
+check(next(g) == null, "empty array: end = null");
+
+print("iterator_types_test PART2 (array) PASS");
+
+// ============================================================
+// PART 3：typed array（typed array）作为 yield 值
+// ============================================================
+
+// 3.1 <int> typed array
+gen func tint_gen() {
+    yield <int>[10, 20, 30];
+    yield <int>[40, 50];
+}
+g = tint_gen();
+t1 = next(g);
+check(type(t1) == "array", "tint: type = array");
+check(len(t1) == 3, "tint: len = 3");
+check(t1[0] == 10 && t1[1] == 20 && t1[2] == 30, "tint: elements");
+t2 = next(g);
+check(len(t2) == 2 && t2[0] == 40 && t2[1] == 50, "tint: second yield");
+
+// 3.2 <double> typed array
+gen func tdbl_gen() {
+    yield <double>[1.5, 2.5, 3.5];
+    yield <double>[4.5];
+}
+g = tdbl_gen();
+d1 = next(g);
+check(type(d1) == "array" && len(d1) == 3, "tdbl: len = 3");
+check(d1[0] == 1.5 && d1[1] == 2.5 && d1[2] == 3.5, "tdbl: elements");
+d2 = next(g);
+check(len(d2) == 1 && d2[0] == 4.5, "tdbl: second yield");
+
+// 3.3 <string> typed array
+gen func tstr_gen() {
+    yield <string>["a", "b", "c"];
+    yield <string>["x"];
+}
+g = tstr_gen();
+s1 = next(g);
+check(type(s1) == "array" && len(s1) == 3, "tstr: len = 3");
+check(s1[0] == "a" && s1[1] == "b" && s1[2] == "c", "tstr: elements");
+s2 = next(g);
+check(len(s2) == 1 && s2[0] == "x", "tstr: second yield");
+
+// 3.4 <bool> typed array
+gen func tbool_gen() {
+    yield <bool>[true, false, true];
+}
+g = tbool_gen();
+b1 = next(g);
+check(type(b1) == "array" && len(b1) == 3, "tbool: len = 3");
+check(b1[0] == true && b1[1] == false && b1[2] == true, "tbool: elements");
+
+// 3.5 <char> typed array
+gen func tchar_gen() {
+    yield <char>['X', 'Y', 'Z'];
+}
+g = tchar_gen();
+c1 = next(g);
+check(type(c1) == "array" && len(c1) == 3, "tchar: len = 3");
+check(c1[0] == 'X' && c1[1] == 'Y' && c1[2] == 'Z', "tchar: elements");
+
+// 3.6 <byte> typed array（极限/边界值）
+gen func tbyte_gen() {
+    yield <byte>[0, 127, 255];
+    yield <byte>[];
+}
+g = tbyte_gen();
+by1 = next(g);
+check(type(by1) == "array" && len(by1) == 3, "tbyte: len = 3");
+check(by1[0] == 0 && by1[1] == 127 && by1[2] == 255, "tbyte: boundary values");
+by2 = next(g);
+check(type(by2) == "array" && len(by2) == 0, "tbyte: empty typed array");
+
+// 3.7 typed array 元素类型转换（<int>[1.9, 2.1] → [1, 2]）
+gen func tint_conv_gen() {
+    yield <int>[1.9, 2.1, 3.99];
+}
+g = tint_conv_gen();
+cv1 = next(g);
+check(len(cv1) == 3 && cv1[0] == 1 && cv1[1] == 2 && cv1[2] == 3, "tint: float→int conversion");
+
+print("iterator_types_test PART3 (typed array) PASS");
+
+// ============================================================
+// PART 4：map（普通 map）作为 yield 值
+// ============================================================
+
+// 4.1 yield 普通动态 map
+gen func map_gen() {
+    yield {"name": "alice", "age": 30};
+    yield {"name": "bob", "age": 25};
+}
+g = map_gen();
+m1 = next(g);
+check(type(m1) == "map", "map: type = map");
+check(m1["name"] == "alice", "map: m1 name");
+check(m1["age"] == 30, "map: m1 age");
+m2 = next(g);
+check(m2["name"] == "bob" && m2["age"] == 25, "map: m2 fields");
+check(next(g) == null, "map: end = null");
+
+// 4.2 yield 空map
+gen func empty_map_gen() {
+    yield {};
+    yield {"k": "v"};
+}
+g = empty_map_gen();
+em1 = next(g);
+check(type(em1) == "map" && len(em1) == 0, "empty map: first = {}");
+em2 = next(g);
+check(len(em2) == 1 && em2["k"] == "v", "empty map: second has 1 entry");
+
+print("iterator_types_test PART4 (map) PASS");
+
+// ============================================================
+// PART 5：generic map（<K,V>map）作为 yield 值
+// ============================================================
+
+// 5.1 <string, int>
+gen func gmap_si_gen() {
+    yield <string, int>{"a": 1, "b": 2};
+    yield <string, int>{"c": 3};
+}
+g = gmap_si_gen();
+msi1 = next(g);
+check(type(msi1) == "map", "gmap<string,int>: type = map");
+check(len(msi1) == 2, "gmap<string,int>: len = 2");
+check(msi1["a"] == 1 && msi1["b"] == 2, "gmap<string,int>: values");
+msi2 = next(g);
+check(len(msi2) == 1 && msi2["c"] == 3, "gmap<string,int>: second yield");
+
+// 5.2 <int, string>（int 键）
+gen func gmap_is_gen() {
+    yield <int, string>{1: "one", 2: "two"};
+    yield <int, string>{3: "three"};
+}
+g = gmap_is_gen();
+mis1 = next(g);
+check(type(mis1) == "map", "gmap<int,string>: type = map");
+check(mis1[1] == "one" && mis1[2] == "two", "gmap<int,string>: values");
+mis2 = next(g);
+check(mis2[3] == "three", "gmap<int,string>: second yield");
+
+// 5.3 <string, double>
+gen func gmap_sd_gen() {
+    yield <string, double>{"pi": 3.14, "e": 2.71};
+}
+g = gmap_sd_gen();
+msd1 = next(g);
+check(type(msd1) == "map" && len(msd1) == 2, "gmap<string,double>: len = 2");
+check(msd1["pi"] == 3.14 && msd1["e"] == 2.71, "gmap<string,double>: values");
+
+// 5.4 <string, bool>
+gen func gmap_sb_gen() {
+    yield <string, bool>{"ok": true, "fail": false};
+}
+g = gmap_sb_gen();
+msb1 = next(g);
+check(type(msb1) == "map" && len(msb1) == 2, "gmap<string,bool>: len = 2");
+check(msb1["ok"] == true && msb1["fail"] == false, "gmap<string,bool>: values");
+
+// 5.5 <string, string>
+gen func gmap_ss_gen() {
+    yield <string, string>{"k1": "v1", "k2": "v2"};
+}
+g = gmap_ss_gen();
+mss1 = next(g);
+check(type(mss1) == "map" && len(mss1) == 2, "gmap<string,string>: len = 2");
+check(mss1["k1"] == "v1" && mss1["k2"] == "v2", "gmap<string,string>: values");
+
+// 5.6 <char, int>
+gen func gmap_ci_gen() {
+    yield <char, int>{'A': 1, 'B': 2};
+}
+g = gmap_ci_gen();
+mci1 = next(g);
+check(type(mci1) == "map" && len(mci1) == 2, "gmap<char,int>: len = 2");
+check(mci1['A'] == 1 && mci1['B'] == 2, "gmap<char,int>: values");
+
+print("iterator_types_test PART5 (generic map) PASS");
+
+// ============================================================
+// PART 6：struct 作为 yield 值
+// ============================================================
+
+struct Point {
+    x: int;
+    y: int;
+    func <int> get_x() { return self.x; }
+    func <int> get_y() { return self.x + self.y; }
+}
+
+gen func struct_gen() {
+    yield Point(1, 2);
+    yield Point(10, 20);
+    yield Point(100, 200);
+}
+g = struct_gen();
+p1 = next(g);
+check(type(p1) == "Point", "struct: type = Point");
+check(p1.x == 1 && p1.y == 2, "struct: p1 fields");
+check(p1.get_x() == 1, "struct: p1 method get_x()");
+check(p1.get_y() == 3, "struct: p1 method get_y() (x+y)");
+p2 = next(g);
+check(p2.x == 10 && p2.y == 20, "struct: p2 fields");
+p3 = next(g);
+check(p3.x == 100 && p3.y == 200, "struct: p3 fields");
+check(next(g) == null, "struct: end = null");
+
+// 嵌套 struct（struct 字段是另一个 struct）
+struct Box {
+    label: string;
+    pt: Point;
+}
+gen func nested_struct_gen() {
+    yield Box("first", Point(5, 6));
+    yield Box("second", Point(7, 8));
+}
+g = nested_struct_gen();
+bx1 = next(g);
+check(type(bx1) == "Box", "nested struct: type = Box");
+check(bx1.label == "first", "nested struct: label");
+check(bx1.pt.x == 5 && bx1.pt.y == 6, "nested struct: inner pt fields");
+bx2 = next(g);
+check(bx2.label == "second" && bx2.pt.x == 7, "nested struct: second yield");
+
+print("iterator_types_test PART6 (struct) PASS");
+
+// ============================================================
+// PART 7：class 作为 yield 值
+// ============================================================
+
+class Animal {
+    name: string;
+    sound: string;
+    func Animal(n, s) {
+        self.name = n;
+        self.sound = s;
+    }
+    func speak() { return self.name + " says " + self.sound; }
+    func <string> get_name() { return self.name; }
+}
+
+gen func class_gen() {
+    yield Animal("dog", "woof");
+    yield Animal("cat", "meow");
+    yield Animal("cow", "moo");
+}
+g = class_gen();
+an1 = next(g);
+check(type(an1) == "Animal", "class: type = Animal");
+check(an1.name == "dog", "class: an1 name");
+check(an1.sound == "woof", "class: an1 sound");
+check(an1.speak() == "dog says woof", "class: an1 speak()");
+check(an1.get_name() == "dog", "class: an1 get_name()");
+an2 = next(g);
+check(an2.name == "cat" && an2.speak() == "cat says meow", "class: an2 fields + method");
+an3 = next(g);
+check(an3.speak() == "cow says moo", "class: an3 speak()");
+check(next(g) == null, "class: end = null");
+
+// class 继承
+class Dog extends Animal {
+    func Dog(n) { self.name = n; self.sound = "woof"; }
+    func fetch() { return self.name + " fetches"; }
+}
+gen func subclass_gen() {
+    yield Dog("rex");
+    yield Dog("buddy");
+}
+g = subclass_gen();
+d1 = next(g);
+check(type(d1) == "Dog", "subclass: type = Dog");
+check(d1.name == "rex", "subclass: d1 name (inherited field)");
+check(d1.speak() == "rex says woof", "subclass: d1 speak() (inherited method)");
+check(d1.fetch() == "rex fetches", "subclass: d1 fetch() (own method)");
+d2 = next(g);
+check(d2.fetch() == "buddy fetches", "subclass: d2 fetch()");
+
+print("iterator_types_test PART7 (class) PASS");
+
+// ============================================================
+// PART 8：type（type 定义）作为 yield 值
+// ============================================================
+
+type Color {
+    red: int,
+    grn: int,
+    blu: int
+}
+
+gen func type_gen() {
+    yield <Color>{red: 255, grn: 0, blu: 0};
+    yield <Color>{red: 0, grn: 255, blu: 0};
+    yield <Color>{red: 0, grn: 0, blu: 255};
+}
+g = type_gen();
+c1 = next(g);
+check(type(c1) == "map", "type: type(c1) == map");
+check(c1.red == 255 && c1.grn == 0 && c1.blu == 0, "type: c1 rgb");
+c2 = next(g);
+check(c2.grn == 255, "type: c2 green");
+c3 = next(g);
+check(c3.blu == 255, "type: c3 blue");
+check(next(g) == null, "type: end = null");
+
+print("iterator_types_test PART8 (type) PASS");
+
+// ============================================================
+// PART 9：gen func 声明返回类型测试
+//   两种语法：
+//     (A) gen func <T> name() 形式（前置尖括号）
+//     (B) gen func name(): T 形式（冒号后缀）
+//   声明类型描述 yield 产出值类型，不影响调用结果（仍是生成器对象）
+// ============================================================
+
+// 9.1 int 返回类型（前置）
+gen func <int> ret_int_prefix() {
+    yield 100;
+    yield 200;
+}
+g = ret_int_prefix();
+check(type(g) == "generator", "rettype int prefix: type(g) = generator");
+check(next(g) == 100, "rettype int prefix: first = 100");
+check(next(g) == 200, "rettype int prefix: second = 200");
+check(next(g) == null, "rettype int prefix: end = null");
+
+// 9.2 int 返回类型（后缀）
+gen func ret_int_colon(): int {
+    yield 300;
+    yield 400;
+}
+g = ret_int_colon();
+check(type(g) == "generator", "rettype int colon: type(g) = generator");
+check(next(g) == 300, "rettype int colon: first = 300");
+check(next(g) == 400, "rettype int colon: second = 400");
+
+// 9.3 double 返回类型（前置）
+gen func <double> ret_dbl_prefix() {
+    yield 1.1;
+    yield 2.2;
+}
+g = ret_dbl_prefix();
+check(type(g) == "generator", "rettype dbl prefix: type(g) = generator");
+check(next(g) == 1.1, "rettype dbl prefix: first = 1.1");
+check(next(g) == 2.2, "rettype dbl prefix: second = 2.2");
+
+// 9.4 double 返回类型（后缀）
+gen func ret_dbl_colon(): double {
+    yield 3.3;
+    yield 4.4;
+}
+g = ret_dbl_colon();
+check(type(g) == "generator", "rettype dbl colon: type(g) = generator");
+check(next(g) == 3.3, "rettype dbl colon: first = 3.3");
+check(next(g) == 4.4, "rettype dbl colon: second = 4.4");
+
+// 9.5 string 返回类型（前置）
+gen func <string> ret_str_prefix() {
+    yield "hello";
+    yield "world";
+}
+g = ret_str_prefix();
+check(type(g) == "generator", "rettype str prefix: type(g) = generator");
+check(next(g) == "hello", "rettype str prefix: first = hello");
+check(next(g) == "world", "rettype str prefix: second = world");
+
+// 9.6 string 返回类型（后缀）
+gen func ret_str_colon(): string {
+    yield "foo";
+    yield "bar";
+}
+g = ret_str_colon();
+check(type(g) == "generator", "rettype str colon: type(g) = generator");
+check(next(g) == "foo", "rettype str colon: first = foo");
+check(next(g) == "bar", "rettype str colon: second = bar");
+
+// 9.7 bool 返回类型（前置 + 后缀）
+gen func <bool> ret_bool_prefix() {
+    yield true;
+    yield false;
+}
+gen func ret_bool_colon(): bool {
+    yield false;
+    yield true;
+}
+g = ret_bool_prefix();
+check(next(g) == true, "rettype bool prefix: first = true");
+g = ret_bool_colon();
+check(next(g) == false, "rettype bool colon: first = false");
+
+// 9.8 char 返回类型（前置 + 后缀）
+gen func <char> ret_char_prefix() {
+    yield 'P';
+    yield 'Q';
+}
+gen func ret_char_colon(): char {
+    yield 'R';
+    yield 'S';
+}
+g = ret_char_prefix();
+check(next(g) == 'P', "rettype char prefix: first = P");
+g = ret_char_colon();
+check(next(g) == 'R', "rettype char colon: first = R");
+
+// 9.9 array 返回类型（后缀）
+gen func ret_array_colon(): array {
+    yield [1, 2, 3];
+    yield [4, 5, 6];
+}
+g = ret_array_colon();
+check(type(g) == "generator", "rettype array colon: type(g) = generator");
+aa1 = next(g);
+check(type(aa1) == "array" && len(aa1) == 3, "rettype array colon: first array");
+check(aa1[0] == 1 && aa1[2] == 3, "rettype array colon: first elements");
+aa2 = next(g);
+check(len(aa2) == 3 && aa2[0] == 4, "rettype array colon: second array");
+
+// 9.10 map 返回类型（后缀）
+gen func ret_map_colon(): map {
+    yield {"k1": 1};
+    yield {"k2": 2};
+}
+g = ret_map_colon();
+check(type(g) == "generator", "rettype map colon: type(g) = generator");
+am1 = next(g);
+check(type(am1) == "map" && am1["k1"] == 1, "rettype map colon: first map");
+am2 = next(g);
+check(am2["k2"] == 2, "rettype map colon: second map");
+
+// 9.11 自定义 struct 返回类型（后缀）
+gen func ret_struct_colon(): Point {
+    yield Point(11, 22);
+    yield Point(33, 44);
+}
+g = ret_struct_colon();
+check(type(g) == "generator", "rettype struct colon: type(g) = generator");
+sp1 = next(g);
+check(type(sp1) == "Point" && sp1.x == 11 && sp1.y == 22, "rettype struct colon: first Point");
+sp2 = next(g);
+check(sp2.x == 33 && sp2.y == 44, "rettype struct colon: second Point");
+
+// 9.12 自定义 class 返回类型（后缀）
+gen func ret_class_colon(): Animal {
+    yield Animal("lion", "roar");
+    yield Animal("bird", "chirp");
+}
+g = ret_class_colon();
+check(type(g) == "generator", "rettype class colon: type(g) = generator");
+cl1 = next(g);
+check(type(cl1) == "Animal" && cl1.name == "lion", "rettype class colon: first Animal");
+check(cl1.speak() == "lion says roar", "rettype class colon: first speak()");
+cl2 = next(g);
+check(cl2.speak() == "bird says chirp", "rettype class colon: second speak()");
+
+print("iterator_types_test PART9 (声明返回类型) PASS");
+
+// ============================================================
+// PART 10：复杂生成器（参数化 + 多类型混合 yield）
+// ============================================================
+
+// 10.1 参数化生成器：根据参数决定 yield 内容
+gen func range_gen(start, end) {
+    i = start;
+    while (i < end) {
+        yield i;
+        i = i + 1;
+    }
+}
+g = range_gen(5, 8);
+check(next(g) == 5, "param gen: range(5,8) first = 5");
+check(next(g) == 6, "param gen: range(5,8) second = 6");
+check(next(g) == 7, "param gen: range(5,8) third = 7");
+check(next(g) == null, "param gen: range(5,8) end = null");
+
+// 10.2 混合类型 yield（同一生成器 yield 不同类型值）
+gen func mixed_gen() {
+    yield 1;
+    yield "two";
+    yield 3.0;
+    yield true;
+    yield [4, 5];
+    yield Point(6, 7);
+}
+g = mixed_gen();
+mx1 = next(g);
+check(type(mx1) == "int" && mx1 == 1, "mixed gen: int");
+mx2 = next(g);
+check(type(mx2) == "string" && mx2 == "two", "mixed gen: string");
+mx3 = next(g);
+check(type(mx3) == "double" && mx3 == 3.0, "mixed gen: double");
+mx4 = next(g);
+check(type(mx4) == "bool" && mx4 == true, "mixed gen: bool");
+mx5 = next(g);
+check(type(mx5) == "array" && mx5[0] == 4 && mx5[1] == 5, "mixed gen: array");
+mx6 = next(g);
+check(type(mx6) == "Point" && mx6.x == 6 && mx6.y == 7, "mixed gen: struct");
+check(next(g) == null, "mixed gen: end = null");
+
+// 10.3 生成器内调用普通函数 + 复杂表达式
+gen func compute_gen(n) {
+    i = 1;
+    while (i <= n) {
+        yield i * i + i;
+        i = i + 1;
+    }
+}
+g = compute_gen(3);
+check(next(g) == 2, "compute gen: 1*1+1 = 2");
+check(next(g) == 6, "compute gen: 2*2+2 = 6");
+check(next(g) == 12, "compute gen: 3*3+3 = 12");
+check(next(g) == null, "compute gen: end = null");
+
+// 10.4 多个生成器交错使用（互不影响）
+gen func gen_a() { yield 1; yield 2; }
+gen func gen_b() { yield 10; yield 20; }
+ga = gen_a();
+gb = gen_b();
+check(next(ga) == 1, "interleave: ga first = 1");
+check(next(gb) == 10, "interleave: gb first = 10");
+check(next(ga) == 2, "interleave: ga second = 2");
+check(next(gb) == 20, "interleave: gb second = 20");
+check(next(ga) == null, "interleave: ga end = null");
+check(next(gb) == null, "interleave: gb end = null");
+
+print("iterator_types_test PART10 (复杂生成器) PASS");
+
+print("iterator_types_test ALL PASS");

@@ -274,12 +274,16 @@ int vm_except_take_pending_return(RetSlot* out) {
 }
 
 /* CATCH_MATCH：多 catch 按类型匹配。
-   a=异常类型字符串常量下标(-1=捕获全部)；命中则 fall through，不命中跳 b。 */
+   a=异常类型字符串常量下标(-1=捕获全部)；命中则 fall through，不命中跳 b。
+   "Error" 视为所有错误的基类，匹配任意 err.type；其他类型名精确匹配。 */
 int vm_exec_catch_match(VMExecCtx* ctx, Instruction* in) {
     if(in->a < 0) return 1;   /* catch-all 子句 */
     const char* want = ctx->const_pool[in->a].s;
     const char* have = g_current_error.v.err.type;
-    if(have && want && strcmp(have, want) == 0) return 1;
+    if(have && want) {
+        if(strcmp(want, "Error") == 0) return 1;  /* 基类：捕获任意错误 */
+        if(strcmp(have, want) == 0) return 1;
+    }
     ctx->pc = in->b;
     return 1;
 }

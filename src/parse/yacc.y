@@ -1311,6 +1311,42 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.is_ffi = 0;
           try_register_global_func($3, func_val); /* class内部不注册全局符号表 */
         }
+        /* 生成器函数 + 前置返回类型：gen func <int> name(params) { body } */
+        | TOK_GEN FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
+          $$ = ast_func_def($4, $6, $8);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_generator = 1;
+          $$->u.func_def.ret_type_name = strdup(castkind_to_name($3));
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($4, func_val);
+        }
+        /* 生成器函数 + 冒号后缀返回类型：gen func name(params) : type { body } */
+        | TOK_GEN FUNC ID LPAREN param_list RPAREN COLON type_name_str block_stmt {
+          $$ = ast_func_def($3, $5, $9);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_generator = 1;
+          $$->u.func_def.ret_type_name = $8;
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($3, func_val);
+        }
         /* 泛型函数：func<T> name(params) { body } */
         | FUNC generic_param_list ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
@@ -1481,8 +1517,9 @@ catch_clause_list
       }
     ;
 
-/* 单个 catch 子句：catch (e) 或 catch (Type e)
-   使用 opt_catch_type 避免移进/归约冲突 */
+/* 单个 catch 子句：catch (e) / catch (Type e) / catch (e: Type)
+   使用 opt_catch_type 避免移进/归约冲突；
+   第三个分支支持冒号后缀类型语法（用户更易书写） */
 catch_clause
     : CATCH LPAREN ID opt_catch_type RPAREN block_stmt {
           if($4) {
@@ -1490,6 +1527,9 @@ catch_clause
           } else {
               $$ = make_catch_clause(NULL, strdup($3), $6);
           }
+      }
+    | CATCH LPAREN ID COLON ID RPAREN block_stmt {
+          $$ = make_catch_clause(strdup($5), strdup($3), $7);
       }
     ;
 
@@ -2361,6 +2401,10 @@ ternary_expr
 assignment_expr
     : ternary_expr
     | ID ASSIGN assignment_expr  { $$ = ast_assign($1, $3); }
+    /* 变量声明带类型标注：a: Type = expr 等价于 a = <Type>expr */
+    | ID COLON map_generic_type ASSIGN assignment_expr {
+          $$ = ast_assign($1, ast_type_annotation((CastKind)$3, $5));
+      }
     /* destruct_lhs 移到 closed_stmt 层面，避免与函数参数列表的 COMMA 冲突 */
     | ID PLUSEQ assignment_expr  { $$ = ast_assign($1, ast_binop(OP_ADD, ast_var($1), $3)); }
     | ID MINUSEQ assignment_expr { $$ = ast_assign($1, ast_binop(OP_SUB, ast_var($1), $3)); }

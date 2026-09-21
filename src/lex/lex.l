@@ -273,11 +273,13 @@ f\"([^"\\]|\\.)*\"   {
                   if(is_expr_end(prev_token)) {
                       /* 类型名后跟 { → 命名构造 ClassName{field: value}，按 MAP_OPEN 处理
                        * 排除声明上下文（extends/implements/struct/class/type 关键字后的类型名，
-                       * 其 { 是类/结构体块而非命名构造） */
+                       * 其 { 是类/结构体块而非命名构造）；
+                       * 也排除函数返回类型标注上下文（func name(): Type {），
+                       * 此时 prev_prev_token == COLON，{ 是函数体块 */
                       if(prev_token == ID && g_last_id_text[0] &&
                          prev_prev_token != TOK_EXTENDS && prev_prev_token != TOK_IMPLEMENTS &&
                          prev_prev_token != TOK_STRUCT && prev_prev_token != TOK_CLASS &&
-                         prev_prev_token != TOK_TYPE &&
+                         prev_prev_token != TOK_TYPE && prev_prev_token != COLON &&
                          (struct_lookup(g_last_id_text) || class_lookup(g_last_id_text) || type_lookup(g_last_id_text))) {
                           prev_token = MAP_OPEN; return MAP_OPEN;
                       }

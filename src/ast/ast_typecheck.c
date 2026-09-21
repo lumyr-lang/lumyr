@@ -876,7 +876,10 @@ int typecheck_expr(AstNode* node)
                 case CAST_STRING:   node->val_type = VAL_STRING; break;
                 case CAST_ASCII:    node->val_type = VAL_INT; break;
                 case CAST_BYTE:     node->val_type = VAL_BYTE; break;
-                default:            node->val_type = VAL_INT;
+                /* 自定义类型（struct/class/type/ptr/bigint/decimal/bitdecimal 等）
+                 * 均为动态类型（VALUE 栈），标注不应改变 val_type 为 INT，
+                 * 否则字段访问（a.x）会被 AST_INDEX 拦截 */
+                default:            node->val_type = VAL_NONE;
             }
             break;
         }
