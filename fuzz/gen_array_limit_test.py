@@ -93,7 +93,7 @@ def main():
         lits = [c[1] for c in cases]
         arr = "a_" + vt
         out.append(arr + ' = <' + v + '>[' + ", ".join(lits) + "];")
-        out.append('check(type(' + arr + ') == "typed_array", "' + vt + ': container");')
+        out.append('check(type(' + arr + ') == "array", "' + vt + ': container");')
         out.append('check(' + arr + '.len == ' + str(len(cases)) + ', "' + vt + ': len");')
         for i, (label, lit, expect, etype) in enumerate(cases):
             if expect is None:

@@ -617,7 +617,7 @@ Value lumyr_type(Value v) {
             const char* n = lumyr_instance_get_name(v);
             return lumyr_make_string(n ? n : "class");
         }
-        case VAL_TYPED_ARRAY: return lumyr_make_string("typed_array");
+        case VAL_TYPED_ARRAY: return lumyr_make_string("array");
         // C类型（各类型专用，不混用）
         case VAL_VOID:     return lumyr_make_string("void");
         case VAL_INT8:     return lumyr_make_string("int8");
