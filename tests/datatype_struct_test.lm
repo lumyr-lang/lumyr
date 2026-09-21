@@ -375,4 +375,49 @@ print("IC10 polymorphism circle area", shapes[0].area());
 print("IC11 polymorphism rect area", shapes[1].area());
 print("IC12 polymorphism base area", shapes[2].area());
 
+// ------------------------------------------------------------
+// IS: 多接口实现
+// ------------------------------------------------------------
+// IS1-IS3: 多接口实现 implements I1, I2
+interface IReader {
+    func fetch(): string;
+}
+interface IWriter {
+    func store(<string> s): string;
+}
+class ReadWriter implements IReader, IWriter {
+    buf: string;
+    func __init__() { self.buf = ""; }
+    func <string> fetch() { return self.buf; }
+    func <string> store(<string> s) { self.buf = self.buf + s; return self.buf; }
+}
+rw = ReadWriter();
+print("IS1 multi-iface store", rw.store("Hello"));
+print("IS2 multi-iface store2", rw.store(" World"));
+print("IS3 multi-iface fetch", rw.fetch());
+
+// IS4-IS6: 多接口 + 继承组合
+interface ITag {
+    func tag(): string;
+}
+interface ICount {
+    func count(): int;
+}
+class TagBase {
+    label: string;
+    n: int;
+    func __init__(<string> l, <int> n) { self.label = l; self.n = n; }
+    func <string> tag() { return self.label; }
+    func <int> count() { return self.n; }
+}
+class TagEx extends TagBase implements ITag, ICount {
+    func __init__(<string> l, <int> n) { self.label = l; self.n = n; }
+    func <string> tag() { return "[" + self.label + "]"; }
+    func <int> count() { return self.n + 1; }
+}
+te = TagEx("K", 5);
+print("IS4 combo tag", te.tag());
+print("IS5 combo count", te.count());
+print("IS6 combo type", type(te));
+
 print("STRUCT_TEST_DONE");
