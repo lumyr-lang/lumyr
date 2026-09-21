@@ -26,6 +26,9 @@ static int* g_prop_access_modifiers = NULL;
 static int* g_prop_const_flags = NULL;   /* const 字段标记（1=构造后不可修改） */
 /* 自定义类型名（字段为 struct/class 类型时记录，如 inner: Inner → "Inner"；其余为 NULL） */
 static char** g_prop_struct_names = NULL;
+/* 字段级访问器策略：-1=无字段注解（默认，随类级 @Data 决策）；0=@Xxx(false)；1=@Xxx(true)/无参 */
+static int* g_prop_getter_policy = NULL;
+static int* g_prop_setter_policy = NULL;
 static int g_prop_n = 0, g_prop_cap = 0;
 static void type_prop_push(char* name, ValueType vt, int access_modifier, int is_const, char* struct_name)
 {
@@ -36,6 +39,8 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
         g_prop_access_modifiers = (int*)realloc(g_prop_access_modifiers, (size_t)nc * sizeof(int));
         g_prop_const_flags = (int*)realloc(g_prop_const_flags, (size_t)nc * sizeof(int));
         g_prop_struct_names = (char**)realloc(g_prop_struct_names, (size_t)nc * sizeof(char*));
+        g_prop_getter_policy = (int*)realloc(g_prop_getter_policy, (size_t)nc * sizeof(int));
+        g_prop_setter_policy = (int*)realloc(g_prop_setter_policy, (size_t)nc * sizeof(int));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
@@ -43,6 +48,8 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
     g_prop_access_modifiers[g_prop_n] = access_modifier;
     g_prop_const_flags[g_prop_n] = is_const;
     g_prop_struct_names[g_prop_n] = struct_name;  /* 不复制：归约动作的 $3 所有权转移 */
+    g_prop_getter_policy[g_prop_n] = -1;
+    g_prop_setter_policy[g_prop_n] = -1;
     g_prop_n++;
 }
 static void type_prop_clear(void)
@@ -53,8 +60,10 @@ static void type_prop_clear(void)
     }
     free(g_prop_names); free(g_prop_types); free(g_prop_access_modifiers);
     free(g_prop_const_flags); free(g_prop_struct_names);
+    free(g_prop_getter_policy); free(g_prop_setter_policy);
     g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
     g_prop_const_flags = NULL; g_prop_struct_names = NULL;
+    g_prop_getter_policy = NULL; g_prop_setter_policy = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -257,17 +266,62 @@ static char* make_accessor_name(const char* prefix, const char* fld) {
     return name;
 }
 
-/* @Data：为实例字段生成 public 访问器 getXxx / setXxx（Lombok/Java 驼峰风格）。
- *  - const 字段只生成 getter（final 语义，无 setter）
- *  - bool 字段 getter 命名为 isXxx（Lombok 惯例）
- *  - 方法已手写存在则跳过
+/* 解析字段级 @Getter / @Setter 注解，写入该字段的访问器策略。
+ *  - 无参数：策略为 1（生成）
+ *  - @Xxx(true)/@Xxx(false)：取 bool 字面量
+ *  - 实参不是 bool：语法错误
+ * 同一字段重复标注时后者覆盖（链遍历顺序即书写顺序） */
+static int apply_field_prop_annotations(int idx, AstNode* list) {
+    if(!list) return 0;
+    AstNode* a = list;
+    while(a) {
+        AstNode* cur;
+        if(a->type == AST_ANNOTATION) cur = a;
+        else if(a->type == AST_SEQ) cur = a->u.seq.first;
+        else return 0;
+        if(cur && cur->type == AST_ANNOTATION && cur->u.annotation.name) {
+            int is_getter = -1;
+            if(strcmp(cur->u.annotation.name, "Getter") == 0) is_getter = 1;
+            else if(strcmp(cur->u.annotation.name, "Setter") == 0) is_getter = 0;
+            if(is_getter >= 0) {
+                int policy = 1;   /* 无参默认生成 */
+                AstNode* args = cur->u.annotation.args;
+                if(args) {
+                    if(args->type != AST_BOOL) {
+                        yyerror("@Getter/@Setter 参数须为 bool 字面量 true/false");
+                        return 1;
+                    }
+                    else
+                        policy = args->u.bval ? 1 : 0;
+                }
+                if(is_getter) g_prop_getter_policy[idx] = policy;
+                else g_prop_setter_policy[idx] = policy;
+            }
+        }
+        if(a->type == AST_ANNOTATION) return 0;   /* 裸单节点：遍历结束 */
+        a = a->u.seq.second;
+    }
+    return 0;
+}
+
+/* 生成访问器：字段级 @Getter/@Setter 策略优先于类级 @Data；
+ * 未标注字段随 @Data（getter/setter 均生成）。
+ * const 字段强制不生成 setter（硬语义优先于 @Setter(true)）。
+ * bool 字段 getter 命名为 isXxx（Lombok 惯例）；手写同名方法仍跳过。
  * 生成节点压入 g_class_methods，复用 class 结束规则的统一方法编译循环 */
-static void apply_data_annotation(void) {
+static void apply_accessors(int has_data) {
     for(int i = 0; i < g_prop_n; i++) {
         const char* fld = g_prop_names[i];
         ValueType vt = g_prop_types[i];
 
+        int want_getter = g_prop_getter_policy[i] >= 0 ? g_prop_getter_policy[i] : has_data;
+        int want_setter = g_prop_setter_policy[i] >= 0 ? g_prop_setter_policy[i]
+                                                       : (has_data && !g_prop_const_flags[i]);
+        /* const 硬语义：构造后不可写，任何情况都不生成 setter */
+        if(g_prop_const_flags[i]) want_setter = 0;
+
         /* getter: func getXxx(self): T { return self.f; } */
+        if(want_getter) {
         char* gname = make_accessor_name(vt == VAL_BOOL ? "is" : "get", fld);
         if(!class_method_exists(gname)) {
             AstNode* selfp = ast_param("self", 0, NULL);
@@ -275,7 +329,7 @@ static void apply_data_annotation(void) {
             AstNode* blk = ast_block(ast_seq(ast_return(acc), NULL));
             AstNode* fn = ast_func_def(gname, selfp, blk);
             char* tn = valtype_to_name(vt);
-            /* 具体标量类型保留返回标注；void/any 置空走动态 */
+            /* 具体标量类型保留返回标注；void/any（含容器/自定义类型）置空走动态 */
             if(tn && strcmp(tn, "void") != 0 && strcmp(tn, "any") != 0)
                 fn->u.func_def.ret_type_name = tn;
             else
@@ -286,15 +340,15 @@ static void apply_data_annotation(void) {
             g_class_method_push(fn);
         }
         free(gname);
-
-        /* const 字段不生成 setter */
-        if(g_prop_const_flags[i]) continue;
+        }
 
         /* setter: func setXxx(self, value) { self.f = value; } */
+        if(want_setter) {
         char* sname = make_accessor_name("set", fld);
         if(!class_method_exists(sname)) {
             AstNode* valp = ast_param("value", 0, NULL);
-            /* 标量字段：形参加类型约束，调用处自动类型转换 */
+            /* 标量字段：形参加类型约束，调用处自动类型转换；
+             * 容器/自定义类型字段保持动态（any） */
             if(vt == VAL_INT || vt == VAL_DOUBLE || vt == VAL_STRING ||
                vt == VAL_BOOL || vt == VAL_CHAR) {
                 valp->u.param.constraint = valtype_to_name(vt);
@@ -311,6 +365,7 @@ static void apply_data_annotation(void) {
             g_class_method_push(fn);
         }
         free(sname);
+        }
     }
 }
 
@@ -1076,7 +1131,7 @@ closed_stmt
           }
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
-          if(annotation_list_has($1, "Data")) apply_data_annotation();
+          apply_accessors(annotation_list_has($1, "Data"));
           if(apply_field_initializers()) YYABORT;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1119,6 +1174,7 @@ closed_stmt
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
+          apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
@@ -1173,7 +1229,7 @@ closed_stmt
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
-          if(annotation_list_has($1, "Data")) apply_data_annotation();
+          apply_accessors(annotation_list_has($1, "Data"));
           if(apply_field_initializers()) YYABORT;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1215,6 +1271,7 @@ closed_stmt
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
           /* 添加方法到 class 方法表（静态方法不加入） */
@@ -1265,7 +1322,7 @@ closed_stmt
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
-          if(annotation_list_has($1, "Data")) apply_data_annotation();
+          apply_accessors(annotation_list_has($1, "Data"));
           if(apply_field_initializers()) YYABORT;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1315,6 +1372,7 @@ closed_stmt
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
+          apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
           /* 添加方法到 class 方法表（静态方法不加入） */
@@ -1370,6 +1428,7 @@ closed_stmt
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
+          apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1421,7 +1480,7 @@ closed_stmt
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
-          if(annotation_list_has($1, "Data")) apply_data_annotation();
+          apply_accessors(annotation_list_has($1, "Data"));
           if(apply_field_initializers()) YYABORT;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1471,6 +1530,7 @@ closed_stmt
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
           class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
           /* 添加方法到 class 方法表（静态方法不加入） */
@@ -2640,7 +2700,9 @@ class_prop_list
         $$ = $3;
       }
     | class_prop_list annotation_list class_prop  {
-        /* class 属性定义（支持注解）：注解暂时保存，后续可扩展语义处理 */
+        /* class 属性定义（字段级 @Getter/@Setter）：class_prop 已完成字段注册，
+           把注解策略写入最后一个字段（idx = g_prop_n-1） */
+        if(g_prop_n > 0 && apply_field_prop_annotations(g_prop_n - 1, $2)) YYABORT;
         $$ = ast_seq($1, $3);
       }
     | class_prop_list annotated_decl  {
@@ -3151,6 +3213,9 @@ class_header: class_start ID LBRACE {
           /* 在 LBRACE 时就设置 g_current_class_name，这样方法定义时就能获取到 */
           g_current_class_name = $2;
           g_current_class_is_abstract = 0;
+          /* 无继承：必须显式清空，防止上一个 extends 类的父类名残留
+           * （残留会让 apply_field_initializers 误判本类有带参父类 ctor） */
+          g_current_class_parent = NULL;
           $$ = NULL;
       }
     ;
@@ -3158,12 +3223,14 @@ abstract_class_header: TOK_ABSTRACT class_start ID LBRACE {
           /* 抽象类定义：标记为抽象类，不能被实例化（abstract public class 顺序） */
           g_current_class_name = $3;
           g_current_class_is_abstract = 1;
+          g_current_class_parent = NULL;
           $$ = NULL;
       }
     | class_start TOK_ABSTRACT TOK_CLASS ID LBRACE {
           /* public abstract class 顺序（等价写法） */
           g_current_class_name = $4;
           g_current_class_is_abstract = 1;
+          g_current_class_parent = NULL;
           $$ = NULL;
       }
     ;

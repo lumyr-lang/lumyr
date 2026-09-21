@@ -134,6 +134,10 @@ AstNode* ast_seq(AstNode* a, AstNode* b)
 // 把 item 追加到 list 链的末尾（保持扁平：末尾 AST_SEQ.second=NULL）
 AstNode* ast_seq_append(AstNode* list, AstNode* item) {
     if(!list) return ast_seq(item, NULL);
+    /* 裸起始节点（非 SEQ，如注解链的首个 AST_ANNOTATION）：包装成标准右深链，
+     * 否则会落到末尾原样返回 list、item 被静默丢弃（同字段多注解只生效首个） */
+    if(list->type != AST_SEQ)
+        return ast_seq(list, ast_seq(item, NULL));
     AstNode* p = list;
     while(p->type == AST_SEQ && p->u.seq.second && p->u.seq.second->type == AST_SEQ)
         p = p->u.seq.second;

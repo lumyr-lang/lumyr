@@ -24,6 +24,10 @@ BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode
 // 编译顶层语句为 main 字节码（执行 / -c 生成 C 共用同一 IR）
 BytecodeFunc* ir_compile_main(AstNode* root);
 
+/* IR 编译是否发生致命错误（调用不存在的方法等）：
+ * ir_compile_main 返回后检查，有错则不运行 VM（避免实参残留致栈错位） */
+int ir_compile_had_error(void);
+
 // 全局函数表（ir_compile_function / ir_compile_main 注册；ir_cgen 遍历用）
 void ir_func_table_reset(void);
 /* 注册/替换普通函数（同名旧函数被释放） */

@@ -20,6 +20,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* IR 编译致命错误标志：调用确定不存在的方法等情况设置。
+ * 全部编译完成后由顶层（ir_compile_main 调用方）检查：有错则不运行 VM。
+ * 此前仅打印错误继续生成，已压栈实参残留会导致运行时栈错位连锁污染。 */
+static int g_ir_compile_error = 0;
+int ir_compile_had_error(void) { return g_ir_compile_error; }
+
 /* 前向声明 */
 void c_stmt(Ctx* c, AstNode* node);
 ExprType c_expr(Ctx* c, AstNode* node);
@@ -2482,6 +2488,7 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
 
     /* 5. 用户类型既无该方法也非内置 */
     fprintf(stderr, "IR: 类型 \"%s\" 没有方法 \"%s\"\n", owner, mname);
+    g_ir_compile_error = 1;
     free(owner);
     return EXPR_TYPE_NONE;
 }

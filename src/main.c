@@ -220,6 +220,16 @@ int main(int argc, char** argv) {
         } else {
             // 字节码 VM 执行（AST → IR → vm）
             BytecodeFunc* main_fn = ir_compile_main(root);
+            /* IR 致命错误（如调用不存在的方法）：中止，不运行 VM */
+            if(ir_compile_had_error()) {
+                bytecode_func_free(main_fn);
+                ast_free(root);
+                root = NULL;
+                ret = 1;
+                if(yyin && yyin != stdin) fclose(yyin);
+                if(used_pp_tmp) unlink(pp_tmp);
+                return 1;
+            }
             vm_run_main(main_fn);
             bytecode_func_free(main_fn);
         }

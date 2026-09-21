@@ -138,6 +138,133 @@ d2 = DataSub2(40);
 check(d2.getBv() == 40, "子类 super(args) 后父类字段生效");
 check(d2.getSv() == 41, "子类 ctor 读取父类字段");
 
+// ------------------------------------------------------------
+// D9: 字段级 @Getter/@Setter 独立生效（无 @Data）
+//     @Getter 只读、@Setter 只写、两者同标可读写、无注解不生成
+// ------------------------------------------------------------
+class FieldAnn {
+    @Getter
+    ro: int = 1;
+    @Setter
+    wo: int = 2;
+    @Getter @Setter
+    rw: int = 3;
+    plain: int = 4;
+    func readWo() { return self.wo; }
+}
+fa = FieldAnn();
+check(fa.getRo() == 1, "无 @Data：@Getter 独立生成 getter");
+fa.setWo(20);
+check(fa.readWo() == 20, "无 @Data：@Setter 独立生成 setter");
+check(fa.getRw() == 3, "无 @Data：@Getter@Setter 读");
+fa.setRw(30);
+check(fa.getRw() == 30, "无 @Data：@Getter@Setter 写");
+
+// ------------------------------------------------------------
+// D10: 字段注解覆盖类级 @Data —— @Getter(false)/@Setter(false)
+//      被关闭方向不生成；另一方向仍随 @Data；未标注字段完全随 @Data
+// ------------------------------------------------------------
+@Data
+class OverrideAnn {
+    @Getter(false)
+    noGet: int = 1;
+    @Setter(false)
+    noSet: int = 2;
+    normal: int = 3;
+    func readNoGet() { return self.noGet; }
+}
+ov = OverrideAnn();
+ov.setNoGet(10);
+check(ov.readNoGet() == 10, "@Getter(false) 关读：setter 仍随 @Data");
+check(ov.getNoSet() == 2, "@Setter(false) 关写：getter 仍随 @Data");
+check(ov.getNormal() == 3, "未标注字段 getter 随 @Data");
+ov.setNormal(30);
+check(ov.getNormal() == 30, "未标注字段 setter 随 @Data");
+
+// ------------------------------------------------------------
+// D11: 显式 true 参数 / 无参 / 同字段重复标注（后者覆盖）
+// ------------------------------------------------------------
+class BoolArg {
+    @Getter(true)
+    a: int = 1;
+    @Setter(true)
+    b: int = 2;
+    @Getter(false) @Getter(true)
+    c: int = 3;
+    func readB() { return self.b; }
+}
+ba = BoolArg();
+check(ba.getA() == 1, "@Getter(true) 生成");
+ba.setB(20);
+check(ba.readB() == 20, "@Setter(true) 生成");
+check(ba.getC() == 3, "同字段重复 @Getter 后者覆盖（false→true）");
+
+// ------------------------------------------------------------
+// D12: 全容器 / 实例类型字段矩阵 —— struct 属性、class 属性、
+//      普通 array、typed array、普通 map、typed map 的 get/set
+//      （容器/自定义类型访问器走动态 any）
+// ------------------------------------------------------------
+struct APt { x: int; y: int; func sum() { return self.x + self.y; } }
+class AKls {
+    n: int;
+    func AKls(n) { self.n = n; }
+    func getn() { return self.n; }
+}
+@Data
+class Containers {
+    arr: array;
+    tarr: <int>array;
+    mp: map;
+    tmp: <string, int>map;
+    p: APt;
+    k: AKls;
+    func Containers() {
+        self.arr = [1, 2, 3];
+        self.tarr = <int>[10, 20];
+        self.mp = {"a": 1};
+        self.tmp = <string, int>{"x": 7};
+        self.p = APt(3, 4);
+        self.k = AKls(5);
+    }
+}
+ct = Containers();
+check(type(ct.getArr()) == "array", "array 字段 getter 类型");
+check(ct.getArr()[1] == 2, "array 字段 getter 元素");
+check(ct.getTarr()[0] == 10, "typed array 字段 getter");
+check(ct.getMp()["a"] == 1, "map 字段 getter");
+check(ct.getTmp()["x"] == 7, "typed map 字段 getter");
+check(type(ct.getP()) == "APt", "struct 属性 getter 类型");
+check(ct.getP().sum() == 7, "struct 属性 getter 方法调用");
+check(type(ct.getK()) == "AKls", "class 属性 getter 类型");
+check(ct.getK().getn() == 5, "class 属性 getter 方法调用");
+ct.setArr([9]);
+check(ct.getArr().len == 1 && ct.getArr()[0] == 9, "array 字段 setter");
+ct.setTarr(<int>[100]);
+check(ct.getTarr()[0] == 100, "typed array 字段 setter");
+ct.setMp({"b": 2});
+check(ct.getMp()["b"] == 2, "map 字段 setter");
+ct.setTmp(<string, int>{"y": 8});
+check(ct.getTmp()["y"] == 8, "typed map 字段 setter");
+ct.setP(APt(6, 7));
+check(ct.getP().sum() == 13, "struct 属性 setter");
+ct.setK(AKls(9));
+check(ct.getK().getn() == 9, "class 属性 setter");
+
+// ------------------------------------------------------------
+// D13: 多类顺序 —— 带字段注解的类位于其他类之后，紧随动态读取，
+//      覆盖跨类场景（容器/动态值经 BOX_PTR→INDEX_GET 路径）
+// ------------------------------------------------------------
+class Lead { v: int = 1; }
+@Data
+class After {
+    @Setter(false)
+    s: string = "x";
+    n: int = 5;
+}
+at = After();
+check(at.getS() == "x", "多类顺序：字段注解类字符串动态读");
+check(at.getN() == 5, "多类顺序：普通字段读");
+
 /* ------------------------------------------------------------
  * 编译中止场景（exit 1，单独验证，不放入本文件以保证全绿）：
  *  - 类有字段初始化器但无 ctor，父类 ctor 含必填参数 → 语法错误中止
