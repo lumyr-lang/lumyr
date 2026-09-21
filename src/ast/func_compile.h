@@ -35,6 +35,8 @@ AstNode* func_ast_lookup(const char* name);
 
 // typecheck 转换函数名引用（AST_VAR→AST_FUNCREF）后重编译该函数字节码并替换
 void func_compile_recompile(AstNode* def);
+// 重编译 struct/class 方法（携带属主，同步更新 TypeDef 方法表 payload 指针）
+void func_compile_recompile_method(const char* owner, AstNode* def);
 
 // 销毁RuntimeFunc（不碰AST）
 void runtime_func_destroy(RuntimeFunc* f);

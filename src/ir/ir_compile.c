@@ -438,9 +438,23 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_FUNC_DEF: {
-        /* 匿名函数表达式（lambda）：有捕获则 MKCLOSURE，否则普通函数值 */
+        /* 匿名函数表达式（lambda/arrow）：有捕获则 MKCLOSURE，否则普通函数值 */
         const char* lname = node->u.func_def.name;
         int sym = c_add_var(c, lname, EXPR_TYPE_NONE);
+        /* struct/class 方法体内的嵌套 lambda/arrow 在 parse 期未单独编译
+         * （g_current_class/struct 非空时 yacc 动作跳过 compile_func_from_ast），
+         * 此处补编译并注册，否则下方 GETFUNC/MKCLOSURE 引用的字节码在函数表中不存在。
+         * 首版本按无捕获编译，typecheck 分析出捕获后会重编译覆盖。 */
+        if(!ir_func_table_lookup(lname)) {
+            RuntimeFunc* nrf = compile_func_from_ast(node);
+            Value nfv;
+            memset(&nfv, 0, sizeof(nfv));
+            nfv.type = VAL_FUNC;
+            nfv.v.func.func_obj = nrf;
+            nfv.v.func.ffi_func = NULL;
+            nfv.v.func.is_ffi = 0;
+            sym_set(lname, nfv);
+        }
         int ncap = lambda_capture_count(lname);
         if(ncap > 0) {
             emit(c, OPC_MKCLOSURE, sym, 0);
@@ -1909,6 +1923,14 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         return CAST_INT;
     }
 
+    /* 三元 cond ? a : b：复用分支类型预判 + 统一规则，把目标类型名转 CastKind。
+     * 否则字符串分支结果被当 CAST_NONE，PTR 变量 LOAD 时读成裸 pointer 而非 string。 */
+    if(node->type == AST_TERNARY) {
+        const char* nt = c_expr_type_name(c, node->u.ternary.true_expr);
+        const char* nf = c_expr_type_name(c, node->u.ternary.false_expr);
+        return ir_type_name_to_castkind(ternary_target_name(nt, nf));
+    }
+
     return CAST_NONE;
 }
 
@@ -1922,7 +1944,9 @@ static void emit_value_cast(Ctx* c, ExprType from, ExprType to) {
             emit(c, OPC_UNBOX_INT64, 0, 0);
         else if(to == EXPR_TYPE_DOUBLE)
             emit(c, OPC_UNBOX_DOUBLE, 0, 0);
-        /* VALUE -> PTR 无通用拆箱，暂不支持 */
+        else if(to == EXPR_TYPE_PTR)
+            /* VALUE -> PTR：string 等裸指针拆箱（UNBOX_PTR 对 string 做独立拷贝） */
+            emit(c, OPC_UNBOX_PTR, 0, 0);
         return;
     }
     if(to == EXPR_TYPE_DOUBLE && from == EXPR_TYPE_INT)

@@ -71,9 +71,12 @@ static AstNode* g_class_constructor = NULL; /* 当前 class 的构造函数（__
 static char** g_class_interfaces = NULL; /* 当前 class 实现的接口名列表 */
 static int g_class_ninterfaces = 0; /* 当前 class 实现的接口数量 */
 
-/* 辅助：如果在 class 内部，不注册到全局符号表（方法注册到 class 方法表） */
+/* 辅助：如果在 class/struct 内部，不注册到全局符号表（方法注册到类型方法表，
+ * 必须通过接收者类型分派）。此前只检查 class，struct 方法会以裸名 sym_set
+ * 一个 func_obj=NULL 的空壳，覆盖同名顶层函数。 */
 static void try_register_global_func(const char* name, Value func_val) {
     if(g_current_class_name) return;
+    if(g_current_struct_name) return;
     sym_set(name, func_val);
 }
 static int g_class_method_n = 0, g_class_method_cap = 0;
@@ -370,6 +373,37 @@ static AstNode* wrap_struct_named(const char* tname, AstNode* items)
     free(values);
     return ast_map_lit(out);
 }
+/* type 形状的位置构造 T(v0, v1, ...)：按字段声明序把位置实参组装成
+ * 带字段类型 cast 的 map literal，与命名构造 T{field: v, ...} 的结果一致；
+ * 尾部缺省字段跳过（同名构造行为），实参多于字段数则报错。 */
+static AstNode* wrap_type_positional(const char* tname, AstNode* args)
+{
+    TypeDef* td = type_lookup(tname);
+    if(!td) {
+        char buf[256];
+        snprintf(buf, sizeof buf, "未定义类型 '%s'", tname);
+        yyerror(buf);
+        return NULL;
+    }
+    AstNode** pos = NULL; int pn = 0, pcap = 0;
+    collect_map_entries(args, &pos, &pn, &pcap);   /* left-leaning 链 → 位置序数组 */
+    if(pn > td->nprops) {
+        char buf[256];
+        snprintf(buf, sizeof buf, "类型 '%s' 构造参数过多：需要至多 %d 个，给定 %d 个", tname, td->nprops, pn);
+        yyerror(buf);
+        free(pos);
+        return NULL;
+    }
+    AstNode* out = NULL;
+    for(int i = 0; i < pn; i++) {
+        CastKind ck = td->ptypes ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
+        AstNode* v = (ck != CAST_NONE) ? new_cast_node(ck, pos[i]) : pos[i];
+        AstNode* entry = ast_map_entry(ast_string(strdup(td->props[i])), v);
+        out = out ? ast_seq(out, entry) : entry;
+    }
+    free(pos);
+    return ast_map_lit(out);
+}
 static int g_lambda_seq = 0;                 // 匿名函数内部名 _lambda_N
 static int g_unpack_tmp_counter = 0;              // unpack 临时变量计数器
 // 把一个语句列表（AST_SEQ 链）展开，追加到另一个语句列表末尾
@@ -575,6 +609,13 @@ stmt_list
 
 closed_stmt
     : expr SEMI                      { $$ = $1; }
+    /* 变量声明带类型标注：a: Type = expr 等价于 a = <Type>expr。
+     * 必须在语句层而非 assignment_expr（见 assignment_expr 注释）：语句开头
+     * ID 后 COLON 在此 shift 进声明；三元 ? ID : 中 ID 后 COLON 则归约为表达式，
+     * COLON 作三元分隔符，两者不再共享冲突状态。 */
+    | ID COLON map_generic_type ASSIGN expr SEMI {
+          $$ = ast_assign($1, ast_type_annotation((CastKind)$3, $5));
+      }
     | destruct_lhs ASSIGN expr SEMI {
         char** names = NULL; int cnt = 0;
         ast_collect_varnames($1, &names, &cnt);
@@ -1681,6 +1722,12 @@ primary
               int argc = 0;
               for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
               $$ = L(ast_class_new($1, argc, $3));
+          } else if(type_lookup($1)) {
+              /* type 形状位置构造 T(v0, v1)：组装成带字段 cast 的 map literal（与 T{...} 同路），
+               * 否则退化为普通调用 T 不是函数，误发 INT64_INDEX_SET(142) */
+              AstNode* made = wrap_type_positional($1, $3);
+              if(!made) YYERROR;   /* 构造校验失败：让 yyparse 返回 1，避免 NULL 进 AST 后段错误 */
+              $$ = L(made);
           } else {
               $$ = L(ast_call($1, $3));
           }
@@ -1691,7 +1738,9 @@ primary
      * 等价于 <ClassName>{field: value}，复用 wrap_struct_named 按字段名映射位置参数 */
     | ID MAP_OPEN map_items RBRACE {
           if(struct_lookup($1) || class_lookup($1) || type_lookup($1)) {
-              $$ = L(wrap_struct_named($1, $3));
+              AstNode* made = wrap_struct_named($1, $3);
+              if(!made) YYERROR;   /* 字段校验失败：终止解析（yyparse 返回 1），勿把 NULL 塞进 AST */
+              $$ = L(made);
           } else {
               /* 非类型名：回退为普通 map 字面量（ID 作 map 前缀不合法） */
               char buf[256];
@@ -1772,8 +1821,10 @@ primary
               $$ = ast_interface_annotation($2, $4);
           } else if(type_lookup($2) != NULL && $4 && $4->type == AST_MAP_LIT) {
               /* 命名字段构造：<CustomType>{ name: v, ... } 展开为位置构造 */
-              $$ = L(wrap_struct_named($2, $4->u.map_lit.entries));
+              AstNode* made = wrap_struct_named($2, $4->u.map_lit.entries);
               free($2);
+              if(!made) YYERROR;   /* 字段校验失败：终止解析，避免 NULL 节点导致后续段错误 */
+              $$ = L(made);
           } else if(type_lookup($2) != NULL && $4 && $4->type == AST_ARRAY_LIT) {
               /* 泛型形状数组：<Person>[e1, e2] → [Person(e1), Person(e2)]
                  （本规则是实际生效路径：[..] 先被归约为数组字面量；
@@ -1841,6 +1892,41 @@ primary
           snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
           $$ = L(ast_func_def(nm, $2, $7));
           $$->u.func_def.ret_type_name = $5;
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
+    /* 箭头生成器函数：gen (params) => { yield ... } / gen (params): RetType => { yield ... }
+     * 与 gen func name() 同路：is_generator=1，调用时返回 GeneratorObject 而非直接执行 */
+    | TOK_GEN LPAREN param_list RPAREN ARROW block_stmt {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          $$ = L(ast_func_def(nm, $3, $6));
+          $$->u.func_def.is_generator = 1;
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
+    | TOK_GEN LPAREN param_list RPAREN COLON type_name_str ARROW block_stmt {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          $$ = L(ast_func_def(nm, $3, $8));
+          $$->u.func_def.is_generator = 1;
+          $$->u.func_def.ret_type_name = $6;
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
@@ -2436,10 +2522,10 @@ ternary_expr
 assignment_expr
     : ternary_expr
     | ID ASSIGN assignment_expr  { $$ = ast_assign($1, $3); }
-    /* 变量声明带类型标注：a: Type = expr 等价于 a = <Type>expr */
-    | ID COLON map_generic_type ASSIGN assignment_expr {
-          $$ = ast_assign($1, ast_type_annotation((CastKind)$3, $5));
-      }
+    /* 变量声明带类型标注（a: Type = expr）已移到 closed_stmt 语句层：若作为
+     * assignment_expr 产生式，其 ID COLON 开头会与三元 cond ? a : b 的 COLON
+     * 在 LALR 状态冲突——ID 后的 COLON 被默认 shift 进声明，三元分支被误当
+     * 类型名，报"未定义类型"。 */
     /* destruct_lhs 移到 closed_stmt 层面，避免与函数参数列表的 COMMA 冲突 */
     | ID PLUSEQ assignment_expr  { $$ = ast_assign($1, ast_binop(OP_ADD, ast_var($1), $3)); }
     | ID MINUSEQ assignment_expr { $$ = ast_assign($1, ast_binop(OP_SUB, ast_var($1), $3)); }

@@ -592,6 +592,20 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
         }
     }
 
+    /* 生成器箭头函数：参数/闭包已绑定到 new_frame，创建 GeneratorObject 接管该帧，
+     * 包装为 VAL_GENERATOR Value 返回，不进入 vm_exec_loop（与 OPC_CALL 生成器路径一致） */
+    if(callee->is_generator) {
+        GeneratorObject* gen = generator_new_with_frame(callee, new_frame);
+        if(!gen) {
+            fprintf(stderr, "VM: 创建箭头生成器失败 %s\n", fname);
+            stackframe_destroy(new_frame);
+            return 0;
+        }
+        out->type = VAL_GENERATOR;
+        out->v.generator = gen;
+        return 1;
+    }
+
     /* 保存/切换执行状态 */
     SavedState save;
     save.fn = ctx->fn; save.code = ctx->code; save.pc = ctx->pc; save.frame = ctx->frame;

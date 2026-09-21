@@ -275,4 +275,142 @@ check(sum_arr([1, 2, 3, 4, 5]) == 15, "arrow sum array: 1+2+3+4+5");
 
 print("arrow_func_test PART8 (复杂场景) PASS");
 
+// ============================================================
+// PART 9：gen 生成器箭头函数 gen (params) => { yield }
+// ============================================================
+
+// 9.1 无参数多次 yield
+make_seq = gen () => { yield 1; yield 2; yield 3; };
+g91 = make_seq();
+check(type(g91) == "generator", "gen arrow: type is generator");
+check(next(g91) == 1, "gen arrow: yield 1");
+check(next(g91) == 2, "gen arrow: yield 2");
+check(next(g91) == 3, "gen arrow: yield 3");
+check(type(next(g91)) == "none", "gen arrow: exhausted -> none");
+
+// 9.2 带类型参数 + 声明返回类型（range 模式）
+make_range = gen (start: int, stop: int): int => {
+    i = start;
+    while (i < stop) {
+        yield i;
+        i = i + 1;
+    }
+};
+g92 = make_range(2, 6);
+check(next(g92) == 2, "gen range: yield 2");
+check(next(g92) == 3, "gen range: yield 3");
+check(next(g92) == 4, "gen range: yield 4");
+check(next(g92) == 5, "gen range: yield 5");
+check(type(next(g92)) == "none", "gen range: exhausted -> none");
+
+// 9.3 gen arrow 立即调用（IIFE）
+g93 = (gen (x: int): int => { yield x * 10; })(4);
+check(type(g93) == "generator", "gen IIFE: type is generator");
+check(next(g93) == 40, "gen IIFE: yield 40");
+
+// 9.4 从外层函数返回 gen arrow + 闭包捕获外层参数
+func make_gen(n: int) {
+    return gen (x: int): int => { yield x; yield x + n; };
+}
+g94 = make_gen(10)(5);
+check(next(g94) == 5, "gen closure: yield x = 5");
+check(next(g94) == 15, "gen closure: yield x+n = 15");
+
+// 9.5 无参 gen arrow 带返回类型，yield string
+make_ab = gen (): string => { yield "a"; yield "b"; };
+g95 = make_ab();
+check(next(g95) == "a", "gen string: yield a");
+check(next(g95) == "b", "gen string: yield b");
+
+print("arrow_func_test PART9 (gen 生成器) PASS");
+
+// ============================================================
+// PART 10：箭头函数与容器/类型（数组 / map / struct / type / interface / class）
+// ============================================================
+
+// 10.1 数组存箭头函数
+fns10 = [
+    (x: int): int => { return x + 1; },
+    (x: int): int => { return x * 2; }
+];
+check(fns10[0](10) == 11, "10.1 array arrow[0] +1");
+check(fns10[1](10) == 20, "10.1 array arrow[1] *2");
+
+// 10.2 动态 map 存箭头函数
+ops10 = {
+    "add": (a: int, b: int): int => { return a + b; },
+    "sub": (a: int, b: int): int => { return a - b; }
+};
+check(ops10["add"](3, 4) == 7, "10.2 map add");
+check(ops10["sub"](3, 4) == -1, "10.2 map sub");
+
+// 10.3 struct 的 map 字段存箭头函数
+struct Bag10 {
+    base: int;
+    ops: map;
+}
+bag10 = Bag10(100, {
+    "add": (a: int, b: int): int => { return a + b; },
+    "mul": (a: int, b: int): int => { return a * b; }
+});
+check(bag10.ops["add"](3, 4) == 7, "10.3 struct map add");
+check(bag10.ops["mul"](3, 4) == 12, "10.3 struct map mul");
+
+// 10.4 struct 方法接收箭头函数作参数
+struct Engine10 {
+    base: int;
+    func apply(f, x) {
+        return f(self.base + x);
+    }
+}
+eng10 = Engine10(10);
+check(eng10.apply((v: int): int => { return v * 2; }, 5) == 30, "10.4 method apply arrow");
+
+// 10.5 type 形状存箭头函数（type 用花括号构造，map 字段承载 arrow）
+type Shape10 {
+    name: string,
+    ops: map
+}
+s10 = Shape10{
+    name: "thing",
+    ops: {"run": (x: int): int => { return x + 1; }}
+};
+check(s10.ops["run"](7) == 8, "10.5 type shape arrow");
+
+// 10.6 interface 签名 + class 实现（方法内使用 arrow）
+interface IGreet10 {
+    func greet(): string;
+}
+class Person10 implements IGreet10 {
+    name: string;
+    func Person10(<string> n) { self.name = n; }
+    func <string> greet() {
+        mk = (s: string): string => { return "Hi, " + s; };
+        return mk(self.name);
+    }
+}
+p10 = Person10("Kai");
+check(p10.greet() == "Hi, Kai", "10.6 interface impl greet");
+
+// 10.7 方法内定义并返回闭包（方法内嵌套 lambda/arrow 捕获）
+struct Counter10 {
+    start: int;
+    func make_adder() {
+        k = self.start;
+        return (x: int): int => { return x + k; };
+    }
+    func make_nested() {
+        a = self.start;
+        return (b: int): int => {
+            inner = (c: int): int => { return a + b + c; };
+            return inner(b);
+        };
+    }
+}
+ct10 = Counter10(10);
+check(ct10.make_adder()(5) == 15, "10.7 method closure adder");
+check(ct10.make_nested()(100) == 210, "10.7 method nested closure");
+
+print("arrow_func_test PART10 (容器/类型) PASS");
+
 print("arrow_func_test ALL PASS");

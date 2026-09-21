@@ -33,6 +33,32 @@ static AstNode** g_recompile = NULL;
 static int g_recompile_cnt = 0;
 static int g_recompile_cap = 0;
 
+/* struct/class 方法重编译表：方法节点不在程序 AST 树中，单独记录属主以便重编译。
+ * 方法内嵌套的 lambda/arrow 仍进 g_recompile（它们是普通函数）。 */
+typedef struct {
+    char* owner;          /* struct/class 名 */
+    AstNode* node;        /* 方法 AST_FUNC_DEF 节点 */
+} MethodRecomp;
+static MethodRecomp* g_method_recomp = NULL;
+static int g_method_recomp_cnt = 0;
+static int g_method_recomp_cap = 0;
+/* 当前正在 typecheck 的方法属主（NULL=普通函数上下文） */
+static const char* g_method_owner = NULL;
+
+static void method_recomp_add(const char* owner, AstNode* node) {
+    for(int i = 0; i < g_method_recomp_cnt; i++)
+        if(g_method_recomp[i].node == node) return;  /* 去重 */
+    if(g_method_recomp_cnt >= g_method_recomp_cap) {
+        int nc = g_method_recomp_cap > 0 ? g_method_recomp_cap * 2 : 16;
+        MethodRecomp* nt = (MethodRecomp*)realloc(g_method_recomp, (size_t)nc * sizeof(MethodRecomp));
+        if(!nt) { LOG_ERROR("方法重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_method_recomp = nt; g_method_recomp_cap = nc;
+    }
+    g_method_recomp[g_method_recomp_cnt].owner = strdup(owner);
+    g_method_recomp[g_method_recomp_cnt].node = node;
+    g_method_recomp_cnt++;
+}
+
 static int func_depth = 0;
 static int g_collect_err = 0;   // 顶层收集阶段错误（函数重复定义等）
 /* 匿名函数捕获：lambda 只能访问 参数 + 全局变量 + 自身局部；
@@ -326,6 +352,25 @@ static int typecheck_call_args(AstNode* args) {
     return typecheck_call_args(args->u.seq.first) | typecheck_call_args(args->u.seq.second);
 }
 
+/* struct/class 方法不在程序 AST 树中（方法节点存于 TypeDef），遍历所有类型，
+ * 对每个方法运行 typecheck 以分析其体内嵌套 lambda/arrow 的捕获；
+ * 嵌套函数进入 g_recompile，方法本身进入方法重编译表。 */
+static void method_typecheck_cb(const char* name, TypeDef* td, void* user_data) {
+    (void)user_data;
+    if(!td || !(td->is_struct || td->is_class)) return;
+    for(int i = 0; i < td->nmethods; i++) {
+        AstNode* m = td->method_nodes[i];
+        if(!m || m->type != AST_FUNC_DEF) continue;
+        g_method_owner = name;
+        typecheck_expr(m);
+        g_method_owner = NULL;
+    }
+}
+
+static void typecheck_type_methods(void) {
+    type_foreach(method_typecheck_cb, NULL);
+}
+
 int ast_typecheck(AstNode* node)
 {
     static_sym_reset();
@@ -336,10 +381,16 @@ int ast_typecheck(AstNode* node)
     collect_top_level(node);
     // 阶段2：全面检查（含函数体递归）
     int err = g_collect_err | typecheck_expr(node);
-    // 阶段3：函数体内函数名引用被转成 AST_FUNCREF 的函数，重编译字节码
+    // 阶段2b：struct/class 方法补 typecheck（分析方法内嵌套 lambda/arrow 捕获）
+    if(!err) typecheck_type_methods();
+    // 阶段3：重编译。先处理普通函数/嵌套 lambda，再处理方法
+    // （方法编译时其体内嵌套 lambda 须已是带捕获的最新版本）
     if(!err) {
         for(int i = 0; i < g_recompile_cnt; i++)
             func_compile_recompile(g_recompile[i]);
+        for(int i = 0; i < g_method_recomp_cnt; i++)
+            func_compile_recompile_method(g_method_recomp[i].owner,
+                                          g_method_recomp[i].node);
     }
     return err;
 }
@@ -533,6 +584,19 @@ int typecheck_expr(AstNode* node)
                     }
                 } else {
                     node->val_type = t;
+                }
+            } else if(strcmp(node->u.varname, "super") == 0 && g_method_owner) {
+                /* super：class 子类方法中的父类接收者（运行时 ir_compile 对 super 走
+                 * LOAD_FIELD 快路径）。仅当当前类型确有父类时合法；val_type=NONE
+                 * 使 super.x 的下标类型校验通过（AST_INDEX 白名单含 NONE）。 */
+                TypeDef* sup_td = struct_lookup(g_method_owner);
+                if(!sup_td) sup_td = class_lookup(g_method_owner);
+                if(sup_td && sup_td->parent) {
+                    node->val_type = VAL_NONE;
+                } else {
+                    LOG_ERROR("语义错误(第%d行)：使用未定义变量 %s\n", node->line, node->u.varname);
+                    node->val_type = VAL_NONE;
+                    err = 1;
                 }
             } else {
                 LOG_ERROR("语义错误(第%d行)：使用未定义变量 %s\n", node->line, node->u.varname);
@@ -918,6 +982,17 @@ int typecheck_expr(AstNode* node)
             }
             break;
         }
+        case AST_YIELD: {
+            /* yield 值必须递归检查：否则 gen arrow 中引用的外层变量
+             * 不会被记录为捕获，导致 lambda 捕获数为 0、误发 GETFUNC */
+            if(node->u.yieldnode.value) {
+                err |= typecheck_expr(node->u.yieldnode.value);
+                node->val_type = node->u.yieldnode.value->val_type;
+            } else {
+                node->val_type = VAL_NONE;
+            }
+            break;
+        }
         case AST_SWITCH: {
             err |= typecheck_expr(node->u.sw.cond);
             AstNode* cp = node->u.sw.cases;
@@ -996,7 +1071,19 @@ int typecheck_expr(AstNode* node)
                         } \
                     } while(0)
                     RECOMPILE_ADD(node);
-                    if(save_cur) RECOMPILE_ADD(save_cur);
+                    /* 外层作用域：若是 struct/class 方法（非 lambda 名）进方法重编译表
+                     * （需携带属主）；若是嵌套 lambda 或普通函数，按普通函数处理。
+                     * 注意不能仅凭 g_method_owner 判断——方法内多层嵌套时，外层仍是 lambda */
+                    if(save_cur) {
+                        const char* sn = save_cur->u.func_def.name;
+                        _Bool outer_is_lambda =
+                            (strncmp(sn, "_arrow_", 7) == 0 ||
+                             strncmp(sn, "_lambda_", 8) == 0);
+                        if(g_method_owner && !outer_is_lambda)
+                            method_recomp_add(g_method_owner, save_cur);
+                        else
+                            RECOMPILE_ADD(save_cur);
+                    }
                     #undef RECOMPILE_ADD
                 }
             }

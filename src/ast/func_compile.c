@@ -7,6 +7,7 @@
 #include "ast_node.h"
 #include "ir/ir_compile.h"
 #include "ast_runtime_sym.h"
+#include "ast_types.h"
 #include "ir/vm.h"
 #include "gc_runtime.h"
 
@@ -331,6 +332,32 @@ void func_compile_recompile(AstNode* def)
         InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
         /* 旧字节码已由 ir_func_table_recompile 释放（原位替换），这里只更新指针 */
         if(pl) pl->bytecode = nb;
+    }
+}
+
+/* 重编译 struct/class 方法（方法在函数表用内部名 <owner>__m__<method>）。
+ * 更新字节码后，同步更新 TypeDef 方法表中 RuntimeFunc payload 的 bytecode 指针，
+ * 否则运行时分派仍持有已释放的旧字节码（use-after-free）。
+ * 调用须晚于方法体内嵌套 lambda 的重编译（func_compile_recompile）。 */
+void func_compile_recompile_method(const char* owner, AstNode* def)
+{
+    if(!owner || !def || def->type != AST_FUNC_DEF) return;
+    const char* mname = def->u.func_def.name;
+    BytecodeFunc* nb = ir_func_table_recompile(mname, def->u.func_def.params,
+                                               def->u.func_def.body,
+                                               def->u.func_def.is_generator,
+                                               owner,
+                                               def->u.func_def.ret_type_name);
+    TypeDef* td = struct_lookup(owner);
+    if(!td) td = class_lookup(owner);
+    if(!td) return;
+    for(int i = 0; i < td->nmethods; i++) {
+        if(!td->method_names[i] || strcmp(td->method_names[i], mname) != 0) continue;
+        RuntimeFunc* rf = (RuntimeFunc*)td->method_funcs[i];
+        if(interp_func_is_payload(rf)) {
+            InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+            if(pl) pl->bytecode = nb;
+        }
     }
 }
 

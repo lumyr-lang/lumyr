@@ -48,10 +48,16 @@ const char* sym_get_current_file(void)
     return g_current_file_name;
 }
 
-/* 设置符号 */
+/* 设置符号。同名符号已存在则就地覆盖（rbtree 不支持重复键：重复插入会产生
+ * 多个同键节点，而 rbtree_find 只返回其中一个、且结果随树旋转不确定）。 */
 void sym_set(const char* n, Value v)
 {
     sym_init();
+    SymEntry* existing = (SymEntry*)rbtree_find(g_sym_tree, NS_VARIABLE, NULL, n);
+    if(existing) {
+        existing->value = v;
+        return;
+    }
     SymEntry* entry = (SymEntry*)malloc(sizeof(SymEntry));
     entry->name = strdup(n);
     entry->class_name = NULL;

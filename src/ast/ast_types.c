@@ -96,12 +96,16 @@ typedef struct {
     void* ud;
 } TypeForeachCtx;
 
-/* type_foreach 的包装函数 */
-static void type_foreach_wrapper(const char* class_name, const char* method_name, void* data, void* user_data)
+/* type_foreach 的包装函数。
+ * rbtree_foreach 回调为 5 参数 (ns, class_name, name, data, user_data)；
+ * 类型表 class_name 恒为 NULL、name 即类型名、data 为 TypeDef*。 */
+static void type_foreach_wrapper(RBTNamespace ns, const char* class_name,
+                                 const char* name, void* data, void* user_data)
 {
+    (void)ns;
     (void)class_name;
     TypeForeachCtx* ctx = (TypeForeachCtx*)user_data;
-    ctx->cb(method_name, (TypeDef*)data, ctx->ud);
+    ctx->cb(name, (TypeDef*)data, ctx->ud);
 }
 
 /* 遍历所有类型（红黑树中序遍历） */
