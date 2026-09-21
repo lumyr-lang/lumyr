@@ -8,10 +8,17 @@
 static RBTree* static_sym_tree = NULL;
 
 /* 作用域层级栈：每个层级记录该层级新创建的符号名，用于恢复时删除 */
+typedef struct OverwrittenConst {
+    SymStaticEntry* entry;   /* 被本层就地更新的既有 entry */
+    int old_is_const;        /* 进入本层前的 is_const 旧值 */
+} OverwrittenConst;
 typedef struct ScopeLevel {
     char** names;        /* 该层级新创建的符号名 */
     int count;
     int cap;
+    OverwrittenConst* overwritten;  /* 就地更新 entry 的 is_const 旧值（恢复时还原） */
+    int ow_count;
+    int ow_cap;
     struct ScopeLevel* next;
 } ScopeLevel;
 
@@ -42,8 +49,33 @@ void static_sym_restore(void)
         free(level->names[i]);
     }
     free(level->names);
+    /* 还原被本层就地遮蔽的既有 entry 的 is_const 旧值 */
+    for(int i = 0; i < level->ow_count; i++) {
+        if(level->overwritten[i].entry)
+            level->overwritten[i].entry->is_const = level->overwritten[i].old_is_const;
+    }
+    free(level->overwritten);
     scope_stack = level->next;
     free(level);
+}
+
+/* 当前是否处于 save 的作用域（函数/lambda 内） */
+int static_sym_scope_active(void)
+{
+    return scope_stack != NULL;
+}
+
+/* 名字是否已在当前作用域层级登记（本层新建/复活，或本层首次遮蔽的存活 entry） */
+int static_sym_level_knows(const char* name)
+{
+    if(!scope_stack || !name) return 0;
+    ScopeLevel* level = scope_stack;
+    for(int i = 0; i < level->count; i++)
+        if(strcmp(level->names[i], name) == 0) return 1;
+    for(int i = 0; i < level->ow_count; i++)
+        if(level->overwritten[i].entry &&
+           strcmp(level->overwritten[i].entry->name, name) == 0) return 1;
+    return 0;
 }
 
 /* 记录当前层级新创建的符号名 */
@@ -56,6 +88,23 @@ static void scope_record_name(const char* name)
         level->names = (char**)realloc(level->names, (size_t)level->cap * sizeof(char*));
     }
     level->names[level->count++] = strdup(name);
+}
+
+/* 本层首次就地更新既有 entry 前，保存其 is_const 旧值（每个 entry 每层只存一次） */
+static void scope_record_overwrite(SymStaticEntry* entry)
+{
+    if(!scope_stack || !entry) return;
+    ScopeLevel* level = scope_stack;
+    for(int i = 0; i < level->ow_count; i++)
+        if(level->overwritten[i].entry == entry) return;
+    if(level->ow_count >= level->ow_cap) {
+        level->ow_cap = level->ow_cap ? level->ow_cap * 2 : 8;
+        level->overwritten = (OverwrittenConst*)realloc(level->overwritten,
+                                                        (size_t)level->ow_cap * sizeof(OverwrittenConst));
+    }
+    level->overwritten[level->ow_count].entry = entry;
+    level->overwritten[level->ow_count].old_is_const = entry->is_const;
+    level->ow_count++;
 }
 
 /* static_sym_reset 的释放回调函数 */
@@ -82,6 +131,7 @@ void static_sym_reset(void)
             free(level->names[i]);
         }
         free(level->names);
+        free(level->overwritten);
         scope_stack = level->next;
         free(level);
     }
@@ -95,7 +145,13 @@ int static_sym_put(const char* name, ValueType ty)
         /* 已存在：若为逻辑删除则复活（当前作用域接管所有权），否则就地更新类型 */
         if(existing->deleted) {
             existing->deleted = 0;
+            existing->is_const = 0;
             scope_record_name(name);
+        } else {
+            /* 存活 entry 被本层就地更新（形参/局部遮蔽）：保存 is_const 旧值后清除，
+             * 避免外层 const 标记导致本层赋值被误判；作用域恢复时还原 */
+            scope_record_overwrite(existing);
+            existing->is_const = 0;
         }
         existing->ty = ty;
         return 1;
@@ -106,9 +162,24 @@ int static_sym_put(const char* name, ValueType ty)
     entry->ty = ty;
     entry->next = NULL;
     entry->deleted = 0;
+    entry->is_const = 0;
     rbtree_insert(static_sym_tree, NS_VARIABLE, NULL, name, entry);
     scope_record_name(name);
     return 1;
+}
+
+void static_sym_set_const(const char* name)
+{
+    if(!static_sym_tree) return;
+    SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
+    if(entry && !entry->deleted) entry->is_const = 1;
+}
+
+int static_sym_is_const(const char* name)
+{
+    if(!static_sym_tree) return 0;
+    SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
+    return (entry && !entry->deleted) ? entry->is_const : 0;
 }
 
 int static_sym_get(const char* name, ValueType* out_ty)

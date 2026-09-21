@@ -498,12 +498,13 @@ TypeDef* struct_lookup(const char* name)
 }
 
 /* ===== class 注册 ===== */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, char** struct_names, int nprops, const char* parent, char** interfaces)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
     ValueType* merged_ptypes = ptypes;
     int* merged_access_modifiers = prop_access_modifiers;
+    int* merged_const_flags = prop_const_flags;
     char** merged_struct_names = struct_names;
     int merged_nprops = nprops;
 
@@ -517,12 +518,14 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 merged_props = (char**)malloc((size_t)merged_nprops * sizeof(char*));
                 merged_ptypes = (ValueType*)malloc((size_t)merged_nprops * sizeof(ValueType));
                 merged_access_modifiers = (int*)malloc((size_t)merged_nprops * sizeof(int));
+                merged_const_flags = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 merged_struct_names = (char**)calloc((size_t)merged_nprops, sizeof(char*));
                 // 父类属性在前
                 for(int i = 0; i < parent_nprops; i++) {
                     merged_props[i] = strdup(parent_td->props[i]);
                     merged_ptypes[i] = parent_td->ptypes[i];
                     merged_access_modifiers[i] = parent_td->prop_access_modifiers ? parent_td->prop_access_modifiers[i] : 0;
+                    merged_const_flags[i] = parent_td->prop_const_flags ? parent_td->prop_const_flags[i] : 0;
                     if(parent_td->field_struct_names && parent_td->field_struct_names[i])
                         merged_struct_names[i] = strdup(parent_td->field_struct_names[i]);
                 }
@@ -531,6 +534,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                     merged_props[parent_nprops + i] = strdup(props[i]);
                     merged_ptypes[parent_nprops + i] = ptypes[i];
                     merged_access_modifiers[parent_nprops + i] = prop_access_modifiers ? prop_access_modifiers[i] : 0;
+                    merged_const_flags[parent_nprops + i] = prop_const_flags ? prop_const_flags[i] : 0;
                     if(struct_names && struct_names[i])
                         merged_struct_names[parent_nprops + i] = strdup(struct_names[i]);
                 }
@@ -594,6 +598,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 fields[i].size = (int)sz;
                 fields[i].access = merged_access_modifiers ?
                     (AccessModifier)merged_access_modifiers[i] : ACCESS_PUBLIC;
+                fields[i].is_const = merged_const_flags ? merged_const_flags[i] : 0;
                 fields[i].type_name = (merged_struct_names && merged_struct_names[i]) ?
                     strdup(merged_struct_names[i]) : NULL;
                 fields[i].annotation_count = 0;
@@ -844,4 +849,47 @@ int class_check_interface_implementation(const char* class_name, const char* int
     }
 
     return 1; /* 实现了所有方法 */
+}
+
+/* ===== 类静态成员访问表 ===== */
+typedef struct {
+    char* full_name;   /* 全局名 "类名_成员名" */
+    char* owner;       /* 属主类名 */
+    int access;        /* 0=public, 1=private, 2=protected */
+} StaticMemberEntry;
+
+static StaticMemberEntry* g_static_members = NULL;
+static int g_static_member_n = 0;
+static int g_static_member_cap = 0;
+
+void class_static_member_register(const char* full_name, const char* owner, int access)
+{
+    /* 已注册同名成员则只更新访问级别 */
+    for(int i = 0; i < g_static_member_n; i++) {
+        if(strcmp(g_static_members[i].full_name, full_name) == 0) {
+            g_static_members[i].access = access;
+            return;
+        }
+    }
+    if(g_static_member_n >= g_static_member_cap) {
+        g_static_member_cap = g_static_member_cap == 0 ? 8 : g_static_member_cap * 2;
+        g_static_members = (StaticMemberEntry*)realloc(g_static_members,
+            (size_t)g_static_member_cap * sizeof(StaticMemberEntry));
+    }
+    g_static_members[g_static_member_n].full_name = strdup(full_name);
+    g_static_members[g_static_member_n].owner = strdup(owner);
+    g_static_members[g_static_member_n].access = access;
+    g_static_member_n++;
+}
+
+int class_static_member_lookup(const char* full_name, const char** owner_out, int* access_out)
+{
+    for(int i = 0; i < g_static_member_n; i++) {
+        if(strcmp(g_static_members[i].full_name, full_name) == 0) {
+            if(owner_out) *owner_out = g_static_members[i].owner;
+            if(access_out) *access_out = g_static_members[i].access;
+            return 1;
+        }
+    }
+    return 0;
 }

@@ -20,22 +20,25 @@ static char* g_last_custom_type_name = NULL;
 static char** g_prop_names = NULL;
 static ValueType* g_prop_types = NULL;
 static int* g_prop_access_modifiers = NULL;
+static int* g_prop_const_flags = NULL;   /* const 字段标记（1=构造后不可修改） */
 /* 自定义类型名（字段为 struct/class 类型时记录，如 inner: Inner → "Inner"；其余为 NULL） */
 static char** g_prop_struct_names = NULL;
 static int g_prop_n = 0, g_prop_cap = 0;
-static void type_prop_push(char* name, ValueType vt, int access_modifier, char* struct_name)
+static void type_prop_push(char* name, ValueType vt, int access_modifier, int is_const, char* struct_name)
 {
     if(g_prop_n >= g_prop_cap) {
         int nc = g_prop_cap > 0 ? g_prop_cap * 2 : 8;
         g_prop_names = (char**)realloc(g_prop_names, (size_t)nc * sizeof(char*));
         g_prop_types = (ValueType*)realloc(g_prop_types, (size_t)nc * sizeof(ValueType));
         g_prop_access_modifiers = (int*)realloc(g_prop_access_modifiers, (size_t)nc * sizeof(int));
+        g_prop_const_flags = (int*)realloc(g_prop_const_flags, (size_t)nc * sizeof(int));
         g_prop_struct_names = (char**)realloc(g_prop_struct_names, (size_t)nc * sizeof(char*));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
     g_prop_types[g_prop_n] = vt;
     g_prop_access_modifiers[g_prop_n] = access_modifier;
+    g_prop_const_flags[g_prop_n] = is_const;
     g_prop_struct_names[g_prop_n] = struct_name;  /* 不复制：归约动作的 $3 所有权转移 */
     g_prop_n++;
 }
@@ -46,9 +49,9 @@ static void type_prop_clear(void)
         free(g_prop_struct_names[i]);
     }
     free(g_prop_names); free(g_prop_types); free(g_prop_access_modifiers);
-    free(g_prop_struct_names);
+    free(g_prop_const_flags); free(g_prop_struct_names);
     g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
-    g_prop_struct_names = NULL;
+    g_prop_const_flags = NULL; g_prop_struct_names = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -96,6 +99,17 @@ static void g_class_method_clear(void) {
     g_class_method_n = 0;
     g_class_method_cap = 0;
     g_class_constructor = NULL;
+}
+
+/* 构造 class 静态属性 assign 节点、注册静态成员访问表并压入方法列表 */
+static AstNode* make_static_prop(char* prop_name, AstNode* expr, int access) {
+    char* svn = (char*)malloc(strlen(g_current_class_name) + strlen(prop_name) + 2);
+    sprintf(svn, "%s_%s", g_current_class_name, prop_name);
+    class_static_member_register(svn, g_current_class_name, access);
+    AstNode* assign = ast_assign(svn, expr);
+    free(svn);
+    g_class_method_push(assign);
+    return assign;
 }
 
 static void class_prop_push(char* name, ValueType vt) {
@@ -616,6 +630,13 @@ closed_stmt
     | ID COLON map_generic_type ASSIGN expr SEMI {
           $$ = ast_assign($1, ast_type_annotation((CastKind)$3, $5));
       }
+    /* const 常量声明：const x = expr / const x: Type = expr，初始化后不可重新赋值 */
+    | CONST ID ASSIGN expr SEMI {
+          $$ = ast_assign_const($2, $4);
+      }
+    | CONST ID COLON map_generic_type ASSIGN expr SEMI {
+          $$ = ast_assign_const($2, ast_type_annotation((CastKind)$4, $6));
+      }
     | destruct_lhs ASSIGN expr SEMI {
         char** names = NULL; int cnt = 0;
         ast_collect_varnames($1, &names, &cnt);
@@ -822,7 +843,7 @@ closed_stmt
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -840,7 +861,10 @@ closed_stmt
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
                   g_current_class_name = NULL;
                   RuntimeFunc* rf = compile_func_from_ast(mnode);
                   if(rf) {
@@ -853,7 +877,7 @@ closed_stmt
                   }
                   g_current_class_name = saved_class_name;
               } else {
-                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
+                  /* 非静态方法已通过 class_add_method 编译，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -864,7 +888,7 @@ closed_stmt
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
@@ -882,11 +906,14 @@ closed_stmt
               RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
               class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
           }
-          /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
+          /* 把静态属性与静态方法的 AST 节点保存到临时顶层列表 */
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
                   /* 静态方法：直接编译并注册到全局符号表 */
                   g_current_class_name = NULL;  // 临时设置为 NULL，以便注册到全局符号表
                   RuntimeFunc* rf = compile_func_from_ast(mnode);
@@ -911,7 +938,7 @@ closed_stmt
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -925,8 +952,22 @@ closed_stmt
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
-                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
               }
           }
           g_class_method_clear();
@@ -937,7 +978,7 @@ closed_stmt
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -950,13 +991,28 @@ closed_stmt
               RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
               class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
           }
-          /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
+          /* 收集需在顶层执行的初始化节点：静态属性 AST_ASSIGN；静态方法在此编译 */
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              /* 静态方法已经在语法分析阶段编译并注册了，这里跳过 */
-              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
-                  /* 非静态方法已经通过 class_add_method 编译了，不加入 method_list 避免重复编译 */
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list = method_list ? ast_seq(method_list, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
+              } else {
+                  /* 非静态方法已通过 class_add_method 编译，不加入 method_list 避免重复编译 */
               }
           }
           g_class_method_clear();
@@ -968,7 +1024,7 @@ closed_stmt
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -982,8 +1038,22 @@ closed_stmt
           AstNode* method_list2 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
                   method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
               }
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
@@ -1002,7 +1072,7 @@ closed_stmt
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1019,9 +1089,22 @@ closed_stmt
           AstNode* method_list2 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              /* 静态方法已经在语法分析阶段编译并注册了，这里跳过 */
-              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
                   method_list2 = method_list2 ? ast_seq(method_list2, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
               }
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
@@ -1042,7 +1125,7 @@ closed_stmt
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1062,8 +1145,22 @@ closed_stmt
           AstNode* abs_method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              if(!(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method)) {
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
                   abs_method_list = abs_method_list ? ast_seq(abs_method_list, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
               }
           }
           g_class_method_clear();
@@ -1074,7 +1171,8 @@ closed_stmt
       }
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
               if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
@@ -1088,7 +1186,23 @@ closed_stmt
           AstNode* method_list3 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
+              }
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
               class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
@@ -1105,7 +1219,8 @@ closed_stmt
       }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
           /* 添加方法到 class 方法表（静态方法不加入） */
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1122,7 +1237,23 @@ closed_stmt
           AstNode* method_list3 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
-              method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  /* 静态属性：作为顶层节点执行初始化（全局名 Class_prop） */
+                  method_list3 = method_list3 ? ast_seq(method_list3, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  /* 静态方法：编译并注册到全局符号表 */
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                  }
+                  g_current_class_name = saved_class_name;
+              }
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
@@ -1334,6 +1465,24 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.ffi_func = NULL;
           func_val.v.func.is_ffi = 0;
           try_register_global_func($3, func_val); /* class内部不注册全局符号表 */
+        }
+        | CONST FUNC ID LPAREN param_list RPAREN COLON type_name_str block_stmt {
+          /* const func 返回类型后缀：const func name(params) : type { ... } */
+          $$ = ast_func_def($3, $5, $9);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_const = 1;
+          $$->u.func_def.ret_type_name = $8;
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($3, func_val);
         }
         /* 生成器函数：gen func name(params) { body } */
         | TOK_GEN FUNC ID LPAREN param_list RPAREN block_stmt {
@@ -2074,32 +2223,32 @@ type_prop
               else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
               else if(type_lookup(sn)) vt = VAL_MAP;
           }
-          type_prop_push($1, vt, 0, sn);
+          type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
     /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
     | ID COLON TOK_TYPE_ANNOT {
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID {
         if(strcmp($4, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
         free($4);
         $$ = ast_none();
     }
     /* 泛型 map 字段：<K,V> 或 <K,V>map */
     | ID COLON LT map_generic_type COMMA map_generic_type GT {
-        type_prop_push($1, VAL_MAP, 0, NULL);
+        type_prop_push($1, VAL_MAP, 0, 0, NULL);
         $$ = ast_none();
     }
     | ID COLON LT map_generic_type COMMA map_generic_type GT ID {
         if(strcmp($8, "map") != 0) {
             yyerror("泛型 map 字段后缀须为 'map'");
         }
-        type_prop_push($1, VAL_MAP, 0, NULL);
+        type_prop_push($1, VAL_MAP, 0, 0, NULL);
         free($8);
         $$ = ast_none();
     }
@@ -2178,6 +2327,65 @@ class_prop_list
     : %empty                     { $$ = NULL; }
     | class_prop                 { $$ = $1; }
     | class_prop_list class_prop { $$ = ast_seq($1, $2); }
+    /* —— 以下 4 条为"首个成员即以 public/private/protected 开头"的无前缀版本。
+          空 class_prop_list 起点（class_header • class_prop_list）若直接 shift
+          access_modifier，bison 内核只保留 class_prop 字段规则，会丢失接
+          static / func 的 class_prop_list 递归规则，导致 private static、
+          private func 作为首成员时报语法错误。此处显式补齐。 —— */
+    | access_modifier TOK_STATIC ID ASSIGN expr SEMI    {
+        /* private/public/protected static count = 0（首成员） */
+        make_static_prop($3, $5, $1);
+        $$ = NULL;
+      }
+    | access_modifier TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
+        /* private/public/protected static count: int = 0（首成员，带类型标注） */
+        make_static_prop($3, $7, $1);
+        $$ = NULL;
+      }
+    | access_modifier func_def    {
+        /* private/public/protected func ...（首成员，实例方法） */
+        if($2 && $2->type == AST_FUNC_DEF) {
+            $2->u.func_def.is_class_method = 1;
+            $2->u.func_def.access_modifier = $1;
+            if(g_current_class_name && strcmp($2->u.func_def.name, g_current_class_name) == 0) {
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
+                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                free($2->u.func_def.name);
+                $2->u.func_def.name = ctor_name;
+                g_class_constructor = $2;
+            } else {
+                g_class_method_push($2);
+            }
+        }
+        $$ = $2;
+      }
+    | access_modifier TOK_STATIC func_def    {
+        /* private/public/protected static func ...（首成员，静态方法） */
+        if($3 && $3->type == AST_FUNC_DEF) {
+            if(!type_lookup(g_current_class_name)) {
+                char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+            }
+            char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
+            sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
+            free($3->u.func_def.name);
+            $3->u.func_def.name = static_name;
+            $3->u.func_def.is_class_method = 0;
+            $3->u.func_def.is_static_method = 1;
+            $3->u.func_def.access_modifier = $1;
+            class_static_member_register(static_name, g_current_class_name, $1);
+            RuntimeFunc* rf = compile_func_from_ast($3);
+            if(rf) {
+                Value fv;
+                fv.type = VAL_FUNC;
+                fv.v.func.ffi_func = NULL;
+                fv.v.func.is_ffi = 0;
+                fv.v.func.func_obj = (void*)rf;
+                sym_set($3->u.func_def.name, fv);
+            }
+        }
+        $$ = $3;
+      }
     | class_prop_list annotation_list class_prop  {
         /* class 属性定义（支持注解）：注解暂时保存，后续可扩展语义处理 */
         $$ = ast_seq($1, $3);
@@ -2206,7 +2414,8 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+                char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -2215,6 +2424,8 @@ class_prop_list
             $4->u.func_def.name = static_name;
             $4->u.func_def.is_class_method = 0;
             $4->u.func_def.is_static_method = 1;
+            /* 注册静态成员访问表（注解 static 方法默认 public） */
+            class_static_member_register(static_name, g_current_class_name, 0);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {
                 Value fv;
@@ -2228,23 +2439,34 @@ class_prop_list
         $$ = ast_seq($1, $4);
       }
     | class_prop_list TOK_STATIC ID ASSIGN expr SEMI    {
-        /* class 静态属性：static count = 0，存储在全局符号表中，变量名加上类名前缀 */
-        char* static_var_name = (char*)malloc(strlen(g_current_class_name) + strlen($3) + 2);
-        sprintf(static_var_name, "%s_%s", g_current_class_name, $3);
-        /* 编译表达式并赋值给全局变量 */
-        AstNode* assign = ast_assign(static_var_name, $5);
-        /* 添加到 g_class_methods 数组中，这样它会被添加到 method_list 中，从而被 collect_top_level 函数处理 */
-        g_class_method_push(assign);
+        /* class 静态属性：static count = 0，全局名加类名前缀 */
+        make_static_prop($3, $5, 0);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
         /* class 静态属性（带类型标注）：static count: int = 0 */
-        char* static_var_name = (char*)malloc(strlen(g_current_class_name) + strlen($3) + 2);
-        sprintf(static_var_name, "%s_%s", g_current_class_name, $3);
-        /* 编译表达式并赋值给全局变量 */
-        AstNode* assign = ast_assign(static_var_name, $7);
-        /* 添加到 g_class_methods 数组中，这样它会被添加到 method_list 中，从而被 collect_top_level 函数处理 */
-        g_class_method_push(assign);
+        AstNode* assign = make_static_prop($3, $7, 0);
+        (void)assign; /* 类型校验在 AST_ASSIGN 统一处理 */
+        $$ = $1;
+      }
+    | class_prop_list access_modifier TOK_STATIC ID ASSIGN expr SEMI    {
+        /* private/public/protected static count = 0 */
+        make_static_prop($4, $6, $2);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC access_modifier ID ASSIGN expr SEMI    {
+        /* static private/public/protected count = 0（修饰符顺序等价） */
+        make_static_prop($4, $6, $3);
+        $$ = $1;
+      }
+    | class_prop_list access_modifier TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
+        /* private/public/protected static count: int = 0 */
+        make_static_prop($4, $8, $2);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC access_modifier ID COLON type_name ASSIGN expr SEMI    {
+        /* static private/public/protected count: int = 0（修饰符顺序等价） */
+        make_static_prop($4, $8, $3);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC func_def  {
@@ -2252,7 +2474,8 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+                char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -2262,6 +2485,8 @@ class_prop_list
             /* 标记为静态方法 */
             $3->u.func_def.is_class_method = 0;  // 不标记为 class 方法，作为普通全局函数处理
             $3->u.func_def.is_static_method = 1;
+            /* 注册静态成员访问表（默认 public） */
+            class_static_member_register(static_name, g_current_class_name, 0);
             /* 立即注册到符号表，以便语义检查阶段能找到 */
             RuntimeFunc* rf = compile_func_from_ast($3);
             if(rf) {
@@ -2279,6 +2504,7 @@ class_prop_list
         /* public/private/protected func ...：带访问修饰符的 class 方法定义 */
         if($3 && $3->type == AST_FUNC_DEF) {
             $3->u.func_def.is_class_method = 1;
+            $3->u.func_def.access_modifier = $2;
             if(g_current_class_name && strcmp($3->u.func_def.name, g_current_class_name) == 0) {
                 char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
                 sprintf(ctor_name, "%s___init__", g_current_class_name);
@@ -2296,7 +2522,8 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
-                class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+                char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -2304,6 +2531,35 @@ class_prop_list
             $4->u.func_def.name = static_name;
             $4->u.func_def.is_class_method = 0;
             $4->u.func_def.is_static_method = 1;
+            $4->u.func_def.access_modifier = $2;
+            class_static_member_register(static_name, g_current_class_name, $2);
+            RuntimeFunc* rf = compile_func_from_ast($4);
+            if(rf) {
+                Value fv;
+                fv.type = VAL_FUNC;
+                fv.v.func.ffi_func = NULL;
+                fv.v.func.is_ffi = 0;
+                fv.v.func.func_obj = (void*)rf;
+                sym_set($4->u.func_def.name, fv);
+            }
+        }
+        $$ = ast_seq($1, $4);
+      }
+    | class_prop_list TOK_STATIC access_modifier func_def  {
+        /* static public/private/protected func ...：修饰符顺序与上一条等价 */
+        if($4 && $4->type == AST_FUNC_DEF) {
+            if(!type_lookup(g_current_class_name)) {
+                char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+            }
+            char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
+            sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
+            free($4->u.func_def.name);
+            $4->u.func_def.name = static_name;
+            $4->u.func_def.is_class_method = 0;
+            $4->u.func_def.is_static_method = 1;
+            $4->u.func_def.access_modifier = $3;
+            class_static_member_register(static_name, g_current_class_name, $3);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {
                 Value fv;
@@ -2334,7 +2590,7 @@ class_prop
               else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
               else if(type_lookup(sn)) vt = VAL_MAP;
           }
-          type_prop_push($1, vt, 0, sn);
+          type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
     | access_modifier ID COLON type_name SEMI    {
@@ -2345,33 +2601,82 @@ class_prop
               else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
               else if(type_lookup(sn)) vt = VAL_MAP;
           }
-          type_prop_push($2, vt, $1, sn);
+          type_prop_push($2, vt, $1, 0, sn);
+          $$ = ast_none();
+      }
+    /* const 字段：const id: Type（构造后不可修改），可带访问修饰 public const id: Type */
+    | CONST ID COLON type_name SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          ValueType vt = $4;
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($2, vt, 0, 1, sn);
+          $$ = ast_none();
+      }
+    | access_modifier CONST ID COLON type_name SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          ValueType vt = $5;
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($3, vt, $1, 1, sn);
           $$ = ast_none();
       }
     /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
     | ID COLON TOK_TYPE_ANNOT SEMI {
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID SEMI {
         if(strcmp($4, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, NULL);
+        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
         free($4);
         $$ = ast_none();
     }
     /* 泛型 map 字段：<K,V> 或 <K,V>map */
     | ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
-        type_prop_push($1, VAL_MAP, 0, NULL);
+        type_prop_push($1, VAL_MAP, 0, 0, NULL);
         $$ = ast_none();
     }
     | ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
         if(strcmp($8, "map") != 0) {
             yyerror("泛型 map 字段后缀须为 'map'");
         }
-        type_prop_push($1, VAL_MAP, 0, NULL);
+        type_prop_push($1, VAL_MAP, 0, 0, NULL);
         free($8);
+        $$ = ast_none();
+    }
+    /* 带访问修饰符的泛型数组字段：private items: <int> */
+    | access_modifier ID COLON TOK_TYPE_ANNOT SEMI {
+        type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+        $$ = ast_none();
+    }
+    | access_modifier ID COLON TOK_TYPE_ANNOT ID SEMI {
+        if(strcmp($5, "array") != 0) {
+            yyerror("泛型数组字段后缀须为 'array'");
+        }
+        type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+        free($5);
+        $$ = ast_none();
+    }
+    /* 带访问修饰符的泛型 map 字段：private m: <string,int> */
+    | access_modifier ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
+        type_prop_push($2, VAL_MAP, $1, 0, NULL);
+        $$ = ast_none();
+    }
+    | access_modifier ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
+        if(strcmp($9, "map") != 0) {
+            yyerror("泛型 map 字段后缀须为 'map'");
+        }
+        type_prop_push($2, VAL_MAP, $1, 0, NULL);
+        free($9);
         $$ = ast_none();
     }
     ;

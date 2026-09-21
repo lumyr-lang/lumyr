@@ -10,6 +10,7 @@
 #include "func_compile.h"
 #include "ast_types.h"
 #include "ast_node.h"
+#include "lm_type.h"
 
 
 // ---------------- 作用域快照 ----------------
@@ -44,6 +45,8 @@ static int g_method_recomp_cnt = 0;
 static int g_method_recomp_cap = 0;
 /* 当前正在 typecheck 的方法属主（NULL=普通函数上下文） */
 static const char* g_method_owner = NULL;
+/* 当前是否正在检查构造函数（const 字段在构造函数内允许首次赋值/初始化） */
+static int g_in_ctor = 0;
 
 static void method_recomp_add(const char* owner, AstNode* node) {
     for(int i = 0; i < g_method_recomp_cnt; i++)
@@ -57,6 +60,410 @@ static void method_recomp_add(const char* owner, AstNode* node) {
     g_method_recomp[g_method_recomp_cnt].owner = strdup(owner);
     g_method_recomp[g_method_recomp_cnt].node = node;
     g_method_recomp_cnt++;
+}
+
+/* ============== 变量持有类型（owner）追踪：用于字段访问控制 ============== */
+typedef struct { char* var; char* owner; } VarOwner;
+static VarOwner* g_vo = NULL;
+static int g_vo_cnt = 0, g_vo_cap = 0;
+
+static void vo_reset(void) {
+    for(int i = 0; i < g_vo_cnt; i++) { free(g_vo[i].var); free(g_vo[i].owner); }
+    free(g_vo); g_vo = NULL; g_vo_cnt = g_vo_cap = 0;
+}
+/* 作用域回滚：释放 base 之后登记的项（函数/方法返回时调用） */
+static void vo_rollback(int base) {
+    for(int i = g_vo_cnt - 1; i >= base; i--) { free(g_vo[i].var); free(g_vo[i].owner); }
+    g_vo_cnt = base;
+}
+/* 记录变量持有的自定义类型名（同作用域内同名变量多次赋值会追加多条，查询从最近取） */
+static void vo_set(const char* var, const char* owner) {
+    if(!var || !owner) return;
+    if(g_vo_cnt >= g_vo_cap) {
+        g_vo_cap = g_vo_cap ? g_vo_cap * 2 : 32;
+        g_vo = (VarOwner*)realloc(g_vo, (size_t)g_vo_cap * sizeof(VarOwner));
+    }
+    g_vo[g_vo_cnt].var = strdup(var);
+    g_vo[g_vo_cnt].owner = strdup(owner);
+    g_vo_cnt++;
+}
+/* 从最近作用域向后查变量持有类型；无则 NULL */
+static const char* vo_get(const char* var) {
+    for(int i = g_vo_cnt - 1; i >= 0; i--)
+        if(strcmp(g_vo[i].var, var) == 0) return g_vo[i].owner;
+    return NULL;
+}
+
+/* 在某类型字段表中按名查找 FieldInfo（含父类扁平化字段） */
+static FieldInfo* tc_find_field(const char* owner, const char* fname) {
+    TypeDef* td = type_lookup(owner);
+    if(!td || !td->runtime_info) return NULL;
+    RuntimeTypeInfo* info = td->runtime_info;
+    for(int i = 0; i < info->nfields; i++)
+        if(strcmp(info->fields[i].name, fname) == 0) return &info->fields[i];
+    return NULL;
+}
+
+/* 推断表达式持有的自定义类型名（返回借用指针，不 strdup；不可推断返回 NULL）。
+ * 动态/不可静态追踪的形态返回 NULL，访问控制对这些情形保守放行（避免误报）。 */
+static const char* tc_owner(AstNode* node) {
+    if(!node) return NULL;
+    if(node->type == AST_CLASS_NEW) return node->u.class_new.class_name;
+    if(node->type == AST_VAR) {
+        const char* vn = node->u.varname;
+        if(strcmp(vn, "self") == 0) return g_method_owner;
+        if(strcmp(vn, "super") == 0) {
+            if(!g_method_owner) return NULL;
+            TypeDef* td = class_lookup(g_method_owner);
+            return td ? td->parent : NULL;
+        }
+        return vo_get(vn);
+    }
+    if(node->type == AST_INDEX) {
+        /* base.field：字段若持有自定义类型，FieldInfo.type_name 给出其类型 */
+        const char* base = tc_owner(node->u.index.arr);
+        if(base && node->u.index.idx->type == AST_STRING) {
+            FieldInfo* fi = tc_find_field(base, node->u.index.idx->u.sval);
+            if(fi) return fi->type_name;
+        }
+    }
+    return NULL;
+}
+
+/* 当前上下文是否允许访问 owner 类中 access 级别的成员 */
+static int tc_access_ok(const char* owner, int access) {
+    if(access == ACCESS_PUBLIC) return 1;
+    const char* ctx = g_method_owner;
+    if(!ctx) return 0;                        /* 外部上下文：private/protected 均拒绝 */
+    if(strcmp(ctx, owner) == 0) return 1;     /* 同类：private/protected 允许 */
+    if(access == ACCESS_PROTECTED) {
+        /* ctx 沿继承链是否派生自 owner */
+        TypeDef* td = class_lookup(ctx);
+        while(td && td->parent) {
+            if(strcmp(td->parent, owner) == 0) return 1;
+            td = class_lookup(td->parent);
+        }
+    }
+    return 0;
+}
+
+/* ======================================================================
+ * 编译期常量折叠（const func）
+ *
+ * 语义：
+ *  - const func 为纯函数：体内只允许 const 局部声明与 return；表达式只能由
+ *    参数、常量、纯算术/比较/逻辑运算及其他 const func 调用组成；
+ *  - 在 const 声明的初始化表达式中调用 const func 时，编译期直接求值，并把
+ *    该初始化表达式就地改写为结果字面量（常量折叠）。
+ * ====================================================================== */
+typedef enum {
+    CEK_NONE = 0, CEK_INT, CEK_FLOAT, CEK_BOOL, CEK_STRING
+} CEKind;
+typedef struct {
+    CEKind kind;
+    long long i;
+    double d;
+    const char* s;   /* 借用：指向 AST 字面量，不释放 */
+} CEVal;
+static void ce_set_none(CEVal* v) { v->kind = CEK_NONE; v->i = 0; v->d = 0; v->s = NULL; }
+
+/* const func 注册表（顶层 const func：name → AST_FUNC_DEF） */
+typedef struct { char* name; AstNode* node; } ConstFuncEntry;
+static ConstFuncEntry* g_cf = NULL;
+static int g_cf_cnt = 0, g_cf_cap = 0;
+static AstNode* cf_lookup(const char* name) {
+    for(int i = 0; i < g_cf_cnt; i++)
+        if(strcmp(g_cf[i].name, name) == 0) return g_cf[i].node;
+    return NULL;
+}
+static void cf_register(const char* name, AstNode* node) {
+    if(cf_lookup(name)) return;
+    if(g_cf_cnt >= g_cf_cap) {
+        int nc = g_cf_cap ? g_cf_cap * 2 : 16;
+        ConstFuncEntry* nt = (ConstFuncEntry*)realloc(g_cf, (size_t)nc * sizeof(ConstFuncEntry));
+        if(!nt) { LOG_ERROR("const func 表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_cf = nt; g_cf_cap = nc;
+    }
+    g_cf[g_cf_cnt].name = strdup(name);
+    g_cf[g_cf_cnt].node = node;
+    g_cf_cnt++;
+}
+
+/* 已折叠的顶层 const 变量（name → CEVal），供后续 const/const func 引用 */
+typedef struct { char* name; CEVal v; } ConstVarEntry;
+static ConstVarEntry* g_cv = NULL;
+static int g_cv_cnt = 0, g_cv_cap = 0;
+static int cv_get(const char* name, CEVal* out) {
+    for(int i = g_cv_cnt - 1; i >= 0; i--)
+        if(strcmp(g_cv[i].name, name) == 0) { *out = g_cv[i].v; return 1; }
+    return 0;
+}
+static void cv_put(const char* name, CEVal v) {
+    if(g_cv_cnt >= g_cv_cap) {
+        int nc = g_cv_cap ? g_cv_cap * 2 : 16;
+        ConstVarEntry* nt = (ConstVarEntry*)realloc(g_cv, (size_t)nc * sizeof(ConstVarEntry));
+        if(!nt) { LOG_ERROR("const 变量表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_cv = nt; g_cv_cap = nc;
+    }
+    g_cv[g_cv_cnt].name = strdup(name);
+    g_cv[g_cv_cnt].v = v;
+    g_cv_cnt++;
+}
+
+/* 参数 / 局部 const 绑定（求值 const func body 期间生效，返回时回滚） */
+typedef struct { char* name; CEVal v; } CEBind;
+static CEBind* g_ceb = NULL;
+static int g_ceb_cnt = 0, g_ceb_cap = 0;
+static void ceb_rollback(int base) {
+    for(int i = g_ceb_cnt - 1; i >= base; i--) free(g_ceb[i].name);
+    g_ceb_cnt = base;
+}
+static int ceb_get(const char* name, CEVal* out) {
+    for(int i = g_ceb_cnt - 1; i >= 0; i--)
+        if(strcmp(g_ceb[i].name, name) == 0) { *out = g_ceb[i].v; return 1; }
+    return 0;
+}
+static void ceb_put(const char* name, CEVal v) {
+    if(g_ceb_cnt >= g_ceb_cap) {
+        int nc = g_ceb_cap ? g_ceb_cap * 2 : 16;
+        CEBind* nt = (CEBind*)realloc(g_ceb, (size_t)nc * sizeof(CEBind));
+        if(!nt) { LOG_ERROR("绑定表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_ceb = nt; g_ceb_cap = nc;
+    }
+    g_ceb[g_ceb_cnt].name = strdup(name);
+    g_ceb[g_ceb_cnt].v = v;
+    g_ceb_cnt++;
+}
+
+static int ce_is_num(const CEVal* v) { return v->kind == CEK_INT || v->kind == CEK_FLOAT; }
+static double ce_as_double(const CEVal* v) { return v->kind == CEK_FLOAT ? v->d : (double)v->i; }
+
+/* 二元运算常量求值；类型不支持返回 0 */
+static int ce_binop(BinOp op, const CEVal* a, const CEVal* b, CEVal* out) {
+    ce_set_none(out);
+    switch(op) {
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD: {
+            if(!ce_is_num(a) || !ce_is_num(b)) return 0;
+            if(a->kind == CEK_FLOAT || b->kind == CEK_FLOAT) {
+                if(op == OP_MOD) return 0;   /* 浮点不支持取模 */
+                double x = ce_as_double(a), y = ce_as_double(b), r = 0;
+                switch(op) {
+                    case OP_ADD: r = x + y; break;
+                    case OP_SUB: r = x - y; break;
+                    case OP_MUL: r = x * y; break;
+                    case OP_DIV: r = x / y; break;
+                    default: return 0;
+                }
+                out->kind = CEK_FLOAT; out->d = r;
+            } else {
+                long long x = a->i, y = b->i, r = 0;
+                switch(op) {
+                    case OP_ADD: r = x + y; break;
+                    case OP_SUB: r = x - y; break;
+                    case OP_MUL: r = x * y; break;
+                    case OP_DIV: r = x / y; break;
+                    case OP_MOD: r = x % y; break;
+                    default: return 0;
+                }
+                out->kind = CEK_INT; out->i = r;
+            }
+            return 1;
+        }
+        case OP_GT: case OP_LT: case OP_GE: case OP_LE: {
+            if(!ce_is_num(a) || !ce_is_num(b)) return 0;
+            double x = ce_as_double(a), y = ce_as_double(b); int r = 0;
+            switch(op) {
+                case OP_GT: r = x > y; break;
+                case OP_LT: r = x < y; break;
+                case OP_GE: r = x >= y; break;
+                case OP_LE: r = x <= y; break;
+                default: return 0;
+            }
+            out->kind = CEK_BOOL; out->i = r; return 1;
+        }
+        case OP_EQ: case OP_NE: {
+            int eq = 0;
+            if(ce_is_num(a) && ce_is_num(b)) eq = ce_as_double(a) == ce_as_double(b);
+            else if(a->kind == CEK_STRING && b->kind == CEK_STRING) eq = strcmp(a->s, b->s) == 0;
+            else if(a->kind == CEK_BOOL && b->kind == CEK_BOOL) eq = a->i == b->i;
+            else return 0;
+            out->kind = CEK_BOOL; out->i = (op == OP_EQ) ? eq : !eq; return 1;
+        }
+        case OP_LOGIC_AND: case OP_LOGIC_OR: {
+            if(a->kind != CEK_BOOL || b->kind != CEK_BOOL) return 0;
+            int r = (op == OP_LOGIC_AND) ? (a->i && b->i) : (a->i || b->i);
+            out->kind = CEK_BOOL; out->i = r; return 1;
+        }
+        default: return 0;
+    }
+}
+/* 一元运算常量求值 */
+static int ce_unary(BinOp op, const CEVal* a, CEVal* out) {
+    ce_set_none(out);
+    if(op == OP_UNARY_MINUS || op == OP_UNARY_PLUS) {
+        if(!ce_is_num(a)) return 0;
+        if(a->kind == CEK_FLOAT) { out->kind = CEK_FLOAT; out->d = op == OP_UNARY_MINUS ? -a->d : a->d; }
+        else { out->kind = CEK_INT; out->i = op == OP_UNARY_MINUS ? -a->i : a->i; }
+        return 1;
+    }
+    if(op == OP_LOGIC_NOT) {
+        if(a->kind != CEK_BOOL) return 0;
+        out->kind = CEK_BOOL; out->i = !a->i; return 1;
+    }
+    return 0;
+}
+
+static int ce_eval(AstNode* node, CEVal* out);   /* 前向声明（调用与求值互相递归） */
+
+/* 实参链（AST_SEQ 左嵌套：first 在前）逐个求值到 vals[]；任一非常量返回 -1 */
+static int ce_eval_args(AstNode* args, CEVal* vals, int max) {
+    if(!args) return 0;
+    if(args->type == AST_SEQ) {
+        int n1 = ce_eval_args(args->u.seq.first, vals, max);
+        if(n1 < 0) return -1;
+        int n2 = ce_eval_args(args->u.seq.second, vals + n1, max - n1);
+        if(n2 < 0) return -1;
+        return n1 + n2;
+    }
+    if(max <= 0) return -1;
+    if(!ce_eval(args, vals)) return -1;
+    return 1;
+}
+
+/* const func body 语句求值：只允许 const 局部声明与 return；返回 return 表达式值 */
+static int ce_body_stmts(AstNode* s, CEVal* ret, int* got_ret) {
+    if(!s) return 1;
+    if(s->type == AST_SEQ)
+        return ce_body_stmts(s->u.seq.first, ret, got_ret) &
+               ce_body_stmts(s->u.seq.second, ret, got_ret);
+    if(s->type == AST_RETURN) {
+        if(!s->u.ret.ret_val) return 0;
+        if(!ce_eval(s->u.ret.ret_val, ret)) return 0;
+        *got_ret = 1; return 1;
+    }
+    if(s->type == AST_ASSIGN) {
+        if(!s->u.assign.is_const) return 0;
+        CEVal v;
+        if(!ce_eval(s->u.assign.expr, &v)) return 0;
+        ceb_put(s->u.assign.varname, v);
+        return 1;
+    }
+    return 0;   /* 非纯语句 */
+}
+
+/* 调用 const func：求值实参、绑定形参、求 body */
+static int ce_call_func(AstNode* fn, AstNode* call_args, CEVal* out) {
+    if(!fn || fn->type != AST_FUNC_DEF || !fn->u.func_def.is_const) return 0;
+    CEVal avals[32];
+    int nargs = ce_eval_args(call_args, avals, 32);
+    if(nargs < 0) return 0;
+    int base = g_ceb_cnt;
+    AstNode* pp = fn->u.func_def.params;
+    int pi = 0;
+    while(pp && pi < nargs) {
+        ceb_put(pp->u.param.name, avals[pi]);
+        pp = pp->u.param.next; pi++;
+    }
+    AstNode* stmts = fn->u.func_def.body ? fn->u.func_def.body->u.block.stmts : NULL;
+    CEVal ret; ce_set_none(&ret);
+    int got_ret = 0;
+    int ok = ce_body_stmts(stmts, &ret, &got_ret);
+    ceb_rollback(base);
+    if(!ok || !got_ret) return 0;
+    *out = ret; return 1;
+}
+
+/* 表达式编译期求值；不可静态求值返回 0 */
+static int ce_eval(AstNode* node, CEVal* out) {
+    ce_set_none(out);
+    if(!node) return 0;
+    switch(node->type) {
+        case AST_INT:    out->kind = CEK_INT;   out->i = node->u.inum; return 1;
+        case AST_NUM:    out->kind = CEK_FLOAT; out->d = node->u.num;  return 1;
+        case AST_BOOL:   out->kind = CEK_BOOL;  out->i = node->u.bval; return 1;
+        case AST_STRING: out->kind = CEK_STRING; out->s = node->u.sval; return 1;
+        case AST_BINOP: {
+            CEVal a, b;
+            if(!ce_eval(node->u.bin.left, &a)) return 0;
+            if(!ce_eval(node->u.bin.right, &b)) return 0;
+            return ce_binop(node->u.bin.op, &a, &b, out);
+        }
+        case AST_UNARY: {
+            CEVal a;
+            if(!ce_eval(node->u.uny.child, &a)) return 0;
+            return ce_unary(node->u.uny.op, &a, out);
+        }
+        case AST_TERNARY: {
+            CEVal c;
+            if(!ce_eval(node->u.ternary.cond, &c) || c.kind != CEK_BOOL) return 0;
+            return ce_eval(c.i ? node->u.ternary.true_expr : node->u.ternary.false_expr, out);
+        }
+        case AST_VAR:
+            if(ceb_get(node->u.varname, out)) return 1;   /* 参数 / 局部 const */
+            if(cv_get(node->u.varname, out)) return 1;     /* 顶层已折叠 const */
+            return 0;
+        case AST_CALL: {
+            AstNode* fn = cf_lookup(node->u.call.name);
+            if(!fn) return 0;
+            return ce_call_func(fn, node->u.call.args, out);
+        }
+        default: return 0;
+    }
+}
+
+/* ---- const func 纯函数约束校验（不依赖调用，定义即检查） ---- */
+/* 表达式纯度：AST_VAR 引用宽松放行（参数/const/全局引用，折叠成败由求值决定），
+ * AST_CALL 只能调用 const func；方法调用/字段访问/new 等涉及对象状态，判不纯。 */
+static int ce_pure_expr(AstNode* node) {
+    if(!node) return 1;
+    switch(node->type) {
+        case AST_INT: case AST_NUM: case AST_BOOL: case AST_STRING: return 1;
+        case AST_VAR: return 1;
+        case AST_BINOP: return ce_pure_expr(node->u.bin.left) && ce_pure_expr(node->u.bin.right);
+        case AST_UNARY: return ce_pure_expr(node->u.uny.child);
+        case AST_TERNARY: return ce_pure_expr(node->u.ternary.cond) &&
+                              ce_pure_expr(node->u.ternary.true_expr) &&
+                              ce_pure_expr(node->u.ternary.false_expr);
+        case AST_CALL: {
+            AstNode* fn = cf_lookup(node->u.call.name);
+            if(!fn || !fn->u.func_def.is_const) return 0;
+            if(!node->u.call.args) return 1;
+            if(node->u.call.args->type != AST_SEQ) return ce_pure_expr(node->u.call.args);
+            return ce_pure_expr(node->u.call.args->u.seq.first) &&
+                   ce_pure_expr(node->u.call.args->u.seq.second);
+        }
+        default: return 0;
+    }
+}
+static int ce_check_stmts(AstNode* s, int* has_ret) {
+    if(!s) return 1;
+    if(s->type == AST_SEQ)
+        return ce_check_stmts(s->u.seq.first, has_ret) &
+               ce_check_stmts(s->u.seq.second, has_ret);
+    if(s->type == AST_RETURN) {
+        *has_ret = 1;
+        return s->u.ret.ret_val ? ce_pure_expr(s->u.ret.ret_val) : 1;
+    }
+    if(s->type == AST_ASSIGN)
+        return s->u.assign.is_const && ce_pure_expr(s->u.assign.expr);
+    return 0;
+}
+/* 校验 const func：body 只含 const 声明/return，且必须有 return */
+static int ce_validate_func(AstNode* fn) {
+    AstNode* stmts = fn->u.func_def.body ? fn->u.func_def.body->u.block.stmts : NULL;
+    int has_ret = 0;
+    return ce_check_stmts(stmts, &has_ret) && has_ret;
+}
+
+/* 折叠结果 → 结果字面量节点 */
+static AstNode* ce_make_literal(CEVal v) {
+    switch(v.kind) {
+        case CEK_INT:   return ast_int(v.i);
+        case CEK_FLOAT: return ast_num(v.d);
+        case CEK_BOOL:  return ast_bool(v.i);
+        case CEK_STRING: return ast_string(v.s);
+        default: return NULL;
+    }
 }
 
 static int func_depth = 0;
@@ -183,6 +590,8 @@ static void collect_top_level(AstNode* node) {
             if(!node->u.func_def.is_class_method) {
                 static_sym_put(node->u.func_def.name, VAL_FUNC);
             }
+            /* const func：登记到 const func 表（供常量折叠查找其 AST） */
+            if(node->u.func_def.is_const) cf_register(node->u.func_def.name, node);
             break;
         }
         case AST_EXTERN_FUNC: {
@@ -356,24 +765,33 @@ static int typecheck_call_args(AstNode* args) {
  * 对每个方法运行 typecheck 以分析其体内嵌套 lambda/arrow 的捕获；
  * 嵌套函数进入 g_recompile，方法本身进入方法重编译表。 */
 static void method_typecheck_cb(const char* name, TypeDef* td, void* user_data) {
-    (void)user_data;
+    int* acc = (int*)user_data;
     if(!td || !(td->is_struct || td->is_class)) return;
+    /* 构造函数单独存于 td->constructor，同样需要 typecheck（否则其内访问控制/const 漏检） */
+    if(td->constructor && td->constructor->type == AST_FUNC_DEF) {
+        g_method_owner = name;
+        *acc |= typecheck_expr(td->constructor);
+        g_method_owner = NULL;
+    }
     for(int i = 0; i < td->nmethods; i++) {
         AstNode* m = td->method_nodes[i];
         if(!m || m->type != AST_FUNC_DEF) continue;
         g_method_owner = name;
-        typecheck_expr(m);
+        *acc |= typecheck_expr(m);
         g_method_owner = NULL;
     }
 }
 
-static void typecheck_type_methods(void) {
-    type_foreach(method_typecheck_cb, NULL);
+static int typecheck_type_methods(void) {
+    int acc = 0;
+    type_foreach(method_typecheck_cb, &acc);
+    return acc;
 }
 
 int ast_typecheck(AstNode* node)
 {
     static_sym_reset();
+    vo_reset();
     func_depth = 0;
     g_collect_err = 0;
     if(!node) return 0;
@@ -382,7 +800,7 @@ int ast_typecheck(AstNode* node)
     // 阶段2：全面检查（含函数体递归）
     int err = g_collect_err | typecheck_expr(node);
     // 阶段2b：struct/class 方法补 typecheck（分析方法内嵌套 lambda/arrow 捕获）
-    if(!err) typecheck_type_methods();
+    if(!err) err |= typecheck_type_methods();
     // 阶段3：重编译。先处理普通函数/嵌套 lambda，再处理方法
     // （方法编译时其体内嵌套 lambda 须已是带捕获的最新版本）
     if(!err) {
@@ -705,7 +1123,31 @@ int typecheck_expr(AstNode* node)
             }
             break;
         }
-        case AST_ASSIGN:
+        case AST_ASSIGN: {
+            const char* assign_vn = node->u.assign.varname;
+            int is_const_decl = node->u.assign.is_const;
+            /* const 重复赋值拦截（put 之前查）：
+             * 顶层无遮蔽直接拦截；函数/lambda 内仅当本层已登记过该名字才算重复
+             * （本层首次出现是对外部常量的合法遮蔽，put 会保存并清除外层标记）。 */
+            if(!is_const_decl && static_sym_is_const(assign_vn) &&
+               (!static_sym_scope_active() || static_sym_level_knows(assign_vn))) {
+                LOG_ERROR("语义错误(第%d行)：不能给常量 '%s' 重新赋值\n", node->line, assign_vn);
+                err = 1;
+            }
+            /* const 声明的编译期折叠：初始化表达式若可静态求值（含 const func
+             * 调用），就地改写为结果字面量，并记录供后续 const 引用；
+             * 不能静态求值（含运行时调用）则保持原样，仍受不可重新赋值约束。 */
+            if(is_const_decl) {
+                CEVal cev;
+                if(ce_eval(node->u.assign.expr, &cev)) {
+                    AstNode* lit = ce_make_literal(cev);
+                    if(lit) {
+                        lit->line = node->line;
+                        node->u.assign.expr = lit;
+                        cv_put(assign_vn, cev);
+                    }
+                }
+            }
             err |= typecheck_expr(node->u.assign.expr);
             node->val_type = node->u.assign.expr->val_type;
             int assign_capture = 0;
@@ -724,6 +1166,11 @@ int typecheck_expr(AstNode* node)
             /* 变量持有函数值时存 VAL_NONE（动态），避免后续引用被误判为函数名引用（AST_FUNCREF） */
             static_sym_put(node->u.assign.varname,
                            node->val_type == VAL_FUNC ? VAL_NONE : node->val_type);
+            /* const 声明：put 登记后标记，使同作用域后续赋值被拦截 */
+            if(is_const_decl) static_sym_set_const(assign_vn);
+            /* 记录变量持有的自定义类型（供后续字段访问的访问控制推断） */
+            const char* rown = tc_owner(node->u.assign.expr);
+            if(rown) vo_set(assign_vn, rown);
             if(in_lambda) {
                 const char* vn = node->u.assign.varname;
                 if(!assign_capture) {
@@ -739,6 +1186,7 @@ int typecheck_expr(AstNode* node)
                 }
             }
             break;
+        }
         case AST_INDEX: {
             err |= typecheck_expr(node->u.index.arr);
             err |= typecheck_expr(node->u.index.idx);
@@ -748,6 +1196,20 @@ int typecheck_expr(AstNode* node)
                node->u.index.arr->val_type != VAL_NONE) {
                 LOG_ERROR("语义错误(第%d行)：下标访问的对象不是数组、字符串或字典\n", node->line);
                 err = 1;
+            }
+            /* class 字段读的访问控制：idx 为字符串字面量且能推断 arr 所属类。
+             * map/数组下标（idx 非字符串或 arr 无 owner）自然跳过。 */
+            if(node->u.index.idx->type == AST_STRING) {
+                const char* fow = tc_owner(node->u.index.arr);
+                if(fow) {
+                    FieldInfo* ffi = tc_find_field(fow, node->u.index.idx->u.sval);
+                    if(ffi && !tc_access_ok(fow, ffi->access)) {
+                        LOG_ERROR("语义错误(第%d行)：字段 '%s' 为 %s，当前上下文不可访问\n",
+                                  node->line, node->u.index.idx->u.sval,
+                                  ffi->access == ACCESS_PRIVATE ? "private" : "protected");
+                        err = 1;
+                    }
+                }
             }
             node->val_type = VAL_NONE;   // 元素类型不可静态追踪
             break;
@@ -762,6 +1224,27 @@ int typecheck_expr(AstNode* node)
                 strcmp(node->u.index_assign.idx->u.sval, "__structname__") == 0)) {
                 LOG_ERROR("语义错误(第%d行)：只读属性 %s 不能赋值\n", node->line, node->u.index_assign.idx->u.sval);
                 err = 1;
+            }
+            /* class 字段写：const 字段拦截 + private/protected 访问控制。
+             * map/数组赋值（arr 无 owner）自然跳过。 */
+            if(node->u.index_assign.idx->type == AST_STRING) {
+                const char* mow = tc_owner(node->u.index_assign.arr);
+                if(mow) {
+                    FieldInfo* mfi = tc_find_field(mow, node->u.index_assign.idx->u.sval);
+                    if(mfi) {
+                        if(mfi->is_const && !g_in_ctor) {
+                            LOG_ERROR("语义错误(第%d行)：不能给 const 字段 '%s' 赋值\n",
+                                      node->line, node->u.index_assign.idx->u.sval);
+                            err = 1;
+                        }
+                        if(!tc_access_ok(mow, mfi->access)) {
+                            LOG_ERROR("语义错误(第%d行)：字段 '%s' 为 %s，当前上下文不可访问\n",
+                                      node->line, node->u.index_assign.idx->u.sval,
+                                      mfi->access == ACCESS_PRIVATE ? "private" : "protected");
+                            err = 1;
+                        }
+                    }
+                }
             }
             if(node->u.index_assign.arr->val_type != VAL_ARRAY &&
                node->u.index_assign.arr->val_type != VAL_MAP &&
@@ -966,6 +1449,26 @@ int typecheck_expr(AstNode* node)
             err |= typecheck_call(node);
             break;
         }
+        case AST_METHOD_CALL: {
+            /* recv.method(args)：检查接收者与实参，并做方法 private/protected 访问控制 */
+            err |= typecheck_expr(node->u.method_call.recv);
+            err |= typecheck_call_args(node->u.method_call.args);
+            const char* cow = tc_owner(node->u.method_call.recv);
+            if(cow) {
+                AstNode* mdef = class_find_method(cow, node->u.method_call.method);
+                if(mdef && mdef->type == AST_FUNC_DEF) {
+                    int mam = mdef->u.func_def.access_modifier;
+                    if(!tc_access_ok(cow, mam)) {
+                        LOG_ERROR("语义错误(第%d行)：方法 '%s' 为 %s，当前上下文不可调用\n",
+                                  node->line, node->u.method_call.method,
+                                  mam == ACCESS_PRIVATE ? "private" : "protected");
+                        err = 1;
+                    }
+                }
+            }
+            node->val_type = VAL_NONE;
+            break;
+        }
         case AST_DYN_CALL: {
             // 调用链 f(1)(2)：callee 是任意表达式（函数值），动态语言不做静态函数性校验
             err |= typecheck_expr(node->u.dyn_call.callee);
@@ -1039,6 +1542,7 @@ int typecheck_expr(AstNode* node)
             AstNode* save_cur = g_cur_func_def;
             g_cur_func_def = node;
             sym_save();
+            int vo_base = g_vo_cnt;
             int save_in_lambda = in_lambda;
             AstNode* save_params = g_lambda_params;
             int save_lc = lambda_locals_cnt;
@@ -1047,7 +1551,24 @@ int typecheck_expr(AstNode* node)
             for(p = node->u.func_def.params; p; p = p->u.param.next) {
                 static_sym_put(p->u.param.name, VAL_NONE);
             }
+            /* 是否构造函数：处于方法上下文且名字以 ___init__ 结尾 */
+            int this_is_ctor = 0;
+            if(g_method_owner) {
+                const char* fnm = node->u.func_def.name;
+                size_t fnl = strlen(fnm);
+                this_is_ctor = (fnl >= 9 && strcmp(fnm + fnl - 9, "___init__") == 0);
+            }
+            int save_in_ctor = g_in_ctor;
+            g_in_ctor = this_is_ctor;
             err |= typecheck_expr(node->u.func_def.body);
+            g_in_ctor = save_in_ctor;
+            /* const func：纯函数约束校验（body 只允许 const 声明/return、
+             * 表达式只由参数/常量/纯运算/其他 const func 调用组成） */
+            if(node->u.func_def.is_const && !ce_validate_func(node)) {
+                LOG_ERROR("语义错误(第%d行)：const 函数 '%s' 不是纯函数：体内只允许常量声明与 return\n",
+                          node->line, node->u.func_def.name);
+                err = 1;
+            }
             if(is_lambda) {
                 in_lambda = save_in_lambda; g_lambda_params = save_params; lambda_locals_cnt = save_lc;
                 int ncapt = cap_pop_record(node->u.func_def.name);
@@ -1087,6 +1608,7 @@ int typecheck_expr(AstNode* node)
                     #undef RECOMPILE_ADD
                 }
             }
+            vo_rollback(vo_base);
             sym_restore();
             g_cur_func_def = save_cur;
             func_depth--;

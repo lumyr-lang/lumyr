@@ -15,6 +15,7 @@ AstNode* ast_string(const char* s);
 AstNode* ast_var(char* name);
 AstNode* ast_binop(BinOp op, AstNode* l, AstNode* r);
 AstNode* ast_assign(char* name, AstNode* e);
+AstNode* ast_assign_const(char* name, AstNode* e);
 AstNode* ast_print(AstNode* args);
 AstNode* ast_seq(AstNode* a, AstNode* b);
 AstNode* ast_seq_append(AstNode* list, AstNode* item);

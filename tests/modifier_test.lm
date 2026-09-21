@@ -1,0 +1,134 @@
+// ============================================================
+// 修饰符测试：const / static / public / private / protected
+// 仅含合法用法（应全部通过、exit 0）；违规用法由编译期语义检查拦截
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// P1: const 变量
+// ------------------------------------------------------------
+const a = 3;
+const b = 4;
+const c = a + b;
+check(c == 7, "const 变量基本运算");
+
+const d = a * 2 + b;
+check(d == 10, "const 变量引用其他 const");
+
+// 函数内遮蔽外层 const：合法，不影响外层
+top_const = 10;
+func shadow_const() {
+    const top_const = 20;
+    return top_const;
+}
+check(shadow_const() == 20, "函数内 const 遮蔽外层");
+check(top_const == 10, "外层 const 不受遮蔽影响");
+
+// ------------------------------------------------------------
+// P2: const func 编译期折叠
+// ------------------------------------------------------------
+const func square(x) { return x * x; }
+const func add(p, q) { return p + q; }
+const s1 = square(5);
+check(s1 == 25, "const func 折叠 square(5)");
+
+const s2 = square(add(2, 3));
+check(s2 == 25, "const func 嵌套折叠 square(add(2,3))");
+
+const func area(w, h) { const hw = w * h; return hw * 2; }
+const ar = area(3, 4);
+check(ar == 24, "const func 局部常量 area(3,4)");
+
+const func typed(x: int): int { return x + 1; }
+const s3 = typed(41);
+check(s3 == 42, "const func 带类型标注");
+
+// const func 也可运行时调用（不强制折叠）
+check(square(6) == 36, "const func 运行时调用");
+
+// ------------------------------------------------------------
+// P3: const 字段（构造函数初始化后只读）
+// ------------------------------------------------------------
+class Point {
+    const id: int;
+    x: int;
+    func Point(id: int, x: int) {
+        self.id = id;
+        self.x = x;
+    }
+    func get_id(): int { return self.id; }
+}
+p = Point(1, 100);
+check(p.get_id() == 1, "const 字段构造函数初始化");
+check(p.id == 1, "const 字段读取");
+
+// ------------------------------------------------------------
+// P4: private 字段与方法（同类内访问）
+// ------------------------------------------------------------
+class Safe {
+    private secret: int;
+    func Safe(v: int) { self.secret = v; }
+    private func hidden(): int { return self.secret * 2; }
+    func reveal(): int {
+        // 同类内访问 private 字段与方法
+        return self.secret + self.hidden();
+    }
+}
+sf = Safe(7);
+check(sf.reveal() == 21, "private 字段/方法同类内访问");
+
+// ------------------------------------------------------------
+// P5: protected 字段与方法（子类访问）
+// ------------------------------------------------------------
+class Shape {
+    protected kind: int;
+    func Shape(k: int) { self.kind = k; }
+    protected func tag(): int { return self.kind + 10; }
+}
+class Circle extends Shape {
+    func Circle(k: int) {
+        // 子类构造访问 protected 父类字段
+        self.kind = k;
+    }
+    func describe(): int {
+        // 子类访问 protected 字段与方法
+        return self.kind + self.tag();
+    }
+}
+ci = Circle(5);
+check(ci.describe() == 20, "protected 字段/方法子类访问");
+
+// ------------------------------------------------------------
+// P6: static 属性（初始化 + 两种修饰符顺序 + 访问修饰）
+// ------------------------------------------------------------
+class Counter {
+    static base = 100;
+    private static secret = 1;
+    static protected data = 2;
+    public static open = 3;
+    func Counter() {}
+}
+check(Counter_base == 100, "static 属性初始化");
+check(Counter_secret == 1, "private static 属性（private static 顺序）");
+check(Counter_data == 2, "protected static 属性（static protected 顺序）");
+check(Counter_open == 3, "public static 属性");
+
+// 顶层修改 static 属性
+Counter_base = Counter_base + 5;
+check(Counter_base == 105, "static 属性顶层修改");
+
+// ------------------------------------------------------------
+// P7: 泛型字段访问修饰符
+// ------------------------------------------------------------
+class BoxMap {
+    private meta: <string, int>;
+    func BoxMap() { self.meta = {"a": 1}; }
+    func get_a(): int { return self.meta["a"]; }
+}
+bm = BoxMap();
+check(bm.get_a() == 1, "泛型 private 字段同类访问");
+
+print("modifier_test ALL PASS");

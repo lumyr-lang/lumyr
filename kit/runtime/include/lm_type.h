@@ -35,6 +35,7 @@ typedef struct {
     ValueType valtype;          /* 28+ 精确类型（枚举） */
     int size;                   /* 字节宽度 */
     AccessModifier access;      /* struct 默认 PUBLIC，class 可设 PRIVATE/PROTECTED */
+    int is_const;               /* const 字段：1=构造后不可修改 */
     /* 当 valtype 为 VAL_STRUCT_PTR/VAL_CLASS_PTR 时，指向字段的自定义类型名
      * （如 inner: Inner → "Inner"），供方法链调用编译期推断接收者类型；其余类型为 NULL */
     const char* type_name;

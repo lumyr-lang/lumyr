@@ -39,6 +39,7 @@ struct AstNode {
         struct {
             char* varname;
             AstNode* expr;
+            int is_const;   /* const 声明：1=初始化后不可重新赋值 */
         } assign;
         struct {
             AstNode* args;  /* 参数列表，AST_SEQ 链接；单参数时为单个表达式节点 */
@@ -133,6 +134,7 @@ struct AstNode {
             char* ret_type_name;  // 返回值类型名（如 "int","double","string"），NULL=无类型声明
             int is_class_method;  // 1=class方法，0=普通函数
             int is_static_method;  // 1=静态方法，0=普通方法
+            int access_modifier;  // 访问控制：0=public, 1=private, 2=protected
             int is_abstract_method;  // 1=抽象方法，0=普通方法
             int is_override_method;  // 1=重写方法，0=普通方法
             int is_getter;  // 1=getter方法，0=普通方法

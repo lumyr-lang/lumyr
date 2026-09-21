@@ -101,6 +101,15 @@ AstNode* ast_assign(char* name, AstNode* e)
     p->line = yylineno;
     p->u.assign.varname = strdup(name);
     p->u.assign.expr = e;
+    p->u.assign.is_const = 0;
+    return p;
+}
+
+/* const 声明：与 ast_assign 相同，但标记 is_const（语义检查拦截重新赋值） */
+AstNode* ast_assign_const(char* name, AstNode* e)
+{
+    AstNode* p = ast_assign(name, e);
+    p->u.assign.is_const = 1;
     return p;
 }
 
@@ -504,6 +513,7 @@ AstNode* ast_func_def(char* name, AstNode* params, AstNode* body) {
     n->u.func_def.generic_params = NULL;
     n->u.func_def.is_generator = 0;
     n->u.func_def.ret_type_name = NULL;
+    n->u.func_def.access_modifier = 0;
     return n;
 }
 

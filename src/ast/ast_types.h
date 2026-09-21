@@ -15,6 +15,7 @@ typedef struct {
     char** props;        // 属性名（按声明序）
     ValueType* ptypes;   // 属性期望类型（VAL_INT/VAL_STRING/...，VAL_NONE=未标注）
     int* prop_access_modifiers; // 属性访问修饰符（0=public, 1=private, 2=protected，NULL=默认public）
+    int* prop_const_flags;      // const 字段标记（1=构造后不可修改，NULL=默认可变）
     int nprops;
     char** generic_params;  // 泛型参数名（NULL=非泛型类型）
     int generic_param_count; // 泛型参数数量
@@ -40,7 +41,7 @@ typedef struct {
 } TypeDef;
 
 /* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL） */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, char** struct_names, int nprops, const char* parent, char** interfaces);
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -114,5 +115,12 @@ int type_implements_interface(const char* type_name, const char* interface_name)
 // 检查 class 是否实现了接口中定义的所有方法（包括继承的方法）
 // 返回 1=实现了所有方法，0=缺少方法，-1=接口不存在或class不存在
 int class_check_interface_implementation(const char* class_name, const char* interface_name);
+
+/* ===== 类静态成员访问表（编译期访问控制） =====
+ * static 属性/方法以全局名 "类名_成员名" 存在，此表记录其属主类与访问级别，
+ * 供 typecheck 在引用这些全局名时做 private/protected 检查。 */
+void class_static_member_register(const char* full_name, const char* owner, int access);
+/* 查找静态成员：找到返回 1 并通过 owner_out/access_out 输出；未找到返回 0 */
+int class_static_member_lookup(const char* full_name, const char** owner_out, int* access_out);
 
 #endif //AST_TYPES_H
