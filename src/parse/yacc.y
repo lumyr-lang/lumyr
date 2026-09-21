@@ -517,6 +517,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
+%token ARROW  /* => 箭头函数 */
 %token SWITCH CASE DEFAULT BREAK RETURN TRY CATCH THROW FINALLY
 %token CONTINUE
 %token FUNC ELLIPSIS TOK_AT SAFE_CALL NULL_COALESCE CONST MACRO TOK_GEN TOK_YIELD TOK_EXTERN TOK_REF
@@ -1808,6 +1809,40 @@ primary
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
               /* 只有全局函数才在这里编译，class 方法在 class_add_method 中编译 */
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
+    /* 箭头函数：(params) => { body } 或 (params): RetType => { body }
+     * params 支持冒号后缀类型标注（name: string 等）；
+     * 与匿名 func 表达式同路：生成内部名 _arrow_N，走 ast_func_def + compile_func_from_ast */
+    | LPAREN param_list RPAREN ARROW block_stmt {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          $$ = L(ast_func_def(nm, $2, $5));
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
+    | LPAREN param_list RPAREN COLON type_name_str ARROW block_stmt {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          $$ = L(ast_func_def(nm, $2, $7));
+          $$->u.func_def.ret_type_name = $5;
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
           }
           Value func_val = {0};

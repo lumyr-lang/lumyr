@@ -11,6 +11,7 @@
 #include "ir_arith.h"
 #include "ir_types.h"
 #include "ast/func_compile.h"
+#include "ast/lumyr_types.h"
 #include "vm_generator.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
@@ -395,6 +396,24 @@ int vm_make_bound_method(Value obj, const char* mname, Value* out) {
  * 校验函数值 → 查全局函数表 → 新建帧按形参类型 unbox 绑定 → 闭包捕获 ref 别名 →
  * 保存/切换执行状态 → 执行 → 恢复 → 返回值 box 到 *out。
  * 返回 1=成功；0=失败（已打印错误）；VM_LOOP_UNWIND=异常穿过本调用 */
+/* 评估字面量默认值 AST → Value（仅简单字面量：string/int/double/bool/char/null）。
+ * 复杂表达式返回 NONE，由调用方自行处理。
+ * 用途：动态调用（OPC_CALLV）时，当实参数少于形参数，用默认值填补缺失形参 */
+static Value eval_literal_default(AstNode* dflt) {
+    if(!dflt) { Value v; v.type = VAL_NONE; v.v.i = 0; return v; }
+    switch(dflt->type) {
+    case AST_INT:    return lumyr_make_int64(dflt->u.inum);
+    case AST_NUM:    return lumyr_make_double(dflt->u.num);
+    case AST_BOOL:  return lumyr_make_bool(dflt->u.bval);
+    case AST_CHAR:   return lumyr_make_int64((int64_t)dflt->u.ch);
+    case AST_STRING: return lumyr_make_string(dflt->u.sval);
+    case AST_NONE: { Value v; v.type = VAL_NONE; v.v.i = 0; return v; }
+    default: break;
+    }
+    Value v; v.type = VAL_NONE; v.v.i = 0;
+    return v;
+}
+
 int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* out) {
     *out = val_none();
     if(fv.type != VAL_FUNC || !fv.v.func.func_obj || !fv.v.func.func_obj->name) {
@@ -462,9 +481,91 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
             stackframe_bind_double(new_frame, pname, dv);
             break;
         }
+        case EXPR_TYPE_PTR: {
+            /* PTR 类型形参（string/bigint/decimal/struct/class 等）：
+             * 从 Value 中提取裸指针，绑定到 ptr_slots（LOAD_PTR_VAR 读取）。
+             * 与 OPC_CALL 路径的 stackframe_bind_ptr 对齐，否则函数体内
+             * LOAD_PTR_VAR 会读到 NULL 导致空值/段错误。
+             * 不 strdup：形参生命周期内，原始 Value（常量池/调用方变量）仍存活 */
+            void* p = NULL;
+            switch(args[slot].type) {
+            case VAL_PTR: case VAL_STRUCT_PTR: case VAL_CLASS_PTR:
+                p = args[slot].v.struct_ptr; break;
+            case VAL_BIGINT:     p = args[slot].v.bigint; break;
+            case VAL_DECIMAL:    p = args[slot].v.decimal; break;
+            case VAL_BITDECIMAL: p = args[slot].v.bitdecimal; break;
+            case VAL_ARRAY:      p = args[slot].v.array; break;
+            case VAL_TYPED_ARRAY: p = args[slot].v.typed_array; break;
+            case VAL_MAP:        p = args[slot].v.map; break;
+            case VAL_STRING:
+                p = args[slot].str_inline ? (void*)args[slot].v.sso.data
+                                          : (void*)args[slot].v.s;
+                break;
+            case VAL_INT64:  p = (void*)(intptr_t)args[slot].v.i64; break;
+            case VAL_INT:    p = (void*)(intptr_t)args[slot].v.i; break;
+            default: p = NULL; break;
+            }
+            stackframe_bind_ptr(new_frame, pname, p);
+            break;
+        }
         default:
             stackframe_bind(new_frame, pname, args[slot]);
             break;
+        }
+    }
+
+    /* 默认参数填补：实参数 < 形参数时，从 AST 查默认值并绑定。
+     * 仅支持简单字面量默认值（string/int/double/bool/char/null），
+     * 复杂表达式默认值暂不支持（动态调用上下文无 AST 求值器）。
+     * 这使 arrow/lambda 函数的默认参数在动态调用时也能生效 */
+    if(argc + slot_off < callee->param_cnt) {
+        AstNode* def_ast = func_ast_lookup(fname);
+        if(def_ast && def_ast->u.func_def.params) {
+            AstNode* p = def_ast->u.func_def.params;
+            for(int i = 0; i < slot_off && p; i++) p = p->u.param.next;
+            for(int i = 0; i < argc && p; i++) p = p->u.param.next;
+            for(int slot = argc + slot_off; slot < callee->param_cnt && p; slot++, p = p->u.param.next) {
+                if(!p->u.param.default_val) continue;
+                Value dv = eval_literal_default(p->u.param.default_val);
+                int fslot = slot;
+                const char* pname = (fslot < name_slots && callee->params[fslot])
+                                    ? callee->params[fslot] : "_";
+                CastKind pck = (fslot < callee->param_cnt && fslot < callee->sym_cnt)
+                               ? (CastKind)callee->var_type_tags[fslot]
+                               : CAST_NONE;
+                ExprType et = castkind_to_exprtype(pck);
+                switch(et) {
+                case EXPR_TYPE_INT: {
+                    int64_t iv = 0;
+                    if(dv.type == VAL_INT64) iv = dv.v.i64;
+                    else if(dv.type == VAL_INT) iv = (int64_t)dv.v.i;
+                    else if(dv.type == VAL_BOOL) iv = dv.v.b ? 1 : 0;
+                    else if(dv.type == VAL_DOUBLE) iv = (int64_t)dv.v.d;
+                    stackframe_bind_int64(new_frame, pname, iv);
+                    break;
+                }
+                case EXPR_TYPE_DOUBLE: {
+                    double dval = 0;
+                    if(dv.type == VAL_DOUBLE) dval = dv.v.d;
+                    else if(dv.type == VAL_INT64) dval = (double)dv.v.i64;
+                    else if(dv.type == VAL_INT) dval = (double)dv.v.i;
+                    stackframe_bind_double(new_frame, pname, dval);
+                    break;
+                }
+                case EXPR_TYPE_PTR: {
+                    void* p_val = NULL;
+                    if(dv.type == VAL_STRING)
+                        p_val = dv.str_inline ? (void*)dv.v.sso.data : (void*)dv.v.s;
+                    else if(dv.type == VAL_PTR || dv.type == VAL_STRUCT_PTR || dv.type == VAL_CLASS_PTR)
+                        p_val = dv.v.struct_ptr;
+                    stackframe_bind_ptr(new_frame, pname, p_val);
+                    break;
+                }
+                default:
+                    stackframe_bind(new_frame, pname, dv);
+                    break;
+                }
+            }
         }
     }
 

@@ -1,0 +1,278 @@
+// ============================================================
+// 箭头函数语法测试：(params) => { body } / (params): RetType => { body }
+// 覆盖：基础类型参数 / 多参数 / 无参数 / 默认值 /
+//       声明返回类型 / void 返回 / 回调 / 闭包 /
+//       与旧匿名函数语法 func(params){} 的等价性
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ============================================================
+// PART 1：基础箭头函数（带/不带返回类型）
+// ============================================================
+
+// 1.1 带返回类型的箭头函数
+add = (a: int, b: int): int => { return a + b; };
+check(add(3, 4) == 7, "arrow: (a: int, b: int): int => a+b");
+
+// 1.2 不带返回类型的箭头函数
+sub = (a: int, b: int) => { return a - b; };
+check(sub(10, 3) == 7, "arrow: (a: int, b: int) => a-b");
+
+// 1.3 void 返回类型
+noop = (msg: string): void => { return; };
+noop("hello");
+check(true, "arrow: void return runs without error");
+
+// 1.4 无参数箭头函数
+get42 = (): int => { return 42; };
+check(get42() == 42, "arrow: (): int => 42");
+
+// 1.5 无参数无返回类型
+greet = () => { return "hi"; };
+check(greet() == "hi", "arrow: () => 'hi'");
+
+print("arrow_func_test PART1 (基础) PASS");
+
+// ============================================================
+// PART 2：参数类型覆盖（所有基础类型）
+// ============================================================
+
+// 2.1 int 参数
+dbl = (n: int): int => { return n * 2; };
+check(dbl(21) == 42, "param int: (n: int) => n*2");
+
+// 2.2 double 参数
+half = (x: double): double => { return x / 2.0; };
+check(half(10.0) == 5.0, "param double: (x: double) => x/2");
+
+// 2.3 string 参数
+upper = (s: string): string => { return s + "!"; };
+check(upper("hello") == "hello!", "param string: (s: string) => s+!");
+
+// 2.4 bool 参数
+invert = (b: bool): bool => { return !b; };
+check(invert(true) == false, "param bool: (b: bool) => !b");
+check(invert(false) == true, "param bool: !false == true");
+
+// 2.5 char 参数
+next_char = (c: char): char => { return c; };
+check(next_char('A') == 'A', "param char: (c: char) => c");
+
+// 2.6 byte 参数
+byte_val = (v: byte): int => { return v; };
+check(byte_val(200) == 200, "param byte: (v: byte) => v");
+
+// 2.7 无类型参数（动态）
+dyn = (x) => { return x + 1; };
+check(dyn(5) == 6, "param untyped: (x) => x+1");
+
+// 2.8 多类型参数
+mix = (a: int, b: string, c: double): string => { return b + a + c; };
+check(mix(3, "n=", 0.5) == "n=30.500000", "param mixed: int+string+double");
+
+print("arrow_func_test PART2 (参数类型) PASS");
+
+// ============================================================
+// PART 3：返回类型覆盖（所有基础类型）
+// ============================================================
+
+// 3.1 返回 int
+ret_int = (n: int): int => { return n * 10; };
+check(ret_int(5) == 50, "ret int: (n: int): int => n*10");
+
+// 3.2 返回 double
+ret_dbl = (n: int): double => { return n + 0.5; };
+check(ret_dbl(3) == 3.5, "ret double: (n: int): double => n+0.5");
+
+// 3.3 返回 string
+ret_str = (n: int): string => { return "val=" + n; };
+check(ret_str(42) == "val=42", "ret string: (n: int): string");
+
+// 3.4 返回 bool
+ret_bool = (n: int): bool => { return n > 0; };
+check(ret_bool(1) == true, "ret bool: positive → true");
+check(ret_bool(-1) == false, "ret bool: negative → false");
+
+// 3.5 返回 char
+ret_char = (n: int): char => { return 'Z'; };
+check(ret_char(1) == 'Z', "ret char: (n: int): char => 'Z'");
+
+// 3.6 返回 array
+ret_arr = (n: int): array => { return [n, n + 1, n + 2]; };
+r_arr = ret_arr(5);
+check(type(r_arr) == "array" && len(r_arr) == 3, "ret array: type + len");
+check(r_arr[0] == 5 && r_arr[1] == 6 && r_arr[2] == 7, "ret array: elements");
+
+// 3.7 返回 map
+ret_map = (k: string, v: int): map => { m = {}; m[k] = v; return m; };
+r_map = ret_map("score", 100);
+check(type(r_map) == "map", "ret map: type");
+check(r_map["score"] == 100, "ret map: value");
+
+// 3.8 返回 void
+ret_void = (n: int): void => { x = n; };
+ret_void(99);
+check(true, "ret void: runs without error");
+
+print("arrow_func_test PART3 (返回类型) PASS");
+
+// ============================================================
+// PART 4：默认参数值
+// ============================================================
+
+// 4.1 基本默认值
+greet_name = (name: string, greeting: string = "hello"): string => { return greeting + ", " + name; };
+check(greet_name("alice") == "hello, alice", "default: greeting defaults to hello");
+check(greet_name("bob", "hi") == "hi, bob", "default: greeting overridden");
+
+// 4.2 int 默认值
+pow = (base: int, exp: int = 2): int => {
+    result = 1;
+    for (i = 0; i < exp; i = i + 1) { result = result * base; }
+    return result;
+};
+check(pow(3) == 9, "default: exp defaults to 2 (3^2=9)");
+check(pow(2, 3) == 8, "default: exp overridden (2^3=8)");
+
+// 4.3 bool 默认值
+flag_fn = (b: bool = true): bool => { return b; };
+check(flag_fn() == true, "default: bool defaults to true");
+check(flag_fn(false) == false, "default: bool overridden");
+
+print("arrow_func_test PART4 (默认参数值) PASS");
+
+// ============================================================
+// PART 5：箭头函数作为回调
+// ============================================================
+
+arr = [1, 2, 3, 4, 5];
+
+// 5.1 map 回调
+doubled = arr.map((x: int): int => { return x * 2; });
+check(len(doubled) == 5, "callback map: len");
+check(doubled[0] == 2 && doubled[4] == 10, "callback map: values");
+
+// 5.2 filter 回调
+evens = arr.filter((x: int): bool => { return x % 2 == 0; });
+check(len(evens) == 2, "callback filter: 2 evens");
+check(evens[0] == 2 && evens[1] == 4, "callback filter: values");
+
+// 5.3 reduce 回调
+sum = arr.reduce((acc: int, x: int): int => { return acc + x; }, 0);
+check(sum == 15, "callback reduce: 1+2+3+4+5=15");
+
+// 5.4 无类型参数回调
+squared = arr.map((x) => { return x * x; });
+check(squared[0] == 1 && squared[2] == 9 && squared[4] == 25, "callback untyped map");
+
+print("arrow_func_test PART5 (回调) PASS");
+
+// ============================================================
+// PART 6：闭包
+// ============================================================
+
+// 6.1 简单闭包：捕获外层变量
+func make_adder(n: int) {
+    return (x: int): int => { return x + n; };
+}
+add5 = make_adder(5);
+add10 = make_adder(10);
+check(add5(3) == 8, "closure: add5(3) = 3+5 = 8");
+check(add10(3) == 13, "closure: add10(3) = 3+10 = 13");
+
+// 6.2 闭包捕获并修改外层变量
+func make_counter() {
+    count = 0;
+    inc = () => { count = count + 1; return count; };
+    return inc;
+}
+counter = make_counter();
+check(counter() == 1, "closure counter: first call = 1");
+check(counter() == 2, "closure counter: second call = 2");
+check(counter() == 3, "closure counter: third call = 3");
+
+// 6.3 闭包返回多个函数
+func make_pair() {
+    v = 0;
+    set = (x: int): void => { v = x; };
+    get = (): int => { return v; };
+    return [set, get];
+}
+pair = make_pair();
+ps = pair[0];
+pg = pair[1];
+ps(42);
+check(pg() == 42, "closure pair: set then get");
+
+print("arrow_func_test PART6 (闭包) PASS");
+
+// ============================================================
+// PART 7：与旧匿名函数语法等价性
+// ============================================================
+
+// 7.1 箭头函数 vs func 匿名函数
+arrow_sq = (n: int): int => { return n * n; };
+func_sq = func(n) { return n * n; };
+check(arrow_sq(5) == func_sq(5), "equiv: arrow vs func anonymous");
+
+// 7.2 无返回类型 vs 有返回类型
+no_ret = (a: int, b: int) => { return a + b; };
+with_ret = (a: int, b: int): int => { return a + b; };
+check(no_ret(3, 4) == with_ret(3, 4), "equiv: no ret type vs with ret type");
+
+// 7.3 无类型参数 vs 有类型参数
+untyped = (x) => { return x * 2; };
+typed = (x: int): int => { return x * 2; };
+check(untyped(21) == typed(21), "equiv: untyped vs typed param");
+
+// 7.4 箭头函数 vs func 在回调中
+arr2 = [1, 2, 3];
+r1 = arr2.map((x: int): int => { return x + 10; });
+r2 = arr2.map(func(x) { return x + 10; });
+check(r1[0] == r2[0] && r1[2] == r2[2], "equiv: arrow vs func in callback");
+
+print("arrow_func_test PART7 (等价性) PASS");
+
+// ============================================================
+// PART 8：复杂场景
+// ============================================================
+
+// 8.1 箭头函数返回箭头函数（柯里化）
+func curry_add(a: int) {
+    return (b: int): int => { return a + b; };
+}
+curried = curry_add(100);
+check(curried(23) == 123, "curry: curry_add(100)(23) = 123");
+
+// 8.2 箭头函数内调用普通函数
+func helper(n: int) { return n * 3; }
+uses_helper = (x: int): int => { return helper(x) + 1; };
+check(uses_helper(2) == 7, "arrow calls func: helper(2)*3+1 = 7");
+
+// 8.3 箭头函数内使用复杂表达式
+compute = (a: int, b: int, c: int): int => { return (a + b) * c - a; };
+check(compute(2, 3, 4) == 18, "complex expr: (2+3)*4-2 = 18");
+
+// 8.4 多个箭头函数组合
+f1 = (x: int): int => { return x + 1; };
+f2 = (x: int): int => { return x * 2; };
+check(f2(f1(5)) == 12, "compose: f2(f1(5)) = f2(6) = 12");
+
+// 8.5 箭头函数处理 string
+concat = (a: string, b: string, c: string): string => { return a + b + c; };
+check(concat("foo", "bar", "baz") == "foobarbaz", "string concat: 3 parts");
+
+// 8.6 箭头函数处理 array
+sum_arr = (arr: array): int => {
+    total = 0;
+    for v in arr { total = total + v; }
+    return total;
+};
+check(sum_arr([1, 2, 3, 4, 5]) == 15, "arrow sum array: 1+2+3+4+5");
+
+print("arrow_func_test PART8 (复杂场景) PASS");
+
+print("arrow_func_test ALL PASS");

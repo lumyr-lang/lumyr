@@ -39,6 +39,7 @@ static int is_expr_end(int t)
         case TOK_ULONG: case TOK_UCHAR: case TOK_SHORT: case TOK_USHORT:
         case TOK_SIZE_T: case TOK_SSIZE_T: case TOK_VOID:
         case TOK_LONG_DOUBLE: case TOK_PTR:
+        case ARROW:                 /* => { → 函数体块 */
             return 1;
         default:
             return 0;
@@ -264,6 +265,7 @@ f\"([^"\\]|\\.)*\"   {
 ":"         { if(in_case_expr) { in_case_expr = 0; LEX_RET(CASE_COLON); }
              LEX_RET(COLON); }
 
+"=>"             { LEX_RET(ARROW); }
 "="             { LEX_RET(ASSIGN); }
 ";"             { LEX_RET(SEMI); }
 

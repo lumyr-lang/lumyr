@@ -836,9 +836,13 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
 
         /* 内置函数：编译期静态表解析为 BuiltinId（无运行时字符串查表），
-         * 实参全部转 VALUE，OPC_BUILTIN 弹 argc 个（栈顶为最后一个）压返回值 */
+         * 实参全部转 VALUE，OPC_BUILTIN 弹 argc 个（栈顶为最后一个）压返回值。
+         * 注意：若 func_name 同时是当前作用域内的局部变量（例如 add = (a,b)=>...;
+         *       用户覆盖了内置名 add），必须优先走动态调用，否则会被误派发到
+         *       BUILTIN_ARRAY_ADD 等方法式内置上，导致运行时报错 */
         int bid = builtin_id_by_name(func_name);
-        if(bid >= 0) {
+        int is_local_var = (c_find_var(c, func_name) >= 0);
+        if(bid >= 0 && !is_local_var) {
             int argc = 0, acap = 0;
             AstNode** argv = NULL;
             collect_call_args(args, &argv, &argc, &acap);
@@ -2622,7 +2626,9 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_CALL: {
-        /* 表达式语句调用：编译但丢弃返回值（keep_result=0） */
+        /* 表达式语句调用：编译但丢弃返回值（keep_result=0）。
+         * 用户函数优先；非用户函数（局部变量持有函数值 / 内置）走 c_expr
+         * 兜底，避免误报 "unknown function" 导致语句不执行 */
         const char* call_name = node->u.call.name;
         BytecodeFunc* callee = ir_func_table_lookup(call_name);
         AstNode* def_ast = func_ast_lookup(call_name);
@@ -2634,7 +2640,13 @@ void c_stmt(Ctx* c, AstNode* node) {
         } else if(callee && def_ast) {
             compile_user_call(c, callee, def_ast, node->u.call.args, 0, NULL);
         } else {
-            fprintf(stderr, "IR: unknown function %s\n", call_name);
+            /* 非用户函数：走 c_expr 处理内置 / 动态调用，并丢弃返回值 */
+            ExprType et = c_expr(c, node);
+            int pop_sel = 0;
+            if(et == EXPR_TYPE_INT) pop_sel = 1;
+            else if(et == EXPR_TYPE_DOUBLE) pop_sel = 2;
+            else if(et == EXPR_TYPE_PTR) pop_sel = 3;
+            emit(c, OPC_POP, pop_sel, 0);
         }
         break;
     }
@@ -3350,8 +3362,10 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
        形参类型与返回标注此时已就绪；递归 CALL 真正运行时函数体已编译完整。 */
     ir_func_table_register(fn);
 
-    /* lambda：注册捕获的外层变量为本地槽位（type NONE，VALUE 栈访问） */
-    if(name && strncmp(name, "_lambda_", 8) == 0) {
+    /* lambda / arrow：注册捕获的外层变量为本地槽位（type NONE，VALUE 栈访问）。
+     * 箭头函数 _arrow_N 与匿名函数 _lambda_N 共用同一闭包捕获机制 */
+    if(name && (strncmp(name, "_lambda_", 8) == 0 ||
+                strncmp(name, "_arrow_", 7) == 0)) {
         int ncap = lambda_capture_count(name);
         for(int i = 0; i < ncap; i++) {
             const char* cname = lambda_capture_name(name, i);

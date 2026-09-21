@@ -143,7 +143,9 @@ static void collect_top_level(AstNode* node) {
             // 函数重复定义：与 C 语义一致，编译期报错（双通道一致；
             // 避免 VM 静默覆盖与 C 生成端重复 static 定义导致 gcc 失败的分歧）
             // class 方法跳过重复定义检查（方法注册到 class 方法表，不注册到全局符号表）
-            if(strncmp(node->u.func_def.name, "_lambda_", 8) != 0 && !node->u.func_def.is_class_method) {
+            if(strncmp(node->u.func_def.name, "_lambda_", 8) != 0 &&
+               strncmp(node->u.func_def.name, "_arrow_", 7) != 0 &&
+               !node->u.func_def.is_class_method) {
                 ValueType ty;
                 if(static_sym_get(node->u.func_def.name, &ty) && ty == VAL_FUNC) {
                     LOG_ERROR("语义错误(第%d行)：函数 \"%s\" 重复定义\n",
@@ -951,7 +953,8 @@ int typecheck_expr(AstNode* node)
                 }
                 p = p->u.param.next;
             }
-            int is_lambda = strncmp(node->u.func_def.name, "_lambda_", 8) == 0;
+            int is_lambda = (strncmp(node->u.func_def.name, "_lambda_", 8) == 0 ||
+                             strncmp(node->u.func_def.name, "_arrow_", 7) == 0);
             if(func_depth > 0 && !is_lambda) {
                 // 嵌套具名函数：codegen 不支持，语义检查同样跳过（保持一致）
                 node->val_type = VAL_FUNC;
