@@ -195,4 +195,102 @@ print("A1 type", type(book));
 print("A2 title", book.title);
 print("A3 to_string()", book.to_string());
 
+// ------------------------------------------------------------
+// IT: interface 全数据类型方法签名声明测试（29 种）
+// 每种类型作方法参数 + 返回类型，验证接口解析与实现
+// ------------------------------------------------------------
+interface IAllTypes {
+    func m_int(<int> v): int;
+    func m_int8(<int8> v): int8;
+    func m_int16(<int16> v): int16;
+    func m_int32(<int32> v): int32;
+    func m_int64(<int64> v): int64;
+    func m_uint8(<uint8> v): uint8;
+    func m_uint16(<uint16> v): uint16;
+    func m_uint32(<uint32> v): uint32;
+    func m_uint64(<uint64> v): uint64;
+    func m_uint(<uint> v): uint;
+    func m_short(<short> v): short;
+    func m_ushort(<ushort> v): ushort;
+    func m_long(<long> v): long;
+    func m_ulong(<ulong> v): ulong;
+    func m_ll(<long long> v): long long;
+    func m_size_t(<size_t> v): size_t;
+    func m_ssize_t(<ssize_t> v): ssize_t;
+    func m_byte(<byte> v): byte;
+    func m_uchar(<uchar> v): uchar;
+    func m_char(<char> v): char;
+    func m_ascii(<ascii> v): ascii;
+    func m_bool(<bool> v): bool;
+    func m_double(<double> v): double;
+    func m_float(<float> v): float;
+    func m_longdouble(<long double> v): long double;
+    func m_string(<string> v): string;
+    func m_bigint(<bigint> v): bigint;
+    func m_decimal(<decimal> v): decimal;
+    func m_bitdecimal(<bitdecimal> v): bitdecimal;
+}
+class AllTypesImpl implements IAllTypes {
+    func <int> m_int(<int> v) { return v; }
+    func <int8> m_int8(<int8> v) { return v; }
+    func <int16> m_int16(<int16> v) { return v; }
+    func <int32> m_int32(<int32> v) { return v; }
+    func <int64> m_int64(<int64> v) { return v; }
+    func <uint8> m_uint8(<uint8> v) { return v; }
+    func <uint16> m_uint16(<uint16> v) { return v; }
+    func <uint32> m_uint32(<uint32> v) { return v; }
+    func <uint64> m_uint64(<uint64> v) { return v; }
+    func <uint> m_uint(<uint> v) { return v; }
+    func <short> m_short(<short> v) { return v; }
+    func <ushort> m_ushort(<ushort> v) { return v; }
+    func <long> m_long(<long> v) { return v; }
+    func <ulong> m_ulong(<ulong> v) { return v; }
+    func <long long> m_ll(<long long> v) { return v; }
+    func <size_t> m_size_t(<size_t> v) { return v; }
+    func <ssize_t> m_ssize_t(<ssize_t> v) { return v; }
+    func <byte> m_byte(<byte> v) { return v; }
+    func <uchar> m_uchar(<uchar> v) { return v; }
+    func <char> m_char(<char> v) { return v; }
+    func <ascii> m_ascii(<ascii> v) { return v; }
+    func <bool> m_bool(<bool> v) { return v; }
+    func <double> m_double(<double> v) { return v; }
+    func <float> m_float(<float> v) { return v; }
+    func <long double> m_longdouble(<long double> v) { return v; }
+    func <string> m_string(<string> v) { return v; }
+    func <bigint> m_bigint(<bigint> v) { return v; }
+    func <decimal> m_decimal(<decimal> v) { return v; }
+    func <bitdecimal> m_bitdecimal(<bitdecimal> v) { return v; }
+}
+
+impl = AllTypesImpl();
+print("IT1 m_int", impl.m_int(7));
+print("IT2 m_int8", impl.m_int8(7));
+print("IT3 m_int16", impl.m_int16(7));
+print("IT4 m_int32", impl.m_int32(7));
+print("IT5 m_int64", impl.m_int64(7000000000));
+print("IT6 m_uint8", impl.m_uint8(7));
+print("IT7 m_uint16", impl.m_uint16(7));
+print("IT8 m_uint32", impl.m_uint32(7));
+print("IT9 m_uint64", impl.m_uint64(7000000000));
+print("IT10 m_uint", impl.m_uint(7));
+print("IT11 m_short", impl.m_short(7));
+print("IT12 m_ushort", impl.m_ushort(7));
+print("IT13 m_long", impl.m_long(7000000000));
+print("IT14 m_ulong", impl.m_ulong(7000000000));
+print("IT15 m_ll", impl.m_ll(7000000000));
+print("IT16 m_size_t", impl.m_size_t(7000000000));
+print("IT17 m_ssize_t", impl.m_ssize_t(7));
+print("IT18 m_byte", impl.m_byte(7));
+print("IT19 m_uchar", impl.m_uchar(7));
+print("IT20 m_char", impl.m_char('G'));
+print("IT21 m_ascii", impl.m_ascii(7));
+print("IT22 m_bool", impl.m_bool(true));
+print("IT23 m_double", impl.m_double(3.5));
+print("IT24 m_float", impl.m_float(3.5));
+print("IT25 m_longdouble", impl.m_longdouble(3.5));
+print("IT26 m_string", impl.m_string("hi"));
+print("IT27 m_bigint", impl.m_bigint(<bigint>99));
+print("IT28 m_decimal", impl.m_decimal(<decimal>99));
+print("IT29 m_bitdecimal", impl.m_bitdecimal(<bitdecimal>99));
+
 print("STRUCT_TEST_DONE");
