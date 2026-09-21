@@ -333,6 +333,36 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* ========== 动态方法绑定 ==========
+ * obj 为 struct/class 实例，mname 为方法名：构造 VAL_FUNC bound method（携带实例指针）。
+ * 用于 map/array 等动态取出的实例的 obj.m(args) 调用（编译期无法静态知类型）。
+ * 返回 1=成功写入 *out；0=非实例/无此解释器方法（调用方可继续按字段缺失处理） */
+int vm_make_bound_method(Value obj, const char* mname, Value* out) {
+    if((obj.type != VAL_STRUCT_PTR && obj.type != VAL_CLASS_PTR) ||
+       !obj.v.struct_ptr || !mname) return 0;
+    RuntimeTypeInfo* ri = *(RuntimeTypeInfo**)obj.v.struct_ptr;
+    if(!ri) return 0;
+    RuntimeFunc* rf = lumyr_type_find_method(ri, mname);
+    if(!rf || !interp_func_is_payload(rf)) return 0;
+    InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+    if(!pl || !pl->bytecode || !pl->bytecode->name) return 0;
+
+    RuntimeFunc* bf = (RuntimeFunc*)calloc(1, sizeof(RuntimeFunc));
+    if(!bf) return 0;
+    bf->name = strdup(pl->bytecode->name);
+    bf->bound_self = obj.v.struct_ptr;
+    /* 保留闭包捕获（method RuntimeFunc 的 captures 即 InterpFuncPayload） */
+    bf->captures = rf->captures;
+    bf->capture_count = rf->capture_count;
+
+    memset(out, 0, sizeof(*out));
+    out->type = VAL_FUNC;
+    out->v.func.func_obj = bf;
+    out->v.func.ffi_func = NULL;
+    out->v.func.is_ffi = 0;
+    return 1;
+}
+
 /* ========== 函数值调用内核（OPC_CALLV 与 map/filter/reduce 高阶内置共用） ==========
  * 校验函数值 → 查全局函数表 → 新建帧按形参类型 unbox 绑定 → 闭包捕获 ref 别名 →
  * 保存/切换执行状态 → 执行 → 恢复 → 返回值 box 到 *out。
@@ -353,11 +383,38 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
     /* 新建帧，按形参类型 unbox 绑定 */
     StackFrame* new_frame = stackframe_new(ctx->frame);
     int name_slots = callee->param_cnt + callee->has_variadic;
+
+    /* bound method：实例自动占 slot 0（self），用户实参整体后移一槽 */
+    RuntimeFunc* rf0 = fv.v.func.func_obj;
+    int slot_off = 0;
+    if(rf0->bound_self) {
+        void* bself = rf0->bound_self;
+        RuntimeTypeInfo* bri = *(RuntimeTypeInfo**)bself;
+        Value sv; memset(&sv, 0, sizeof(sv));
+        sv.v.struct_ptr = bself;
+        sv.type = (bri && bri->kind == TYPE_KIND_STRUCT) ? VAL_STRUCT_PTR : VAL_CLASS_PTR;
+        const char* spname = (callee->param_cnt > 0 && callee->params[0]) ? callee->params[0] : "self";
+        CastKind spck = (callee->param_cnt > 0 && callee->sym_cnt > 0)
+                        ? (CastKind)callee->var_type_tags[0] : CAST_NONE;
+        ExprType set = castkind_to_exprtype(spck);
+        if(set == EXPR_TYPE_INT) {
+            stackframe_bind_int64(new_frame, spname, (int64_t)(uintptr_t)bself);
+        } else if(set == EXPR_TYPE_DOUBLE) {
+            stackframe_bind_double(new_frame, spname, 0.0);
+        } else {
+            /* PTR self：必须写 ptr_slots（LOAD_PTR_VAR 读它）；
+             * stackframe_bind 只写 vals 不写 ptr_slots，self 会变 NULL */
+            stackframe_bind_ptr(new_frame, spname, bself);
+        }
+        slot_off = 1;
+    }
+
     for(int slot = 0; slot < argc; ++slot) {
-        const char* pname = (slot < name_slots && callee->params[slot])
-                            ? callee->params[slot] : "_";
-        CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
-                       ? (CastKind)callee->var_type_tags[slot]
+        int fslot = slot + slot_off;
+        const char* pname = (fslot < name_slots && callee->params[fslot])
+                            ? callee->params[fslot] : "_";
+        CastKind pck = (fslot < callee->param_cnt && fslot < callee->sym_cnt)
+                       ? (CastKind)callee->var_type_tags[fslot]
                        : CAST_NONE;
         ExprType et = castkind_to_exprtype(pck);
         switch(et) {

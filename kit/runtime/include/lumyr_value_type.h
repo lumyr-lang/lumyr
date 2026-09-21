@@ -26,6 +26,7 @@ typedef struct RuntimeFunc {
     Value* captures;         // 闭包捕获值
     int capture_count;
     char* name;              // 字节码VM用：函数名（用于动态调用时查找 BytecodeFunc）
+    void* bound_self;        // 绑定方法：非 NULL 时为实例指针，动态调用自动注入 self 槽
 } RuntimeFunc;
 
 // 强制转换类型，给 new_cast_node 使用

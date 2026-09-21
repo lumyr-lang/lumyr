@@ -995,7 +995,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     p = p->u.param.next;
                 }
                 free(argv2);
-                /* emit CALL */
+                /* emit CALL（ctor 为 void：keep_result=0，CALL 不压返回值） */
                 int total = 1 + argc2;
                 int cs = bf_add_callsite(c->fn, ctor_name, total, 0, (int)EXPR_TYPE_NONE);
                 emit(c, OPC_CALL, cs, total);
@@ -1075,11 +1075,15 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                         if(val_et == EXPR_TYPE_INT) matched = 1;
                         else if(val_et == EXPR_TYPE_DOUBLE) { emit(c, OPC_DOUBLE_TO_INT64, 0, 0); matched = 1; }
                         else if(val_et == EXPR_TYPE_PTR) { emit(c, OPC_PTR_TO_INT64, 0, 0); matched = 1; }
+                        else if(val_et == EXPR_TYPE_NONE) { emit(c, OPC_UNBOX_INT64, 0, 0); matched = 1; }
                     } else if(cls == 2) {
                         if(val_et == EXPR_TYPE_DOUBLE) matched = 1;
                         else if(val_et == EXPR_TYPE_INT) { emit(c, OPC_INT64_TO_DOUBLE, 0, 0); matched = 1; }
+                        else if(val_et == EXPR_TYPE_NONE) { emit(c, OPC_UNBOX_DOUBLE, 0, 0); matched = 1; }
                     } else {
                         if(val_et == EXPR_TYPE_PTR) matched = 1;
+                        else if(val_et == EXPR_TYPE_NONE) { emit(c, OPC_UNBOX_PTR, 0, 0); matched = 1; }
+                        else if(val_et == EXPR_TYPE_INT) { emit(c, OPC_INT64_TO_PTR, 0, 0); matched = 1; }
                     }
                     if(matched) {
                         /* 编译 self 到 PTR 栈 */
@@ -2196,10 +2200,12 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
         return EXPR_TYPE_NONE;
     }
 
-    /* 4. 无法确定类型：无静态签名，退化为动态调用（recv 与实参全 VALUE，CALLV）。
-     * 正常全类型标注路径不会进入；保留动态 map 函数值等场景 */
+    /* 4. 无法确定类型：先动态取属性 recv[mname]（runtime 解析 map 值/实例字段/bound method），
+     * 再 CALLV。不能直接把 recv 当函数——方法名会丢失。
+     * 正常全类型标注路径不会进入；覆盖动态 map 函数值、动态取出实例的方法调用 */
     if(!owner || !td) {
-        c_expr_to_value(c, recv);
+        AstNode* prop = ast_index(recv, ast_string((char*)mname));
+        c_expr_to_value(c, prop);
         AstNode** av = NULL; int ac = 0, acp = 0;
         collect_call_args(margs, &av, &ac, &acp);
         for(int i = 0; i < ac; i++) c_expr_to_value(c, av[i]);
@@ -2242,8 +2248,13 @@ void c_stmt(Ctx* c, AstNode* node) {
                         /* 无 PRINT_BITDECIMAL：先转字符串再打印 */
                         emit(c, OPC_BITDECIMAL_TO_STRING, 0, 0);
                         emit(c, OPC_PRINT_PTR, 0, 0);
-                    } else {
+                    } else if(cast_type == CAST_STRING) {
                         emit(c, OPC_PRINT_PTR, (int)cast_type, 0);
+                    } else {
+                        /* 容器/实例引用（map/array/typed_array/struct_ptr/class_ptr）：
+                         * 装箱后走 VALUE 打印路径，PRINT_PTR 只能打裸字符串 */
+                        emit(c, OPC_BOX_PTR, (int)cast_type, 0);
+                        emit(c, OPC_PRINT, 0, 0);
                     }
                 } else {
                     emit(c, OPC_PRINT, (int)cast_type, 0);
@@ -2392,9 +2403,14 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_INDEX_ASSIGN: {
-        /* 下标写语句：编译（INDEX_SET 压回 v），丢弃结果 */
-        c_expr(c, node);
-        emit(c, OPC_POP, 0, 0);
+        /* 下标/属性写语句：丢弃压回的结果。结果所在栈按编译返回类型选择，
+         * 否则 self.field=typed 值（INT64/DOUBLE/PTR）会误弹 VALUE 偷调用方数据 */
+        ExprType wet = c_expr(c, node);
+        int pop_sel = 0;
+        if(wet == EXPR_TYPE_INT) pop_sel = 1;
+        else if(wet == EXPR_TYPE_DOUBLE) pop_sel = 2;
+        else if(wet == EXPR_TYPE_PTR) pop_sel = 3;
+        emit(c, OPC_POP, pop_sel, 0);
         break;
     }
 

@@ -68,9 +68,12 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             }
             break;
 
-        /* ===== Value 栈弹出指令 ===== */
+        /* ===== 弹栈指令：a 选择栈（0 VALUE/1 INT64/2 DOUBLE/3 PTR） ===== */
         case OPC_POP:
-            d.value = -1;
+            if(in.a == 1) d.int64 = -1;
+            else if(in.a == 2) d.double_stk = -1;
+            else if(in.a == 3) d.ptr = -1;
+            else d.value = -1;
             break;
         case OPC_STORE_VAR:
             d.value = -1;

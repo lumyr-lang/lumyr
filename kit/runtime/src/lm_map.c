@@ -98,6 +98,13 @@ static uint32_t value_hash(Value v) {
             }
             break;
         }
+        /* struct/class 实例：引用身份哈希（同一实例引用才作同一键，与 JS Map/Java identity 一致） */
+        case VAL_STRUCT_PTR:
+        case VAL_CLASS_PTR: {
+            uintptr_t p = (uintptr_t)v.v.struct_ptr;
+            h ^= (uint32_t)(p ^ (p >> 32));
+            break;
+        }
         default:
             break;
     }
@@ -156,6 +163,13 @@ static int key_compare(Value a, Value b) {
             free(sa); free(sb);
             return (c > 0) - (c < 0);
         }
+        /* 实例键：引用身份排序（保持严格弱序） */
+        case VAL_STRUCT_PTR:
+        case VAL_CLASS_PTR: {
+            uintptr_t pa = (uintptr_t)a.v.struct_ptr;
+            uintptr_t pb = (uintptr_t)b.v.struct_ptr;
+            return (pa > pb) - (pa < pb);
+        }
         default:
             return 0;
     }
@@ -210,6 +224,10 @@ static int key_eq(Value a, Value b) {
             }
             return 1;
         }
+        /* 实例键：同一引用才相等（与 value_hash 的身份哈希契约一致） */
+        case VAL_STRUCT_PTR:
+        case VAL_CLASS_PTR:
+            return a.v.struct_ptr == b.v.struct_ptr;
         default: return 0;
     }
 }

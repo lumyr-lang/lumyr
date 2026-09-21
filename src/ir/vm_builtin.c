@@ -487,6 +487,19 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     *out = val_none();
     Value recv = argv[0];
 
+    /* 用户方法优先：receiver 是 struct/class 实例且声明了与该内置同名的用户方法时，
+     * 构造 bound method 调用用户实现（用户方法允许覆盖内置，如实例自定义 sum/get/set）。
+     * 仅方法形式；BUILTIN_TYPE 对实例本就有正确语义，不拦截。
+     * 未命中用户方法则落回常规分派（保持既有报错行为）。 */
+    if(is_method == 1 && id != BUILTIN_TYPE &&
+       (recv.type == VAL_STRUCT_PTR || recv.type == VAL_CLASS_PTR)) {
+        const char* mname = builtin_id_name(id);
+        Value bm;
+        if(mname && vm_make_bound_method(recv, mname, &bm)) {
+            return vm_call_func_value(ctx, bm, argc, argv + 1, out);
+        }
+    }
+
     switch(id) {
     /* ===== 通用 ===== */
     case BUILTIN_LEN: {

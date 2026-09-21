@@ -192,6 +192,11 @@ static AstNode* wrap_type_list(const char* tname, AstNode* chain)
         chain->u.seq.second = wrap_type_list(tname, chain->u.seq.second);
         return chain;
     }
+    /* 与语法动作一致：struct/class 名走 ast_class_new，否则普通调用。
+       此前一律 ast_call，"Pt(1)" 被当普通函数，落回动态路径变成 int64 */
+    if(struct_lookup(tname) || class_lookup(tname)) {
+        return ast_class_new(strdup(tname), 1, chain);
+    }
     return ast_call(strdup(tname), chain);
 }
 /* 泛型 map 字面量 <K,V>{k1:v1,...}：沿 SEQ 链给每个 entry 的键包 K cast、值包 V cast，
@@ -482,7 +487,7 @@ static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; 
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
 %type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
-%type<ll> type_name builtin_type_name type_keyword access_modifier
+%type<ll> type_name builtin_type_name type_keyword access_modifier map_generic_type
 %type<s> type_name_str
 %type <ch> char_lit
 %type<ll> INTEGER
@@ -1627,14 +1632,20 @@ primary
               /* 命名字段构造：<CustomType>{ name: v, ... } 展开为位置构造 */
               $$ = L(wrap_struct_named($2, $4->u.map_lit.entries));
               free($2);
+          } else if(type_lookup($2) != NULL && $4 && $4->type == AST_ARRAY_LIT) {
+              /* 泛型形状数组：<Person>[e1, e2] → [Person(e1), Person(e2)]
+                 （本规则是实际生效路径：[..] 先被归约为数组字面量；
+                  下方 LT ID GT ARRAY_OPEN 规则因移进冲突不可达） */
+              $$ = L(ast_array_lit(wrap_type_list($2, $4->u.array_lit.elems), -1));
+              free($2);
           } else {
               /* 非接口类型：暂时当作普通表达式处理（后续可扩展自定义类型标注） */
               $$ = $4;
               free($2);
           }
       }
-    | LT type_name COMMA type_name GT MAP_OPEN map_items RBRACE
-        { $$ = ast_map_lit(wrap_map_kv($7, valuetype_to_castkind($2), valuetype_to_castkind($4))); }
+    | LT map_generic_type COMMA map_generic_type GT MAP_OPEN map_items RBRACE
+        { $$ = ast_map_lit(wrap_map_kv($7, (CastKind)$2, (CastKind)$4)); }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
           /* 泛型自定义类型：<Person>[e1,e2] → [Person(e1), Person(e2)]（形状构造） */
           if(type_lookup($2) != NULL) {
@@ -1996,12 +2007,26 @@ access_modifier
 class_prop
     : ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
-          type_prop_push($1, $3, 0, sn);
+          ValueType vt = $3;
+          /* 自定义类型字段：type_name 对自定义名返回 VAL_NONE，须按注册表修正
+             （与 type_prop 规则一致），否则 cls 走错栈、指针被当整数 */
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($1, vt, 0, sn);
           $$ = ast_none();
       }
     | access_modifier ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
-          type_prop_push($2, $4, $1, sn);
+          ValueType vt = $4;
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($2, vt, $1, sn);
           $$ = ast_none();
       }
     ;
@@ -2044,6 +2069,44 @@ type_name
 type_name_str
     : ID                         { $$ = $1; }
     | builtin_type_name          { $$ = castkind_to_name($1); }
+    ;
+
+/* 双泛型 map <K,V> 的类型实参：内建类型直接取 CastKind；自定义类型查注册表
+   （struct→STRUCT_PTR、class→CLASS_PTR、type 形状→MAP）。
+   此前裸走 type_name：自定义名返回 VAL_NONE，被默认映射成 CAST_LONGLONG，
+   class/struct 实例在 entry cast 中被字符串转整数而销毁 */
+map_generic_type
+    : builtin_type_name          { $$ = $1; }
+    | ID                         {
+          if(strcmp($1, "map") == 0) {
+              $$ = CAST_MAP;
+              free($1);
+          } else if(strcmp($1, "array") == 0) {
+              $$ = CAST_ARRAY;
+              free($1);
+          } else if(strcmp($1, "bigint") == 0) {
+              $$ = CAST_BIGINT;
+              free($1);
+          } else if(strcmp($1, "decimal") == 0) {
+              $$ = CAST_DECIMAL;
+              free($1);
+          } else if(strcmp($1, "bitdecimal") == 0) {
+              $$ = CAST_BITDECIMAL;
+              free($1);
+          } else if(struct_lookup($1)) {
+              $$ = CAST_STRUCT_PTR;
+              free($1);
+          } else if(class_lookup($1)) {
+              $$ = CAST_CLASS_PTR;
+              free($1);
+          } else if(type_lookup($1)) {
+              $$ = CAST_MAP;
+              free($1);
+          } else {
+              yyerror("未定义类型");
+              $$ = CAST_NONE;
+          }
+      }
     ;
 
 /* 枚举成员：值 = 成员名字符串 */

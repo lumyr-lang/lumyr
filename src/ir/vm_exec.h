@@ -32,6 +32,9 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
  * 返回 1=成功；0=失败（已打印错误）；VM_LOOP_UNWIND=异常穿过本调用 */
 int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* out);
 
+/* 实例 obj 的方法 mname → bound method Value；无方法返回 0 */
+int vm_make_bound_method(Value obj, const char* mname, Value* out);
+
 /* BuiltinId 的反汇编名（bytecode.c 名表用） */
 const char* builtin_id_name(int id);
 

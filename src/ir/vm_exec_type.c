@@ -122,6 +122,13 @@ int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in) {
         v.type = VAL_STRUCT_PTR; v.v.struct_ptr = val; break;
     case CAST_CLASS_PTR:
         v.type = VAL_CLASS_PTR; v.v.struct_ptr = val; break;
+    /* 容器裸指针：装回对应容器 Value，后续动态 INDEX_GET/print 才能识别 */
+    case CAST_ARRAY:
+        v.type = VAL_ARRAY;     v.v.array = val;      break;
+    case CAST_MAP:
+        v.type = VAL_MAP;       v.v.map = val;        break;
+    case CAST_TYPED_ARRAY:
+        v.type = VAL_TYPED_ARRAY; v.v.typed_array = val; break;
     default:
         v.type = VAL_PTR;       v.v.struct_ptr = val;  break;
     }

@@ -1,0 +1,458 @@
+// tests/nested_types_test.lm
+// 全数据类型 × 容器相互嵌套测试（由 fuzz/gen_nested_types_test.py 生成，勿手改）
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 0. 自定义类型：struct Pt / type BoxT / class Kls =====
+struct Pt {
+    x: int;
+    y: int;
+    func sum(self) {
+        return self.x + self.y;
+    }
+}
+
+type BoxT {
+    name: string,
+    v: int
+}
+
+class Kls {
+    label: string;
+    n: int;
+    func __init__(self, label, n) {
+        self.label = label;
+        self.n = n;
+    }
+    func getn(self) {
+        return self.n;
+    }
+}
+
+// ===== A. 全 29 类型作 typed map 的 V：<string,T> =====
+mA_int = <string, int>{"k": 7};
+check(type(mA_int) == "map", "A.int: container");
+check(mA_int["k"] == 7, "A.int: value");
+check(type(mA_int["k"]) == "int", "A.int: vtype");
+mA_int8 = <string, int8>{"k": 7};
+check(type(mA_int8) == "map", "A.int8: container");
+check(mA_int8["k"] == 7, "A.int8: value");
+check(type(mA_int8["k"]) == "int8", "A.int8: vtype");
+mA_int16 = <string, int16>{"k": 7};
+check(type(mA_int16) == "map", "A.int16: container");
+check(mA_int16["k"] == 7, "A.int16: value");
+check(type(mA_int16["k"]) == "int16", "A.int16: vtype");
+mA_int32 = <string, int32>{"k": 7};
+check(type(mA_int32) == "map", "A.int32: container");
+check(mA_int32["k"] == 7, "A.int32: value");
+check(type(mA_int32["k"]) == "int32", "A.int32: vtype");
+mA_int64 = <string, int64>{"k": 7000000000};
+check(type(mA_int64) == "map", "A.int64: container");
+check(mA_int64["k"] == 7000000000, "A.int64: value");
+check(type(mA_int64["k"]) == "int64", "A.int64: vtype");
+mA_uint8 = <string, uint8>{"k": 7};
+check(type(mA_uint8) == "map", "A.uint8: container");
+check(mA_uint8["k"] == 7, "A.uint8: value");
+check(type(mA_uint8["k"]) == "uint8", "A.uint8: vtype");
+mA_uint16 = <string, uint16>{"k": 7};
+check(type(mA_uint16) == "map", "A.uint16: container");
+check(mA_uint16["k"] == 7, "A.uint16: value");
+check(type(mA_uint16["k"]) == "uint16", "A.uint16: vtype");
+mA_uint32 = <string, uint32>{"k": 7};
+check(type(mA_uint32) == "map", "A.uint32: container");
+check(mA_uint32["k"] == 7, "A.uint32: value");
+check(type(mA_uint32["k"]) == "uint32", "A.uint32: vtype");
+mA_uint64 = <string, uint64>{"k": 7000000000};
+check(type(mA_uint64) == "map", "A.uint64: container");
+check(mA_uint64["k"] == 7000000000, "A.uint64: value");
+check(type(mA_uint64["k"]) == "uint64", "A.uint64: vtype");
+mA_byte = <string, byte>{"k": 7};
+check(type(mA_byte) == "map", "A.byte: container");
+check(mA_byte["k"] == 7, "A.byte: value");
+check(type(mA_byte["k"]) == "byte", "A.byte: vtype");
+mA_uchar = <string, uchar>{"k": 7};
+check(type(mA_uchar) == "map", "A.uchar: container");
+check(mA_uchar["k"] == 7, "A.uchar: value");
+check(type(mA_uchar["k"]) == "unsigned char", "A.uchar: vtype");
+mA_ushort = <string, ushort>{"k": 7};
+check(type(mA_ushort) == "map", "A.ushort: container");
+check(mA_ushort["k"] == 7, "A.ushort: value");
+check(type(mA_ushort["k"]) == "unsigned short", "A.ushort: vtype");
+mA_ulong = <string, ulong>{"k": 7000000000};
+check(type(mA_ulong) == "map", "A.ulong: container");
+check(mA_ulong["k"] == 7000000000, "A.ulong: value");
+check(type(mA_ulong["k"]) == "unsigned long", "A.ulong: vtype");
+mA_uint = <string, uint>{"k": 7000000000};
+check(type(mA_uint) == "map", "A.uint: container");
+check(mA_uint["k"] == 7000000000, "A.uint: value");
+check(type(mA_uint["k"]) == "uint64", "A.uint: vtype");
+mA_size_t = <string, size_t>{"k": 7000000000};
+check(type(mA_size_t) == "map", "A.size_t: container");
+check(mA_size_t["k"] == 7000000000, "A.size_t: value");
+check(type(mA_size_t["k"]) == "size_t", "A.size_t: vtype");
+mA_short = <string, short>{"k": 7};
+check(type(mA_short) == "map", "A.short: container");
+check(mA_short["k"] == 7, "A.short: value");
+check(type(mA_short["k"]) == "short", "A.short: vtype");
+mA_long = <string, long>{"k": 7000000000};
+check(type(mA_long) == "map", "A.long: container");
+check(mA_long["k"] == 7000000000, "A.long: value");
+check(type(mA_long["k"]) == "long", "A.long: vtype");
+mA_longlong = <string, long long>{"k": 7000000000};
+check(type(mA_longlong) == "map", "A.longlong: container");
+check(mA_longlong["k"] == 7000000000, "A.longlong: value");
+check(type(mA_longlong["k"]) == "long long", "A.longlong: vtype");
+mA_ssize_t = <string, ssize_t>{"k": 7};
+check(type(mA_ssize_t) == "map", "A.ssize_t: container");
+check(mA_ssize_t["k"] == 7, "A.ssize_t: value");
+check(type(mA_ssize_t["k"]) == "ssize_t", "A.ssize_t: vtype");
+mA_char = <string, char>{"k": 'G'};
+check(type(mA_char) == "map", "A.char: container");
+check(mA_char["k"] == 'G', "A.char: value");
+check(type(mA_char["k"]) == "char", "A.char: vtype");
+mA_ascii = <string, ascii>{"k": 7};
+check(type(mA_ascii) == "map", "A.ascii: container");
+check(mA_ascii["k"] == 7, "A.ascii: value");
+check(type(mA_ascii["k"]) == "int", "A.ascii: vtype");
+mA_bool = <string, bool>{"k": true};
+check(type(mA_bool) == "map", "A.bool: container");
+check(mA_bool["k"] == true, "A.bool: value");
+check(type(mA_bool["k"]) == "bool", "A.bool: vtype");
+mA_double = <string, double>{"k": 3.5};
+check(type(mA_double) == "map", "A.double: container");
+check(mA_double["k"] == 3.5, "A.double: value");
+check(type(mA_double["k"]) == "double", "A.double: vtype");
+mA_float = <string, float>{"k": 3.5};
+check(type(mA_float) == "map", "A.float: container");
+check(mA_float["k"] == 3.5, "A.float: value");
+check(type(mA_float["k"]) == "double", "A.float: vtype");
+mA_longdouble = <string, long double>{"k": 3.5};
+check(type(mA_longdouble) == "map", "A.longdouble: container");
+check(mA_longdouble["k"] == 3.5, "A.longdouble: value");
+check(type(mA_longdouble["k"]) == "double", "A.longdouble: vtype");
+mA_bigint = <string, bigint>{"k": <bigint>99};
+check(type(mA_bigint) == "map", "A.bigint: container");
+check((string)mA_bigint["k"] == "99", "A.bigint: value");
+check(type(mA_bigint["k"]) == "bigint", "A.bigint: vtype");
+mA_decimal = <string, decimal>{"k": <decimal>99};
+check(type(mA_decimal) == "map", "A.decimal: container");
+check((string)mA_decimal["k"] == "99", "A.decimal: value");
+check(type(mA_decimal["k"]) == "decimal", "A.decimal: vtype");
+mA_bitdecimal = <string, bitdecimal>{"k": <bitdecimal>99};
+check(type(mA_bitdecimal) == "map", "A.bitdecimal: container");
+check((string)mA_bitdecimal["k"] == "99", "A.bitdecimal: value");
+check(type(mA_bitdecimal["k"]) == "bitdecimal", "A.bitdecimal: vtype");
+mA_string = <string, string>{"k": "v7"};
+check(type(mA_string) == "map", "A.string: container");
+check(mA_string["k"] == "v7", "A.string: value");
+check(type(mA_string["k"]) == "string", "A.string: vtype");
+
+// ===== B. 全 29 类型作 typed array 元素：<T>[v, v] =====
+aB_int = <int>[7, 7];
+check(type(aB_int) == "typed_array", "B.int: container");
+check(aB_int.len == 2, "B.int: len");
+check(aB_int[0] == 7, "B.int: value");
+check(type(aB_int[0]) == "int", "B.int: vtype");
+aB_int8 = <int8>[7, 7];
+check(type(aB_int8) == "typed_array", "B.int8: container");
+check(aB_int8.len == 2, "B.int8: len");
+check(aB_int8[0] == 7, "B.int8: value");
+check(type(aB_int8[0]) == "int8", "B.int8: vtype");
+aB_int16 = <int16>[7, 7];
+check(type(aB_int16) == "typed_array", "B.int16: container");
+check(aB_int16.len == 2, "B.int16: len");
+check(aB_int16[0] == 7, "B.int16: value");
+check(type(aB_int16[0]) == "int16", "B.int16: vtype");
+aB_int32 = <int32>[7, 7];
+check(type(aB_int32) == "typed_array", "B.int32: container");
+check(aB_int32.len == 2, "B.int32: len");
+check(aB_int32[0] == 7, "B.int32: value");
+check(type(aB_int32[0]) == "int32", "B.int32: vtype");
+aB_int64 = <int64>[7000000000, 7000000000];
+check(type(aB_int64) == "typed_array", "B.int64: container");
+check(aB_int64.len == 2, "B.int64: len");
+check(aB_int64[0] == 7000000000, "B.int64: value");
+check(type(aB_int64[0]) == "int64", "B.int64: vtype");
+aB_uint8 = <uint8>[7, 7];
+check(type(aB_uint8) == "typed_array", "B.uint8: container");
+check(aB_uint8.len == 2, "B.uint8: len");
+check(aB_uint8[0] == 7, "B.uint8: value");
+check(type(aB_uint8[0]) == "uint8", "B.uint8: vtype");
+aB_uint16 = <uint16>[7, 7];
+check(type(aB_uint16) == "typed_array", "B.uint16: container");
+check(aB_uint16.len == 2, "B.uint16: len");
+check(aB_uint16[0] == 7, "B.uint16: value");
+check(type(aB_uint16[0]) == "uint16", "B.uint16: vtype");
+aB_uint32 = <uint32>[7, 7];
+check(type(aB_uint32) == "typed_array", "B.uint32: container");
+check(aB_uint32.len == 2, "B.uint32: len");
+check(aB_uint32[0] == 7, "B.uint32: value");
+check(type(aB_uint32[0]) == "uint32", "B.uint32: vtype");
+aB_uint64 = <uint64>[7000000000, 7000000000];
+check(type(aB_uint64) == "typed_array", "B.uint64: container");
+check(aB_uint64.len == 2, "B.uint64: len");
+check(aB_uint64[0] == 7000000000, "B.uint64: value");
+check(type(aB_uint64[0]) == "uint64", "B.uint64: vtype");
+aB_byte = <byte>[7, 7];
+check(type(aB_byte) == "typed_array", "B.byte: container");
+check(aB_byte.len == 2, "B.byte: len");
+check(aB_byte[0] == 7, "B.byte: value");
+check(type(aB_byte[0]) == "byte", "B.byte: vtype");
+aB_uchar = <uchar>[7, 7];
+check(type(aB_uchar) == "typed_array", "B.uchar: container");
+check(aB_uchar.len == 2, "B.uchar: len");
+check(aB_uchar[0] == 7, "B.uchar: value");
+check(type(aB_uchar[0]) == "unsigned char", "B.uchar: vtype");
+aB_ushort = <ushort>[7, 7];
+check(type(aB_ushort) == "typed_array", "B.ushort: container");
+check(aB_ushort.len == 2, "B.ushort: len");
+check(aB_ushort[0] == 7, "B.ushort: value");
+check(type(aB_ushort[0]) == "unsigned short", "B.ushort: vtype");
+aB_ulong = <ulong>[7000000000, 7000000000];
+check(type(aB_ulong) == "typed_array", "B.ulong: container");
+check(aB_ulong.len == 2, "B.ulong: len");
+check(aB_ulong[0] == 7000000000, "B.ulong: value");
+check(type(aB_ulong[0]) == "unsigned long", "B.ulong: vtype");
+aB_uint = <uint>[4000000000, 4000000000];
+check(type(aB_uint) == "typed_array", "B.uint: container");
+check(aB_uint.len == 2, "B.uint: len");
+check(aB_uint[0] == 4000000000, "B.uint: value");
+check(type(aB_uint[0]) == "uint", "B.uint: vtype");
+aB_size_t = <size_t>[7000000000, 7000000000];
+check(type(aB_size_t) == "typed_array", "B.size_t: container");
+check(aB_size_t.len == 2, "B.size_t: len");
+check(aB_size_t[0] == 7000000000, "B.size_t: value");
+check(type(aB_size_t[0]) == "size_t", "B.size_t: vtype");
+aB_short = <short>[7, 7];
+check(type(aB_short) == "typed_array", "B.short: container");
+check(aB_short.len == 2, "B.short: len");
+check(aB_short[0] == 7, "B.short: value");
+check(type(aB_short[0]) == "short", "B.short: vtype");
+aB_long = <long>[7000000000, 7000000000];
+check(type(aB_long) == "typed_array", "B.long: container");
+check(aB_long.len == 2, "B.long: len");
+check(aB_long[0] == 7000000000, "B.long: value");
+check(type(aB_long[0]) == "long", "B.long: vtype");
+aB_longlong = <long long>[7000000000, 7000000000];
+check(type(aB_longlong) == "typed_array", "B.longlong: container");
+check(aB_longlong.len == 2, "B.longlong: len");
+check(aB_longlong[0] == 7000000000, "B.longlong: value");
+check(type(aB_longlong[0]) == "long long", "B.longlong: vtype");
+aB_ssize_t = <ssize_t>[7, 7];
+check(type(aB_ssize_t) == "typed_array", "B.ssize_t: container");
+check(aB_ssize_t.len == 2, "B.ssize_t: len");
+check(aB_ssize_t[0] == 7, "B.ssize_t: value");
+check(type(aB_ssize_t[0]) == "ssize_t", "B.ssize_t: vtype");
+aB_char = <char>['G', 'G'];
+check(type(aB_char) == "typed_array", "B.char: container");
+check(aB_char.len == 2, "B.char: len");
+check(aB_char[0] == 'G', "B.char: value");
+check(type(aB_char[0]) == "char", "B.char: vtype");
+aB_ascii = <ascii>[7, 7];
+check(type(aB_ascii) == "typed_array", "B.ascii: container");
+check(aB_ascii.len == 2, "B.ascii: len");
+check(aB_ascii[0] == 7, "B.ascii: value");
+check(type(aB_ascii[0]) == "int", "B.ascii: vtype");
+aB_bool = <bool>[true, true];
+check(type(aB_bool) == "typed_array", "B.bool: container");
+check(aB_bool.len == 2, "B.bool: len");
+check(aB_bool[0] == true, "B.bool: value");
+check(type(aB_bool[0]) == "bool", "B.bool: vtype");
+aB_double = <double>[3.5, 3.5];
+check(type(aB_double) == "typed_array", "B.double: container");
+check(aB_double.len == 2, "B.double: len");
+check(aB_double[0] == 3.5, "B.double: value");
+check(type(aB_double[0]) == "double", "B.double: vtype");
+aB_float = <float>[3.5, 3.5];
+check(type(aB_float) == "typed_array", "B.float: container");
+check(aB_float.len == 2, "B.float: len");
+check(aB_float[0] == 3.5, "B.float: value");
+check(type(aB_float[0]) == "float", "B.float: vtype");
+aB_longdouble = <long double>[3.5, 3.5];
+check(type(aB_longdouble) == "typed_array", "B.longdouble: container");
+check(aB_longdouble.len == 2, "B.longdouble: len");
+check(aB_longdouble[0] == 3.5, "B.longdouble: value");
+check(type(aB_longdouble[0]) == "long double", "B.longdouble: vtype");
+aB_bigint = <bigint>[<bigint>99, <bigint>99];
+check(type(aB_bigint) == "typed_array", "B.bigint: container");
+check(aB_bigint.len == 2, "B.bigint: len");
+check((string)aB_bigint[0] == "99", "B.bigint: value");
+check(type(aB_bigint[0]) == "bigint", "B.bigint: vtype");
+aB_decimal = <decimal>[<decimal>99, <decimal>99];
+check(type(aB_decimal) == "typed_array", "B.decimal: container");
+check(aB_decimal.len == 2, "B.decimal: len");
+check((string)aB_decimal[0] == "99", "B.decimal: value");
+check(type(aB_decimal[0]) == "decimal", "B.decimal: vtype");
+aB_bitdecimal = <bitdecimal>[<bitdecimal>99, <bitdecimal>99];
+check(type(aB_bitdecimal) == "typed_array", "B.bitdecimal: container");
+check(aB_bitdecimal.len == 2, "B.bitdecimal: len");
+check((string)aB_bitdecimal[0] == "99", "B.bitdecimal: value");
+check(type(aB_bitdecimal[0]) == "bitdecimal", "B.bitdecimal: vtype");
+aB_string = <string>["v7", "v7"];
+check(type(aB_string) == "typed_array", "B.string: container");
+check(aB_string.len == 2, "B.string: len");
+check(aB_string[0] == "v7", "B.string: value");
+check(type(aB_string[0]) == "string", "B.string: vtype");
+
+// ===== C. typed map 的 V = 容器 / 实例 =====
+c_mm = <string, map>{"a": {"x": 5}};
+check(type(c_mm) == "map", "C.mm container");
+check(c_mm["a"]["x"] == 5, "C.mm value");
+
+c_ma = <string, array>{"a": [1, 2, 3]};
+check(c_ma["a"][1] == 2, "C.ma value");
+check(type(c_ma["a"]) == "array", "C.ma vtype");
+
+c_ms = <string, Pt>{"p": Pt(3, 4)};
+check(type(c_ms["p"]) == "Pt", "C.ms vtype");
+check(c_ms["p"].x == 3, "C.ms field");
+check(c_ms["p"].sum() == 7, "C.ms method");
+
+c_mt = <string, BoxT>{"b": <BoxT>{name: "bb", v: 9}};
+check(type(c_mt["b"]) == "map", "C.mt vtype");
+check(c_mt["b"].name == "bb", "C.mt field");
+check(c_mt["b"].v == 9, "C.mt field2");
+
+c_mc = <string, Kls>{"k": Kls("kk", 13)};
+check(type(c_mc["k"]) == "Kls", "C.mc vtype");
+check(c_mc["k"].label == "kk", "C.mc field");
+check(c_mc["k"].getn() == 13, "C.mc method");
+
+// ===== D. struct / class 实例作 map 键（引用身份） =====
+d_pkey = Pt(1, 2);
+d_mk = <Pt, int>{[d_pkey]: 77};
+check(d_mk[d_pkey] == 77, "D.struct key");
+check(d_mk[Pt(1, 2)] == null, "D.identity not equal");
+
+d_ckey = Kls("c", 1);
+d_mkc = <Kls, int>{[d_ckey]: 88};
+check(d_mkc[d_ckey] == 88, "D.class key");
+
+// ===== E. 字段嵌套容器 / 实例 =====
+class EHolder {
+    items: array;
+    info: map;
+    func __init__(self) {
+        self.items = [10, 20, 30];
+        self.info = {"a": 1};
+    }
+    func total(self) {
+        return self.items[0] + self.items[1] + self.items[2];
+    }
+}
+eh = EHolder();
+check(type(eh.items) == "array", "E.class array field");
+check(eh.total() == 60, "E.class method");
+check(eh.info["a"] == 1, "E.class map field");
+eh.items[1] = 200;
+check(eh.total() == 240, "E.class in-place modify");
+eh.info["a"] = 100;
+check(eh.info["a"] == 100, "E.class map in-place");
+
+struct EComposed {
+    arr: array;
+    mp: map;
+    p: Pt;
+}
+ec = <EComposed>{arr: [1, 2], mp: {"k": "v"}, p: Pt(5, 6)};
+check(type(ec.arr) == "array", "E.struct array field");
+check(ec.arr[0] == 1, "E.struct arr value");
+check(ec.mp["k"] == "v", "E.struct map value");
+check(ec.p.sum() == 11, "E.struct nested method");
+ec.arr[0] = 11;
+check(ec.arr[0] == 11, "E.struct in-place modify");
+
+type EHolderT {
+    name: string,
+    items: array,
+    info: map,
+    p: Pt
+}
+et = <EHolderT>{name: "hb", items: [4, 5, 6], info: {"z": 1}, p: Pt(2, 3)};
+check(et.name == "hb", "E.type scalar field");
+check(et.items[2] == 6, "E.type array field");
+check(et.info["z"] == 1, "E.type map field");
+check(et.p.sum() == 5, "E.type nested method");
+et.items[0] = 40;
+check(et.items[0] == 40, "E.type in-place modify");
+
+// ===== F. 深度混合链 =====
+struct FDeep {
+    layers: map;
+}
+fd = <FDeep>{layers: {"L1": [{"k": Kls("deep", 42)}]}};
+check(fd.layers["L1"][0]["k"].getn() == 42, "F.chain1 method");
+fd.layers["L1"][0]["k"].n = 52;
+check(fd.layers["L1"][0]["k"].getn() == 52, "F.chain1 modify");
+
+class FTree {
+    children: array;
+    node: Pt;
+    func __init__(self) {
+        self.children = [Pt(1, 1), Pt(2, 2)];
+        self.node = Pt(9, 9);
+    }
+    func childSum(self, i) {
+        return self.children[i].sum();
+    }
+}
+ft = FTree();
+check(ft.childSum(0) == 2, "F.chain2 method");
+check(ft.node.sum() == 18, "F.chain2 node method");
+ft.children[1] = Pt(10, 10);
+check(ft.childSum(1) == 20, "F.chain2 element replace");
+
+fmix = {"a": [Pt(1, 2), {"q": 3}], "b": {"c": [Kls("z", 5)]}};
+check(fmix["a"][0].sum() == 3, "F.chain3 struct in array");
+check(fmix["a"][1]["q"] == 3, "F.chain3 map in array");
+check(fmix["b"]["c"][0].getn() == 5, "F.chain3 class deep");
+fmix["b"]["c"][0].n = 6;
+check(fmix["b"]["c"][0].getn() == 6, "F.chain3 deep modify");
+
+// ===== G. 数组装容器 / 实例 =====
+g_coll = [{"a": 1}, [10, 20], Pt(7, 8), Kls("g", 3)];
+check(type(g_coll) == "array", "G.coll container");
+check(g_coll[0]["a"] == 1, "G.map element");
+check(g_coll[1][0] == 10, "G.array element");
+check(g_coll[2].sum() == 15, "G.struct element method");
+check(g_coll[3].getn() == 3, "G.class element method");
+
+// 自定义类型泛型数组：<Pt>[1, 2] → [Pt(1), Pt(2)] 形状构造，普通数组
+g_shaped = <Pt>[1, 2];
+check(type(g_shaped) == "array", "G.shape container");
+check(g_shaped.len == 2, "G.shape len");
+check(type(g_shaped[0]) == "Pt", "G.shape elem vtype");
+check(g_shaped[0].x == 1, "G.shape elem0 x");
+check(g_shaped[0].sum() == 1, "G.shape elem0 method");
+check(g_shaped[1].x == 2, "G.shape elem1 x");
+g_shaped[1] = Pt(20, 20);
+check(g_shaped[1].sum() == 40, "G.shape element replace");
+
+// ===== H. 语义：引用共享 / 空容器嵌套 / 多层互嵌 =====
+h_shared = {"n": 1};
+h_outer1 = {"s": h_shared};
+h_outer2 = {"s": h_shared};
+h_outer1["s"]["n"] = 99;
+check(h_outer2["s"]["n"] == 99, "H.reference sharing");
+
+h_empty = {"a": [], "b": {}};
+check(h_empty["a"].len == 0, "H.empty array");
+h_empty["a"].add(1);
+check(h_empty["a"][0] == 1, "H.empty array grow");
+h_empty["b"]["k"] = 2;
+check(h_empty["b"]["k"] == 2, "H.empty map grow");
+
+h_m3 = [[[1]]];
+check(type(h_m3[0][0]) == "array", "H.nested array type");
+check(h_m3[0][0][0] == 1, "H.nested array value");
+
+h_tmm = <string, map>{"a": {"x": 1}};
+h_tmm["a"]["x"] = 11;
+check(h_tmm["a"]["x"] == 11, "H.typed map V=map modify");
+h_tma = <string, array>{"a": [1, 2]};
+h_tma["a"][0] = 9;
+check(h_tma["a"][0] == 9, "H.typed map V=array modify");
+
+print("nested_types_test ALL PASS");

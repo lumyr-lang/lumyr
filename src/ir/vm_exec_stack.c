@@ -8,6 +8,7 @@
 #include "gc_runtime.h"
 #include "lm_map.h"
 #include "lm_type.h"
+#include "vm_exec.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
 static inline int typed_ptr_ok(const void* p) {
@@ -19,8 +20,18 @@ static inline int typed_ptr_ok(const void* p) {
 
 /* POP：弹出 VALUE 栈顶 */
 int vm_exec_stack_pop(VMExecCtx* ctx, Instruction* in) {
-    Value val;
-    stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    /* a 选择栈：0 VALUE（默认）/1 INT64/2 DOUBLE/3 PTR。
+     * 此前固定弹 VALUE，self.field=typed 值的语句会误偷调用方 VALUE */
+    if(in->a == 1) {
+        int64_t iv; stack_vm_pop(g_stack_mgr, STACK_INT64, &iv);
+    } else if(in->a == 2) {
+        double dv; stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &dv);
+    } else if(in->a == 3) {
+        void* pv; stack_vm_pop(g_stack_mgr, STACK_PTR, &pv);
+    } else {
+        Value val;
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    }
     return 1;
 }
 
@@ -253,9 +264,16 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
                 r = typed_box_elem(ta->elem_type, ta->items, (int)i);
         }
     } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
-        /* 动态字段访问：idx 是字段名字符串（struct/class 实例统一处理） */
+        /* 动态属性访问：先按字段查；字段不存在再按方法构造 bound method；
+         * 两者皆无由 lumyr_field_get 抛标准错误（不可先调用，它对缺字段 longjmp） */
         const char* fname = lumyr_str_cstr(&idx);
-        if(fname) r = lumyr_field_get(arr, fname);
+        if(fname) {
+            RuntimeTypeInfo* ri = *(RuntimeTypeInfo**)arr.v.struct_ptr;
+            FieldInfo* fi = ri ? lumyr_type_find_field(ri, fname) : NULL;
+            if(fi) r = lumyr_field_get(arr, fname);
+            else if(!vm_make_bound_method(arr, fname, &r))
+                r = lumyr_field_get(arr, fname);
+        }
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
