@@ -25,6 +25,7 @@
 #include "lm_regex.h"
 #include "lm_time.h"
 #include "lm_container.h"
+#include "lm_calendar.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -697,6 +698,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_date_add(recv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
             return 1;
         }
+        if(recv.type == VAL_CALENDAR) {
+            /* calendar add(n, "months"/"years") → 新 calendar */
+            int need = is_method ? 2 : 3;
+            if(argc < need) { runtime_error("add() 参数不足（需 n, unit）"); return 0; }
+            if(argv[2].type != VAL_STRING) { runtime_error("add() 单位参数必须是字符串"); return 0; }
+            *out = lumyr_calendar_add(recv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
+            return 1;
+        }
         /* set.add(x)：原地添加元素（返回 self） */
         if(recv.type == VAL_SET) {
             int need = is_method ? 1 : 2;
@@ -1056,6 +1065,10 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     /* ===== contains/indexOf 通用（string/array/map） ===== */
     case BUILTIN_CONTAINS:
         if(!bi_need_args("contains", argc, 1)) return 0;
+        if(recv.type == VAL_CALENDAR) {
+            *out = lumyr_calendar_contains(recv, argv[1]);
+            return 1;
+        }
         *out = lumyr_contains(recv, argv[1]);
         return 1;
 
@@ -1836,6 +1849,34 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_complex_conjugate(recv);
         return 1;
     }
+    /* ===== calendar 综合日历 ===== */
+    case BUILTIN_CALENDAR_MAKE: {
+        /* calendar(y, m [, tz]) / calendar(date [, tz])
+         * 全局形式：argv[0]=第1实参 */
+        if(argc < 1) { runtime_error("calendar() 至少需要 1 个参数"); return 0; }
+        int32_t tz = INT32_MIN;  // 默认本地时区
+        if(argv[0].type == VAL_DATE || argv[0].type == VAL_DATETIME) {
+            /* calendar(date [, tz]) */
+            if(argc >= 2) tz = (int32_t)bi_num_i64(argv[1]);
+            *out = lumyr_calendar_from_date(argv[0], tz);
+            return 1;
+        }
+        /* calendar(year, month [, tz]) */
+        if(argc < 2) { runtime_error("calendar() 需要 year, month 或 date"); return 0; }
+        if(argc >= 3) tz = (int32_t)bi_num_i64(argv[2]);
+        *out = lumyr_calendar_make((int)bi_num_i64(argv[0]), (int)bi_num_i64(argv[1]), tz);
+        return 1;
+    }
+    case BUILTIN_CALENDAR_FIRST_DATE: {
+        if(recv.type != VAL_CALENDAR) return bi_type_err("firstDate", recv);
+        *out = lumyr_calendar_first_date(recv);
+        return 1;
+    }
+    case BUILTIN_CALENDAR_LAST_DATE: {
+        if(recv.type != VAL_CALENDAR) return bi_type_err("lastDate", recv);
+        *out = lumyr_calendar_last_date(recv);
+        return 1;
+    }
 
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
@@ -1973,6 +2014,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_BYTES_FROM_HEX: return "from_hex";
     case BUILTIN_COMPLEX_MAKE: return "complex";
     case BUILTIN_COMPLEX_CONJUGATE: return "conjugate";
+    case BUILTIN_CALENDAR_MAKE: return "calendar";
+    case BUILTIN_CALENDAR_FIRST_DATE: return "firstDate";
+    case BUILTIN_CALENDAR_LAST_DATE: return "lastDate";
     default: return "?";
     }
 }

@@ -867,7 +867,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token TOK_INT TOK_DOUBLE TOK_CHAR TOK_STRING TOK_BOOL TOK_ASCII TOK_BYTE
 %token TOK_INT8 TOK_INT16 TOK_INT32 TOK_INT64 TOK_UINT8 TOK_UINT16 TOK_UINT32 TOK_UINT64 TOK_UINT TOK_LONG TOK_LONGLONG TOK_FLOAT TOK_ULONG TOK_UCHAR TOK_SHORT TOK_USHORT TOK_SIZE_T TOK_SSIZE_T TOK_VOID TOK_LONG_DOUBLE TOK_PTR
 %token TOK_DATE TOK_DATETIME TOK_TIME_KW TOK_TIMEDELTA
-%token TOK_TUPLE TOK_BYTES TOK_COMPLEX
+%token TOK_TUPLE TOK_BYTES TOK_COMPLEX TOK_CALENDAR
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
 %token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
@@ -2263,6 +2263,8 @@ primary
     | TOK_TUPLE LPAREN arg_list RPAREN   { $$ = L(ast_call(strdup("tuple"), $3)); }
     | TOK_BYTES LPAREN arg_list RPAREN   { $$ = L(ast_call(strdup("bytes"), $3)); }
     | TOK_COMPLEX LPAREN arg_list RPAREN { $$ = L(ast_call(strdup("complex"), $3)); }
+    /* calendar 构造：calendar(2026, 9) / calendar(date) */
+    | TOK_CALENDAR LPAREN arg_list RPAREN { $$ = L(ast_call(strdup("calendar"), $3)); }
     | ID LPAREN arg_list RPAREN {
           /* 宏调用：如果是已注册的宏，则展开；否则作为普通函数调用 */
           if(macro_is_defined($1)) {
@@ -3205,6 +3207,7 @@ builtin_type_name
     | TOK_TUPLE                  { $$ = CAST_TUPLE; }
     | TOK_BYTES                  { $$ = CAST_BYTES; }
     | TOK_COMPLEX                { $$ = CAST_COMPLEX; }
+    | TOK_CALENDAR               { $$ = CAST_CALENDAR; }
     ;
 type_name
     : builtin_type_name          { g_last_custom_type_name = NULL; $$ = castkind_to_valtype($1); }

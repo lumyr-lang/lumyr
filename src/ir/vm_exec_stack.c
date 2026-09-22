@@ -10,6 +10,7 @@
 #include "lm_type.h"
 #include "lm_time.h"
 #include "lm_container.h"
+#include "lm_calendar.h"
 #include "vm_exec.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
@@ -301,6 +302,11 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             int64_t i = value_to_index(idx);
             if(i >= 0 && i < (int64_t)ta->len && ta->items)
                 r = typed_box_elem(ta->elem_type, ta->items, (int)i);
+        }
+    } else if(arr.type == VAL_CALENDAR) {
+        /* calendar 字段访问：year/month/daysInMonth/firstWeekday/weeks/lunar 等 */
+        if(idx.type == VAL_STRING) {
+            r = lumyr_calendar_field(arr, lumyr_str_cstr(&idx));
         }
     } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
         /* 动态属性访问：先按字段查；字段不存在再按方法构造 bound method；

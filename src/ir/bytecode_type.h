@@ -453,6 +453,12 @@ typedef enum {
     BUILTIN_COMPLEX_MAKE,   // complex(re, im)：构造 VAL_COMPLEX
     BUILTIN_COMPLEX_ABS,    // abs(c)：模 |c| → double
     BUILTIN_COMPLEX_CONJUGATE, // conjugate(c)：共轭 → complex
+    /* calendar 综合日历 */
+    BUILTIN_CALENDAR_MAKE,     // calendar(y, m [, tz]) / calendar(date [, tz])
+    BUILTIN_CALENDAR_ADD,      // cal.add(n, unit)：日历算术
+    BUILTIN_CALENDAR_FIRST_DATE, // cal.firstDate()：月初 date
+    BUILTIN_CALENDAR_LAST_DATE,  // cal.lastDate()：月末 date
+    BUILTIN_CALENDAR_CONTAINS,   // cal.contains(date)：日期是否在本月
     BUILTIN_COUNT
 } BuiltinId;
 

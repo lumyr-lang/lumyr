@@ -20,6 +20,7 @@
  */
 #include "gc_runtime.h"
 #include "lumyr_value.h"
+#include "lm_calendar.h"
 #include "lumyr_log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -861,6 +862,11 @@ void gc_mark(Value v)
         if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr(v.v.complex_obj);
         break;
     }
+    case VAL_CALENDAR: {
+        /* calendar：仅含整数字段无 Value 引用，标记对象本身 */
+        if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr(v.v.calendar_obj);
+        break;
+    }
     default:
         break;
     }
@@ -1098,6 +1104,11 @@ void gc_mark_value_to_stack(Value v)
         if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr_to_stack(v.v.complex_obj);
         break;
     }
+    case VAL_CALENDAR: {
+        /* calendar：仅含整数字段无 Value 引用，容器变灰入栈 */
+        if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr_to_stack(v.v.calendar_obj);
+        break;
+    }
     default:
         /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
         break;
@@ -1236,6 +1247,9 @@ void gc_mark_one(GCObject* obj)
     }
     case VAL_COMPLEX:
         /* ComplexObj 仅含 double 字段，无子对象 */
+        break;
+    case VAL_CALENDAR:
+        /* CalendarObj 仅含整数字段，无子对象 */
         break;
     default:
         break;
@@ -1398,6 +1412,10 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr_to_stack(v.v.complex_obj);
         break;
     }
+    case VAL_CALENDAR: {
+        if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr_to_stack(v.v.calendar_obj);
+        break;
+    }
     default:
         break;
     }
@@ -1509,6 +1527,8 @@ static void gc_mark_one_minor(GCObject* obj)
         break;
     }
     case VAL_COMPLEX:
+        break;
+    case VAL_CALENDAR:
         break;
     default:
         break;

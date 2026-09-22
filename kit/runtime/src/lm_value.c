@@ -6,6 +6,7 @@
 #include "lm_bitdecimal.h"
 #include "lm_time.h"
 #include "lm_container.h"
+#include "lm_calendar.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -366,6 +367,7 @@ char* value_to_str(Value v) {
         case VAL_SET:     return lumyr_set_to_str(v);
         case VAL_BYTES:   return lumyr_bytes_to_str(v);
         case VAL_COMPLEX: return lumyr_complex_to_str(v);
+        case VAL_CALENDAR: return lumyr_calendar_to_str(v);
         default:
             strcpy(buf, "");
             break;
@@ -539,6 +541,17 @@ Value lumyr_len(Value v) {
     if(v.type == VAL_TUPLE) return lumyr_make_int((long long)lumyr_tuple_len(v));
     if(v.type == VAL_SET)   return lumyr_make_int((long long)lumyr_set_len(v));
     if(v.type == VAL_BYTES) return lumyr_make_int((long long)lumyr_bytes_len(v));
+    if(v.type == VAL_CALENDAR) {
+        /* calendar 长度 = 当月天数（daysInMonth） */
+        CalendarObj* o = (CalendarObj*)v.v.calendar_obj;
+        static const int d[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+        if(!o) return lumyr_make_int(0);
+        int m = o->month;
+        if(m < 1 || m > 12) return lumyr_make_int(0);
+        int y = o->year;
+        int leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+        return lumyr_make_int((m == 2 && leap) ? 29 : d[m-1]);
+    }
     runtime_error("len() 参数必须是数组、字符串或字典");
     return lumyr_make_int(0);
 }
@@ -589,6 +602,14 @@ Value lumyr_index_get(Value c, Value idx) {
         if(name && strcmp(name, "real") == 0) return lumyr_make_double(lumyr_complex_real(c));
         if(name && strcmp(name, "imag") == 0) return lumyr_make_double(lumyr_complex_imag(c));
         return lumyr_make_double(0.0);
+    }
+    /* calendar 字段访问：year/month/tz/daysInMonth/firstWeekday/weeks/lunar 等 */
+    if(c.type == VAL_CALENDAR) {
+        if(idx.type != VAL_STRING) {
+            runtime_error("calendar 字段访问必须是字符串键");
+            return val_none();
+        }
+        return lumyr_calendar_field(c, lumyr_str_cstr(&idx));
     }
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
@@ -759,6 +780,7 @@ Value lumyr_type(Value v) {
         case VAL_SET:     return lumyr_make_string("set");
         case VAL_BYTES:   return lumyr_make_string("bytes");
         case VAL_COMPLEX: return lumyr_make_string("complex");
+        case VAL_CALENDAR: return lumyr_make_string("calendar");
     }
     return lumyr_make_string("unknown");
 }
@@ -825,6 +847,7 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_TUPLE) { runtime_error("tuple 不可变，不支持下标赋值"); return val; }
     if(arr.type == VAL_BYTES) { runtime_error("bytes 不可变，不支持下标赋值"); return val; }
     if(arr.type == VAL_COMPLEX) { runtime_error("complex 不支持下标赋值"); return val; }
+    if(arr.type == VAL_CALENDAR) { runtime_error("calendar 不支持下标赋值"); return val; }
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
     /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
        自动判断是 class 还是 struct，调用对应的专门属性写入函数 */
@@ -1072,6 +1095,13 @@ Value lumyr_eq(Value a, Value b) {
         if(!oa || !ob) return lumyr_make_bool(oa == ob);
         return lumyr_make_bool(oa->real == ob->real && oa->imag == ob->imag);
     }
+    /* calendar 值相等：year+month+tz_offset_min 比较 */
+    if(a.type == VAL_CALENDAR && b.type == VAL_CALENDAR) {
+        CalendarObj* oa = (CalendarObj*)a.v.calendar_obj;
+        CalendarObj* ob = (CalendarObj*)b.v.calendar_obj;
+        if(!oa || !ob) return lumyr_make_bool(oa == ob);
+        return lumyr_make_bool(oa->year == ob->year && oa->month == ob->month && oa->tz_offset_min == ob->tz_offset_min);
+    }
     if (is_string(a,b)) {
         char *sa = value_to_str(a);
         char *sb = value_to_str(b);
@@ -1195,6 +1225,7 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_SET:     return v.v.set_obj != NULL;
         case VAL_BYTES:   return v.v.bytes_obj != NULL;
         case VAL_COMPLEX: return v.v.complex_obj != NULL;
+        case VAL_CALENDAR: return v.v.calendar_obj != NULL;
         default: return 1;  // 其他未知类型默认为 true
     }
 }
@@ -1596,6 +1627,12 @@ void lumyr_print(Value v) {
             free(s);
             break;
         }
+        case VAL_CALENDAR: {
+            char* s = lumyr_calendar_to_str(v);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
         default:              printf("<unknown>\n"); break;
     }
 }
@@ -1772,6 +1809,12 @@ void lumyr_print_inline(Value v) {
         }
         case VAL_COMPLEX: {
             char* s = lumyr_complex_to_str(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_CALENDAR: {
+            char* s = lumyr_calendar_to_str(v);
             printf("%s", s ? s : "(null)");
             free(s);
             break;

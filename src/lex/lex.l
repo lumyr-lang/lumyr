@@ -150,6 +150,7 @@ static int is_expr_end(int t)
 "tuple"         { LEX_RET(TOK_TUPLE); }
 "bytes"         { LEX_RET(TOK_BYTES); }
 "complex"       { LEX_RET(TOK_COMPLEX); }
+"calendar"      { LEX_RET(TOK_CALENDAR); }
 "static"        { LEX_RET(TOK_STATIC); }
 "abstract"      { LEX_RET(TOK_ABSTRACT); }
 "public"        { LEX_RET(TOK_PUBLIC); }
@@ -280,6 +281,11 @@ f\"([^"\\]|\\.)*\"   {
 "<ptr>"            { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<pointer>"        { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<handle>"         { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
+"<date>"           { LEX_RET(TOK_DATE); }
+"<datetime>"       { LEX_RET(TOK_DATETIME); }
+"<time>"           { LEX_RET(TOK_TIME_KW); }
+"<timedelta>"      { LEX_RET(TOK_TIMEDELTA); }
+"<calendar>"       { LEX_RET(TOK_CALENDAR); }
 "<"                { LEX_RET(LT); }
 "&&"        { LEX_RET(AND); }
 "||"        { LEX_RET(OR); }

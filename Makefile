@@ -132,6 +132,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_bitdecimal.c
 # 容器与数值扩展类型（tuple/set/bytes/complex）
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_container.c
 
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_calendar.c
+
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 
 # ========== 编译器本体源文件（不含 runtime） ==========

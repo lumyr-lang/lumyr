@@ -1,0 +1,129 @@
+// tests/calendar_test.lm
+// calendar 综合日历对象（VAL_CALENDAR）
+// 月视图 + 农历转换 + 日历算术
+
+// ===== 1. 构造与基本字段 =====
+c = calendar(2026, 9);
+assert type(c) == "calendar";
+assert c.year == 2026;
+assert c.month == 9;
+assert c.daysInMonth == 30;
+assert c.leapYear == false;   // 2026 非闰年
+assert c.quarter == 3;
+assert c.monthName == "September";
+
+// ===== 2. firstWeekday（2026-09-01 是周二） =====
+assert c.firstWeekday == 2;   // 0=周日，2=周二
+
+// ===== 3. weeks 周网格 =====
+w = c.weeks;
+assert type(w) == "array";
+assert w.len == 6;  // 6 行
+// 第一行前两天为空（周二开始），第三天是 1 号
+assert w[0][0] == 0;    // 周日：空
+assert w[0][1] == 0;    // 周一：空
+assert w[0][2] == 1;    // 周二：1 号
+assert w[0][3] == 2;    // 周三：2 号
+// 每行 7 列
+assert w[0].len == 7;
+
+// ===== 4. 闰年检查 =====
+c_leap = calendar(2024, 2);
+assert c_leap.leapYear == true;
+assert c_leap.daysInMonth == 29;
+
+c_notleap = calendar(2023, 2);
+assert c_notleap.leapYear == false;
+assert c_notleap.daysInMonth == 28;
+
+// ===== 5. 日历算术 add =====
+c2 = calendar(2026, 1);
+c3 = c2.add(1, "months");
+assert c3.year == 2026;
+assert c3.month == 2;
+
+c4 = c2.add(13, "months");
+assert c4.year == 2027;
+assert c4.month == 2;
+
+c5 = c2.add(1, "years");
+assert c5.year == 2027;
+assert c5.month == 1;
+
+// ===== 6. firstDate / lastDate =====
+fd = c.firstDate();
+assert type(fd) == "date";
+assert fd.year == 2026;
+assert fd.month == 9;
+assert fd.day == 1;
+
+ld = c.lastDate();
+assert type(ld) == "date";
+assert ld.day == 30;
+
+// ===== 7. contains =====
+d_in = date(2026, 9, 15);
+d_out = date(2026, 10, 1);
+assert c.contains(d_in) == true;
+assert c.contains(d_out) == false;
+
+// ===== 8. 从 date 构造 =====
+d = date(2026, 9, 22);
+c_from_date = calendar(d);
+assert c_from_date.year == 2026;
+assert c_from_date.month == 9;
+
+// ===== 9. 干支/生肖 =====
+c_2026 = calendar(2026, 1);
+assert c_2026.ganzhi == "丙午";
+assert c_2026.zodiac == "马";
+
+c_1984 = calendar(1984, 1);
+assert c_1984.ganzhi == "甲子";
+assert c_1984.zodiac == "鼠";
+
+c_2000 = calendar(2000, 1);
+assert c_2000.zodiac == "龙";
+
+// ===== 10. 农历字段 =====
+// 2026-09-22 对应农历日期（仅验证字段可访问、类型正确）
+assert type(c.lunarYear) == "int";
+assert type(c.lunarMonth) == "int";
+assert type(c.lunarDay) == "int";
+assert c.lunarYear > 0;
+assert c.lunarMonth >= 1;
+assert c.lunarMonth <= 12;
+assert c.lunarDay >= 1;
+assert c.lunarDay <= 30;
+
+// ===== 11. 时区 =====
+c_utc = calendar(2026, 9, 0);
+assert c_utc.timezone == "+00:00";
+c_local = calendar(2026, 9);
+assert c_local.timezone == "Local";
+
+// ===== 12. f-string 集成 =====
+s = f"{c}";
+assert s == "September 2026";
+
+// ===== 13. 角括号字面量语法 =====
+d_bracket = <date>"2026-09-22";
+assert type(d_bracket) == "date";
+assert d_bracket.year == 2026;
+
+dt_bracket = <datetime>"2026-09-22T10:30:45";
+assert type(dt_bracket) == "datetime";
+assert dt_bracket.hour == 10;
+
+t_bracket = <time>"10:30:45";
+assert type(t_bracket) == "time";
+assert t_bracket.hour == 10;
+
+td_bracket = <timedelta>"90061";
+assert type(td_bracket) == "timedelta";
+
+c_bracket = <calendar>(2026, 9);
+assert type(c_bracket) == "calendar";
+assert c_bracket.year == 2026;
+
+print("calendar_test ALL PASS / 全部通过");

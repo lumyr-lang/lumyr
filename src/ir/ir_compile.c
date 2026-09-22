@@ -161,6 +161,10 @@ static int builtin_id_by_name(const char* name) {
         {"from_hex", BUILTIN_BYTES_FROM_HEX},
         /* complex 方法 */
         {"conjugate", BUILTIN_COMPLEX_CONJUGATE},
+        /* calendar 综合日历 */
+        {"calendar", BUILTIN_CALENDAR_MAKE},
+        {"firstDate", BUILTIN_CALENDAR_FIRST_DATE},
+        {"lastDate", BUILTIN_CALENDAR_LAST_DATE},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {

@@ -87,6 +87,7 @@ typedef enum {
     CAST_SET,        // set：无序唯一元素集合
     CAST_BYTES,      // bytes：不可变字节串
     CAST_COMPLEX,    // complex：复数（real+imag double）
+    CAST_CALENDAR,   // calendar：综合日历对象（月视图+农历+日历算术）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -115,6 +116,7 @@ typedef enum {
     VAL_SET,         // set：无序唯一元素集合（堆分配对象，基于哈希）
     VAL_BYTES,       // bytes：不可变字节串（堆分配对象）
     VAL_COMPLEX,     // complex：复数（堆分配对象，real+imag double）
+    VAL_CALENDAR,    // calendar：综合日历对象（堆分配，月视图+农历+算术）
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -241,6 +243,7 @@ struct Value {
         void* set_obj;          // VAL_SET：SetObj* 指针（堆分配对象）
         void* bytes_obj;        // VAL_BYTES：BytesObj* 指针（堆分配对象）
         void* complex_obj;      // VAL_COMPLEX：ComplexObj* 指针（堆分配对象）
+        void* calendar_obj;     // VAL_CALENDAR：CalendarObj* 指针（堆分配对象）
     } v;
 };
 
@@ -387,5 +390,14 @@ typedef struct {
     double real;     // 实部
     double imag;     // 虚部
 } ComplexObj;
+
+// calendar 对象，VAL_CALENDAR 使用（综合日历，堆分配，GC 管理）
+// 存储公历年月 + 时区；所有派生字段（daysInMonth/firstWeekday/weeks/lunar 等）按需计算
+// 无内部 Value 引用（weeks 按需构造临时数组，不由 CalendarObj 持有），gc_mark 只标记自身
+typedef struct {
+    int32_t year;          // 公历年
+    int32_t month;         // 公历月 1-12
+    int32_t tz_offset_min; // 时区偏移（分钟）：INT32_MIN=本地，0=UTC，480=UTC+8
+} CalendarObj;
 
 #endif //LUMYR_VALUE_TYPE_H

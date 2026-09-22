@@ -976,6 +976,8 @@ static int typecheck_call(AstNode* node)
                     {"days", 1, 1}, {"seconds", 1, 1}, {"totalSeconds", 1, 1},
                     {"format_date", 2, 2}, {"diff", 2, 2},
                     {"tuple", 0, 32}, {"complex", 1, 2},
+                    {"calendar", 1, 3},
+                    {"firstDate", 1, 1}, {"lastDate", 1, 1},
                     {"from_hex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"to_str", 1, 1},
                     {"format_time", 1, 2},
                     {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
