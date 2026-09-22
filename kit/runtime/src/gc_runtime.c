@@ -867,6 +867,25 @@ void gc_mark(Value v)
         if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr(v.v.calendar_obj);
         break;
     }
+    case VAL_FILE: {
+        /* file：持有 path/mode 两个 gc_alloc 字符串，递归标记 */
+        FileObj* o = (FileObj*)v.v.file_obj;
+        if (GC_VALID_PTR(o)) {
+            if (!gc_mark_ptr(o)) break;
+            if (o->path && GC_VALID_PTR(o->path)) gc_mark_ptr(o->path);
+            if (o->mode && GC_VALID_PTR(o->mode)) gc_mark_ptr(o->mode);
+        }
+        break;
+    }
+    case VAL_FOLDER: {
+        /* folder：持有 path 字符串，递归标记 */
+        FolderObj* o = (FolderObj*)v.v.folder_obj;
+        if (GC_VALID_PTR(o)) {
+            if (!gc_mark_ptr(o)) break;
+            if (o->path && GC_VALID_PTR(o->path)) gc_mark_ptr(o->path);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -1109,6 +1128,18 @@ void gc_mark_value_to_stack(Value v)
         if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr_to_stack(v.v.calendar_obj);
         break;
     }
+    case VAL_FILE: {
+        /* file：持有 path/mode 字符串，容器变灰入栈 */
+        FileObj* o = (FileObj*)v.v.file_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_FOLDER: {
+        /* folder：持有 path 字符串，容器变灰入栈 */
+        FolderObj* o = (FolderObj*)v.v.folder_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
     default:
         /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
         break;
@@ -1251,6 +1282,19 @@ void gc_mark_one(GCObject* obj)
     case VAL_CALENDAR:
         /* CalendarObj 仅含整数字段，无子对象 */
         break;
+    case VAL_FILE: {
+        /* FileObj 弹栈：path/mode 内部字符串标记黑色 */
+        FileObj* o = (FileObj*)obj_to_ptr(obj);
+        if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        if (o->mode && GC_VALID_PTR(o->mode)) gc_mark_internal_black(o->mode);
+        break;
+    }
+    case VAL_FOLDER: {
+        /* FolderObj 弹栈：path 内部字符串标记黑色 */
+        FolderObj* o = (FolderObj*)obj_to_ptr(obj);
+        if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        break;
+    }
     default:
         break;
     }
@@ -1416,6 +1460,16 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(v.v.calendar_obj)) gc_mark_ptr_to_stack(v.v.calendar_obj);
         break;
     }
+    case VAL_FILE: {
+        FileObj* o = (FileObj*)v.v.file_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_FOLDER: {
+        FolderObj* o = (FolderObj*)v.v.folder_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
     default:
         break;
     }
@@ -1530,6 +1584,17 @@ static void gc_mark_one_minor(GCObject* obj)
         break;
     case VAL_CALENDAR:
         break;
+    case VAL_FILE: {
+        FileObj* o = (FileObj*)obj_to_ptr(obj);
+        if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        if (o->mode && GC_VALID_PTR(o->mode)) gc_mark_internal_black(o->mode);
+        break;
+    }
+    case VAL_FOLDER: {
+        FolderObj* o = (FolderObj*)obj_to_ptr(obj);
+        if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        break;
+    }
     default:
         break;
     }

@@ -1,0 +1,162 @@
+// file_test.lm —— file 与 folder 数据类型测试
+// 涵盖：构造、字段、读全部/读行/读单行/读行范围、写全部/写行/写多行/追加/追加行、
+//       删除文件；目录列出/文件过滤/子目录过滤/创建/递归删除/遍历/复制/移动
+// 全部在 /tmp 下操作，避免污染项目目录
+
+// ===== 1. file 基本构造与字段 =====
+f1 = file("/tmp/lm_file_test_1.txt");
+assert f1.path == "/tmp/lm_file_test_1.txt";
+assert f1.mode == "r";
+assert f1.exists == false;
+assert f1.size == -1;
+assert type(f1) == "file";
+assert f1 == file("/tmp/lm_file_test_1.txt");
+print("1. file 构造与字段 OK");
+
+// ===== 2. 写入与读取全部 =====
+// 用 writeLines 写入多行（每行末尾自动加换行符）
+f1.writeLines(["Hello", "World"]);
+assert f1.exists == true;
+assert f1.size == 12;
+assert f1.lines == 2;
+// readAll 返回 "Hello\nWorld\n"，用反引号多行字符串比较
+assert f1.readAll() == `Hello
+World
+`;
+print("2. file 写入/读取全部 OK");
+
+// ===== 3. 读行：readLines / readLine / readLines(from,to) =====
+lines = f1.readLines();
+assert len(lines) == 2;
+assert lines[0] == "Hello";
+assert lines[1] == "World";
+
+assert f1.readLine(0) == "Hello";
+assert f1.readLine(1) == "World";
+assert f1.readLine(-1) == "World";
+
+range = f1.readLines(0, 1);
+assert len(range) == 2;
+assert range[0] == "Hello";
+assert range[1] == "World";
+
+range2 = f1.readLines(1, 1);
+assert len(range2) == 1;
+assert range2[0] == "World";
+print("3. file 读行操作 OK");
+
+// ===== 4. 写行：writeLine / writeLines =====
+f1.writeLine(0, "Hi");
+assert f1.readLine(0) == "Hi";
+assert f1.readLine(1) == "World";
+
+f1.writeLines(["L1", "L2", "L3"]);
+assert f1.lines == 3;
+assert f1.readLine(0) == "L1";
+assert f1.readLine(2) == "L3";
+print("4. file 写行操作 OK");
+
+// ===== 5. 追加：append / appendLine =====
+// append 是字节级追加；appendLine 追加一行（自动加换行符）
+f1.appendLine("L4");
+assert f1.lines == 4;
+assert f1.readLine(3) == "L4";
+f1.append("X");
+// append 追加到末尾：内容变为 L1\nL2\nL3\nL4\nX
+assert f1.readAll() == `L1
+L2
+L3
+L4
+X`;
+print("5. file 追加操作 OK");
+
+// ===== 6. flush / delete =====
+f1.flush();
+assert f1.exists == true;
+f1.delete();
+assert f1.exists == false;
+print("6. file flush/delete OK");
+
+// ===== 7. 指定写模式构造 file(path, "w") =====
+f3 = file("/tmp/lm_file_test_3.txt", "w");
+assert f3.mode == "w";
+f3.writeAll("WriteMode");
+assert f3.readAll() == "WriteMode";
+f3.delete();
+print("7. file(path, mode) 构造 OK");
+
+// ===== 8. folder 基本构造与字段 =====
+d1 = folder("/tmp/lm_folder_test_1");
+assert d1.path == "/tmp/lm_folder_test_1";
+assert d1.exists == false;
+assert type(d1) == "folder";
+assert d1 == folder("/tmp/lm_folder_test_1");
+print("8. folder 构造与字段 OK");
+
+// ===== 9. folder.create / list / files / dirs / count =====
+d1.create();
+assert d1.exists == true;
+subA = folder("/tmp/lm_folder_test_1/subA");
+subA.create();
+subB = folder("/tmp/lm_folder_test_1/subB");
+subB.create();
+file("/tmp/lm_folder_test_1/f1.txt").writeAll("file1");
+file("/tmp/lm_folder_test_1/f2.txt").writeAll("file2");
+
+assert d1.count == 4;
+all = d1.list();
+assert len(all) == 4;
+files = d1.files();
+assert len(files) == 2;
+dirs = d1.dirs();
+assert len(dirs) == 2;
+print("9. folder create/list/files/dirs/count OK");
+
+// ===== 10. folder.walk 递归遍历 =====
+walked = d1.walk();
+assert len(walked) >= 2;
+print("10. folder walk OK");
+
+// ===== 11. folder.copyTo / moveTo =====
+d2 = folder("/tmp/lm_folder_test_2");
+d2.remove();
+d1.copyTo("/tmp/lm_folder_test_2");
+assert d2.exists == true;
+assert d2.count == 4;
+print("11. folder copyTo OK");
+
+d3 = folder("/tmp/lm_folder_test_3");
+d3.remove();
+d1.moveTo("/tmp/lm_folder_test_3");
+assert d3.exists == true;
+assert d1.exists == false;
+print("12. folder moveTo OK");
+
+// ===== 13. folder.remove 递归删除 =====
+d2.remove();
+assert d2.exists == false;
+d3.remove();
+assert d3.exists == false;
+print("13. folder remove 递归删除 OK");
+
+// ===== 14. to_str 字符串化 =====
+f4 = file("/tmp/lm_file_test_4.txt");
+assert f"{f4}" == "<file /tmp/lm_file_test_4.txt>";
+d5 = folder("/tmp/lm_folder_test_5");
+assert f"{d5}" == "<folder /tmp/lm_folder_test_5>";
+print("14. file/folder to_str OK");
+
+// ===== 15. len() 与字段访问 =====
+file("/tmp/lm_file_test_5.txt").writeLines(["a", "b", "c", "d"]);
+f5 = file("/tmp/lm_file_test_5.txt");
+assert len(f5) == 4;
+f5.delete();
+d6 = folder("/tmp/lm_folder_test_6");
+d6.create();
+file("/tmp/lm_folder_test_6/x.txt").writeAll("x");
+assert len(d6) == 1;
+d6.remove();
+print("15. len(file)/len(folder) OK");
+
+print("");
+print("===== file/folder ALL PASS / 全部通过 =====");

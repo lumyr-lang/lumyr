@@ -459,6 +459,29 @@ typedef enum {
     BUILTIN_CALENDAR_FIRST_DATE, // cal.firstDate()：月初 date
     BUILTIN_CALENDAR_LAST_DATE,  // cal.lastDate()：月末 date
     BUILTIN_CALENDAR_CONTAINS,   // cal.contains(date)：日期是否在本月
+    /* file 文件对象 */
+    BUILTIN_FILE_MAKE,          // file(path [, mode])：构造 VAL_FILE
+    BUILTIN_FILE_READ_ALL,      // f.readAll()：读取全部内容
+    BUILTIN_FILE_READ_LINES,    // f.readLines()：读取所有行
+    BUILTIN_FILE_READ_LINE,     // f.readLine(n)：读取第 n 行
+    BUILTIN_FILE_READ_LINES_RANGE, // f.readLines(from, to)：读取行范围
+    BUILTIN_FILE_WRITE_ALL,     // f.writeAll(s)：覆盖写入
+    BUILTIN_FILE_WRITE_LINE,    // f.writeLine(n, s)：写入第 n 行
+    BUILTIN_FILE_WRITE_LINES,   // f.writeLines(arr)：写入多行
+    BUILTIN_FILE_APPEND,        // f.append(s)：追加内容
+    BUILTIN_FILE_APPEND_LINE,   // f.appendLine(s)：追加一行
+    BUILTIN_FILE_FLUSH,         // f.flush()：刷新（no-op）
+    BUILTIN_FILE_DELETE,        // f.delete()：删除文件
+    /* folder 目录对象 */
+    BUILTIN_FOLDER_MAKE,        // folder(path)：构造 VAL_FOLDER
+    BUILTIN_FOLDER_LIST,        // d.list()：列出所有条目
+    BUILTIN_FOLDER_FILES,      // d.files()：列出文件
+    BUILTIN_FOLDER_DIRS,        // d.dirs()：列出子目录
+    BUILTIN_FOLDER_CREATE,      // d.create()：创建目录
+    BUILTIN_FOLDER_REMOVE,      // d.remove()：删除目录
+    BUILTIN_FOLDER_WALK,        // d.walk()：递归遍历
+    BUILTIN_FOLDER_COPY_TO,     // d.copyTo(dest)：复制
+    BUILTIN_FOLDER_MOVE_TO,     // d.moveTo(dest)：移动
     BUILTIN_COUNT
 } BuiltinId;
 

@@ -7,6 +7,7 @@
 #include "lm_time.h"
 #include "lm_container.h"
 #include "lm_calendar.h"
+#include "lm_file.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -368,6 +369,8 @@ char* value_to_str(Value v) {
         case VAL_BYTES:   return lumyr_bytes_to_str(v);
         case VAL_COMPLEX: return lumyr_complex_to_str(v);
         case VAL_CALENDAR: return lumyr_calendar_to_str(v);
+        case VAL_FILE:     return lumyr_file_to_str(v);
+        case VAL_FOLDER:   return lumyr_folder_to_str(v);
         default:
             strcpy(buf, "");
             break;
@@ -552,6 +555,14 @@ Value lumyr_len(Value v) {
         int leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
         return lumyr_make_int((m == 2 && leap) ? 29 : d[m-1]);
     }
+    if(v.type == VAL_FILE) {
+        /* file 长度 = 行数（同 .lines 字段） */
+        return lumyr_file_field(v, "lines");
+    }
+    if(v.type == VAL_FOLDER) {
+        /* folder 长度 = 直接子条目数（同 .count 字段） */
+        return lumyr_folder_field(v, "count");
+    }
     runtime_error("len() 参数必须是数组、字符串或字典");
     return lumyr_make_int(0);
 }
@@ -610,6 +621,22 @@ Value lumyr_index_get(Value c, Value idx) {
             return val_none();
         }
         return lumyr_calendar_field(c, lumyr_str_cstr(&idx));
+    }
+    /* file 字段访问：path/mode/exists/size/lines/isOpen */
+    if(c.type == VAL_FILE) {
+        if(idx.type != VAL_STRING) {
+            runtime_error("file 字段访问必须是字符串键");
+            return val_none();
+        }
+        return lumyr_file_field(c, lumyr_str_cstr(&idx));
+    }
+    /* folder 字段访问：path/exists/count */
+    if(c.type == VAL_FOLDER) {
+        if(idx.type != VAL_STRING) {
+            runtime_error("folder 字段访问必须是字符串键");
+            return val_none();
+        }
+        return lumyr_folder_field(c, lumyr_str_cstr(&idx));
     }
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
@@ -781,6 +808,8 @@ Value lumyr_type(Value v) {
         case VAL_BYTES:   return lumyr_make_string("bytes");
         case VAL_COMPLEX: return lumyr_make_string("complex");
         case VAL_CALENDAR: return lumyr_make_string("calendar");
+        case VAL_FILE:    return lumyr_make_string("file");
+        case VAL_FOLDER:  return lumyr_make_string("folder");
     }
     return lumyr_make_string("unknown");
 }
@@ -848,6 +877,8 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_BYTES) { runtime_error("bytes 不可变，不支持下标赋值"); return val; }
     if(arr.type == VAL_COMPLEX) { runtime_error("complex 不支持下标赋值"); return val; }
     if(arr.type == VAL_CALENDAR) { runtime_error("calendar 不支持下标赋值"); return val; }
+    if(arr.type == VAL_FILE) { runtime_error("file 不支持下标赋值"); return val; }
+    if(arr.type == VAL_FOLDER) { runtime_error("folder 不支持下标赋值"); return val; }
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
     /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
        自动判断是 class 还是 struct，调用对应的专门属性写入函数 */
@@ -1102,6 +1133,26 @@ Value lumyr_eq(Value a, Value b) {
         if(!oa || !ob) return lumyr_make_bool(oa == ob);
         return lumyr_make_bool(oa->year == ob->year && oa->month == ob->month && oa->tz_offset_min == ob->tz_offset_min);
     }
+    /* file 相等：路径+模式比较 */
+    if(a.type == VAL_FILE && b.type == VAL_FILE) {
+        FileObj* oa = (FileObj*)a.v.file_obj;
+        FileObj* ob = (FileObj*)b.v.file_obj;
+        if(!oa || !ob) return lumyr_make_bool(oa == ob);
+        const char* pa = oa->path ? oa->path : "";
+        const char* pb = ob->path ? ob->path : "";
+        const char* ma = oa->mode ? oa->mode : "";
+        const char* mb = ob->mode ? ob->mode : "";
+        return lumyr_make_bool(strcmp(pa, pb) == 0 && strcmp(ma, mb) == 0);
+    }
+    /* folder 相等：路径比较 */
+    if(a.type == VAL_FOLDER && b.type == VAL_FOLDER) {
+        FolderObj* oa = (FolderObj*)a.v.folder_obj;
+        FolderObj* ob = (FolderObj*)b.v.folder_obj;
+        if(!oa || !ob) return lumyr_make_bool(oa == ob);
+        const char* pa = oa->path ? oa->path : "";
+        const char* pb = ob->path ? ob->path : "";
+        return lumyr_make_bool(strcmp(pa, pb) == 0);
+    }
     if (is_string(a,b)) {
         char *sa = value_to_str(a);
         char *sb = value_to_str(b);
@@ -1226,6 +1277,8 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_BYTES:   return v.v.bytes_obj != NULL;
         case VAL_COMPLEX: return v.v.complex_obj != NULL;
         case VAL_CALENDAR: return v.v.calendar_obj != NULL;
+        case VAL_FILE:     return v.v.file_obj != NULL;
+        case VAL_FOLDER:   return v.v.folder_obj != NULL;
         default: return 1;  // 其他未知类型默认为 true
     }
 }
@@ -1633,6 +1686,18 @@ void lumyr_print(Value v) {
             free(s);
             break;
         }
+        case VAL_FILE: {
+            char* s = lumyr_file_to_str(v);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_FOLDER: {
+            char* s = lumyr_folder_to_str(v);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
         default:              printf("<unknown>\n"); break;
     }
 }
@@ -1815,6 +1880,18 @@ void lumyr_print_inline(Value v) {
         }
         case VAL_CALENDAR: {
             char* s = lumyr_calendar_to_str(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_FILE: {
+            char* s = lumyr_file_to_str(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_FOLDER: {
+            char* s = lumyr_folder_to_str(v);
             printf("%s", s ? s : "(null)");
             free(s);
             break;

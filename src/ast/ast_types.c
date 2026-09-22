@@ -178,6 +178,8 @@ ValueType castkind_to_valtype(int ck)
         case CAST_BYTES: return VAL_BYTES;
         case CAST_COMPLEX: return VAL_COMPLEX;
         case CAST_CALENDAR: return VAL_CALENDAR;
+        case CAST_FILE:     return VAL_FILE;
+        case CAST_FOLDER:   return VAL_FOLDER;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
         /* 容器引用：字段持堆指针（8 字节） */
         case CAST_MAP: return VAL_MAP;
@@ -232,6 +234,8 @@ int valuetype_to_castkind(int vt) {
         case VAL_BYTES: return CAST_BYTES;
         case VAL_COMPLEX: return CAST_COMPLEX;
         case VAL_CALENDAR: return CAST_CALENDAR;
+        case VAL_FILE:     return CAST_FILE;
+        case VAL_FOLDER:   return CAST_FOLDER;
         /* 容器/引用类型：cast 语义为透传（保持容器不被标量化） */
         case VAL_MAP: return CAST_MAP;
         case VAL_ARRAY: return CAST_ARRAY;
@@ -283,6 +287,8 @@ char* castkind_to_name(int ck) {
         case CAST_BYTES: return strdup("bytes");
         case CAST_COMPLEX: return strdup("complex");
         case CAST_CALENDAR: return strdup("calendar");
+        case CAST_FILE:     return strdup("file");
+        case CAST_FOLDER:   return strdup("folder");
         default: return strdup("int");
     }
 }

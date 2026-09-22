@@ -133,6 +133,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_bitdecimal.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_container.c
 
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_calendar.c
+# 文件与目录对象（file/folder）
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_file.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 

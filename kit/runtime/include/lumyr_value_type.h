@@ -88,6 +88,8 @@ typedef enum {
     CAST_BYTES,      // bytes：不可变字节串
     CAST_COMPLEX,    // complex：复数（real+imag double）
     CAST_CALENDAR,   // calendar：综合日历对象（月视图+农历+日历算术）
+    CAST_FILE,       // file：文件对象（路径+模式，按需 fopen/fclose，GC 安全）
+    CAST_FOLDER,     // folder：目录对象（路径，目录操作）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -117,6 +119,8 @@ typedef enum {
     VAL_BYTES,       // bytes：不可变字节串（堆分配对象）
     VAL_COMPLEX,     // complex：复数（堆分配对象，real+imag double）
     VAL_CALENDAR,    // calendar：综合日历对象（堆分配，月视图+农历+算术）
+    VAL_FILE,        // file：文件对象（堆分配，路径+模式字符串，按需 IO）
+    VAL_FOLDER,      // folder：目录对象（堆分配，路径，目录操作）
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -244,6 +248,8 @@ struct Value {
         void* bytes_obj;        // VAL_BYTES：BytesObj* 指针（堆分配对象）
         void* complex_obj;      // VAL_COMPLEX：ComplexObj* 指针（堆分配对象）
         void* calendar_obj;     // VAL_CALENDAR：CalendarObj* 指针（堆分配对象）
+        void* file_obj;         // VAL_FILE：FileObj* 指针（堆分配对象）
+        void* folder_obj;       // VAL_FOLDER：FolderObj* 指针（堆分配对象）
     } v;
 };
 
@@ -399,5 +405,22 @@ typedef struct {
     int32_t month;         // 公历月 1-12
     int32_t tz_offset_min; // 时区偏移（分钟）：INT32_MIN=本地，0=UTC，480=UTC+8
 } CalendarObj;
+
+// file 对象，VAL_FILE 使用（文件对象，堆分配，GC 管理）
+// 持有路径和模式字符串（gc_alloc 管理，gc_mark 递归标记字符串）
+// 不持有 FILE* 句柄：每次方法调用 fopen/fclose，避免 GC 回收时的资源泄漏
+// mode：1="r" 只读（默认），2="w" 覆盖写，3="a" 追加
+typedef struct {
+    char* path;     // 文件路径（gc_alloc 管理）
+    char* mode;     // 打开模式字符串（"r"/"w"/"a"，gc_alloc 管理）
+    uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
+} FileObj;
+
+// folder 对象，VAL_FOLDER 使用（目录对象，堆分配，GC 管理）
+// 持有路径字符串（gc_alloc 管理，gc_mark 递归标记字符串）
+typedef struct {
+    char* path;     // 目录路径（gc_alloc 管理）
+    uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
+} FolderObj;
 
 #endif //LUMYR_VALUE_TYPE_H

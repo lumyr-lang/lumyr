@@ -26,6 +26,7 @@
 #include "lm_time.h"
 #include "lm_container.h"
 #include "lm_calendar.h"
+#include "lm_file.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -510,6 +511,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     switch(id) {
     /* ===== 通用 ===== */
     case BUILTIN_LEN: {
+        if(recv.type == VAL_FILE) {
+            /* file 长度 = 行数（同 .lines 字段） */
+            *out = lumyr_file_field(recv, "lines");
+            return 1;
+        }
+        if(recv.type == VAL_FOLDER) {
+            /* folder 长度 = 直接子条目数（同 .count 字段） */
+            *out = lumyr_folder_field(recv, "count");
+            return 1;
+        }
         if(recv.type != VAL_STRING && recv.type != VAL_ARRAY &&
            recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP &&
            recv.type != VAL_TUPLE && recv.type != VAL_SET &&
@@ -726,6 +737,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_ARRAY_REMOVE: {
+        /* folder.remove()：无参数，递归删除目录 */
+        if(recv.type == VAL_FOLDER) {
+            *out = lumyr_folder_remove(recv);
+            return 1;
+        }
         if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_SET)
             return bi_type_err("remove", recv);
         if(!bi_need_args("remove", argc, 1)) return 0;
@@ -1877,6 +1893,145 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_calendar_last_date(recv);
         return 1;
     }
+    /* ===== file 文件对象 ===== */
+    case BUILTIN_FILE_MAKE: {
+        /* file(path [, mode])：全局形式 argv[0]=path */
+        if(argc < 1 || argv[0].type != VAL_STRING) {
+            runtime_error("file() 至少需要 1 个路径字符串参数");
+            return 0;
+        }
+        const char* mode = (argc >= 2 && argv[1].type == VAL_STRING) ? lumyr_str_cstr(&argv[1]) : "r";
+        *out = lumyr_file_make(lumyr_str_cstr(&argv[0]), mode);
+        return 1;
+    }
+    case BUILTIN_FILE_READ_ALL: {
+        if(recv.type != VAL_FILE) return bi_type_err("readAll", recv);
+        *out = lumyr_file_read_all(recv);
+        return 1;
+    }
+    case BUILTIN_FILE_READ_LINES: {
+        if(recv.type != VAL_FILE) return bi_type_err("readLines", recv);
+        if(argc >= 2) {
+            /* f.readLines(from, to)：行范围 */
+            *out = lumyr_file_read_lines_range(recv, bi_num_i64(argv[1]), bi_num_i64(argv[2]));
+        } else {
+            /* f.readLines()：所有行 */
+            *out = lumyr_file_read_lines(recv);
+        }
+        return 1;
+    }
+    case BUILTIN_FILE_READ_LINE: {
+        if(recv.type != VAL_FILE) return bi_type_err("readLine", recv);
+        if(argc < 1) { runtime_error("readLine(n) 需要 1 个行号参数"); return 0; }
+        *out = lumyr_file_read_line(recv, bi_num_i64(argv[1]));
+        return 1;
+    }
+    case BUILTIN_FILE_READ_LINES_RANGE: {
+        /* 兼容：readLinesRange 显式调用（若名称映射存在时使用） */
+        if(recv.type != VAL_FILE) return bi_type_err("readLinesRange", recv);
+        if(argc < 2) { runtime_error("readLinesRange(from,to) 需要 2 个参数"); return 0; }
+        *out = lumyr_file_read_lines_range(recv, bi_num_i64(argv[1]), bi_num_i64(argv[2]));
+        return 1;
+    }
+    case BUILTIN_FILE_WRITE_ALL: {
+        if(recv.type != VAL_FILE) return bi_type_err("writeAll", recv);
+        if(argc < 1) { runtime_error("writeAll(s) 需要 1 个参数"); return 0; }
+        char* s = value_to_str(argv[1]);
+        *out = lumyr_file_write_all(recv, s);
+        free(s);
+        return 1;
+    }
+    case BUILTIN_FILE_WRITE_LINE: {
+        if(recv.type != VAL_FILE) return bi_type_err("writeLine", recv);
+        if(argc < 2) { runtime_error("writeLine(n,s) 需要 2 个参数"); return 0; }
+        char* s = value_to_str(argv[2]);
+        *out = lumyr_file_write_line(recv, bi_num_i64(argv[1]), s);
+        free(s);
+        return 1;
+    }
+    case BUILTIN_FILE_WRITE_LINES: {
+        if(recv.type != VAL_FILE) return bi_type_err("writeLines", recv);
+        if(argc < 1) { runtime_error("writeLines(arr) 需要 1 个参数"); return 0; }
+        *out = lumyr_file_write_lines(recv, argv[1]);
+        return 1;
+    }
+    case BUILTIN_FILE_APPEND: {
+        if(recv.type != VAL_FILE) return bi_type_err("append", recv);
+        if(argc < 1) { runtime_error("append(s) 需要 1 个参数"); return 0; }
+        char* s = value_to_str(argv[1]);
+        *out = lumyr_file_append(recv, s);
+        free(s);
+        return 1;
+    }
+    case BUILTIN_FILE_APPEND_LINE: {
+        if(recv.type != VAL_FILE) return bi_type_err("appendLine", recv);
+        if(argc < 1) { runtime_error("appendLine(s) 需要 1 个参数"); return 0; }
+        char* s = value_to_str(argv[1]);
+        *out = lumyr_file_append_line(recv, s);
+        free(s);
+        return 1;
+    }
+    case BUILTIN_FILE_FLUSH: {
+        if(recv.type != VAL_FILE) return bi_type_err("flush", recv);
+        *out = lumyr_file_flush(recv);
+        return 1;
+    }
+    case BUILTIN_FILE_DELETE: {
+        if(recv.type != VAL_FILE) return bi_type_err("delete", recv);
+        *out = lumyr_file_delete(recv);
+        return 1;
+    }
+    /* ===== folder 目录对象 ===== */
+    case BUILTIN_FOLDER_MAKE: {
+        if(argc < 1 || argv[0].type != VAL_STRING) {
+            runtime_error("folder() 至少需要 1 个路径字符串参数");
+            return 0;
+        }
+        *out = lumyr_folder_make(lumyr_str_cstr(&argv[0]));
+        return 1;
+    }
+    case BUILTIN_FOLDER_LIST: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("list", recv);
+        *out = lumyr_folder_list(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_FILES: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("files", recv);
+        *out = lumyr_folder_files(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_DIRS: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("dirs", recv);
+        *out = lumyr_folder_dirs(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_CREATE: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("create", recv);
+        *out = lumyr_folder_create(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_REMOVE: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("remove", recv);
+        *out = lumyr_folder_remove(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_WALK: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("walk", recv);
+        *out = lumyr_folder_walk(recv);
+        return 1;
+    }
+    case BUILTIN_FOLDER_COPY_TO: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("copyTo", recv);
+        if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("copyTo(dest) 需要 1 个字符串参数"); return 0; }
+        *out = lumyr_folder_copy_to(recv, lumyr_str_cstr(&argv[1]));
+        return 1;
+    }
+    case BUILTIN_FOLDER_MOVE_TO: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("moveTo", recv);
+        if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("moveTo(dest) 需要 1 个字符串参数"); return 0; }
+        *out = lumyr_folder_move_to(recv, lumyr_str_cstr(&argv[1]));
+        return 1;
+    }
 
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
@@ -2017,6 +2172,27 @@ const char* builtin_id_name(int id) {
     case BUILTIN_CALENDAR_MAKE: return "calendar";
     case BUILTIN_CALENDAR_FIRST_DATE: return "firstDate";
     case BUILTIN_CALENDAR_LAST_DATE: return "lastDate";
+    case BUILTIN_FILE_MAKE: return "file";
+    case BUILTIN_FILE_READ_ALL: return "readAll";
+    case BUILTIN_FILE_READ_LINES: return "readLines";
+    case BUILTIN_FILE_READ_LINE: return "readLine";
+    case BUILTIN_FILE_READ_LINES_RANGE: return "readLinesRange";
+    case BUILTIN_FILE_WRITE_ALL: return "writeAll";
+    case BUILTIN_FILE_WRITE_LINE: return "writeLine";
+    case BUILTIN_FILE_WRITE_LINES: return "writeLines";
+    case BUILTIN_FILE_APPEND: return "append";
+    case BUILTIN_FILE_APPEND_LINE: return "appendLine";
+    case BUILTIN_FILE_FLUSH: return "flush";
+    case BUILTIN_FILE_DELETE: return "delete";
+    case BUILTIN_FOLDER_MAKE: return "folder";
+    case BUILTIN_FOLDER_LIST: return "list";
+    case BUILTIN_FOLDER_FILES: return "files";
+    case BUILTIN_FOLDER_DIRS: return "dirs";
+    case BUILTIN_FOLDER_CREATE: return "create";
+    case BUILTIN_FOLDER_REMOVE: return "remove";
+    case BUILTIN_FOLDER_WALK: return "walk";
+    case BUILTIN_FOLDER_COPY_TO: return "copyTo";
+    case BUILTIN_FOLDER_MOVE_TO: return "moveTo";
     default: return "?";
     }
 }

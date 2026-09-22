@@ -48,6 +48,7 @@ static int is_expr_end(int t)
         case TOK_LONG_DOUBLE: case TOK_PTR:
         case TOK_DATE: case TOK_DATETIME: case TOK_TIME_KW: case TOK_TIMEDELTA:
         case TOK_TUPLE: case TOK_BYTES: case TOK_COMPLEX:
+        case TOK_FILE: case TOK_FOLDER:
         case ARROW:                 /* => { → 函数体块 */
             return 1;
         default:
@@ -151,6 +152,8 @@ static int is_expr_end(int t)
 "bytes"         { LEX_RET(TOK_BYTES); }
 "complex"       { LEX_RET(TOK_COMPLEX); }
 "calendar"      { LEX_RET(TOK_CALENDAR); }
+"file"          { LEX_RET(TOK_FILE); }
+"folder"        { LEX_RET(TOK_FOLDER); }
 "static"        { LEX_RET(TOK_STATIC); }
 "abstract"      { LEX_RET(TOK_ABSTRACT); }
 "public"        { LEX_RET(TOK_PUBLIC); }
@@ -286,6 +289,8 @@ f\"([^"\\]|\\.)*\"   {
 "<time>"           { LEX_RET(TOK_TIME_KW); }
 "<timedelta>"      { LEX_RET(TOK_TIMEDELTA); }
 "<calendar>"       { LEX_RET(TOK_CALENDAR); }
+"<file>"           { LEX_RET(TOK_FILE); }
+"<folder>"         { LEX_RET(TOK_FOLDER); }
 "<"                { LEX_RET(LT); }
 "&&"        { LEX_RET(AND); }
 "||"        { LEX_RET(OR); }
