@@ -1949,6 +1949,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         free(s);
         return 1;
     }
+    case BUILTIN_FILE_INSERT_LINE: {
+        if(recv.type != VAL_FILE) return bi_type_err("insertLine", recv);
+        if(argc < 2) { runtime_error("insertLine(n,s) 需要 2 个参数"); return 0; }
+        char* s = value_to_str(argv[2]);
+        *out = lumyr_file_insert_line(recv, bi_num_i64(argv[1]), s);
+        free(s);
+        return 1;
+    }
     case BUILTIN_FILE_WRITE_LINES: {
         if(recv.type != VAL_FILE) return bi_type_err("writeLines", recv);
         if(argc < 1) { runtime_error("writeLines(arr) 需要 1 个参数"); return 0; }
@@ -2230,6 +2238,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FILE_READ_LINES_RANGE: return "readLinesRange";
     case BUILTIN_FILE_WRITE_ALL: return "writeAll";
     case BUILTIN_FILE_WRITE_LINE: return "writeLine";
+    case BUILTIN_FILE_INSERT_LINE: return "insertLine";
     case BUILTIN_FILE_WRITE_LINES: return "writeLines";
     case BUILTIN_FILE_APPEND: return "append";
     case BUILTIN_FILE_APPEND_LINE: return "appendLine";

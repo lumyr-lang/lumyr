@@ -980,7 +980,7 @@ static int typecheck_call(AstNode* node)
                     {"firstDate", 1, 1}, {"lastDate", 1, 1},
                     {"file", 1, 2}, {"folder", 1, 1},
                     {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
-                    {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"writeLines", 2, 2},
+                    {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
                     {"append", 2, 2}, {"appendLine", 2, 2},
                     {"flush", 1, 1}, {"delete", 1, 1},
                     {"readBytes", 1, 1}, {"writeBytes", 2, 2},

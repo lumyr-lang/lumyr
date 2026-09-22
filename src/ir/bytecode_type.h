@@ -467,6 +467,7 @@ typedef enum {
     BUILTIN_FILE_READ_LINES_RANGE, // f.readLines(from, to)：读取行范围
     BUILTIN_FILE_WRITE_ALL,     // f.writeAll(s)：覆盖写入
     BUILTIN_FILE_WRITE_LINE,    // f.writeLine(n, s)：写入第 n 行
+    BUILTIN_FILE_INSERT_LINE,   // f.insertLine(n, s)：插入第 n 行（原有行后移）
     BUILTIN_FILE_WRITE_LINES,   // f.writeLines(arr)：写入多行
     BUILTIN_FILE_APPEND,        // f.append(s)：追加内容
     BUILTIN_FILE_APPEND_LINE,   // f.appendLine(s)：追加一行

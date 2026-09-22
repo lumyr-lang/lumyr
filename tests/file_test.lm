@@ -56,8 +56,28 @@ assert f1.readLine(0) == "L1";
 assert f1.readLine(2) == "L3";
 print("4. file 写行操作 OK");
 
+// ===== 4b. 插入行：insertLine =====
+f1.writeLines(["A", "B", "C"]);
+f1.insertLine(1, "X");
+assert f1.lines == 4;
+assert f1.readLine(0) == "A";
+assert f1.readLine(1) == "X";
+assert f1.readLine(2) == "B";
+assert f1.readLine(3) == "C";
+// 负数倒数：-1 在最后一行前插入
+f1.insertLine(-1, "Y");
+assert f1.lines == 5;
+assert f1.readLine(3) == "Y";
+assert f1.readLine(4) == "C";
+// 越界追加到末尾
+f1.insertLine(100, "Z");
+assert f1.lines == 6;
+assert f1.readLine(5) == "Z";
+print("4b. file insertLine 插入行 OK");
+
 // ===== 5. 追加：append / appendLine =====
 // append 是字节级追加；appendLine 追加一行（自动加换行符）
+f1.writeLines(["L1", "L2", "L3"]);
 f1.appendLine("L4");
 assert f1.lines == 4;
 assert f1.readLine(3) == "L4";

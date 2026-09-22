@@ -490,6 +490,48 @@ Value lumyr_file_write_line(Value v, int64_t line_no, const char* content) {
     return val_none();
 }
 
+Value lumyr_file_insert_line(Value v, int64_t line_no, const char* content) {
+    if (v.type != VAL_FILE) { runtime_error("insertLine() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("insertLine() 文件对象无效"); return val_none(); }
+    long sz = 0;
+    char* old = read_whole_file(o->path, &sz);
+    int total = old ? count_lines(old) : 0;
+    Value lines = old ? split_lines(old) : val_array(0);
+    free(old);
+    /* 规整行号：负数倒数，越界则追加到末尾 */
+    int idx;
+    if (line_no < 0) {
+        idx = (int)(total + line_no);  /* -1 → 最后一行之前插入 */
+        if (idx < 0) idx = 0;
+    } else {
+        idx = (int)line_no;
+        if (idx > total) idx = total;  /* 超界追加到末尾 */
+    }
+    /* 构造新数组：idx 之前 + 新行 + idx 之后 */
+    int new_total = total + 1;
+    Value result = val_array(new_total);
+    int j = 0;
+    for (int i = 0; i < idx; i++) result.v.array->items[j++] = lines.v.array->items[i];
+    result.v.array->items[j++] = lumyr_make_string(content ? content : "");
+    for (int i = idx; i < total; i++) result.v.array->items[j++] = lines.v.array->items[i];
+    /* 写回 */
+    FILE* f = fopen(o->path, "wb");
+    if (!f) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "insertLine() 无法打开文件（写回）: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    for (int i = 0; i < new_total; i++) {
+        const char* s = lumyr_str_cstr(&result.v.array->items[i]);
+        fputs(s ? s : "", f);
+        fputc('\n', f);
+    }
+    fclose(f);
+    return val_none();
+}
+
 Value lumyr_file_write_lines(Value v, Value arr) {
     if (v.type != VAL_FILE) { runtime_error("writeLines() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;

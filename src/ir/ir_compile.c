@@ -171,6 +171,7 @@ static int builtin_id_by_name(const char* name) {
         {"readLine", BUILTIN_FILE_READ_LINE},
         {"writeAll", BUILTIN_FILE_WRITE_ALL},
         {"writeLine", BUILTIN_FILE_WRITE_LINE},
+        {"insertLine", BUILTIN_FILE_INSERT_LINE},
         {"writeLines", BUILTIN_FILE_WRITE_LINES},
         {"append", BUILTIN_FILE_APPEND},
         {"appendLine", BUILTIN_FILE_APPEND_LINE},

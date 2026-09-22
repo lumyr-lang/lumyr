@@ -23,6 +23,7 @@ Value lumyr_file_read_line(Value v, int64_t line_no);
 Value lumyr_file_read_lines_range(Value v, int64_t from, int64_t to);
 Value lumyr_file_write_all(Value v, const char* content);
 Value lumyr_file_write_line(Value v, int64_t line_no, const char* content);
+Value lumyr_file_insert_line(Value v, int64_t line_no, const char* content);
 Value lumyr_file_write_lines(Value v, Value arr);
 Value lumyr_file_append(Value v, const char* content);
 Value lumyr_file_append_line(Value v, const char* content);
