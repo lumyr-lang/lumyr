@@ -59,6 +59,7 @@ typedef enum {
     AST_METHOD_CALL,     // 接收者绑定的方法调用 recv.method(args)：类型化分派（含继承/多态）
     AST_COMP_LIST,       // 列表推导式 [expr for x in iter (if cond)]
     AST_COMP_MAP,        // 字典推导式 {k:v for x in iter (if cond)}
+    AST_DEFER,           // defer { body }：延迟到函数退出（return/throw/fallthrough）时执行
 } AstType;
 
 // 二元运算符

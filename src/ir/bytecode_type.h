@@ -404,6 +404,7 @@ typedef enum {
     /* ===== enum 增强 ===== */
     BUILTIN_FROM_VALUE,      // fromValue(map, val)：按值反查键名（enum 逆向查找）
 
+    BUILTIN_ASSERT,          // __assert(cond [, msg])：断言失败 exit(1)
     BUILTIN_COUNT
 } BuiltinId;
 

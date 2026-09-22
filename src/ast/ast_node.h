@@ -26,13 +26,13 @@ AstNode* ast_elif(AstNode* cond, AstNode* body);
 AstNode* ast_elif_append(AstNode* list, AstNode* elif);
 AstNode* ast_if_chain(AstNode* cond, AstNode* if_body, AstNode* elif_list, AstNode* else_body);
 AstNode* ast_new(AstType type);
-AstNode* ast_while(AstNode* cond, AstNode* body);
-AstNode* ast_do_while(AstNode* cond, AstNode* body);
+AstNode* ast_while(AstNode* cond, AstNode* body, const char* label);
+AstNode* ast_do_while(AstNode* cond, AstNode* body, const char* label);
 AstNode* ast_annotation(char* name, AstNode* args);
 AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args);
 AstNode* ast_null_coalesce(AstNode* left, AstNode* right);
 AstNode* ast_macro_def(char* name, AstNode* params, AstNode* body);
-AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body);
+AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body, const char* label);
 AstNode* new_cast_node(CastKind cast_type, AstNode* child);
 AstNode* ast_unary(BinOp op, AstNode* child);
 AstNode* ast_ternary(AstNode* cond, AstNode* t, AstNode* f);
@@ -40,11 +40,13 @@ AstNode* ast_switch(AstNode* expr, AstNode* cases);
 AstNode* ast_case(AstNode* const_expr, AstNode* body, int is_default);
 AstNode* ast_case_type(int match_type, AstNode* body);  /* type match: case int: etc */
 AstNode* ast_case_guard(const char* bind_var, AstNode* guard, AstNode* body);  /* pattern binding + guard: case x if cond: */
-AstNode* ast_break(void);
-AstNode* ast_continue(void);
+AstNode* ast_break(const char* label);
+AstNode* ast_continue(const char* label);
 AstNode* ast_return(AstNode* expr);
 AstNode* ast_yield(AstNode* value);
 AstNode* ast_case_append(AstNode* case_list, AstNode* one_case);
+AstNode* ast_defer(AstNode* body);
+int ast_has_defer(AstNode* node);   /* 递归检测 AST 子树是否含 AST_DEFER */
 
 // func def: func name(params) body
 AstNode* ast_func_def(char* name, AstNode* params, AstNode* body);

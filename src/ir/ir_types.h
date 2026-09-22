@@ -32,6 +32,7 @@ typedef enum {
  */
 typedef struct {
     int kind;              /* 0=循环 1=switch */
+    char* label;           /* 标签名（labeled break/continue），NULL=无标签 */
     int* brk; int brk_cnt, brk_cap;    /* 未定 break 跳转位置（JMP.a） */
     int* cont; int cont_cnt, cont_cap; /* 未定 continue 跳转位置（循环，JMP.a） */
     int* brk_fin; int brk_fin_cnt, brk_fin_cap;   /* try-finally 内 break 的 FIN_PUSH 位置（patch b） */
@@ -59,6 +60,11 @@ typedef struct {
     int* fin_jmp_cap;
     int fin_depth;
     int fin_cap;
+    /* defer 上下文：函数级 LIFO 栈，编译 body 时压栈；return/throw/fallthrough 触发执行 */
+    AstNode** deferred;
+    int deferred_cnt;
+    int deferred_cap;
+    int has_defer;          /* 1=函数体含 AST_DEFER，需要函数级 try 包裹 */
     /* 简单符号表：变量名 → 索引 + 类型 */
     char** var_names;
     ExprType* var_types;

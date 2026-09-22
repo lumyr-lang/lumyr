@@ -1452,6 +1452,11 @@ int typecheck_expr(AstNode* node)
             if(node->u.block.stmts) err |= typecheck_expr(node->u.block.stmts);
             node->val_type = VAL_DOUBLE;
             break;
+        case AST_DEFER:
+            /* defer { body }：检查 body（与 AST_BLOCK 一致） */
+            if(node->u.defer.body) err |= typecheck_expr(node->u.defer.body);
+            node->val_type = VAL_NONE;
+            break;
         case AST_IF_CHAIN:
             err |= typecheck_expr(node->u.if_chain.cond);
             err |= typecheck_expr(node->u.if_chain.if_body);

@@ -71,6 +71,7 @@ struct AstNode {
         struct {
             AstNode* cond;
             AstNode* body;
+            char* label;   /* 标签名（labeled break/continue），NULL=无标签 */
         } while_node;
         struct {
             char* name;
@@ -95,6 +96,7 @@ struct AstNode {
             AstNode* cond;
             AstNode* update;
             AstNode* body;
+            char* label;   /* 标签名（labeled break/continue），NULL=无标签 */
         } for_node;
         struct {
             CastKind cast_type;
@@ -103,6 +105,9 @@ struct AstNode {
         struct {
             AstNode* ret_val;
         } ret;
+        struct {
+            char* label;   /* 标签名（labeled break/continue），NULL=无标签 */
+        } jump;
         struct {
             AstNode* cond;
             AstNode* true_expr;
@@ -243,6 +248,9 @@ struct AstNode {
             AstNode* iter;        // 可迭代对象
             AstNode* cond;        // 过滤条件（NULL=无过滤）
         } comp;
+        struct {
+            AstNode* body;        // defer 块体（AST_BLOCK）
+        } defer;
     } u;
 };
 

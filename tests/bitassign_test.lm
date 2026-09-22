@@ -105,6 +105,17 @@ check(caught == 2, "non-int compound raises");
 
 print("bitassign_test ALL PASS");
 
+// ===== 11. %= 取模复合赋值（变量 + 数组下标） =====
+ma = 10; ma %= 3;
+check(ma == 1, "%= basic");
+mb = 17; mb %= 5;
+check(mb == 2, "%= basic 2");
+sa = [10, 20, 30];
+sa[0] %= 3;
+check(sa[0] == 1, "index %=");
+sa[2] %= 4;
+check(sa[2] == 2, "index %= 2");
+
 // ===== 反例（放 /tmp，exit 1；此处仅列明） =====
 // x = 3; x &= "x";   // 字符串右值 → TypeError
 // y = 3.5; y |= 2;   // double 左值 → TypeError

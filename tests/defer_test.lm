@@ -1,0 +1,53 @@
+// tests/defer_test.lm
+// defer { body }：函数退出时 LIFO 执行（return / fallthrough / throw 均触发）
+
+func f() {
+    defer { print("third"); }
+    defer { print("second"); }
+    print("first");
+}
+f();   // first second third（LIFO）
+
+func g() {
+    defer { print("cleanup"); }
+    return 42;
+}
+print(g());  // cleanup 42
+
+func h() {
+    defer { print("at end"); }
+    print("body");
+}
+h();  // body at end
+
+// defer 内访问局部变量
+func locals() {
+    x = 10;
+    defer { print("x =", x); }
+    x = 20;
+    return x;
+}
+print(locals());  // x = 20 / 20
+
+// defer + try/catch（defer 在 catch 处理后仍执行）
+func with_catch() {
+    defer { print("after catch"); }
+    try {
+        throw "boom";
+    } catch (e) {
+        print("caught:", e);
+    }
+    return 1;
+}
+print(with_catch());  // caught: boom / after catch / 1
+
+print("defer_test ALL PASS");
+
+// ===== 反例（放 /tmp，exit 1；此处仅列明） =====
+// /tmp/defer_throw.lm:
+//   func e() {
+//       defer { print("on throw"); }
+//       throw "err";
+//   }
+//   e();
+// 退出码 1，输出含 "on throw" 后异常传播

@@ -133,6 +133,7 @@ static int builtin_id_by_name(const char* name) {
         /* 生成器 */
         {"next", BUILTIN_NEXT}, {"send", BUILTIN_SEND},
         {"receive", BUILTIN_RECEIVE}, {"close", BUILTIN_CLOSE},
+        {"__assert", BUILTIN_ASSERT},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {
@@ -2409,7 +2410,7 @@ static Layer* layer_top(Ctx* c) {
     return &c->layers[c->layer_depth - 1];
 }
 
-static void layer_push(Ctx* c, int kind) {
+static void layer_push(Ctx* c, int kind, const char* label) {
     if(c->layer_depth >= c->layers_cap) {
         c->layers_cap = c->layers_cap ? c->layers_cap * 2 : 8;
         c->layers = (Layer*)realloc(c->layers, sizeof(Layer) * c->layers_cap);
@@ -2417,11 +2418,23 @@ static void layer_push(Ctx* c, int kind) {
     }
     Layer* L = &c->layers[c->layer_depth++];
     L->kind = kind;
+    L->label = label ? strdup(label) : NULL;
     L->brk = NULL; L->brk_cnt = L->brk_cap = 0;
     L->cont = NULL; L->cont_cnt = L->cont_cap = 0;
     L->brk_fin = NULL; L->brk_fin_cnt = L->brk_fin_cap = 0;
     L->cont_fin = NULL; L->cont_fin_cnt = L->cont_fin_cap = 0;
     L->cont_target = -1;
+}
+
+/* 按 label 向上搜索 layer 栈，找到首个匹配的循环层；NULL=用最近循环层 */
+static Layer* layer_find_labeled(Ctx* c, const char* label) {
+    if(!label) return layer_top(c);
+    for(int i = c->layer_depth - 1; i >= 0; i--) {
+        Layer* L = &c->layers[i];
+        if(L->kind != 0) continue;  /* 只匹配循环层（跳过 switch 层） */
+        if(L->label && strcmp(L->label, label) == 0) return L;
+    }
+    return NULL;
 }
 
 static void int_list_add(int** arr, int* cnt, int* cap, int v) {
@@ -2436,6 +2449,7 @@ static void int_list_add(int** arr, int* cnt, int* cap, int v) {
 static void layer_pop(Ctx* c) {
     if(c->layer_depth <= 0) return;
     Layer* L = &c->layers[--c->layer_depth];
+    free(L->label);
     free(L->brk); free(L->cont);
     free(L->brk_fin); free(L->cont_fin);
 }
@@ -2866,6 +2880,26 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
     return EXPR_TYPE_NONE;
 }
 
+/* emit_deferred：LIFO 逆序编译所有已注册的 defer body。
+ * 用于 AST_RETURN、AST_DEFER 之后的 fallthrough 路径与异常 handler 路径。 */
+static void emit_deferred(Ctx* c) {
+    if(!c || c->deferred_cnt <= 0) return;
+    for(int i = c->deferred_cnt - 1; i >= 0; i--) {
+        if(c->deferred[i]) c_stmt(c, c->deferred[i]);
+    }
+}
+
+/* push_defer：把 defer body 压入函数级 LIFO 栈（按需扩容） */
+static void push_defer(Ctx* c, AstNode* body) {
+    if(!c) return;
+    if(c->deferred_cnt >= c->deferred_cap) {
+        c->deferred_cap = c->deferred_cap ? c->deferred_cap * 2 : 4;
+        c->deferred = (AstNode**)realloc(c->deferred, sizeof(AstNode*) * c->deferred_cap);
+        if(!c->deferred) { perror("push_defer"); exit(EXIT_FAILURE); }
+    }
+    c->deferred[c->deferred_cnt++] = body;
+}
+
 void c_stmt(Ctx* c, AstNode* node) {
     if(!node) return;
 
@@ -3247,14 +3281,25 @@ void c_stmt(Ctx* c, AstNode* node) {
         break;
     }
 
+    case AST_DEFER: {
+        /* defer { body }：不立即编译，把 body 压入函数级 LIFO 栈。
+         * 在 AST_RETURN / fallthrough / 异常 handler 处由 emit_deferred 统一执行。 */
+        push_defer(c, node->u.defer.body);
+        c->has_defer = 1;
+        break;
+    }
+
     case AST_RETURN: {
         /* 返回语句：无值 RETURN_NIL；有值 c_expr 后 RETURN（a=返回 ExprType）。
-           在 try-finally 内：编译为 PEND_RETURN，先执行 finally 再真正返回。 */
+           在 try-finally 内：编译为 PEND_RETURN，先执行 finally 再真正返回。
+           defer 处理：函数级 has_defer=1 时，return 前先 LIFO 执行所有 deferred。 */
         AstNode* rv = node->u.ret.ret_val;
 
         if(c->fin_depth > 0) {
             int pr;
             if(!rv) {
+                /* 无值返回：先 emit_deferred 再 PEND_RETURN，让外层 finally 与 defer 都执行 */
+                emit_deferred(c);
                 pr = emit_here(c, OPC_PEND_RETURN, 1, 0);   /* 无值返回 */
             } else {
                 ExprType vt = c_expr(c, rv);
@@ -3271,6 +3316,9 @@ void c_stmt(Ctx* c, AstNode* node) {
                 }
                 if(target != EXPR_TYPE_NONE)
                     emit_to_dynamic(c, target, ret_ck);
+                /* 值已 box 到 VALUE 栈，再 LIFO 执行 defer（可能修改 self.field/全局；
+                   不影响已压栈的返回值），最后 PEND_RETURN */
+                emit_deferred(c);
                 pr = emit_here(c, OPC_PEND_RETURN, 0, 0);
             }
             fin_add_pend(c, pr);
@@ -3278,6 +3326,8 @@ void c_stmt(Ctx* c, AstNode* node) {
         }
 
         if(!rv) {
+            /* 无值返回：先 LIFO 执行 defer，再 RETURN_NIL */
+            emit_deferred(c);
             emit(c, OPC_RETURN_NIL, 0, 0);
             break;
         }
@@ -3306,6 +3356,8 @@ void c_stmt(Ctx* c, AstNode* node) {
             target = EXPR_TYPE_NONE;
             ret_ck = CAST_NONE;
         }
+        /* 返回值已 box 到 VALUE 栈，再 LIFO 执行 defer，最后 RETURN */
+        emit_deferred(c);
         /* a=ExprType（RETURN 从对应栈弹）；b=CastKind（PTR 字符串需深拷贝） */
         emit(c, OPC_RETURN, (int)target, (int)ret_ck);
         break;
@@ -3367,9 +3419,15 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_BREAK: {
-        /* break：直接 JMP 出口；在 try-finally 内则 FIN_PUSH(BREAK) 先执行 finally 再跳 */
-        Layer* L = layer_top(c);
-        if(!L) { fprintf(stderr, "IR: break outside loop\n"); break; }
+        /* break：直接 JMP 出口；在 try-finally 内则 FIN_PUSH(BREAK) 先执行 finally 再跳。
+         * 若 break 带 label，向上搜 layer 栈找匹配标签的循环层。 */
+        const char* lbl = node->u.jump.label;
+        Layer* L = layer_find_labeled(c, lbl);
+        if(!L) {
+            if(lbl) fprintf(stderr, "IR: break label '%s' not found\n", lbl);
+            else    fprintf(stderr, "IR: break outside loop\n");
+            break;
+        }
         if(c->fin_depth > 0) {
             int fp = emit_here(c, OPC_FIN_PUSH, 3, 0);
             int_list_add(&L->brk_fin, &L->brk_fin_cnt, &L->brk_fin_cap, fp);
@@ -3383,9 +3441,15 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_CONTINUE: {
-        /* continue：跳 cond/更新头；try-finally 内 FIN_PUSH(CONT) 先执行 finally 再跳 */
-        Layer* L = layer_top(c);
-        if(!L) { fprintf(stderr, "IR: continue outside loop\n"); break; }
+        /* continue：跳 cond/更新头；try-finally 内 FIN_PUSH(CONT) 先执行 finally 再跳。
+         * 若 continue 带 label，向上搜 layer 栈找匹配标签的循环层。 */
+        const char* lbl = node->u.jump.label;
+        Layer* L = layer_find_labeled(c, lbl);
+        if(!L) {
+            if(lbl) fprintf(stderr, "IR: continue label '%s' not found\n", lbl);
+            else    fprintf(stderr, "IR: continue outside loop\n");
+            break;
+        }
         if(c->fin_depth > 0) {
             int fp;
             if(L->cont_target >= 0) {
@@ -3407,7 +3471,7 @@ void c_stmt(Ctx* c, AstNode* node) {
 
     case AST_WHILE: {
         /* L_cond: cond; JMP_IF_FALSE -> end; body; JMP L_cond; end: */
-        layer_push(c, 0);
+        layer_push(c, 0, node->u.while_node.label);
         Layer* L = layer_top(c);
         int cond_pc = here(c);
         L->cont_target = cond_pc;
@@ -3424,7 +3488,7 @@ void c_stmt(Ctx* c, AstNode* node) {
     case AST_DO_WHILE: {
         /* L_body: body; L_cond: cond; JMP_IF_TRUE -> L_body; end:
          * continue 跳 L_cond（编译 body 时位置未知，待 patch） */
-        layer_push(c, 0);
+        layer_push(c, 0, node->u.while_node.label);
         Layer* L = layer_top(c);
         int body_pc = here(c);
         c_stmt(c, node->u.while_node.body);
@@ -3448,7 +3512,7 @@ void c_stmt(Ctx* c, AstNode* node) {
         /* init; L_cond: [cond; JMP_IF_FALSE -> end]; body; L_upd: update; JMP L_cond; end:
          * continue 跳 L_upd；无条件（cond=NULL）即永真。 */
         compile_for_effect(c, node->u.for_node.init);
-        layer_push(c, 0);
+        layer_push(c, 0, node->u.for_node.label);
         Layer* L = layer_top(c);
         int cond_pc = here(c);
         int jf = -1;
@@ -3499,7 +3563,7 @@ void c_stmt(Ctx* c, AstNode* node) {
             else if(ncases < 64) case_arr[ncases++] = p;
         }
 
-        layer_push(c, 1);   /* switch 层（break 跳出） */
+        layer_push(c, 1, NULL);   /* switch 层（break 跳出） */
         Layer* L = layer_top(c);
 
         int* end_jmps = (int*)malloc(sizeof(int) * (ncases + 1));
@@ -3695,6 +3759,10 @@ static void ctx_cleanup(Ctx* c) {
     symhash_reset(&c->var_idx);
     c->var_names = NULL; c->var_types = NULL;
     c->var_cnt = c->var_cap = 0;
+    /* defer 栈：只释放指针数组（body 节点由 AST 全局释放，不重复 free） */
+    free(c->deferred);
+    c->deferred = NULL;
+    c->deferred_cnt = c->deferred_cap = 0;
 }
 
 /* 前置声明（重载组定义在后文） */
@@ -3811,9 +3879,35 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
         }
     }
 
-    /* 编译函数体；末尾隐式返回 null（显式 return 时该指令不可达，无害） */
+    /* 预扫描函数体是否含 AST_DEFER；若有，发函数级 OPC_TRY 包裹整个 body，
+     * 让 throw 路径也能触发 defer（catch handler 跑完 emit_deferred 后重抛） */
+    int has_defer = body ? ast_has_defer(body) : 0;
+    int try_pos = -1;
+    if(has_defer) {
+        try_pos = emit_here(&c, OPC_TRY, 0, 0);   /* a=catch_pc（后回填），b=0（无 finally） */
+        c.has_defer = 1;
+    }
+
+    /* 编译函数体；末尾隐式返回 null（显式 return 时该指令不可达，无害）。
+     * 若 has_defer，fallthrough 路径需先 LIFO 执行所有 deferred 再 ENDTRY+RETURN_NIL。 */
     if(body) c_stmt(&c, body);
+    if(has_defer) {
+        /* fallthrough 路径：先 emit_deferred（LIFO）然后弹 try 后隐式 return nil */
+        emit_deferred(&c);
+        emit(&c, OPC_ENDTRY, 0, 0);
+    }
     emit(&c, OPC_RETURN_NIL, 0, 0);
+
+    /* 异常 handler：emit_deferred + GET_ERR + THROW 重抛到外层 */
+    if(has_defer) {
+        int handler_pc = c.fn->code_len;
+        /* 重新 emit_deferred（编译期重复一次，对应异常运行时路径） */
+        emit_deferred(&c);
+        emit(&c, OPC_GET_ERR, 0, 0);
+        emit(&c, OPC_THROW, 0, 0);
+        /* 回填 OPC_TRY 的 catch_pc */
+        c.fn->code[try_pos].a = handler_pc;
+    }
 
     ctx_cleanup(&c);
     return fn;

@@ -1,0 +1,37 @@
+// tests/labeled_break_test.lm
+// 标签 break/continue：break label / continue label 跳出到指定循环
+
+// 1. break label：双层 for，内层 j==1 时跳出外层
+outer: for (i = 0; i < 3; i++) {
+    for (j = 0; j < 3; j++) {
+        if (j == 1) { break outer; }
+        print(i, j);
+    }
+}
+// 只输出 (0,0) 后跳出
+
+// 2. continue label：双层 for，内层 j==2 时跳过本轮外层
+total = 0;
+outer2: for (i = 0; i < 5; i++) {
+    for (j = 0; j < 5; j++) {
+        if (j == 2) { continue outer2; }
+        total += 1;
+    }
+}
+print(total);  // 5 * 2 = 10
+
+// 3. label while
+k = 0;
+wlbl: while (k < 10) {
+    k += 1;
+    if (k == 3) { break wlbl; }
+}
+print(k);  // 3
+
+// 4. 无标签 break 仍正常
+for (i = 0; i < 5; i++) {
+    if (i == 2) { break; }
+}
+print(i);  // 2
+
+print("labeled_break_test ALL PASS");

@@ -36,6 +36,7 @@ static int is_expr_end(int t)
         case TRY:                 /* try { → 块 */
         case FINALLY:             /* finally { → 块 */
         case TOK_DO:              /* do { → 块 */
+        case TOK_DEFER:            /* defer { → 块 */
         /* 内置类型关键字：出现在冒号返回类型后，其后的 { 一定是块而非 map */
         case TOK_INT: case TOK_DOUBLE: case TOK_CHAR: case TOK_STRING:
         case TOK_BOOL: case TOK_ASCII: case TOK_BYTE:
@@ -102,6 +103,8 @@ static int is_expr_end(int t)
 "break"         {   LEX_RET(BREAK); }
 "continue"      { LEX_RET(CONTINUE); }
 "return"        {  LEX_RET(RETURN); }
+"assert"        { LEX_RET(TOK_ASSERT); }
+"defer"         { LEX_RET(TOK_DEFER); }
 
 "int"           { LEX_RET(TOK_INT); }
 "double"        { LEX_RET(TOK_DOUBLE); }
@@ -291,6 +294,7 @@ f\"([^"\\]|\\.)*\"   {
 "-="        { LEX_RET(MINUSEQ); }
 "*="        { LEX_RET(MULEQ); }
 "/="        { LEX_RET(DIVEQ); }
+"%="        { LEX_RET(MODEQ); }
 
 "&="        { LEX_RET(BANDEQ); }
 "|="        { LEX_RET(BOREQ); }

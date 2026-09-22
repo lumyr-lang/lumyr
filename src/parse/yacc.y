@@ -718,6 +718,30 @@ static char* make_unpack_tmp_name(void) {
     snprintf(name, 32, "unpacktmp%d", g_unpack_tmp_counter++);
     return name;
 }
+/* 链式比较：若 left 已是比较/相等 binop，则 a<b<c → (a<b) && (b<c)；
+ * 若 left 已是 (a<b)&&(b<c) 形式（链化结果），则取链尾的右操作数作中项续链：
+ *   ((a<b)&&(b<c))<d → ((a<b)&&(b<c)) && (c<d)
+ * 中项克隆以避免节点共享；非比较/非链化 binop 退回普通 binop */
+static AstNode* chain_cmp(AstNode* left, int op, AstNode* right) {
+    if(left && left->type == AST_BINOP) {
+        int lop = left->u.bin.op;
+        if(lop == OP_LT || lop == OP_GT || lop == OP_GE || lop == OP_LE ||
+           lop == OP_EQ || lop == OP_NE) {
+            AstNode* mid = ast_clone_node(left->u.bin.right);
+            return ast_binop(OP_LOGIC_AND, left, ast_binop(op, mid, right));
+        }
+        if(lop == OP_LOGIC_AND && left->u.bin.right &&
+           left->u.bin.right->type == AST_BINOP) {
+            int rop = left->u.bin.right->u.bin.op;
+            if(rop == OP_LT || rop == OP_GT || rop == OP_GE || rop == OP_LE ||
+               rop == OP_EQ || rop == OP_NE) {
+                AstNode* mid = ast_clone_node(left->u.bin.right->u.bin.right);
+                return ast_binop(OP_LOGIC_AND, left, ast_binop(op, mid, right));
+            }
+        }
+    }
+    return ast_binop(op, left, right);
+}
 // 构建对象解构赋值序列：unpack {a,b} = obj -> _tmp=obj; a=_tmp.a; b=_tmp.b;
 static AstNode* build_object_destruct(AstNode* list, AstNode* names, AstNode* rhs) {
     char* tmp = make_unpack_tmp_name();
@@ -850,12 +874,13 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token SWITCH CASE DEFAULT BREAK RETURN TRY CATCH THROW FINALLY
 %token CONTINUE
 %token FUNC ELLIPSIS TOK_AT SAFE_CALL NULL_COALESCE CONST MACRO TOK_GEN TOK_YIELD TOK_EXTERN TOK_REF
+%token TOK_ASSERT TOK_DEFER
 %token READ WRITE
 %token COMMA
 %token AND OR NOT MOD
 %token BAND BOR BXOR BNOT SHL SHR   /* 位运算：& | ^ ~ << >> */
 %token POW                          /* 中缀幂 ** */
-%token PLUSEQ MINUSEQ MULEQ DIVEQ
+%token PLUSEQ MINUSEQ MULEQ DIVEQ MODEQ
 %token BANDEQ BOREQ BXOREQ SHLEQ SHREQ  /* 位复合赋值：&= |= ^= <<= >>= */
 %token LBRACKET RBRACKET
 %token ARRAY_OPEN
@@ -876,7 +901,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %type<node> program stmt_list closed_stmt open_stmt block_stmt try_stmt
 %type<node> elif_clause_list elif_clause else_part
 %type<node> expr ternary_expr logic_or_expr logic_and_expr assignment_expr unary_expr power_expr postfix_expr multiplicative_expr additive_expr comparison_expr shift_expr equality_expr bit_and_expr bit_xor_expr bit_or_expr expr_opt for_init for_incr primary map_items map_item
-%type<node> switch_stmt case_list case_item break_stmt continue_stmt const_expr return_stmt yield_stmt
+%type<node> switch_stmt case_list case_item break_stmt continue_stmt assert_stmt defer_stmt const_expr return_stmt yield_stmt expr_list
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
 %type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_start class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
@@ -949,8 +974,11 @@ closed_stmt
           }
       }
     | open_stmt                      { $$ = $1; }
-    | WHILE LPAREN expr RPAREN closed_stmt     { $$ = ast_while($3, $5); }
-    | FOR LPAREN for_init SEMI expr_opt SEMI for_incr RPAREN closed_stmt { $$ = ast_for($3, $5, $7, $9); }
+    | WHILE LPAREN expr RPAREN closed_stmt     { $$ = ast_while($3, $5, NULL); }
+    /* 标签循环 label: while(...) {...} —— 标签传给 ast_while，break/continue label 可跳转 */
+    | ID COLON WHILE LPAREN expr RPAREN closed_stmt { $$ = ast_while($5, $7, $1); }
+    | FOR LPAREN for_init SEMI expr_opt SEMI for_incr RPAREN closed_stmt { $$ = ast_for($3, $5, $7, $9, NULL); }
+    | ID COLON FOR LPAREN for_init SEMI expr_opt SEMI for_incr RPAREN closed_stmt { $$ = ast_for($5, $7, $9, $11, $1); }
     /* for-each 循环：for x in obj，同时支持数组和生成器（运行时判断类型） */
     | FOR ID TOK_IN expr closed_stmt {
         static int fe_counter = 0;
@@ -960,6 +988,7 @@ closed_stmt
         snprintf(isarr_name, sizeof(isarr_name), "__fe_isarr_%d", n);
         snprintf(idx_name, sizeof(idx_name), "__fe_idx_%d", n);
         snprintf(len_name, sizeof(len_name), "__fe_len_%d", n);
+        const char* lbl = NULL;   /* for-in 不支持标签（其内部 desugar 出 while 无外部标签） */
 
         /* __fe_obj = obj; */
         AstNode* obj_assign = ast_assign(strdup(oname), ast_clone_node($4));
@@ -978,7 +1007,7 @@ closed_stmt
         /* while (1) { ... } */
         /* 数组分支：if (__fe_idx >= __fe_len) break; x = __fe_obj[__fe_idx]; __fe_idx++; */
         AstNode* arr_break_cond = ast_binop(OP_GE, ast_var(strdup(idx_name)), ast_var(strdup(len_name)));
-        AstNode* arr_break = ast_if(arr_break_cond, ast_break(), NULL, NULL);
+        AstNode* arr_break = ast_if(arr_break_cond, ast_break(NULL), NULL, NULL);
         AstNode* arr_x_assign = ast_assign(strdup($2), ast_index(ast_var(strdup(oname)), ast_var(strdup(idx_name))));
         AstNode* arr_idx_inc = ast_unary(OP_POST_INC, ast_var(strdup(idx_name)));
         AstNode* arr_branch = ast_block(ast_seq(arr_break, ast_seq(arr_x_assign, arr_idx_inc)));
@@ -987,7 +1016,7 @@ closed_stmt
         AstNode* gen_next_call = ast_call(strdup("next"), ast_seq(ast_var(strdup(oname)), NULL));
         AstNode* gen_x_assign = ast_assign(strdup($2), gen_next_call);
         AstNode* gen_break_cond = ast_binop(OP_EQ, ast_var(strdup($2)), ast_none());
-        AstNode* gen_break = ast_if(gen_break_cond, ast_break(), NULL, NULL);
+        AstNode* gen_break = ast_if(gen_break_cond, ast_break(NULL), NULL, NULL);
         AstNode* gen_branch = ast_block(ast_seq(gen_x_assign, gen_break));
 
         /* if (__fe_isarr) { arr_branch } else { gen_branch } */
@@ -997,7 +1026,7 @@ closed_stmt
         AstNode* while_body = ast_block(ast_seq(if_type, $5));
 
         /* while (1) { while_body } */
-        AstNode* while_loop = ast_while(ast_int(1), while_body);
+        AstNode* while_loop = ast_while(ast_int(1), while_body, NULL);
 
         /* 整体：obj_assign; isarr_assign; idx_init; len_init; if_len; while_loop */
         AstNode* stmts = ast_seq(obj_assign, ast_seq(isarr_assign, ast_seq(idx_init, ast_seq(len_init, ast_seq(if_len, while_loop)))));
@@ -1018,7 +1047,7 @@ closed_stmt
         AstNode* k_assign = ast_assign(strdup($2), ast_index(ast_var(strdup(kname)), ast_var(strdup(iname))));
         AstNode* v_assign = ast_assign(strdup($4), ast_index(iter_copy, ast_var(strdup($2))));
         AstNode* body = ast_block(ast_seq(k_assign, ast_seq(v_assign, $7)));
-        AstNode* for_stmt = ast_for(init, cond, update, body);
+        AstNode* for_stmt = ast_for(init, cond, update, body, NULL);
         $$ = ast_block(ast_seq(keys_init, for_stmt));
     }
     /* 迭代器协议：for x iter obj，调用 obj.next()，返回 null 结束 */
@@ -1033,20 +1062,23 @@ closed_stmt
         AstNode* x_assign = ast_assign(strdup($2), next_call);
         /* if (x == null) break; */
         AstNode* null_cond = ast_binop(OP_EQ, ast_var(strdup($2)), ast_none());
-        AstNode* break_stmt = ast_break();
+        AstNode* break_stmt = ast_break(NULL);
         AstNode* if_break = ast_if(null_cond, break_stmt, NULL, NULL);
         /* body: x = next(...); if (x == null) break; <original body> */
         AstNode* loop_body = ast_block(ast_seq(x_assign, ast_seq(if_break, $5)));
         /* while (1) { body } */
-        AstNode* while_stmt = ast_while(ast_int(1), loop_body);
+        AstNode* while_stmt = ast_while(ast_int(1), loop_body, NULL);
         /* __iter_obj_N = obj; while (1) { ... } */
         $$ = ast_block(ast_seq(obj_assign, while_stmt));
     }
 
-    | TOK_DO closed_stmt WHILE LPAREN expr RPAREN SEMI { $$ = ast_do_while($5, $2); }
+    | TOK_DO closed_stmt WHILE LPAREN expr RPAREN SEMI { $$ = ast_do_while($5, $2, NULL); }
+    | ID COLON TOK_DO closed_stmt WHILE LPAREN expr RPAREN SEMI { $$ = ast_do_while($7, $4, $1); }
     | switch_stmt                    { $$ = $1; }
     | break_stmt                     { $$ = $1; }
     | continue_stmt                  { $$ = $1; }
+    | assert_stmt                    { $$ = $1; }
+    | defer_stmt                     { $$ = $1; }
     | return_stmt                    { $$ = $1; }
     | yield_stmt                     { $$ = $1; }
     | func_def                       { $$ = $1; }          /* 新增函数定义语句 */
@@ -2070,15 +2102,36 @@ block_stmt
     ;
 
 break_stmt
-    : BREAK SEMI { $$ = ast_break(); }
+    : BREAK SEMI { $$ = ast_break(NULL); }
+    | BREAK ID SEMI { $$ = ast_break($2); }
     ;
 
 continue_stmt
-    : CONTINUE SEMI { $$ = ast_continue(); }
+    : CONTINUE SEMI { $$ = ast_continue(NULL); }
+    | CONTINUE ID SEMI { $$ = ast_continue($2); }
+    ;
+
+/* assert cond; / assert cond, "msg"; —— 语法糖：调用 builtin __assert(cond[, msg]) */
+assert_stmt
+    : TOK_ASSERT expr SEMI { $$ = L(ast_call(strdup("__assert"), $2)); }
+    | TOK_ASSERT expr COMMA expr SEMI { $$ = L(ast_call(strdup("__assert"), ast_seq($2, $4))); }
+    ;
+
+/* defer { body } —— 延迟到函数退出（return/throw/fallthrough）时按 LIFO 执行 */
+defer_stmt
+    : TOK_DEFER block_stmt { $$ = L(ast_defer($2)); }
+    ;
+
+/* 多返回值表达式列表：用左嵌套 seq 收集，最终在 return_stmt 折成数组字面量
+ * 仅用于 RETURN 后的逗号列表语境，与函数调用参数 COMMA 不冲突（lookahead 区分） */
+expr_list
+    : expr COMMA expr        { $$ = ast_seq($1, $3); }
+    | expr_list COMMA expr   { $$ = ast_seq($1, $3); }
     ;
 
 return_stmt    : RETURN SEMI              { $$ = ast_return(NULL); }
                | RETURN expr SEMI         { $$ = ast_return($2); }
+               | RETURN expr_list SEMI    { $$ = ast_return(L(ast_array_lit($2, -1))); }
 ;
 
 /* yield 语句：生成器函数中产生一个值并暂停 */
@@ -2457,6 +2510,15 @@ primary
 postfix_expr
     : primary
     | postfix_expr LBRACKET expr RBRACKET  { $$ = L(ast_index($1, $3)); }  /* 数组下标 a[i] */
+    /* 切片 a[start:end] / a[start:] / a[:end] / a[:] —— 语法糖：调用 builtin slice(arr, start, end) */
+    | postfix_expr LBRACKET expr COLON expr RBRACKET
+        { $$ = L(ast_call(strdup("slice"), ast_seq($1, ast_seq($3, $5)))); }
+    | postfix_expr LBRACKET expr COLON RBRACKET
+        { $$ = L(ast_call(strdup("slice"), ast_seq($1, ast_seq($3, ast_none())))); }
+    | postfix_expr LBRACKET COLON expr RBRACKET
+        { $$ = L(ast_call(strdup("slice"), ast_seq($1, ast_seq(ast_none(), $4)))); }
+    | postfix_expr LBRACKET COLON RBRACKET
+        { $$ = L(ast_call(strdup("slice"), ast_seq($1, ast_seq(ast_none(), ast_none())))); }
     | postfix_expr PLUSPLUS   { $$ = ast_unary(OP_POST_INC, $1); }
     | postfix_expr MINUSMINUS { $$ = ast_unary(OP_POST_DEC, $1); }
     /* 调用链 f(1)(2)：callee 为表达式（函数值），动态调用 */
@@ -3222,20 +3284,20 @@ shift_expr
     | shift_expr SHR additive_expr    { $$ = ast_binop(OP_SHR, $1, $3); }
     ;
 
-/* 关系层：> < >= <= */
+/* 关系层：> < >= <=（支持链式 a<b<c → (a<b)&&(b<c)） */
 comparison_expr
     : shift_expr
-    | comparison_expr GT shift_expr    { $$ = ast_binop(OP_GT, $1, $3); }
-    | comparison_expr LT shift_expr    { $$ = ast_binop(OP_LT, $1, $3); }
-    | comparison_expr GE shift_expr    { $$ = ast_binop(OP_GE, $1, $3); }
-    | comparison_expr LE shift_expr    { $$ = ast_binop(OP_LE, $1, $3); }
+    | comparison_expr GT shift_expr    { $$ = chain_cmp($1, OP_GT, $3); }
+    | comparison_expr LT shift_expr    { $$ = chain_cmp($1, OP_LT, $3); }
+    | comparison_expr GE shift_expr    { $$ = chain_cmp($1, OP_GE, $3); }
+    | comparison_expr LE shift_expr    { $$ = chain_cmp($1, OP_LE, $3); }
     ;
 
-/* 相等层：== !=（优先级低于关系运算） */
+/* 相等层：== !=（支持链式 a==b==c → (a==b)&&(b==c)） */
 equality_expr
     : comparison_expr
-    | equality_expr EQ comparison_expr    { $$ = ast_binop(OP_EQ, $1, $3); }
-    | equality_expr NE comparison_expr    { $$ = ast_binop(OP_NE, $1, $3); }
+    | equality_expr EQ comparison_expr    { $$ = chain_cmp($1, OP_EQ, $3); }
+    | equality_expr NE comparison_expr    { $$ = chain_cmp($1, OP_NE, $3); }
     | equality_expr TOK_IMPLEMENTS ID     { $$ = ast_binop(OP_IMPLEMENTS, $1, ast_string($3)); }
     ;
 
@@ -3285,6 +3347,7 @@ assignment_expr
     | ID MINUSEQ assignment_expr { $$ = ast_assign($1, ast_binop(OP_SUB, ast_var($1), $3)); }
     | ID MULEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_MUL, ast_var($1), $3)); }
     | ID DIVEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_DIV, ast_var($1), $3)); }
+    | ID MODEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_MOD, ast_var($1), $3)); }
     /* 位复合赋值：x &= y ⇔ x = x & y（其余同理） */
     | ID BANDEQ assignment_expr  { $$ = ast_assign($1, ast_binop(OP_BIT_AND, ast_var($1), $3)); }
     | ID BOREQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_BIT_OR,  ast_var($1), $3)); }
@@ -3301,6 +3364,8 @@ assignment_expr
         { $$ = ast_index_assign($1, $3, ast_binop(OP_MUL, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
     | postfix_expr LBRACKET expr RBRACKET DIVEQ assignment_expr
         { $$ = ast_index_assign($1, $3, ast_binop(OP_DIV, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    | postfix_expr LBRACKET expr RBRACKET MODEQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_MOD, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
     /* 数组元素位复合赋值：a[i] &= v ⇔ a[i] = a[i] & v（其余同理） */
     | postfix_expr LBRACKET expr RBRACKET BANDEQ assignment_expr
         { $$ = ast_index_assign($1, $3, ast_binop(OP_BIT_AND, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }

@@ -232,19 +232,21 @@ AstNode* ast_new(AstType type)
     return n;
 }
 
-AstNode* ast_while(AstNode* cond, AstNode* body)
+AstNode* ast_while(AstNode* cond, AstNode* body, const char* label)
 {
     AstNode* n = ast_new(AST_WHILE);
     n->u.while_node.cond = cond;
     n->u.while_node.body = body;
+    n->u.while_node.label = label ? strdup(label) : NULL;
     return n;
 }
 
-AstNode* ast_do_while(AstNode* cond, AstNode* body)
+AstNode* ast_do_while(AstNode* cond, AstNode* body, const char* label)
 {
     AstNode* n = ast_new(AST_DO_WHILE);
     n->u.while_node.cond = cond;
     n->u.while_node.body = body;
+    n->u.while_node.label = label ? strdup(label) : NULL;
     return n;
 }
 
@@ -282,13 +284,14 @@ AstNode* ast_macro_def(char* name, AstNode* params, AstNode* body)
     return n;
 }
 
-AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body)
+AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body, const char* label)
 {
     AstNode* n = ast_new(AST_FOR);
     n->u.for_node.init = init;
     n->u.for_node.cond = cond;
     n->u.for_node.update = update;
     n->u.for_node.body = body;
+    n->u.for_node.label = label ? strdup(label) : NULL;
     return n;
 }
 
@@ -396,12 +399,14 @@ AstNode* ast_clone_node(const AstNode* src)
             AstNode* n = ast_new(AST_WHILE);
             n->u.while_node.cond = ast_clone_node(src->u.while_node.cond);
             n->u.while_node.body = ast_clone_node(src->u.while_node.body);
+            n->u.while_node.label = src->u.while_node.label ? strdup(src->u.while_node.label) : NULL;
             return n;
         }
         case AST_DO_WHILE: {
             AstNode* n = ast_new(AST_DO_WHILE);
             n->u.while_node.cond = ast_clone_node(src->u.while_node.cond);
             n->u.while_node.body = ast_clone_node(src->u.while_node.body);
+            n->u.while_node.label = src->u.while_node.label ? strdup(src->u.while_node.label) : NULL;
             return n;
         }
         case AST_FOR: {
@@ -410,11 +415,17 @@ AstNode* ast_clone_node(const AstNode* src)
             n->u.for_node.cond = ast_clone_node(src->u.for_node.cond);
             n->u.for_node.update = ast_clone_node(src->u.for_node.update);
             n->u.for_node.body = ast_clone_node(src->u.for_node.body);
+            n->u.for_node.label = src->u.for_node.label ? strdup(src->u.for_node.label) : NULL;
             return n;
         }
         case AST_RETURN: {
             AstNode* n = ast_new(AST_RETURN);
             n->u.ret.ret_val = ast_clone_node(src->u.ret.ret_val);
+            return n;
+        }
+        case AST_DEFER: {
+            AstNode* n = ast_new(AST_DEFER);
+            n->u.defer.body = ast_clone_node(src->u.defer.body);
             return n;
         }
         default:
@@ -475,15 +486,17 @@ AstNode* ast_case_guard(const char* bind_var, AstNode* guard, AstNode* body)
     return n;
 }
 
-AstNode* ast_break(void)
+AstNode* ast_break(const char* label)
 {
     AstNode* n = ast_new(AST_BREAK);
+    n->u.jump.label = label ? strdup(label) : NULL;
     return n;
 }
 
-AstNode* ast_continue(void)
+AstNode* ast_continue(const char* label)
 {
     AstNode* n = ast_new(AST_CONTINUE);
+    n->u.jump.label = label ? strdup(label) : NULL;
     return n;
 }
 
@@ -549,10 +562,56 @@ AstNode* ast_interface_annotation(char* interface_name, AstNode* expr) {
     return n;
 }
 
-AstNode* ast_yield(AstNode* value) {
+AstNode* ast_yield(AstNode* value)
+{
     AstNode* n = ast_new(AST_YIELD);
     n->u.yieldnode.value = value;
     return n;
+}
+
+AstNode* ast_defer(AstNode* body)
+{
+    AstNode* n = ast_new(AST_DEFER);
+    n->u.defer.body = body;
+    return n;
+}
+
+/* 递归检测 AST 子树是否含 AST_DEFER（避免无限递归：仅扫语句级节点） */
+int ast_has_defer(AstNode* node) {
+    if(!node) return 0;
+    if(node->type == AST_DEFER) return 1;
+    /* 递归遍历常见容器/语句节点的子节点 */
+    switch(node->type) {
+        case AST_SEQ:
+            return ast_has_defer(node->u.seq.first) || ast_has_defer(node->u.seq.second);
+        case AST_BLOCK:
+            return ast_has_defer(node->u.block.stmts);
+        case AST_IF:
+            return ast_has_defer(node->u.ifnode.then_stmt) ||
+                   ast_has_defer(node->u.ifnode.elif_chain) ||
+                   ast_has_defer(node->u.ifnode.else_stmt);
+        case AST_IF_CHAIN:
+            return ast_has_defer(node->u.if_chain.if_body) ||
+                   ast_has_defer(node->u.if_chain.elif_list) ||
+                   ast_has_defer(node->u.if_chain.else_body);
+        case AST_ELIF:
+            return ast_has_defer(node->u.elif.body) || ast_has_defer(node->u.elif.next);
+        case AST_WHILE:
+        case AST_DO_WHILE:
+            return ast_has_defer(node->u.while_node.body);
+        case AST_FOR:
+            return ast_has_defer(node->u.for_node.body);
+        case AST_SWITCH:
+            return ast_has_defer(node->u.sw.cases);
+        case AST_CASE:
+            return ast_has_defer(node->u.cs.body) || ast_has_defer(node->u.cs.next);
+        case AST_TRY:
+            return ast_has_defer(node->u.trynode.body) ||
+                   ast_has_defer(node->u.trynode.catch_body) ||
+                   ast_has_defer(node->u.trynode.finally_body);
+        default:
+            return 0;
+    }
 }
 
 AstNode* ast_param(char* name, int is_ellipsis, AstNode* default_val) {
@@ -797,10 +856,12 @@ void ast_free(AstNode* node) {
         case AST_WHILE:
             ast_free(node->u.while_node.cond);
             ast_free(node->u.while_node.body);
+            free(node->u.while_node.label);
             break;
         case AST_DO_WHILE:
             ast_free(node->u.while_node.cond);
             ast_free(node->u.while_node.body);
+            free(node->u.while_node.label);
             break;
         case AST_ANNOTATION:
             free(node->u.annotation.name);
@@ -825,6 +886,7 @@ void ast_free(AstNode* node) {
             ast_free(node->u.for_node.cond);
             ast_free(node->u.for_node.update);
             ast_free(node->u.for_node.body);
+            free(node->u.for_node.label);
             break;
         case AST_CAST:
             ast_free(node->u.cast.child);
@@ -850,13 +912,21 @@ void ast_free(AstNode* node) {
         case AST_CASE:
             break;
         case AST_BREAK:
+            free(node->u.jump.label);
+            break;
         case AST_CONTINUE:
+            free(node->u.jump.label);
+            break;
         case AST_RETURN:
             ast_free(node->u.ret.ret_val);
             break;
 
         case AST_YIELD:
             if (node->u.yieldnode.value) ast_free(node->u.yieldnode.value);
+            break;
+
+        case AST_DEFER:
+            ast_free(node->u.defer.body);
             break;
 
         // ==========新增函数相关节点释放==========

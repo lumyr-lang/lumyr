@@ -1123,16 +1123,31 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_SLICE: {
-        if(recv.type != VAL_ARRAY && recv.type != VAL_TYPED_ARRAY)
+        if(recv.type != VAL_ARRAY && recv.type != VAL_TYPED_ARRAY && recv.type != VAL_STRING)
             return bi_type_err("slice", recv);
-        if(!bi_need_args("slice", argc, 1)) return 0;
         int n = bi_len_of(recv);
-        int64_t start = bi_num_i64(argv[1]);
-        int64_t end = (argc >= 2) ? bi_num_i64(argv[2]) : n;
+        /* argv[1]=start（null/缺省→0），argv[2]=end（null/缺省→n） */
+        int64_t start = 0;
+        if(argc >= 2 && argv[1].type != VAL_NONE) start = bi_num_i64(argv[1]);
+        int64_t end = n;
+        if(argc >= 3 && argv[2].type != VAL_NONE) end = bi_num_i64(argv[2]);
         if(start < 0) start = 0;
         if(end > n) end = n;
         if(start > end) start = end;
         int cnt = (int)(end - start);
+        if(recv.type == VAL_STRING) {
+            /* 字符串切片：按字节拷贝（v1 不处理 UTF-8 多字节边界） */
+            const char* s = lumyr_str_cstr(&recv);
+            size_t slen = (size_t)n;
+            if(!s) { *out = lumyr_make_string(""); return 1; }
+            size_t blen = (start < (int64_t)slen) ? (size_t)(end - start) : 0;
+            char* buf = (char*)malloc(blen + 1);
+            if(blen > 0) memcpy(buf, s + (size_t)start, blen);
+            buf[blen] = '\0';
+            *out = lumyr_make_string(buf);
+            free(buf);
+            return 1;
+        }
         if(recv.type == VAL_ARRAY) {
             Value r = val_array(cnt);
             for(int i = 0; i < cnt; i++) r.v.array->items[i] = recv.v.array->items[start + i];
@@ -1422,6 +1437,23 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
 
+    case BUILTIN_ASSERT: {
+        /* __assert(cond [, msg])：cond 为假时打印 msg 并 exit(1) */
+        if(argc < 1) { *out = val_none(); return 1; }
+        _Bool ok = lumyr_to_bool(argv[0]);
+        if(!ok) {
+            const char* msg = "assertion failed";
+            if(argc >= 2 && argv[1].type == VAL_STRING) {
+                const char* m = lumyr_str_cstr(&argv[1]);
+                if(m) msg = m;
+            }
+            fprintf(stderr, "Assertion failed: %s\n", msg);
+            exit(1);
+        }
+        *out = val_none();
+        return 1;
+    }
+
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
         return 0;
@@ -1529,6 +1561,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_NORMALIZE: return "normalize";
     case BUILTIN_SOFTMAX: return "softmax";
     case BUILTIN_FROM_VALUE: return "fromValue";
+    case BUILTIN_ASSERT: return "__assert";
     default: return "?";
     }
 }

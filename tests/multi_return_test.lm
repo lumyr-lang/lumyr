@@ -1,0 +1,27 @@
+// tests/multi_return_test.lm
+// 多返回值：return a, b; → return [a, b]; 数组字面量
+
+func two() { return 1, 2; }
+unpack [a, b] = two();
+print(a); print(b);
+
+func three() { return 10, 20, 30; }
+unpack [x, y, z] = three();
+print(x + y + z);
+
+func mixed() { return "hi", 42, true; }
+unpack [s, n, f] = mixed();
+print(s); print(n); print(f);
+
+// 单返回值仍正常
+func single() { return 99; }
+print(single());
+
+// 空 return
+func noret() { return; }
+noret();
+
+// 表达式做返回值
+func calc() { return 1 + 1, 2 * 2; }
+unpack [p, q] = calc();
+print(p); print(q);

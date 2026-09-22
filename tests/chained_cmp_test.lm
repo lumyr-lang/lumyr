@@ -1,0 +1,22 @@
+// tests/chained_cmp_test.lm
+// 链式比较：1 < x < 10 → (1 < x) && (x < 10)，x 评估两次
+
+x = 5;
+if (1 < x < 10) { print("in range"); }
+
+x = 20;
+if (1 < x < 10) { print("yes"); } else { print("no"); }
+
+a = 2; b = 2; c = 2;
+if (a == b == c) { print("all equal"); }
+
+x = 5; y = 50;
+if (1 < x < y < 100) { print("deep"); }
+
+// 不等链
+n = 7;
+if (0 < n != 100) { print("neq chain"); }
+
+// 数值上下界
+v = 10;
+if (0 <= v <= 100) { print("le ge ok"); }

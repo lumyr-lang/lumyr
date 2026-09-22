@@ -1,0 +1,30 @@
+// tests/assert_test.lm
+// assert cond; / assert cond, "msg";  —— 语法糖→builtin __assert
+
+assert 1 < 2;
+assert 1 == 1, "equal";
+x = 5;
+assert x > 0, "x must be positive";
+
+// 边界：非零整数为真
+assert 42;
+assert -1;
+
+// 字符串非空为真
+assert "hello";
+s = "";
+// assert s;  // 空字符串为假（v1 不测，避免误失败）
+
+// 数组非空为真
+assert [1, 2];
+
+// 关系比较链
+assert 1 + 1 == 2;
+assert 10 % 3 == 1;
+
+print("assert_test ALL PASS");
+
+// ===== 反例（放 /tmp，exit 1；此处仅列明） =====
+// /tmp/assert_fail.lm:
+//   assert 1 > 2;
+// 退出码 1
