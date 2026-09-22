@@ -1,0 +1,32 @@
+// 列表/字典推导式测试
+// 语法：[expr for x in iter] / [expr for x in iter if cond]
+//      {k:v for x in iter} / {k:v for x in iter if cond}
+// 限制：字典推导式的 key 必须是简单 ID（非任意表达式）。
+
+// 1. 基本列表推导
+a = [x * x for x in [1, 2, 3, 4, 5]];
+print(a);
+
+// 2. 带过滤的列表推导
+b = [x for x in [1, 2, 3, 4, 5, 6] if x % 2 == 0];
+print(b);
+
+// 3. 过滤 + 变换
+c = [x + 10 for x in [1, 2, 3] if x > 1];
+print(c);
+
+// 4. 基本字典推导
+d = {x: x * x for x in [1, 2, 3]};
+print(d);
+
+// 5. 带过滤的字典推导
+e = {x: x * x for x in [1, 2, 3, 4] if x % 2 == 0};
+print(e);
+
+// 6. 嵌套使用：列表推导的元素为字典
+f = [{k: v for k in ["a"]} for v in [1]];
+print(f);
+
+// 7. 链式操作：推导结果取长度
+h = len([x for x in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] if x > 5]);
+print(h);

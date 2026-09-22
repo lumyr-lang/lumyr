@@ -85,6 +85,12 @@ int vm_exec_throw(VMExecCtx* ctx, Instruction* in) {
     (void)in;
     Value v;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+    return vm_except_throw_value(ctx, v);
+}
+
+/* 供其它指令内部调用：直接以给定 throw 值走分派（不经过栈）。
+ * 返回 1 表示已被同层捕获或启动跨帧展开；未捕获时内部 exit(1)。 */
+int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     Value err = ensure_error(v);
 
     /* 沿 try 栈找第一个有 catch 的处理器 */
@@ -125,6 +131,17 @@ int vm_exec_throw(VMExecCtx* ctx, Instruction* in) {
         g_unwind.catch_pc = t->catch_pc;
     }
     return 1;
+}
+
+/* 便捷：构造一个 VAL_ERROR 并抛出（供位运算等做类型校验的指令使用） */
+void vm_except_raise_str(VMExecCtx* ctx, const char* type, const char* msg) {
+    Value e;
+    memset(&e, 0, sizeof(e));
+    e.type = VAL_ERROR;
+    e.v.err.type = strdup(type ? type : "RuntimeError");
+    e.v.err.message = strdup(msg ? msg : "");
+    e.v.err.stack = NULL;
+    vm_except_throw_value(ctx, e);
 }
 
 /* ========== GET_ERR：把原始 throw 值压 VALUE 栈（catch 变量绑定它） ========== */

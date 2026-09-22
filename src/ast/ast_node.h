@@ -80,6 +80,10 @@ AstNode* ast_map_entry(AstNode* key, AstNode* value);
 // 深拷贝（复合赋值下标展开防双重释放）
 AstNode* ast_clone_node(const AstNode* src);
 
+// 推导式
+AstNode* ast_comp_list(AstNode* expr, AstNode* var, AstNode* iter, AstNode* cond);
+AstNode* ast_comp_map(AstNode* key, AstNode* value, AstNode* var, AstNode* iter, AstNode* cond);
+
 // 释放AST
 void ast_free(AstNode* node);
 

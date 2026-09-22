@@ -1,0 +1,66 @@
+// tests/namedarg_test.lm
+// 命名实参：调用时以 形参名=值 传参，可乱序、可与位置实参混用（位置实参须在前），
+// 可跳过中间默认参数。位置/命名绑定到同一形参槽，缺省仍取默认值。
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 1. 全命名、乱序 =====
+func sub(a, b) { return a - b; }
+check(sub(a=10, b=3) == 7, "named in order");
+check(sub(b=3, a=10) == 7, "named out of order");
+check(sub(10, b=3) == 7, "positional then named");
+
+// ===== 2. 多参数全命名乱序 =====
+func greet(greeting, name, punct) { return greeting + " " + name + punct; }
+check(greet(name="Sam", punct="!", greeting="Hi") == "Hi Sam!", "three named shuffled");
+check(greet("Hi", punct=".", name="Bo") == "Hi Bo.", "first positional rest named");
+
+// ===== 3. 默认参数 + 命名（跳过 / 覆盖） =====
+func area(w, h=2) { return w * h; }
+check(area(w=5) == 10, "named only, default fills");
+check(area(5, h=4) == 20, "positional plus named override");
+check(area(h=3, w=6) == 18, "named shuffled override");
+
+func f3(a, b=10, c=100) { return a + b + c; }
+check(f3(1) == 111, "all defaults");
+check(f3(1, c=3) == 14, "skip middle via named");
+check(f3(c=1, b=2, a=3) == 6, "all named shuffled");
+check(f3(a=5) == 115, "first named default rest");
+
+// ===== 4. 命名实参为表达式 / 变量 / 字符串 =====
+func clamp(v, lo, hi) {
+    if(v < lo) { return lo; }
+    if(v > hi) { return hi; }
+    return v;
+}
+x = 50;
+check(clamp(lo=0, hi=x+50, v=120) == 100, "named with expressions");
+check(clamp(hi=10, lo=0, v=-5) == 0, "named order independent");
+
+// ===== 5. 方法上的命名实参 =====
+class Calc {
+    func scaled(self, v, factor) { return v * factor; }
+}
+calc = Calc{};
+check(calc.scaled(v=4, factor=6) == 24, "method named shuffled");
+check(calc.scaled(4, factor=3) == 12, "method positional plus named");
+
+// ===== 6. 命名实参与 ?? / 可空混用不冲突 =====
+func describe(name, age) { return name + ":" + age; }
+nick: string? = null;
+check(describe(age=(nick ?? 0), name="a") == "a:0", "named with coalesced value");
+
+// ===== 7. 同一函数多次调用、命名/位置交替 =====
+check(sub(a=8, b=1) == 7, "call again named 1");
+check(sub(8, 1) == 7, "call again positional");
+check(sub(b=5, a=5) == 0, "call again named 2");
+
+print("namedarg_test ALL PASS");
+
+// ===== 反例（放 /tmp，exit 1；此处仅列明） =====
+// f(z=1)          // 未知形参名
+// f(a=1, a=2)     // 命名实参重复
+// f(1, a=2)       // 位置实参已占据该形参，不能再命名
+// 注：位置实参必须在命名实参之前（f(a=1, 2) 不合规则顺序）。

@@ -58,6 +58,14 @@ int vm_exec_arith_int64_sub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_mul(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_div(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_mod(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_band(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_bor(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_bxor(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_bnot(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_shl(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_shr(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_pow(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_double_pow(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_double_add(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_double_sub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_double_mul(VMExecCtx* ctx, Instruction* in);
@@ -133,6 +141,7 @@ int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in);
 int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_box_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in);
+int vm_exec_assert_nonnull(VMExecCtx* ctx, Instruction* in);
 int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_unbox_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_unbox_ptr(VMExecCtx* ctx, Instruction* in);
@@ -156,6 +165,7 @@ int vm_exec_vsub(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vmul(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vdiv(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vmod(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vpow(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vneg(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vgt(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vlt(VMExecCtx* ctx, Instruction* in);
@@ -163,6 +173,12 @@ int vm_exec_vge(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vle(VMExecCtx* ctx, Instruction* in);
 int vm_exec_veq(VMExecCtx* ctx, Instruction* in);
 int vm_exec_vne(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vband(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vbor(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vbxor(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vbnot(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vshl(VMExecCtx* ctx, Instruction* in);
+int vm_exec_vshr(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_true_value(VMExecCtx* ctx, Instruction* in);
 int vm_exec_control_jmp_if_false_value(VMExecCtx* ctx, Instruction* in);
 
@@ -249,6 +265,15 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_INT64_DIV: handled = vm_exec_arith_int64_div(ctx, &in); break;
         case OPC_INT64_MOD: handled = vm_exec_arith_int64_mod(ctx, &in); break;
 
+        /* ===== 位运算（INT64 栈） ===== */
+        case OPC_INT64_BAND: handled = vm_exec_arith_int64_band(ctx, &in); break;
+        case OPC_INT64_BOR:  handled = vm_exec_arith_int64_bor(ctx, &in); break;
+        case OPC_INT64_BXOR: handled = vm_exec_arith_int64_bxor(ctx, &in); break;
+        case OPC_INT64_BNOT: handled = vm_exec_arith_int64_bnot(ctx, &in); break;
+        case OPC_INT64_SHL:  handled = vm_exec_arith_int64_shl(ctx, &in); break;
+        case OPC_INT64_SHR:  handled = vm_exec_arith_int64_shr(ctx, &in); break;
+        case OPC_INT64_POW:  handled = vm_exec_arith_int64_pow(ctx, &in); break;
+
         /* ===== 类型转换 ===== */
         case OPC_INT64_TO_DOUBLE: handled = vm_exec_type_int64_to_double(ctx, &in); break;
         case OPC_DOUBLE_TO_INT64: handled = vm_exec_type_double_to_int64(ctx, &in); break;
@@ -256,6 +281,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_BOX_INT64:  handled = vm_exec_box_int64(ctx, &in); break;
         case OPC_BOX_DOUBLE: handled = vm_exec_box_double(ctx, &in); break;
         case OPC_BOX_PTR:    handled = vm_exec_box_ptr(ctx, &in); break;
+        case OPC_ASSERT_NONNULL: handled = vm_exec_assert_nonnull(ctx, &in); break;
         case OPC_PUSH_NONE: {
             Value v; v.type = VAL_NONE; v.v.i = 0;
             stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
@@ -283,6 +309,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DOUBLE_SUB: handled = vm_exec_arith_double_sub(ctx, &in); break;
         case OPC_DOUBLE_MUL: handled = vm_exec_arith_double_mul(ctx, &in); break;
         case OPC_DOUBLE_DIV: handled = vm_exec_arith_double_div(ctx, &in); break;
+        case OPC_DOUBLE_POW: handled = vm_exec_arith_double_pow(ctx, &in); break;
 
         /* ===== 算术运算（PTR 栈：字符串拼接等） ===== */
         case OPC_PTR_ADD: handled = vm_exec_arith_ptr_add(ctx, &in); break;
@@ -346,6 +373,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_VMUL: handled = vm_exec_vmul(ctx, &in); break;
         case OPC_VDIV: handled = vm_exec_vdiv(ctx, &in); break;
         case OPC_VMOD: handled = vm_exec_vmod(ctx, &in); break;
+        case OPC_VPOW: handled = vm_exec_vpow(ctx, &in); break;
         case OPC_VNEG: handled = vm_exec_vneg(ctx, &in); break;
         case OPC_VGT: handled = vm_exec_vgt(ctx, &in); break;
         case OPC_VLT: handled = vm_exec_vlt(ctx, &in); break;
@@ -353,6 +381,12 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_VLE: handled = vm_exec_vle(ctx, &in); break;
         case OPC_VEQ: handled = vm_exec_veq(ctx, &in); break;
         case OPC_VNE: handled = vm_exec_vne(ctx, &in); break;
+        case OPC_VBAND: handled = vm_exec_vband(ctx, &in); break;
+        case OPC_VBOR:  handled = vm_exec_vbor(ctx, &in); break;
+        case OPC_VBXOR: handled = vm_exec_vbxor(ctx, &in); break;
+        case OPC_VBNOT: handled = vm_exec_vbnot(ctx, &in); break;
+        case OPC_VSHL:  handled = vm_exec_vshl(ctx, &in); break;
+        case OPC_VSHR:  handled = vm_exec_vshr(ctx, &in); break;
 
         /* ===== 函数调用 ===== */
         case OPC_CALL: handled = vm_exec_call(ctx, &in); break;

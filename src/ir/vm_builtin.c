@@ -984,6 +984,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_make_bool(lumyr_map_has(recv, argv[1]));
         return 1;
 
+    /* enum 增强反查：fromValue(map, val) → 键名字符串；未找到返回 null */
+    case BUILTIN_FROM_VALUE:
+        if(recv.type != VAL_MAP) return bi_type_err("fromValue", recv);
+        if(!bi_need_args("fromValue", argc, 1)) return 0;
+        *out = lumyr_map_find_key(recv, argv[1]);
+        return 1;
+
     /* ===== contains/indexOf 通用（string/array/map） ===== */
     case BUILTIN_CONTAINS:
         if(!bi_need_args("contains", argc, 1)) return 0;
@@ -1521,6 +1528,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_ARGMIN: return "argmin";
     case BUILTIN_NORMALIZE: return "normalize";
     case BUILTIN_SOFTMAX: return "softmax";
+    case BUILTIN_FROM_VALUE: return "fromValue";
     default: return "?";
     }
 }

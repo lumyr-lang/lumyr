@@ -54,6 +54,20 @@ int vm_exec_vneg(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* ASSERT_NONNULL：VALUE 栈弹 1，为 null(VAL_NONE) 则抛 NullError，否则原样压回。
+ * 用于非空类型 T 的写入/实参绑定校验；可被 try/catch 捕获。净栈变化 0。 */
+int vm_exec_assert_nonnull(VMExecCtx* ctx, Instruction* in) {
+    (void)in;
+    Value v;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+    if(v.type == VAL_NONE) {
+        vm_except_raise_str(ctx, "NullError", "非空类型不允许 null 值");
+        return 1;   /* 抛出后不再压回 */
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
+
 /* ===== typed 栈 -> VALUE 栈装箱（实参 typed、形参动态 NONE 时绑定用） ===== */
 
 /* BOX_INT64：INT64 栈弹 1 -> Value -> VALUE 栈

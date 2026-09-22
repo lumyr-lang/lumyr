@@ -637,6 +637,28 @@ AstNode* ast_map_lit(AstNode* entries) {
     return n;
 }
 
+/* 列表推导式 [expr for x in iter (if cond)] */
+AstNode* ast_comp_list(AstNode* expr, AstNode* var, AstNode* iter, AstNode* cond) {
+    AstNode* n = ast_new(AST_COMP_LIST);
+    n->u.comp.expr = expr;
+    n->u.comp.value = NULL;
+    n->u.comp.var = var;
+    n->u.comp.iter = iter;
+    n->u.comp.cond = cond;
+    return n;
+}
+
+/* 字典推导式 {k:v for x in iter (if cond)} */
+AstNode* ast_comp_map(AstNode* key, AstNode* value, AstNode* var, AstNode* iter, AstNode* cond) {
+    AstNode* n = ast_new(AST_COMP_MAP);
+    n->u.comp.expr = key;
+    n->u.comp.value = value;
+    n->u.comp.var = var;
+    n->u.comp.iter = iter;
+    n->u.comp.cond = cond;
+    return n;
+}
+
 AstNode* ast_class_new(char* class_name, int argc, AstNode* args) {
     AstNode* n = ast_new(AST_CLASS_NEW);
     n->u.class_new.class_name = class_name;
@@ -887,6 +909,19 @@ void ast_free(AstNode* node) {
             break;
         case AST_ARRAY_LIT:
             ast_free(node->u.array_lit.elems);
+            break;
+        case AST_COMP_LIST:
+            ast_free(node->u.comp.expr);
+            ast_free(node->u.comp.var);
+            ast_free(node->u.comp.iter);
+            if(node->u.comp.cond) ast_free(node->u.comp.cond);
+            break;
+        case AST_COMP_MAP:
+            ast_free(node->u.comp.expr);
+            ast_free(node->u.comp.value);
+            ast_free(node->u.comp.var);
+            ast_free(node->u.comp.iter);
+            if(node->u.comp.cond) ast_free(node->u.comp.cond);
             break;
         case AST_PARAM:
             // 只被AST_FUNC_DEF内部循环释放，外部不会单独走到这里

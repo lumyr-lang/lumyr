@@ -558,6 +558,30 @@ static int is_lambda_param(const char* n) {
 // 遍历顶层（不深入函数体）：登记全部函数名 + 顶层赋值变量，
 // 使函数前向引用、函数体读取全局变量在阶段2都能通过。
 
+/* 重载签名表：记录顶层函数“名字#普通形参数#形参类型序列”，签名完全相同才算重复定义；
+ * 同名不同签名视为重载，允许。 */
+static char** g_func_sigs = NULL;
+static int g_func_sig_n = 0, g_func_sig_cap = 0;
+
+static char* make_func_sig(AstNode* node) {
+    const char* fname = node->u.func_def.name;
+    int ncnt = 0;
+    for(AstNode* p = node->u.func_def.params; p; p = p->u.param.next)
+        if(!p->u.param.is_ellipsis) ncnt++;
+    size_t cap = strlen(fname) + 32;
+    for(AstNode* p = node->u.func_def.params; p; p = p->u.param.next)
+        cap += p->u.param.constraint ? strlen(p->u.param.constraint) + 2 : 3;
+    char* s = (char*)malloc(cap);
+    size_t w = 0;
+    w += (size_t)snprintf(s + w, cap - w, "%s#%d#", fname, ncnt);
+    for(AstNode* p = node->u.func_def.params; p; p = p->u.param.next) {
+        if(p->u.param.is_ellipsis) continue;
+        const char* c = p->u.param.constraint;
+        w += (size_t)snprintf(s + w, cap - w, "%s,", c ? c : (p->u.param.is_nullable ? "n" : "d"));
+    }
+    return s;
+}
+
 static void collect_top_level(AstNode* node) {
     if (!node) return;
     switch (node->type) {
@@ -573,17 +597,26 @@ static void collect_top_level(AstNode* node) {
             g_global_vars[g_global_vars_cnt++] = strdup(node->u.assign.varname);
             break;
         case AST_FUNC_DEF: {
-            // 函数重复定义：与 C 语义一致，编译期报错（双通道一致；
-            // 避免 VM 静默覆盖与 C 生成端重复 static 定义导致 gcc 失败的分歧）
-            // class 方法跳过重复定义检查（方法注册到 class 方法表，不注册到全局符号表）
+            // 重复定义判定：仅当签名（形参个数 + 形参声明类型）完全相同才报错；
+            // 同名不同签名为函数重载，允许。lambda/arrow 与 class 方法不走此表。
             if(strncmp(node->u.func_def.name, "_lambda_", 8) != 0 &&
                strncmp(node->u.func_def.name, "_arrow_", 7) != 0 &&
                !node->u.func_def.is_class_method) {
-                ValueType ty;
-                if(static_sym_get(node->u.func_def.name, &ty) && ty == VAL_FUNC) {
-                    LOG_ERROR("语义错误(第%d行)：函数 \"%s\" 重复定义\n",
+                char* sig = make_func_sig(node);
+                int dup = 0;
+                for(int i = 0; i < g_func_sig_n; i++)
+                    if(strcmp(g_func_sigs[i], sig) == 0) { dup = 1; break; }
+                if(dup) {
+                    LOG_ERROR("语义错误(第%d行)：函数 \"%s\" 签名重复定义\n",
                             node->line, node->u.func_def.name);
                     g_collect_err = 1;
+                } else {
+                    if(g_func_sig_n >= g_func_sig_cap) {
+                        g_func_sig_cap = g_func_sig_cap ? g_func_sig_cap * 2 : 32;
+                        g_func_sigs = (char**)realloc(g_func_sigs,
+                                         sizeof(char*) * (size_t)g_func_sig_cap);
+                    }
+                    g_func_sigs[g_func_sig_n++] = sig;
                 }
             }
             // 登记函数名（支持前向引用）；不深入函数体；class 方法也登记（用于方法调用查找）
@@ -623,6 +656,19 @@ static void collect_top_level(AstNode* node) {
             break;
         case AST_MAP_LIT:
             collect_top_level(node->u.map_lit.entries);
+            break;
+        case AST_COMP_LIST:
+            collect_top_level(node->u.comp.expr);
+            collect_top_level(node->u.comp.var);
+            collect_top_level(node->u.comp.iter);
+            if(node->u.comp.cond) collect_top_level(node->u.comp.cond);
+            break;
+        case AST_COMP_MAP:
+            collect_top_level(node->u.comp.expr);
+            collect_top_level(node->u.comp.value);
+            collect_top_level(node->u.comp.var);
+            collect_top_level(node->u.comp.iter);
+            if(node->u.comp.cond) collect_top_level(node->u.comp.cond);
             break;
         case AST_TRY:
             collect_top_level(node->u.trynode.body);
@@ -753,6 +799,15 @@ static int typecheck_arg_count(AstNode* chain)
     if(chain->type == AST_SEQ) return typecheck_arg_count(chain->u.seq.first) + typecheck_arg_count(chain->u.seq.second);
     return 1;
 }
+/* 实参树中是否含命名实参（AST_ASSIGN：f(x=expr)）。
+ * 含命名时默认值按“位置尾部补齐”会错位，跳过该填充，改由 compile_user_call 按槽处理。 */
+static int args_have_named(AstNode* chain)
+{
+    if(!chain) return 0;
+    if(chain->type == AST_SEQ)
+        return args_have_named(chain->u.seq.first) || args_have_named(chain->u.seq.second);
+    return chain->type == AST_ASSIGN;
+}
 static int typecheck_call_args(AstNode* args) {
     if (!args) return 0;
     if (args->type != AST_SEQ) {
@@ -842,9 +897,10 @@ static int typecheck_call(AstNode* node)
             err = 1;
         }
     }
-            // 默认参数填充：如果实参不足，用函数定义中的默认值表达式填充
+            // 默认参数填充：如果实参不足，用函数定义中的默认值表达式填充。
+            // 含命名实参时跳过（位置补齐会错位），由 compile_user_call 按形参槽取默认值。
             {
-                if(sym_has(node->u.call.name)) {
+                if(sym_has(node->u.call.name) && !args_have_named(node->u.call.args)) {
                 Value fv = sym_get(node->u.call.name);
                 if(fv.type == VAL_FUNC) {
                     RuntimeFunc* rf = (RuntimeFunc*)fv.v.func.func_obj;
@@ -1287,6 +1343,24 @@ int typecheck_expr(AstNode* node)
             break;
         case AST_MAP_LIT:
             err |= typecheck_expr(node->u.map_lit.entries);
+            node->val_type = VAL_MAP;
+            break;
+        case AST_COMP_LIST:
+            err |= typecheck_expr(node->u.comp.iter);
+            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
+            /* 注册循环变量后检查表达式 */
+            if(node->u.comp.var && node->u.comp.var->type == AST_VAR)
+                static_sym_put(node->u.comp.var->u.varname, VAL_NONE);
+            err |= typecheck_expr(node->u.comp.expr);
+            node->val_type = VAL_ARRAY;
+            break;
+        case AST_COMP_MAP:
+            err |= typecheck_expr(node->u.comp.iter);
+            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
+            if(node->u.comp.var && node->u.comp.var->type == AST_VAR)
+                static_sym_put(node->u.comp.var->u.varname, VAL_NONE);
+            err |= typecheck_expr(node->u.comp.expr);
+            err |= typecheck_expr(node->u.comp.value);
             node->val_type = VAL_MAP;
             break;
         case AST_MAP_ENTRY:

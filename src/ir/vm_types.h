@@ -85,6 +85,10 @@ int vm_except_check_unwind(VMExecCtx* ctx);
 /* FINISH 后若挂起返回已走完所有 finally：取出返回值（1=有，0=无） */
 int vm_except_take_pending_return(RetSlot* out);
 
+/* 内部指令抛出异常（vm_except.c）：以 throw 值走分派；未捕获则 exit(1) */
+int vm_except_throw_value(VMExecCtx* ctx, Value v);
+void vm_except_raise_str(VMExecCtx* ctx, const char* type, const char* msg);
+
 /* 返回值独立化（字符串堆值深拷贝），定义在 vm_exec.c */
 Value ret_value_detach(Value v);
 

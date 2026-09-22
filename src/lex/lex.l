@@ -16,6 +16,10 @@ static int prev_prev_token = 0;
 // 上一个 ID 文本：用于判断 `{` 前的 ID 是否为已注册类型名（ClassName{field: value} 命名构造）
 static char g_last_id_text[256] = {0};
 
+/* 多行反引号字符串缓冲区 */
+static char mstr_buf[65536];
+static int mstr_len = 0;
+
 // 表达式结束类 token（其后 `[` 是下标）
 static int in_case_expr = 0;   /* case 值后的冒号 → CASE_COLON（与字典/三元冒号区分） */
 
@@ -50,6 +54,7 @@ static int is_expr_end(int t)
 %}
 
 %option yylineno
+%x MSTR
 
 %%
 "type"          { LEX_RET(TOK_TYPE); }
@@ -144,6 +149,21 @@ static int is_expr_end(int t)
     yylval.s[strlen(yylval.s)-1] = '\0';
     LEX_RET(STRING_LIT);
 }
+
+"`"  { BEGIN(MSTR); mstr_buf[0]='\0'; mstr_len=0; }
+<MSTR>"`"  {
+    BEGIN(INITIAL);
+    mstr_buf[mstr_len] = '\0';
+    yylval.s = strdup(mstr_buf);
+    LEX_RET(STRING_LIT);
+}
+<MSTR>\n  { mstr_buf[mstr_len++]='\n'; }
+<MSTR>\\n  { mstr_buf[mstr_len++]='\n'; }
+<MSTR>\\t  { mstr_buf[mstr_len++]='\t'; }
+<MSTR>\\r  { mstr_buf[mstr_len++]='\r'; }
+<MSTR>\\\\ { mstr_buf[mstr_len++]='\\'; }
+<MSTR>.  { mstr_buf[mstr_len++]=yytext[0]; }
+<MSTR><<EOF>> { BEGIN(INITIAL); mstr_buf[mstr_len]='\0'; yylval.s=strdup(mstr_buf); LEX_RET(STRING_LIT); }
 
 f\"([^"\\]|\\.)*\"   {
     yylval.s = strdup(yytext+2);   /* 跳过 f 和开头引号 */
@@ -251,8 +271,16 @@ f\"([^"\\]|\\.)*\"   {
 "!"         { LEX_RET(NOT); }
 "%"         { LEX_RET(MOD); }
 
+"<<"        { LEX_RET(SHL); }
+">>"        { LEX_RET(SHR); }
+"&"         { LEX_RET(BAND); }
+"|"         { LEX_RET(BOR); }
+"^"         { LEX_RET(BXOR); }
+"~"         { LEX_RET(BNOT); }
+
 "+"             { LEX_RET(PLUS); }
 "-"             { LEX_RET(MINUS); }
+"**"            { LEX_RET(POW); }
 "*"             { LEX_RET(MUL); }
 "/"             { LEX_RET(DIV); }
 
@@ -260,6 +288,12 @@ f\"([^"\\]|\\.)*\"   {
 "-="        { LEX_RET(MINUSEQ); }
 "*="        { LEX_RET(MULEQ); }
 "/="        { LEX_RET(DIVEQ); }
+
+"&="        { LEX_RET(BANDEQ); }
+"|="        { LEX_RET(BOREQ); }
+"^="        { LEX_RET(BXOREQ); }
+"<<="       { LEX_RET(SHLEQ); }
+">>="       { LEX_RET(SHREQ); }
 
 "?"         { LEX_RET(QMARK); }
 ":"         { if(in_case_expr) { in_case_expr = 0; LEX_RET(CASE_COLON); }

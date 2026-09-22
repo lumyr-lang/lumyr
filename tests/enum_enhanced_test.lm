@@ -1,0 +1,75 @@
+// 增强型 enum 测试：values()/fromValue()/fromName()/keys()
+// 限制：enum 成员仍为 C 风格整数值（非对象），不支持 Color.RED.name 语法。
+// 替代：Color.fromValue(Color.RED) 获取成员名 "RED"。
+// 注意：全局变量（含 enum）在函数内不可见（既有作用域限制），fromValue 在顶层调用。
+
+enum Color { RED, GREEN, BLUE }
+enum Op { ADD = 1, SUB, MUL, DIV }
+enum Status { IDLE, RUNNING, DONE, FAILED }
+
+// 1. 基本成员访问（C 风格整数值）
+print(Color.RED);
+print(Color.GREEN);
+print(Color.BLUE);
+
+// 2. 显式赋值 + 自动递增
+print(Op.ADD);
+print(Op.SUB);
+print(Op.MUL);
+print(Op.DIV);
+
+// 3. values()：获取全部成员值
+print(Color.values());
+print(len(Color.values()));
+
+// 4. fromValue(n)：按值反查成员名
+print(Color.fromValue(0));
+print(Color.fromValue(1));
+print(Color.fromValue(2));
+print(Op.fromValue(1));
+print(Op.fromValue(3));
+
+// 5. fromName(s) = Color["NAME"]：按名查值
+print(Color["RED"]);
+print(Color["GREEN"]);
+print(Color["BLUE"]);
+
+// 6. keys()：获取全部成员名
+print(len(Color.keys()));
+
+// 7. switch 分派
+func color_name(c) {
+    switch(c) {
+        case Color.RED: return "Red";
+        case Color.GREEN: return "Green";
+        case Color.BLUE: return "Blue";
+        default: return "Unknown";
+    }
+}
+print(color_name(Color.RED));
+print(color_name(Color.GREEN));
+print(color_name(Color.BLUE));
+
+// 8. 运算分派
+func compute(op, a, b) {
+    switch(op) {
+        case Op.ADD: return a + b;
+        case Op.SUB: return a - b;
+        case Op.MUL: return a * b;
+        case Op.DIV: return b != 0 ? a / b : 0;
+        default: return 0;
+    }
+}
+print(compute(Op.ADD, 10, 3));
+print(compute(Op.SUB, 10, 3));
+print(compute(Op.MUL, 10, 3));
+print(compute(Op.DIV, 10.0, 4.0));
+
+// 9. fromValue 在顶层用于反查
+r = Op.fromValue(Op.MUL);
+print("MUL name=" + r);
+
+// 10. 遍历 enum（顶层）
+for k in Color.keys() {
+    print(k + "=" + Color[k]);
+}

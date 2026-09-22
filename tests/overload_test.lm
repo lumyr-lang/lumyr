@@ -1,0 +1,36 @@
+// 函数重载测试：同名不同签名的自由函数按实参类型/个数分派。
+// 反例（exit 1）：/tmp/ov_dup.lm 签名完全重复定义；
+//               /tmp/ov_ambig_real.lm 两个同 arity 同族重载无法唯一分派。
+
+// 1. 按类型分派：int vs string
+func describe(x: int) { return "int:" + x; }
+func describe(x: string) { return "str:" + x; }
+print(describe(5));
+print(describe("a"));
+
+// 2. 按实参个数分派
+func add(a: int) { return a + 1; }
+func add(a: int, b: int) { return a + b; }
+print(add(10));
+print(add(10, 20));
+
+// 3. 动态形参兜底
+func classify(x: int) { return "int"; }
+func classify(x: string) { return "str"; }
+func classify(x) { return "dyn:" + x; }
+print(classify(3));
+print(classify("ab"));
+print(classify(3.14));
+
+// 4. 默认参数 + 重载
+func calc(a: int, b: int = 10) { return a + b; }
+func calc(a: string) { return a; }
+print(calc(5));
+print(calc(5, 20));
+print(calc("hi"));
+
+// 5. 语句语境调用
+func greet(name: string) { print("hello " + name); }
+func greet(n: int) { print("num=" + n); }
+greet("world");
+greet(42);

@@ -19,6 +19,7 @@ void bytecode_func_free(BytecodeFunc* fn)
 {
     if(!fn) return;
     free((void*)fn->name);
+    free((void*)fn->table_key);  /* 重载唯一键（malloc），需释放 */
     free(fn->code);
     for(int i = 0; i < fn->sym_cnt; i++) free(fn->syms[i]);
     free(fn->syms);
@@ -372,6 +373,13 @@ const char* opc_name(OpCode op)
         case OPC_INT64_EQ: return "INT64_EQ";
         case OPC_INT64_NE: return "INT64_NE";
         case OPC_INT64_TO_VALUE: return "INT64_TO_VALUE";
+        case OPC_INT64_BAND: return "INT64_BAND";
+        case OPC_INT64_BOR: return "INT64_BOR";
+        case OPC_INT64_BXOR: return "INT64_BXOR";
+        case OPC_INT64_BNOT: return "INT64_BNOT";
+        case OPC_INT64_SHL: return "INT64_SHL";
+        case OPC_INT64_SHR: return "INT64_SHR";
+        case OPC_INT64_POW: return "INT64_POW";
         case OPC_DOUBLE_ADD: return "DOUBLE_ADD";
         case OPC_DOUBLE_SUB: return "DOUBLE_SUB";
         case OPC_DOUBLE_MUL: return "DOUBLE_MUL";
@@ -383,6 +391,7 @@ const char* opc_name(OpCode op)
         case OPC_DOUBLE_EQ: return "DOUBLE_EQ";
         case OPC_DOUBLE_NE: return "DOUBLE_NE";
         case OPC_DOUBLE_TO_VALUE: return "DOUBLE_TO_VALUE";
+        case OPC_DOUBLE_POW: return "DOUBLE_POW";
         case OPC_INT64_TO_DOUBLE: return "INT64_TO_DOUBLE";
         case OPC_DOUBLE_TO_INT64: return "DOUBLE_TO_INT64";
         case OPC_INT64_TO_PTR: return "INT64_TO_PTR";
@@ -449,6 +458,7 @@ const char* opc_name(OpCode op)
         case OPC_VMUL: return "VMUL";
         case OPC_VDIV: return "VDIV";
         case OPC_VMOD: return "VMOD";
+        case OPC_VPOW: return "VPOW";
         case OPC_VNEG: return "VNEG";
         case OPC_VGT: return "VGT";
         case OPC_VLT: return "VLT";
@@ -456,11 +466,18 @@ const char* opc_name(OpCode op)
         case OPC_VLE: return "VLE";
         case OPC_VEQ: return "VEQ";
         case OPC_VNE: return "VNE";
+        case OPC_VBAND: return "VBAND";
+        case OPC_VBOR: return "VBOR";
+        case OPC_VBXOR: return "VBXOR";
+        case OPC_VBNOT: return "VBNOT";
+        case OPC_VSHL: return "VSHL";
+        case OPC_VSHR: return "VSHR";
         case OPC_JMP_IF_TRUE_V: return "JMP_IF_TRUE_V";
         case OPC_JMP_IF_FALSE_V: return "JMP_IF_FALSE_V";
         case OPC_BOX_INT64:  return "BOX_INT64";
         case OPC_BOX_DOUBLE: return "BOX_DOUBLE";
         case OPC_BOX_PTR:    return "BOX_PTR";
+        case OPC_ASSERT_NONNULL: return "ASSERT_NONNULL";
         case OPC_CATCH_MATCH:return "CATCH_MATCH";
         case OPC_PUSH_NONE:  return "PUSH_NONE";
         case OPC_UNBOX_INT64:  return "UNBOX_INT64";

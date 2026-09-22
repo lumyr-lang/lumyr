@@ -412,11 +412,12 @@ Value lumyr_field_get(Value obj, const char* field_name)
         else { v.type = VAL_DOUBLE; v.v.d = *(double*)field_ptr; }
         return v;
     }
-    /* PTR 族 */
+    /* PTR 族：空指针（可空字段 T? 未指向对象）读作 VAL_NONE(null) */
     void* ptr = *(void**)field_ptr;
+    if(!ptr) return val_none();
     Value v; memset(&v, 0, sizeof(v));
     if(fi->valtype == VAL_STRING) {
-        return lumyr_make_string(ptr ? (const char*)ptr : "");
+        return lumyr_make_string((const char*)ptr);
     }
     v.type = fi->valtype;
     v.v.struct_ptr = ptr;

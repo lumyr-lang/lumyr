@@ -97,6 +97,17 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_VNEG:
             d.value = 0;  /* 1 弹 1 压 */
             break;
+        case OPC_VBAND: case OPC_VBOR: case OPC_VBXOR:
+        case OPC_VSHL: case OPC_VSHR:
+        case OPC_VPOW:
+            d.value = -1; /* 2 弹 1 压 */
+            break;
+        case OPC_VBNOT:
+            d.value = 0;  /* 1 弹 1 压 */
+            break;
+        case OPC_ASSERT_NONNULL:
+            d.value = 0;  /* 1 弹 1 压（null 时抛出不压回） */
+            break;
         case OPC_GT: case OPC_LT: case OPC_GE:
         case OPC_LE: case OPC_EQ: case OPC_NE:
         case OPC_VGT: case OPC_VLT: case OPC_VGE:
@@ -186,7 +197,13 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT64_ADD: case OPC_INT64_SUB:
         case OPC_INT64_MUL: case OPC_INT64_DIV:
         case OPC_INT64_MOD:
+        case OPC_INT64_BAND: case OPC_INT64_BOR: case OPC_INT64_BXOR:
+        case OPC_INT64_SHL: case OPC_INT64_SHR:
+        case OPC_INT64_POW:
             d.int64 = -1; /* 2 个弹出，1 个压入 */
+            break;
+        case OPC_INT64_BNOT:
+            /* 弹1压1，净变化 0 */
             break;
         case OPC_INT64_GT: case OPC_INT64_LT:
         case OPC_INT64_GE: case OPC_INT64_LE:
@@ -253,6 +270,7 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             break;
         case OPC_DOUBLE_ADD: case OPC_DOUBLE_SUB:
         case OPC_DOUBLE_MUL: case OPC_DOUBLE_DIV:
+        case OPC_DOUBLE_POW:
             d.double_stk = -1; /* 2 个弹出，1 个压入 */
             break;
         case OPC_DOUBLE_GT: case OPC_DOUBLE_LT:
@@ -372,8 +390,15 @@ int op_stack_push(OpCode op)
         case OPC_INT64_ADD: case OPC_INT64_SUB:
         case OPC_INT64_MUL: case OPC_INT64_DIV:
         case OPC_INT64_MOD:
+        case OPC_INT64_BAND: case OPC_INT64_BOR: case OPC_INT64_BXOR:
+        case OPC_INT64_SHL: case OPC_INT64_SHR:
+        case OPC_INT64_POW:
+        case OPC_VBAND: case OPC_VBOR: case OPC_VBXOR:
+        case OPC_VSHL: case OPC_VSHR:
+        case OPC_VPOW:
         case OPC_DOUBLE_ADD: case OPC_DOUBLE_SUB:
         case OPC_DOUBLE_MUL: case OPC_DOUBLE_DIV:
+        case OPC_DOUBLE_POW:
             return 1;
 
         /* 比较运算：弹出 2 个，压入 1 个 bool */

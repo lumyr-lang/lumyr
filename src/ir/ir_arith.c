@@ -126,6 +126,15 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         if(ck != CAST_NONE) return castkind_to_exprtype(ck);
     }
 
+    /* 一元运算：按位取反 ~ —— 操作数为整数 → INT；否则动态（运行时校验抛错） */
+    if(node->type == AST_UNARY) {
+        if(node->u.uny.op == OP_BIT_NOT) {
+            ExprType ct = arith_get_expr_type(c, node->u.uny.child);
+            return ct == EXPR_TYPE_INT ? EXPR_TYPE_INT : EXPR_TYPE_NONE;
+        }
+        return EXPR_TYPE_NONE;
+    }
+
     /* 二元运算：递归判断左右操作数类型 */
     if(node->type == AST_BINOP) {
         ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
@@ -140,6 +149,39 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
                         || node->u.bin.op == OP_DIV || node->u.bin.op == OP_SUB);
         if(is_arith && (left_type == EXPR_TYPE_PTR || right_type == EXPR_TYPE_PTR)) {
             return EXPR_TYPE_PTR;
+        }
+
+        /* 幂 **：结果类型取决于指数符号（静态可知时）。
+         * 指数为非负整数字面量且底数 int → 整数幂；负指数 → double；
+         * 指数符号或底数在编译期未知 → 动态，运行时 int&非负指数→int 否则 double。 */
+        if(node->u.bin.op == OP_POW) {
+            AstNode* e = node->u.bin.right;
+            int sign_known = 0, neg = 0;
+            if(e->type == AST_INT) {
+                sign_known = 1; neg = (e->u.inum < 0);
+            } else if(e->type == AST_UNARY && e->u.uny.op == OP_UNARY_MINUS
+                      && e->u.uny.child->type == AST_INT) {
+                sign_known = 1; neg = 1;
+            }
+            if(sign_known) {
+                if(neg) return EXPR_TYPE_DOUBLE;
+                if(left_type == EXPR_TYPE_INT) return EXPR_TYPE_INT;
+                if(left_type == EXPR_TYPE_DOUBLE) return EXPR_TYPE_DOUBLE;
+                return EXPR_TYPE_NONE;   /* 底数动态，运行时决定 */
+            }
+            return EXPR_TYPE_NONE;
+        }
+
+        /* 位运算（& | ^ << >>）：结果始终为整数。
+         * 两个操作数都是静态整数 → INT64 栈；其余（动态、double、string 等）
+         * 一律走动态位运算，由运行时校验操作数为整数，否则抛 TypeError。 */
+        int is_bit = (node->u.bin.op == OP_BIT_AND || node->u.bin.op == OP_BIT_OR
+                      || node->u.bin.op == OP_BIT_XOR || node->u.bin.op == OP_SHL
+                      || node->u.bin.op == OP_SHR);
+        if(is_bit) {
+            if(left_type == EXPR_TYPE_INT && right_type == EXPR_TYPE_INT)
+                return EXPR_TYPE_INT;
+            return EXPR_TYPE_NONE;
         }
 
         /* 两个都是已知类型，取较高优先级 */

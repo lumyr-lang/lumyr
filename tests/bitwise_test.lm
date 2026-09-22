@@ -1,0 +1,123 @@
+// tests/bitwise_test.lm
+// 位运算测试：& | ^ ~ << >>（64 位二补码，>> 为保留符号的算术右移）
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 1. 基础位运算（经典 60 / 13） =====
+// 60 = 0b111100，13 = 0b001101
+check((60 & 13) == 12, "and");        // 0b001100
+check((60 | 13) == 61, "or");         // 0b111101
+check((60 ^ 13) == 49, "xor");        // 0b110001
+check(~60 == -61, "not");
+
+// ===== 2. 移位 =====
+check((1 << 4) == 16, "shl");
+check((256 >> 3) == 32, "shr");
+// 算术右移保留符号：负数右移仍为负
+check((-8 >> 1) == -4, "shr negative");
+check((-1 >> 10) == -1, "shr -1");
+// 移位量按 64 位掩码（&63）：移位 64 等于移位 0
+check((1 << 64) == 1, "shl mask 64");
+check((15 >> 64) == 15, "shr mask 64");
+
+// ===== 3. 恒等式 =====
+x = 1234567;
+check((x & 0) == 0, "x & 0");
+check((x | 0) == x, "x | 0");
+check((x ^ x) == 0, "x ^ x");
+check(~(~x) == x, "double not");
+check(((x & -1) == x), "x & -1");
+
+// ===== 4. 优先级：& > ^ > | =====
+// 5 & 3 = 1，1 | 8 = 9
+check((5 & 3 | 8) == 9, "and before or");
+// 5 ^ 3 = 6，6 | 8 = 14
+check((5 ^ 3 | 8) == 14, "xor before or");
+// 4 & 2 = 0，5 ^ 0 = 5
+check((5 ^ 4 & 2) == 5, "and before xor");
+// 加减 > 移位 > 关系 > 相等 > 位运算
+check((1 + 2 << 3) == 24, "add before shl");
+check((256 >> 3 + 1) == 16, "add binds tighter than shr");  // 256 >> 4
+check((3 & 2 == 2) == true, "equality before and");  // (2 == 2)=true=1 ... careful
+check((1 | 0 == 1) == true, "equality before or");
+
+// ===== 5. 括号改变结合 =====
+check((5 & (3 | 8)) == 1, "paren");        // 5 & 11 = 1
+check(((1 | 2) & 2) == 2, "paren 2");
+
+// ===== 6. 链式（左结合） =====
+check((12 & 10 & 8) == 8, "chain and");
+check((1 | 2 | 4) == 7, "chain or");
+check((1 ^ 2 ^ 1) == 2, "chain xor");
+check((1 << 2 << 1) == 8, "chain shl");
+
+// ===== 7. typed int 操作数（走 INT64 栈） =====
+a = <int>60;
+b = <int>13;
+check((a & b) == 12, "typed and");
+check((a | b) == 61, "typed or");
+check((a ^ b) == 49, "typed xor");
+check(~a == -61, "typed not");
+check((a << 2) == 240, "typed shl");
+check((a >> 2) == 15, "typed shr");
+
+// ===== 8. 动态整数操作数（无标注变量，走 VALUE 栈，运行时校验） =====
+p = 60;
+q = 13;
+check((p & q) == 12, "dyn and");
+check((p | q) == 61, "dyn or");
+check((p ^ q) == 49, "dyn xor");
+check(~p == -61, "dyn not");
+check((p << 1) == 120, "dyn shl");
+check((p >> 1) == 30, "dyn shr");
+
+// ===== 9. 64 位边界值 =====
+big = 9223372036854775807;   // INT64_MAX
+check((big ^ big) == 0, "int64max xor self");
+check((big & 0) == 0, "int64max & 0");
+check(~big == -9223372036854775808, "int64max not");
+nbig = -9223372036854775808; // INT64_MIN
+check(nbig >> 63 == -1, "int64min shr 63");
+
+// ===== 10. 位运算用于条件 / 返回值 =====
+func low_bits(n) {
+    return n & 15;
+}
+check(low_bits(31) == 15, "func and");
+check(low_bits(256) == 0, "func and 2");
+if(8 & 8) {} else { throw "bit in if"; }
+
+// ===== 11. 非整数操作数：运行时抛 TypeError（可被 try/catch 捕获） =====
+caught = 0;
+try {
+    z = 3 & "x";
+} catch (e) {
+    caught = caught + 1;
+}
+try {
+    z = 3.5 | 2;
+} catch (e) {
+    caught = caught + 1;
+}
+try {
+    z = ~3.2;
+} catch (e) {
+    caught = caught + 1;
+}
+try {
+    z = 1 << "a";
+} catch (e) {
+    caught = caught + 1;
+}
+check(caught == 4, "non-int raises TypeError");
+
+print("bitwise_test ALL PASS");
+
+// ===== 反例（放 /tmp，运行 exit 1；此处仅列明，不执行） =====
+// print(3 & "x");    // 字符串操作数 → TypeError
+// print(3.5 | 2);    // double 操作数 → TypeError
+// print(~3.2);       // double 操作数 → TypeError
+// print(1 << "a");   // 字符串移位量 → TypeError
+// print("a" ^ "b");  // 字符串操作数 → TypeError

@@ -1,0 +1,110 @@
+// tests/bitassign_test.lm
+// 位复合赋值：&= |= ^= <<= >>=  ——  x op= y 等价于 x = x op y
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 1. 变量：&= |= ^= =====
+x = 60; x &= 13;
+check(x == 12, "&= basic");
+y = 60; y |= 13;
+check(y == 61, "|= basic");
+z = 60; z ^= 13;
+check(z == 49, "^= basic");
+
+// ===== 2. 变量：<<= >>= =====
+a = 1; a <<= 4;
+check(a == 16, "<<= basic");
+b = 256; b >>= 3;
+check(b == 32, ">>= basic");
+n = -8; n >>= 1;
+check(n == -4, ">>= negative arithmetic shift");
+one = -1; one >>= 10;
+check(one == -1, ">>= -1 stays -1");
+
+// ===== 3. 大值不被截断（>2^31） =====
+v = 1; v <<= 40;
+check(v == 1099511627776, "<<= 40 large");
+check(type(v) == "int64", "large keeps int64");
+w = 1099511627776; w >>= 40;
+check(w == 1, ">>= 40 large back");
+
+// ===== 4. 移位量 64 位掩码（&63） =====
+q = 1; q <<= 64;
+check(q == 1, "<<= 64 mask");
+r = 15; r >>= 64;
+check(r == 15, ">>= 64 mask");
+
+// ===== 5. 右侧为表达式 / 变量 =====
+c = 5; c &= c;
+check(c == 5, "&= self");
+mask = 15;
+p = 255; p &= (mask + 0);
+check(p == 15, "&= expr rhs");
+s = 1; s <<= (2 + 2);
+check(s == 16, "<<= expr rhs");
+
+// ===== 6. typed 整型变量 =====
+ta = <int>60; ta &= 13;
+check(ta == 12, "typed &= ");
+to = <int>60; to |= 13;
+check(to == 61, "typed |= ");
+tx = <int>60; tx ^= 13;
+check(tx == 49, "typed ^= ");
+tl = <int>60; tl <<= 2;
+check(tl == 240, "typed <<= ");
+tr = <int>60; tr >>= 2;
+check(tr == 15, "typed >>= ");
+
+// ===== 7. 数组元素复合赋值 =====
+arr = [60, 13];
+arr[0] &= arr[1];
+check(arr[0] == 12, "index &= ");
+mm = [1, 2, 4];
+mm[1] |= 8;
+check(mm[1] == 10, "index |= ");
+aa = [1];
+aa[0] <<= 4;
+check(aa[0] == 16, "index <<= ");
+bb = [256];
+bb[0] >>= 3;
+check(bb[0] == 32, "index >>= ");
+
+// ===== 8. 链式连续复合赋值 =====
+d = 100;
+d &= 60;    // 36
+d |= 1;     // 37
+d <<= 1;    // 74
+check(d == 74, "chained compound");
+
+e = 70;
+e ^= 70;    // 0
+e |= 15;    // 15
+check(e == 15, "chained compound 2");
+
+// ===== 9. 复合赋值用于条件（语句更新后再判断；赋值表达式本身值会被丢弃，既有语义） =====
+g = 8;
+g &= 8;
+if(g == 8) {} else { throw "compound then if value"; }
+h = 1;
+h <<= 3;
+if(h == 8) {} else { throw "compound then if"; }
+
+// ===== 10. 非整数操作数：右侧非整数，动态路径抛 TypeError（可捕获） =====
+caught = 0;
+try {
+    iv = 3;
+    iv &= "x";
+} catch (e) { caught = caught + 1; }
+try {
+    dv = 3.5;
+    dv |= 2;
+} catch (e) { caught = caught + 1; }
+check(caught == 2, "non-int compound raises");
+
+print("bitassign_test ALL PASS");
+
+// ===== 反例（放 /tmp，exit 1；此处仅列明） =====
+// x = 3; x &= "x";   // 字符串右值 → TypeError
+// y = 3.5; y |= 2;   // double 左值 → TypeError

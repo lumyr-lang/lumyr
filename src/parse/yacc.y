@@ -853,7 +853,10 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token READ WRITE
 %token COMMA
 %token AND OR NOT MOD
+%token BAND BOR BXOR BNOT SHL SHR   /* 位运算：& | ^ ~ << >> */
+%token POW                          /* 中缀幂 ** */
 %token PLUSEQ MINUSEQ MULEQ DIVEQ
+%token BANDEQ BOREQ BXOREQ SHLEQ SHREQ  /* 位复合赋值：&= |= ^= <<= >>= */
 %token LBRACKET RBRACKET
 %token ARRAY_OPEN
 %token DOT
@@ -872,7 +875,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 
 %type<node> program stmt_list closed_stmt open_stmt block_stmt try_stmt
 %type<node> elif_clause_list elif_clause else_part
-%type<node> expr ternary_expr logic_or_expr logic_and_expr assignment_expr unary_expr postfix_expr multiplicative_expr additive_expr comparison_expr expr_opt for_init for_incr primary map_items map_item
+%type<node> expr ternary_expr logic_or_expr logic_and_expr assignment_expr unary_expr power_expr postfix_expr multiplicative_expr additive_expr comparison_expr shift_expr equality_expr bit_and_expr bit_xor_expr bit_or_expr expr_opt for_init for_incr primary map_items map_item
 %type<node> switch_stmt case_list case_item break_stmt continue_stmt const_expr return_stmt yield_stmt
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
@@ -909,14 +912,25 @@ closed_stmt
      * ID 后 COLON 在此 shift 进声明；三元 ? ID : 中 ID 后 COLON 则归约为表达式，
      * COLON 作三元分隔符，两者不再共享冲突状态。 */
     | ID COLON map_generic_type ASSIGN expr SEMI {
-          $$ = ast_assign($1, ast_type_annotation((CastKind)$3, $5));
+          /* 非空 T：写入前做非空断言（T? 规则不做） */
+          $$ = ast_assign($1, ast_type_annotation((CastKind)$3,
+                    ast_unary(OP_NONNULL_ASSERT, $5)));
+      }
+    /* 可空局部声明 a: T? = expr：变量可持 null 或 T，须落 VALUE(动态)槽，
+     * 不做静态类型标注（否则 null 被 UNBOX 成 0）；语义等同无标注赋值。 */
+    | ID COLON map_generic_type QMARK ASSIGN expr SEMI {
+          $$ = ast_assign($1, $6);
       }
     /* const 常量声明：const x = expr / const x: Type = expr，初始化后不可重新赋值 */
     | CONST ID ASSIGN expr SEMI {
           $$ = ast_assign_const($2, $4);
       }
     | CONST ID COLON map_generic_type ASSIGN expr SEMI {
-          $$ = ast_assign_const($2, ast_type_annotation((CastKind)$4, $6));
+          $$ = ast_assign_const($2, ast_type_annotation((CastKind)$4,
+                    ast_unary(OP_NONNULL_ASSERT, $6)));
+      }
+    | CONST ID COLON map_generic_type QMARK ASSIGN expr SEMI {
+          $$ = ast_assign_const($2, $7);
       }
     | destruct_lhs ASSIGN expr SEMI {
         char** names = NULL; int cnt = 0;
@@ -1930,6 +1944,13 @@ param
     | TOK_REF ID COLON ID       { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型 ref p: Point */
     | TOK_REF ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型+默认值 */
     | TOK_REF ID COLON ID ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型+默认值 */
+    /* ===== 可空形参 T?：constraint 记基础类型，is_nullable=1（绑定时跳过非空校验） ===== */
+    | TOK_TYPE_ANNOT ID QMARK { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($1)); $$->u.param.is_nullable = 1; } /* <int>a? */
+    | LT ID GT ID QMARK      { $$ = ast_param($4, 0, NULL); $$->u.param.constraint = strdup($2); $$->u.param.is_nullable = 1; } /* <Point>a? */
+    | ID COLON builtin_type_name QMARK { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); $$->u.param.is_nullable = 1; } /* n: int? */
+    | ID COLON ID QMARK               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.is_nullable = 1; } /* n: Point? */
+    | ID COLON builtin_type_name QMARK ASSIGN expr { $$ = ast_param($1, 0, $6); $$->u.param.constraint = strdup(castkind_to_name($3)); $$->u.param.is_nullable = 1; } /* n: int? = 5 */
+    | ID COLON ID QMARK ASSIGN expr   { $$ = ast_param($1, 0, $6); $$->u.param.constraint = strdup($3); $$->u.param.is_nullable = 1; } /* n: Point? = ... */
 ;
 
 /* 注解：@name 或 @name(args) */
@@ -2194,7 +2215,27 @@ primary
           }
       }  /* 函数调用 foo(a,b,c) 或宏调用 或构造调用 */
     | ARRAY_OPEN arg_list RBRACKET { $$ = ast_array_lit($2, -1); }  /* 数组字面量 [1,2,3] / []（lexer 按上下文消歧） */
+    /* 列表推导式：[expr for x in iter] / [expr for x in iter if cond] */
+    | ARRAY_OPEN expr FOR ID TOK_IN expr RBRACKET {
+          $$ = L(ast_comp_list($2, ast_var(strdup($4)), $6, NULL));
+          free($4);
+      }
+    | ARRAY_OPEN expr FOR ID TOK_IN expr IF expr RBRACKET {
+          $$ = L(ast_comp_list($2, ast_var(strdup($4)), $6, $8));
+          free($4);
+      }
     | MAP_OPEN map_items RBRACE   { $$ = ast_map_lit($2); }    /* 字典字面量 {"k": v, name: 1} / {}（lexer 上下文消歧：表达式位置） */
+    /* 字典推导式：{k:v for x in iter} / {k:v for x in iter if cond}
+     * 使用 ID COLON expr 避免与 map_items 的 shift/reduce 冲突；
+     * key 取 ID 的变量值（非 string 转换） */
+    | MAP_OPEN ID COLON expr FOR ID TOK_IN expr RBRACE {
+          $$ = L(ast_comp_map(ast_var(strdup($2)), $4, ast_var(strdup($6)), $8, NULL));
+          free($2); free($6);
+      }
+    | MAP_OPEN ID COLON expr FOR ID TOK_IN expr IF expr RBRACE {
+          $$ = L(ast_comp_map(ast_var(strdup($2)), $4, ast_var(strdup($6)), $8, $10));
+          free($2); free($6);
+      }
     /* 命名构造简写 ClassName{field: value, ...}：lexer 在类型名后的 { 识别为 MAP_OPEN
      * 等价于 <ClassName>{field: value}，复用 wrap_struct_named 按字段名映射位置参数 */
     | ID MAP_OPEN map_items RBRACE {
@@ -2932,7 +2973,7 @@ class_prop
               else if(type_lookup(sn)) vt = VAL_MAP;
           }
           type_prop_push($1, vt, 0, 0, sn);
-          record_field_init($1, $5);
+          record_field_init($1, ast_unary(OP_NONNULL_ASSERT, $5));
           $$ = ast_none();
       }
     | access_modifier ID COLON type_name ASSIGN expr SEMI    {
@@ -2944,7 +2985,34 @@ class_prop
               else if(type_lookup(sn)) vt = VAL_MAP;
           }
           type_prop_push($2, vt, $1, 0, sn);
-          record_field_init($2, $6);
+          record_field_init($2, ast_unary(OP_NONNULL_ASSERT, $6));
+          $$ = ast_none();
+      }
+    /* 可空字段 T?：字段槽仍为具体类型（对象是 C 布局，lumyr_field_get 依赖具体 valtype）。
+     * 引用族（class/struct/map/string/array/bigint）以 NULL 指针表示 null，完全支持；
+     * primitive(int/double) 槽无法容纳 null（运行时对象模型限制，见测试尾注）。
+     * 初始器不做非空断言。 */
+    | ID COLON type_name QMARK SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          ValueType vt = $3;
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($1, vt, 0, 0, sn);
+          $$ = ast_none();
+      }
+    | ID COLON type_name QMARK ASSIGN expr SEMI    {
+          char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
+          ValueType vt = $3;
+          if(vt == VAL_NONE && sn) {
+              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
+              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
+              else if(type_lookup(sn)) vt = VAL_MAP;
+          }
+          type_prop_push($1, vt, 0, 0, sn);
+          record_field_init($1, $6);   /* 可空：不做断言；引用 null 落 NULL */
           $$ = ast_none();
       }
     /* const 字段：const id: Type（构造后不可修改），可带访问修饰 public const id: Type */
@@ -3119,12 +3187,19 @@ enum_member
     ;
 
 unary_expr
-    : postfix_expr
+    : power_expr
     | PLUSPLUS unary_expr     { $$ = ast_unary(OP_PRE_INC, $2); }
     | MINUSMINUS unary_expr   { $$ = ast_unary(OP_PRE_DEC, $2); }
     | PLUS unary_expr         { $$ = ast_unary(OP_UNARY_PLUS, $2); }
     | MINUS unary_expr        { $$ = ast_unary(OP_UNARY_MINUS, $2); }
     | NOT unary_expr          { $$ = ast_unary(OP_LOGIC_NOT, $2); }
+    | BNOT unary_expr         { $$ = ast_unary(OP_BIT_NOT, $2); }
+    ;
+
+/* 幂层：右结合，位于一元运算符之下（-2**2 = -(2**2)），指数为 unary（支持负指数） */
+power_expr
+    : postfix_expr
+    | postfix_expr POW unary_expr   { $$ = ast_binop(OP_POW, $1, $3); }
     ;
 
 multiplicative_expr
@@ -3140,20 +3215,51 @@ additive_expr
     | additive_expr MINUS multiplicative_expr { $$ = ast_binop(OP_SUB, $1, $3); }
     ;
 
-comparison_expr
+/* 移位层：<< >>（优先级低于加减） */
+shift_expr
     : additive_expr
-    | comparison_expr GT additive_expr    { $$ = ast_binop(OP_GT, $1, $3); }
-    | comparison_expr LT additive_expr    { $$ = ast_binop(OP_LT, $1, $3); }
-    | comparison_expr GE additive_expr    { $$ = ast_binop(OP_GE, $1, $3); }
-    | comparison_expr LE additive_expr    { $$ = ast_binop(OP_LE, $1, $3); }
-    | comparison_expr EQ additive_expr    { $$ = ast_binop(OP_EQ, $1, $3); }
-    | comparison_expr NE additive_expr    { $$ = ast_binop(OP_NE, $1, $3); }
-    | comparison_expr TOK_IMPLEMENTS ID   { $$ = ast_binop(OP_IMPLEMENTS, $1, ast_string($3)); }
+    | shift_expr SHL additive_expr    { $$ = ast_binop(OP_SHL, $1, $3); }
+    | shift_expr SHR additive_expr    { $$ = ast_binop(OP_SHR, $1, $3); }
+    ;
+
+/* 关系层：> < >= <= */
+comparison_expr
+    : shift_expr
+    | comparison_expr GT shift_expr    { $$ = ast_binop(OP_GT, $1, $3); }
+    | comparison_expr LT shift_expr    { $$ = ast_binop(OP_LT, $1, $3); }
+    | comparison_expr GE shift_expr    { $$ = ast_binop(OP_GE, $1, $3); }
+    | comparison_expr LE shift_expr    { $$ = ast_binop(OP_LE, $1, $3); }
+    ;
+
+/* 相等层：== !=（优先级低于关系运算） */
+equality_expr
+    : comparison_expr
+    | equality_expr EQ comparison_expr    { $$ = ast_binop(OP_EQ, $1, $3); }
+    | equality_expr NE comparison_expr    { $$ = ast_binop(OP_NE, $1, $3); }
+    | equality_expr TOK_IMPLEMENTS ID     { $$ = ast_binop(OP_IMPLEMENTS, $1, ast_string($3)); }
+    ;
+
+/* 位与：& */
+bit_and_expr
+    : equality_expr
+    | bit_and_expr BAND equality_expr  { $$ = ast_binop(OP_BIT_AND, $1, $3); }
+    ;
+
+/* 位异或：^ */
+bit_xor_expr
+    : bit_and_expr
+    | bit_xor_expr BXOR bit_and_expr   { $$ = ast_binop(OP_BIT_XOR, $1, $3); }
+    ;
+
+/* 位或：| */
+bit_or_expr
+    : bit_xor_expr
+    | bit_or_expr BOR bit_xor_expr     { $$ = ast_binop(OP_BIT_OR, $1, $3); }
     ;
 
 logic_and_expr
-    : comparison_expr
-    | logic_and_expr AND comparison_expr  { $$ = ast_binop(OP_LOGIC_AND, $1, $3); }
+    : bit_or_expr
+    | logic_and_expr AND bit_or_expr  { $$ = ast_binop(OP_LOGIC_AND, $1, $3); }
     ;
 
 logic_or_expr
@@ -3179,6 +3285,12 @@ assignment_expr
     | ID MINUSEQ assignment_expr { $$ = ast_assign($1, ast_binop(OP_SUB, ast_var($1), $3)); }
     | ID MULEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_MUL, ast_var($1), $3)); }
     | ID DIVEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_DIV, ast_var($1), $3)); }
+    /* 位复合赋值：x &= y ⇔ x = x & y（其余同理） */
+    | ID BANDEQ assignment_expr  { $$ = ast_assign($1, ast_binop(OP_BIT_AND, ast_var($1), $3)); }
+    | ID BOREQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_BIT_OR,  ast_var($1), $3)); }
+    | ID BXOREQ assignment_expr  { $$ = ast_assign($1, ast_binop(OP_BIT_XOR, ast_var($1), $3)); }
+    | ID SHLEQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_SHL,     ast_var($1), $3)); }
+    | ID SHREQ assignment_expr   { $$ = ast_assign($1, ast_binop(OP_SHR,     ast_var($1), $3)); }
     | postfix_expr LBRACKET expr RBRACKET ASSIGN assignment_expr
         { $$ = ast_index_assign($1, $3, $6); }
     | postfix_expr LBRACKET expr RBRACKET PLUSEQ assignment_expr
@@ -3189,6 +3301,17 @@ assignment_expr
         { $$ = ast_index_assign($1, $3, ast_binop(OP_MUL, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
     | postfix_expr LBRACKET expr RBRACKET DIVEQ assignment_expr
         { $$ = ast_index_assign($1, $3, ast_binop(OP_DIV, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    /* 数组元素位复合赋值：a[i] &= v ⇔ a[i] = a[i] & v（其余同理） */
+    | postfix_expr LBRACKET expr RBRACKET BANDEQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_BIT_AND, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    | postfix_expr LBRACKET expr RBRACKET BOREQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_BIT_OR,  ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    | postfix_expr LBRACKET expr RBRACKET BXOREQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_BIT_XOR, ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    | postfix_expr LBRACKET expr RBRACKET SHLEQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_SHL,     ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
+    | postfix_expr LBRACKET expr RBRACKET SHREQ assignment_expr
+        { $$ = ast_index_assign($1, $3, ast_binop(OP_SHR,     ast_index(ast_clone_node($1), ast_clone_node($3)), $6)); }
     /* 属性赋值 m.key = v → m["key"] = v */
     | postfix_expr DOT ID ASSIGN assignment_expr
         { $$ = ast_index_assign($1, ast_string($3), $5); }

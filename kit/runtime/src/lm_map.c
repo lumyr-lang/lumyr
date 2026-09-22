@@ -748,6 +748,19 @@ Value lumyr_map_values(Value map) {
     return r;
 }
 
+/* 按值反查键：遍历所有键值对，找到值相等的首个键返回；未找到返回 null */
+Value lumyr_map_find_key(Value map, Value val) {
+    if(map.type != VAL_MAP) return val_none();
+    MapIter it;
+    map_iter_init(&it, map.v.map);
+    Value k, v;
+    while(map_iter_next(&it, &k, &v)) {
+        Value eq = lumyr_eq(v, val);
+        if(eq.v.b) return k;
+    }
+    return val_none();
+}
+
 Value lumyr_map_lit(Value* kv, int n) {
     Value r = val_map();
     for(int i = 0; i < n; i++)

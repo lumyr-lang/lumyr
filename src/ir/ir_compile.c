@@ -37,6 +37,11 @@ AstNode* func_ast_lookup(const char* name);   /* AST 函数表（func_compile.c�
 static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result, AstNode* method_recv);
 static BytecodeFunc* resolve_self_recursive(Ctx* c, const char* func_name, AstNode* tmp_def);
 static void collect_call_args(AstNode* n, AstNode*** argv, int* argc, int* acap);
+/* 自由函数重载解析：成功写 *fn_out/*def_out 返回1，失败（无匹配/歧义）返回0 */
+static int resolve_free_call(Ctx* c, const char* name, AstNode* args,
+                             BytecodeFunc** fn_out, AstNode** def_out);
+static int ol_group_exists(const char* name);
+static int g_ol_seq = 0;   /* 重载唯一键全局序号（定义在后，此处前置） */
 static void emit_value_cast(Ctx* c, ExprType from, ExprType to);  /* typed → typed 栈转换 */
 char* c_expr_owner_type(Ctx* c, AstNode* node);  /* 表达式持有的自定义类型名 */
 static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs);  /* 记录变量槽属主类型 */
@@ -99,6 +104,8 @@ static int builtin_id_by_name(const char* name) {
         {"norm", BUILTIN_NORM},
         {"normalize", BUILTIN_NORMALIZE},
         {"softmax", BUILTIN_SOFTMAX},
+        /* enum 增强 */
+        {"fromValue", BUILTIN_FROM_VALUE}, {"from_value", BUILTIN_FROM_VALUE},
         {"flat", BUILTIN_ARRAY_FLAT},
         {"join", BUILTIN_JOIN},
         /* 高阶函数 */
@@ -840,6 +847,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         const char* func_name = node->u.call.name;
         AstNode* args = node->u.call.args;
 
+        /* 重载名：存在重载组 → 按实参解析唯一版本（失败/歧义致命） */
+        if(ol_group_exists(func_name)) {
+            BytecodeFunc* callee = NULL; AstNode* def_ast = NULL;
+            if(!resolve_free_call(c, func_name, args, &callee, &def_ast))
+                exit(EXIT_FAILURE);
+            return compile_user_call(c, callee, def_ast, args, 1, NULL);
+        }
+
         /* 用户自定义函数：查函数表 + AST 表 */
         {
             BytecodeFunc* callee = ir_func_table_lookup(func_name);
@@ -1092,6 +1107,197 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         return EXPR_TYPE_NONE;
     }
 
+    /* 列表推导式 [expr for x in iter (if cond)]
+     * 编译为：创建空数组 → 遍历 iter → 条件过滤 → 元素入数组 → 返回数组 */
+    case AST_COMP_LIST: {
+        /* 1. 创建空数组并存到临时变量 */
+        emit(c, OPC_ARRAY_LIT, 0, 0);
+        static int comp_seq = 0;
+        char res_name[64], idx_name[64], len_name[64], obj_name[64];
+        snprintf(res_name, sizeof(res_name), "__comp_res_%d", comp_seq);
+        snprintf(idx_name, sizeof(idx_name), "__comp_i_%d", comp_seq);
+        snprintf(len_name, sizeof(len_name), "__comp_n_%d", comp_seq);
+        snprintf(obj_name, sizeof(obj_name), "__comp_o_%d", comp_seq);
+        comp_seq++;
+        int res_slot = c_add_var(c, res_name, EXPR_TYPE_NONE);
+        int res_bf = bf_sym(c->fn, res_name);
+        emit(c, OPC_STORE_VAR, res_slot, 0);
+
+        /* 2. 编译 iter 并取 len */
+        c_expr_to_value(c, node->u.comp.iter);
+        int obj_slot = c_add_var(c, obj_name, EXPR_TYPE_NONE);
+        int obj_bf = bf_sym(c->fn, obj_name);
+        emit(c, OPC_STORE_VAR, obj_slot, 0);
+        /* len(obj) */
+        emit(c, OPC_LOAD_VAR, obj_slot, 0);
+        emit(c, OPC_BUILTIN, BUILTIN_LEN, 1);
+        emit(c, OPC_UNBOX_INT64, 0, 0);  /* VALUE → INT64 */
+        int len_slot = c_add_var(c, len_name, EXPR_TYPE_INT);
+        int len_bf = bf_sym(c->fn, len_name);
+        c->fn->var_type_tags[len_bf] = (int)CAST_INT;
+        emit(c, OPC_STORE_INT64_VAR, len_slot, 0);
+
+        /* 3. i = 0 */
+        int idx_slot = c_add_var(c, idx_name, EXPR_TYPE_INT);
+        int idx_bf = bf_sym(c->fn, idx_name);
+        c->fn->var_type_tags[idx_bf] = (int)CAST_INT;
+        emit(c, OPC_PUSH_INT64_CONST, 0, 0);
+        emit(c, OPC_STORE_INT64_VAR, idx_slot, 0);
+
+        /* 4. 循环 */
+        int loop_start = c->fn->code_len;
+        /* if i >= len: break */
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_LOAD_INT64_VAR, len_slot, 0);
+        emit(c, OPC_INT64_GE, 0, 0);
+        int jmp_end = c->fn->code_len;
+        emit(c, OPC_JMP_IF_TRUE, 0, 0);  /* i>=len → 跳到 end */
+
+        /* 5. x = obj[i] */
+        emit(c, OPC_LOAD_VAR, obj_slot, 0);
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_BOX_INT64, (int)CAST_NONE, 0);  /* INT64 → VALUE */
+        emit(c, OPC_BUILTIN, BUILTIN_GET, 2);  /* get(obj, idx) → VALUE */
+        /* 绑定循环变量 */
+        const char* varname = node->u.comp.var->u.varname;
+        int var_slot = c_add_var(c, (char*)varname, EXPR_TYPE_NONE);
+        int var_bf = bf_sym(c->fn, (char*)varname);
+        emit(c, OPC_STORE_VAR, var_slot, 0);
+
+        /* 6. 条件过滤 */
+        int cont_target;
+        if(node->u.comp.cond) {
+            c_expr_to_value(c, node->u.comp.cond);
+            int jmp_skip = c->fn->code_len;
+            emit(c, OPC_JMP_IF_FALSE_V, 0, 0);  /* false → 跳过 add */
+            cont_target = c->fn->code_len;
+            c->fn->code[jmp_skip].a = -1;  /* patch later to continue */
+        } else {
+            cont_target = c->fn->code_len;
+        }
+
+        /* 7. res.add(expr) */
+        emit(c, OPC_LOAD_VAR, res_slot, 0);
+        c_expr_to_value(c, node->u.comp.expr);
+        emit(c, OPC_CALL_BUILTIN_METHOD, BUILTIN_ARRAY_ADD, 1);
+        emit(c, OPC_POP, 0, 0);  /* discard add() return */
+
+        /* 8. i++ */
+        int continue_target = c->fn->code_len;
+        if(node->u.comp.cond) {
+            /* patch skip target to here */
+            for(int pi = cont_target - 1; pi >= 0; pi--) {
+                if(c->fn->code[pi].op == OPC_JMP_IF_FALSE_V && c->fn->code[pi].a == -1) {
+                    c->fn->code[pi].a = continue_target;
+                    break;
+                }
+            }
+        }
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_PUSH_INT64_CONST, 1, 0);
+        emit(c, OPC_INT64_ADD, 0, 0);
+        emit(c, OPC_STORE_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_JMP, loop_start, 0);
+
+        /* 9. end: load result */
+        int end_target = c->fn->code_len;
+        c->fn->code[jmp_end].a = end_target;
+        emit(c, OPC_LOAD_VAR, res_slot, 0);
+        return EXPR_TYPE_NONE;
+    }
+
+    /* 字典推导式 {k:v for x in iter (if cond)} */
+    case AST_COMP_MAP: {
+        /* 1. 创建空 map */
+        emit(c, OPC_MAP_LIT, 0, 0);
+        static int mcomp_seq = 0;
+        char res_name[64], idx_name[64], len_name[64], obj_name[64];
+        snprintf(res_name, sizeof(res_name), "__mcomp_r_%d", mcomp_seq);
+        snprintf(idx_name, sizeof(idx_name), "__mcomp_i_%d", mcomp_seq);
+        snprintf(len_name, sizeof(len_name), "__mcomp_n_%d", mcomp_seq);
+        snprintf(obj_name, sizeof(obj_name), "__mcomp_o_%d", mcomp_seq);
+        mcomp_seq++;
+        int res_slot = c_add_var(c, res_name, EXPR_TYPE_NONE);
+        emit(c, OPC_STORE_VAR, res_slot, 0);
+
+        /* 2. 编译 iter 并取 len */
+        c_expr_to_value(c, node->u.comp.iter);
+        int obj_slot = c_add_var(c, obj_name, EXPR_TYPE_NONE);
+        emit(c, OPC_STORE_VAR, obj_slot, 0);
+        emit(c, OPC_LOAD_VAR, obj_slot, 0);
+        emit(c, OPC_BUILTIN, BUILTIN_LEN, 1);
+        emit(c, OPC_UNBOX_INT64, 0, 0);  /* VALUE → INT64 */
+        int len_slot = c_add_var(c, len_name, EXPR_TYPE_INT);
+        int len_bf = bf_sym(c->fn, len_name);
+        c->fn->var_type_tags[len_bf] = (int)CAST_INT;
+        emit(c, OPC_STORE_INT64_VAR, len_slot, 0);
+
+        /* 3. i = 0 */
+        int idx_slot = c_add_var(c, idx_name, EXPR_TYPE_INT);
+        int idx_bf = bf_sym(c->fn, idx_name);
+        c->fn->var_type_tags[idx_bf] = (int)CAST_INT;
+        emit(c, OPC_PUSH_INT64_CONST, 0, 0);
+        emit(c, OPC_STORE_INT64_VAR, idx_slot, 0);
+
+        /* 4. 循环 */
+        int loop_start = c->fn->code_len;
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_LOAD_INT64_VAR, len_slot, 0);
+        emit(c, OPC_INT64_GE, 0, 0);
+        int jmp_end = c->fn->code_len;
+        emit(c, OPC_JMP_IF_TRUE, 0, 0);
+
+        /* 5. x = obj[i] */
+        emit(c, OPC_LOAD_VAR, obj_slot, 0);
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_BOX_INT64, (int)CAST_NONE, 0);
+        emit(c, OPC_BUILTIN, BUILTIN_GET, 2);
+        const char* varname = node->u.comp.var->u.varname;
+        int var_slot = c_add_var(c, (char*)varname, EXPR_TYPE_NONE);
+        emit(c, OPC_STORE_VAR, var_slot, 0);
+
+        /* 6. 条件过滤 */
+        int cont_target;
+        if(node->u.comp.cond) {
+            c_expr_to_value(c, node->u.comp.cond);
+            int jmp_skip = c->fn->code_len;
+            emit(c, OPC_JMP_IF_FALSE_V, 0, 0);
+            cont_target = c->fn->code_len;
+            c->fn->code[jmp_skip].a = -1;
+        } else {
+            cont_target = c->fn->code_len;
+        }
+
+        /* 7. res[k] = v → set(res, k, v) */
+        emit(c, OPC_LOAD_VAR, res_slot, 0);
+        c_expr_to_value(c, node->u.comp.expr);   /* key */
+        c_expr_to_value(c, node->u.comp.value);   /* value */
+        emit(c, OPC_CALL_BUILTIN_METHOD, BUILTIN_SET, 2);
+        emit(c, OPC_POP, 0, 0);
+
+        /* 8. i++ */
+        int continue_target = c->fn->code_len;
+        if(node->u.comp.cond) {
+            for(int pi = cont_target - 1; pi >= 0; pi--) {
+                if(c->fn->code[pi].op == OPC_JMP_IF_FALSE_V && c->fn->code[pi].a == -1) {
+                    c->fn->code[pi].a = continue_target;
+                    break;
+                }
+            }
+        }
+        emit(c, OPC_LOAD_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_PUSH_INT64_CONST, 1, 0);
+        emit(c, OPC_INT64_ADD, 0, 0);
+        emit(c, OPC_STORE_INT64_VAR, idx_slot, 0);
+        emit(c, OPC_JMP, loop_start, 0);
+
+        /* 9. end */
+        int end_target = c->fn->code_len;
+        c->fn->code[jmp_end].a = end_target;
+        emit(c, OPC_LOAD_VAR, res_slot, 0);
+        return EXPR_TYPE_NONE;
+    }
+
     case AST_INDEX_ASSIGN: {
         /* self.field = val 快路径：arr 是 self，idx 是字符串字面量，且当前 fn 是方法
          * → OPC_STORE_FIELD（typed 栈路由） */
@@ -1171,6 +1377,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 
     case AST_UNARY: {
         BinOp op = node->u.uny.op;
+        /* 非空断言：子表达式落 VALUE，发 ASSERT_NONNULL，结果仍为 VALUE（动态） */
+        if(op == OP_NONNULL_ASSERT) {
+            c_expr_to_value(c, node->u.uny.child);
+            emit(c, OPC_ASSERT_NONNULL, 0, 0);
+            return EXPR_TYPE_NONE;
+        }
         /* ++ / --：var++ / ++var / var-- / --var
          * 简化语义：作为语句时不区分前置/后置（结果丢弃）；作为表达式时后置返回原值，前置返回新值（暂未实现精确语义，统一按前置处理） */
         if(op == OP_POST_INC || op == OP_PRE_INC || op == OP_POST_DEC || op == OP_PRE_DEC) {
@@ -1226,6 +1438,17 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             } else {
                 emit(c, OPC_NEG, (int)child_type, 0);
             }
+        }
+        /* 按位取反 ~：整数走 INT64 栈；否则转动态，运行时校验 */
+        if(op == OP_BIT_NOT) {
+            if(child_type == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_BNOT, 0, 0);
+                return EXPR_TYPE_INT;
+            }
+            if(child_type != EXPR_TYPE_NONE)
+                emit_to_dynamic(c, child_type, c_expr_cast_type(c, node->u.uny.child));
+            emit(c, OPC_VBNOT, 0, 0);
+            return EXPR_TYPE_NONE;
         }
         return child_type;
     }
@@ -1484,6 +1707,40 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_VMOD, 0, 0);  /* double 不支持 mod，动态走 VMOD */
             }
             break;
+        /* 幂 **：按静态结果栈选择指令（运行时各自完成幂运算） */
+        case OP_POW:
+            if(result == EXPR_TYPE_INT) {
+                emit(c, OPC_INT64_POW, 0, 0);
+            } else if(result == EXPR_TYPE_DOUBLE) {
+                emit(c, OPC_DOUBLE_POW, 0, 0);
+            } else {
+                emit(c, OPC_VPOW, 0, 0);
+            }
+            break;
+        /* 位运算：整数走 INT64 栈；动态走 VALUE 栈（运行时校验整数） */
+        case OP_BIT_AND: case OP_BIT_OR: case OP_BIT_XOR:
+        case OP_SHL: case OP_SHR: {
+            if(result == EXPR_TYPE_INT) {
+                switch(node->u.bin.op) {
+                case OP_BIT_AND: emit(c, OPC_INT64_BAND, 0, 0); break;
+                case OP_BIT_OR:  emit(c, OPC_INT64_BOR, 0, 0); break;
+                case OP_BIT_XOR: emit(c, OPC_INT64_BXOR, 0, 0); break;
+                case OP_SHL:     emit(c, OPC_INT64_SHL, 0, 0); break;
+                case OP_SHR:     emit(c, OPC_INT64_SHR, 0, 0); break;
+                default: break;
+                }
+            } else {
+                switch(node->u.bin.op) {
+                case OP_BIT_AND: emit(c, OPC_VBAND, 0, 0); break;
+                case OP_BIT_OR:  emit(c, OPC_VBOR, 0, 0); break;
+                case OP_BIT_XOR: emit(c, OPC_VBXOR, 0, 0); break;
+                case OP_SHL:     emit(c, OPC_VSHL, 0, 0); break;
+                case OP_SHR:     emit(c, OPC_VSHR, 0, 0); break;
+                default: break;
+                }
+            }
+            break;
+        }
         case OP_GT: case OP_LT: case OP_GE:
         case OP_LE: case OP_EQ: case OP_NE: {
             /* 字符串（PTR 栈）相等比较：两操作数此时已在 PTR 栈（bottom=left/top=right）。
@@ -1638,10 +1895,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* DUP+null 检查 */
         emit(c, OPC_LOAD_VAR, recv_idx, 0);
         int jfalse = emit_here(c, OPC_JMP_IF_FALSE_V, 0, 0);   /* null 跳 push_null */
-        /* truthy：调用 method(recv) */
-        AstNode* method_call = ast_method_call(ast_var(strdup(tmp_name)), strdup(method), args);
-        ExprType mt = c_expr(c, method_call);
-        if(mt != EXPR_TYPE_NONE) emit_to_dynamic(c, mt, c_expr_cast_type(c, method_call));
+        /* truthy：args 非空=安全方法调用 recv.method(args)；args 为空=安全属性访问 recv["method"] */
+        ExprType mt;
+        CastKind mt_cast;
+        AstNode* member_expr;
+        if(args) {
+            member_expr = ast_method_call(ast_var(strdup(tmp_name)), strdup(method), args);
+        } else {
+            member_expr = ast_index(ast_var(strdup(tmp_name)), ast_string(strdup(method)));
+        }
+        mt = c_expr(c, member_expr);
+        mt_cast = c_expr_cast_type(c, member_expr);
+        if(mt != EXPR_TYPE_NONE) emit_to_dynamic(c, mt, mt_cast);
         int jend = emit_here(c, OPC_JMP, 0, 0);
         /* push_null: PUSH_NONE */
         patch_to(c, jfalse);
@@ -1830,8 +2095,13 @@ static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs) {
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(!node) return CAST_NONE;
 
-    /* 字面量 */
-    if(node->type == AST_INT) return CAST_INT;
+    /* 字面量：整数按实际宽度返回——超过 int32 的大字面量为 CAST_INT64，
+     * 否则在"提升装箱到动态"时会被 CAST_INT 截断（如 dyn == 1099511627776 误判）。
+     * 与 c_expr_to_value 中 AST_INT 走 PUSH_CONST_VAL(int64) 的处理保持一致。 */
+    if(node->type == AST_INT) {
+        int64_t lv = node->u.inum;
+        return (lv >= INT32_MIN && lv <= INT32_MAX) ? CAST_INT : CAST_INT64;
+    }
     if(node->type == AST_NUM) return CAST_DOUBLE;
     if(node->type == AST_BOOL) return CAST_BOOL;
     if(node->type == AST_CHAR) return CAST_CHAR;
@@ -2076,13 +2346,34 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
             emit(c, OPC_VNEG, 0, 0);
             return;
         }
+        /* 按位取反：静态整数走 typed INT64（保留整数性），以 int64 装箱不截断；
+         * 动态子树 c_expr 已发 VBNOT，结果已在 VALUE，无需处理 */
+        if(node->u.uny.op == OP_BIT_NOT) {
+            ExprType t = c_expr(c, node);
+            if(t == EXPR_TYPE_INT) emit(c, OPC_BOX_INT64, CAST_NONE, 0);
+            return;
+        }
         c_value_fallback(c, node);
         return;
     }
 
     /* 二元运算：左右子树均目标 VALUE，发通用 Value 指令 */
     case AST_BINOP: {
-        int vop = binop_value_opcode(node->u.bin.op);
+        int bop = node->u.bin.op;
+        /* 幂与位运算：不走通用 value 算术（lumyr_add 对 int64 会提升为 double，
+         * 位运算又严格要求整数）。改为自然编译——静态整数走 typed INT64（保留整数性），
+         * 浮点走 DOUBLE，动态 c_expr 已发 V 指令落 VALUE；typed 结果按 int64/double 装箱，
+         * int64 装箱不做 CAST_INT 截断。 */
+        if(bop == OP_POW || bop == OP_BIT_AND || bop == OP_BIT_OR ||
+           bop == OP_BIT_XOR || bop == OP_SHL || bop == OP_SHR) {
+            ExprType t = c_expr(c, node);
+            if(t == EXPR_TYPE_INT)
+                emit(c, OPC_BOX_INT64, CAST_NONE, 0);
+            else if(t == EXPR_TYPE_DOUBLE)
+                emit(c, OPC_BOX_DOUBLE, 0, 0);
+            return;
+        }
+        int vop = binop_value_opcode(bop);
         CastKind lk = c_expr_cast_type(c, node->u.bin.left);
         CastKind rk = c_expr_cast_type(c, node->u.bin.right);
         if(vop >= 0 && !cast_is_special_value(lk) && !cast_is_special_value(rk)) {
@@ -2258,6 +2549,73 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     AstNode** argv = NULL;
     collect_call_args(args, &argv, &argc, &acap);
 
+    /* ---- 命名实参拆分：形如 id = expr 的实参（AST_ASSIGN）按形参名绑定，其余为位置实参 ----
+     * 1) 建立用户形参名表（方法跳过 self，遇可变停止）；
+     * 2) 位置实参入 posv；AST_ASSIGN 实参按名定位形参槽，校验 未知/重复/与位置冲突；
+     * 3) src_for_slot[相对形参下标] = 该槽实参节点（位置或命名）。 */
+    int nnormal = 0, pcap = 0;
+    char** pnames = NULL;
+    /* 建立用户形参名表：方法跳过 self，遇可变形参停止 */
+    {
+        int pi = 0;
+        for(AstNode* p = def_ast->u.func_def.params; p; p = p->u.param.next, pi++) {
+            if(method_recv && pi == 0) continue;      /* self */
+            if(p->u.param.is_ellipsis) break;
+            if(nnormal >= pcap) {
+                pcap = pcap ? pcap * 2 : 8;
+                pnames = (char**)realloc(pnames, sizeof(char*) * (size_t)pcap);
+            }
+            pnames[nnormal++] = p->u.param.name;
+        }
+    }
+    AstNode** src_for_slot = (AstNode**)calloc(nnormal > 0 ? nnormal : 1, sizeof(AstNode*));
+    int posc = 0, poscap = 0;
+    AstNode** posv = NULL;
+    int* named_slot_used = (int*)calloc(nnormal > 0 ? nnormal : 1, sizeof(int));
+    int named_err = 0;
+    for(int i = 0; i < argc; i++) {
+        AstNode* a = argv[i];
+        if(a->type == AST_ASSIGN) {
+            const char* nm = a->u.assign.varname;
+            int hit = -1;
+            for(int k = 0; k < nnormal; k++)
+                if(pnames[k] && strcmp(pnames[k], nm) == 0) { hit = k; break; }
+            if(hit < 0) {
+                fprintf(stderr, "IR: 调用 %s 没有名为 %s 的形参\n",
+                        callee->name ? callee->name : "?", nm);
+                named_err = 1;
+            } else if(named_slot_used[hit]) {
+                fprintf(stderr, "IR: 调用 %s 的命名实参 %s 重复\n",
+                        callee->name ? callee->name : "?", nm);
+                named_err = 1;
+            } else {
+                named_slot_used[hit] = 1;
+                src_for_slot[hit] = a->u.assign.expr;
+            }
+        } else {
+            if(posc >= poscap) {
+                poscap = poscap ? poscap * 2 : 8;
+                posv = (AstNode**)realloc(posv, sizeof(AstNode*) * (size_t)poscap);
+            }
+            posv[posc] = a;
+            if(posc < nnormal) src_for_slot[posc] = a;
+            posc++;
+        }
+    }
+    /* 命名槽若已被位置实参占据（hit < posc）则冲突 */
+    for(int k = 0; k < nnormal; k++) {
+        if(named_slot_used[k] && k < posc) {
+            fprintf(stderr, "IR: 调用 %s 的形参 %s 已由位置实参占据，不能再用命名实参\n",
+                    callee->name ? callee->name : "?", pnames[k]);
+            named_err = 1;
+        }
+    }
+    if(named_err) {
+        free(argv); free(pnames); free(src_for_slot);
+        free(named_slot_used); free(posv);
+        exit(EXIT_FAILURE);
+    }
+
     /* 方法调用：method_recv 非空。栈布局 slot 0=receiver（self），slot 1+=用户实参。
      * 先编译 receiver 占底（VM 弹栈时实参在顶先弹，receiver 最后弹） */
     int is_method = (method_recv != NULL);
@@ -2292,14 +2650,15 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
         CastKind pck = (slot < callee->sym_cnt) ? (CastKind)callee->var_type_tags[slot] : CAST_NONE;
         ExprType param_et = castkind_to_exprtype(pck);
 
-        if(p->u.param.is_ref && bound < argc) {
-            /* ref 形参：实参必须是左值（当前支持变量） */
-            AstNode* arg = argv[bound];
-            if(arg->type != AST_VAR) {
+        AstNode* arg_node = src_for_slot[bound];   /* 该槽实参（位置或命名），无则 NULL */
+
+        if(p->u.param.is_ref && arg_node) {
+            /* ref 形参：实参必须是左值（当前支持变量）；命名写法 f(x=var) 亦同 */
+            if(arg_node->type != AST_VAR) {
                 fprintf(stderr, "IR: 调用 %s 的 ref 形参 %s 需要左值（变量）\n",
                         callee->name ? callee->name : "?", p->u.param.name);
             } else {
-                int cslot = c_find_var(c, arg->u.varname);
+                int cslot = c_find_var(c, arg_node->u.varname);
                 if(cslot >= 0) {
                     ref_flags[slot] = 1;
                     ref_slots[slot] = cslot;
@@ -2307,16 +2666,22 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
             }
         }
 
-        if(bound < argc) {
+        if(arg_node) {
             if(param_et != EXPR_TYPE_NONE) {
-                ExprType at = c_expr(c, argv[bound]);
+                ExprType at = c_expr(c, arg_node);
+                /* 非空 T：动态(VALUE)实参（含显式 null，c_expr 归为 NONE）在拆箱前断言；
+                 * 静态 typed 实参不可能为 null，无需断言（零开销）。可空 T? 跳过。 */
+                if(at == EXPR_TYPE_NONE && !p->u.param.is_nullable)
+                    emit(c, OPC_ASSERT_NONNULL, 0, 0);
                 emit_value_cast(c, at, param_et);   /* typed -> typed */
             } else {
-                c_expr_to_value(c, argv[bound]);      /* 上下文目标 VALUE，免 BOX */
+                c_expr_to_value(c, arg_node);       /* 上下文目标 VALUE，免 BOX */
             }
         } else if(p->u.param.default_val) {
             if(param_et != EXPR_TYPE_NONE) {
                 ExprType at = c_expr(c, p->u.param.default_val);
+                if(at == EXPR_TYPE_NONE && !p->u.param.is_nullable)
+                    emit(c, OPC_ASSERT_NONNULL, 0, 0);
                 emit_value_cast(c, at, param_et);
             } else {
                 c_expr_to_value(c, p->u.param.default_val);
@@ -2329,18 +2694,19 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     }
     total += bound;
 
-    /* 3. 可变参数：超出普通形参的实参组装为数组，绑定到可变槽（PTR/VALUE） */
+    /* 3. 可变参数：仅位置实参可溢出（命名实参不能进入可变槽）。
+     *    超出普通形参的位置实参组装为数组，绑定到可变槽。 */
     if(callee->has_variadic) {
-        int extra = argc - bound;
+        int extra = posc - nnormal;
         if(extra < 0) extra = 0;
         for(int i = 0; i < extra; i++) {
-            c_expr_to_value(c, argv[bound + i]);
+            c_expr_to_value(c, posv[nnormal + i]);
         }
         emit(c, OPC_ARRAY_LIT, 0, extra);   /* 弹 extra 个 VALUE，压数组 */
         total += 1;                         /* 数组作为可变槽 */
-    } else if(argc > bound) {
+    } else if(posc > nnormal) {
         fprintf(stderr, "IR: 调用 %s 实参过多：%d 个，最多 %d 个\n",
-                callee->name ? callee->name : "?", argc, bound);
+                callee->name ? callee->name : "?", posc, nnormal);
     }
 
     /* 4. 按 callee 返回标注确定结果类型（无标注→动态 NONE），供 callsite 记录压栈目标。
@@ -2353,8 +2719,11 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     }
 
     /* 5. 登记调用点并发 CALL / CALL_METHOD。
-     * callee 名记录静态定义处内部名（签名来源）；CALL_METHOD 运行时按 receiver 实际类型重新解析 */
-    int cs = bf_add_callsite(c->fn, callee->name ? callee->name : "?",
+     * callee 键记录运行时可定位的注册键（重载版本 table_key，否则内部名/源名）；
+     * CALL_METHOD 运行时按 receiver 实际类型重新解析 */
+    const char* callee_key = callee->table_key ? callee->table_key :
+                             (callee->name ? callee->name : "?");
+    int cs = bf_add_callsite(c->fn, callee_key,
                              total, keep_result, (int)ret_et);
     CallSite* csp = &c->fn->callsites[cs];
     for(int i = 0; i < total; i++) {
@@ -2365,6 +2734,10 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     free(ref_slots);
     emit(c, is_method ? OPC_CALL_METHOD : OPC_CALL, cs, total);
     free(argv);
+    free(pnames);
+    free(src_for_slot);
+    free(named_slot_used);
+    free(posv);
 
     return ret_et;
 }
@@ -2661,6 +3034,14 @@ void c_stmt(Ctx* c, AstNode* node) {
          * 用户函数优先；非用户函数（局部变量持有函数值 / 内置）走 c_expr
          * 兜底，避免误报 "unknown function" 导致语句不执行 */
         const char* call_name = node->u.call.name;
+        /* 重载名：按实参解析版本（keep_result=0） */
+        if(ol_group_exists(call_name)) {
+            BytecodeFunc* oc = NULL; AstNode* od = NULL;
+            if(!resolve_free_call(c, call_name, node->u.call.args, &oc, &od))
+                exit(EXIT_FAILURE);
+            compile_user_call(c, oc, od, node->u.call.args, 0, NULL);
+            break;
+        }
         BytecodeFunc* callee = ir_func_table_lookup(call_name);
         AstNode* def_ast = func_ast_lookup(call_name);
         /* 方法内裸名自递归 fallback */
@@ -3316,6 +3697,10 @@ static void ctx_cleanup(Ctx* c) {
     c->var_cnt = c->var_cap = 0;
 }
 
+/* 前置声明（重载组定义在后文） */
+static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out);
+static void ol_insert_bare_alias(BytecodeFunc* fn);
+
 /* 编译函数 / Compile a lumin function into bytecode and register it */
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
     /* 方法唯一内部名：<属主>__m__<方法>，避免不同 struct/class 的同名方法
@@ -3340,6 +3725,21 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     fn->is_generator = is_generator ? 1 : 0;
     fn->class_name = class_name ? strdup(class_name) : NULL;
     fn->ret_type_name = ret_type_name ? strdup(ret_type_name) : NULL;
+
+    /* 自由函数（非 lambda/arrow/ctor）：分配唯一注册键以支持重载同名多版本；
+     * fn->name 保留源名用于显示，实际入表键为 __ol__<name>__<seq> */
+    int is_free_for_overload = 0;
+    if(!class_name && name) {
+        if(strncmp(name, "_lambda_", 8) != 0 &&
+           strncmp(name, "_arrow_", 7) != 0 &&
+           !(strlen(name) >= 9 && strcmp(name + strlen(name) - 9, "___init__") == 0)) {
+            is_free_for_overload = 1;
+            size_t need = strlen(name) + 16;
+            char* key = (char*)malloc(need);
+            snprintf(key, need, "__ol__%s__%d", name, g_ol_seq++);
+            fn->table_key = key;
+        }
+    }
 
     /* 编译上下文：形参按声明序注册（Ctx idx == bf 槽位 == frame 槽位） */
     Ctx c;
@@ -3393,6 +3793,13 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
        形参类型与返回标注此时已就绪；递归 CALL 真正运行时函数体已编译完整。 */
     ir_func_table_register(fn);
 
+    /* 登记进重载组；首版本额外以裸名建别名（兼容函数值/裸名路径） */
+    if(is_free_for_overload) {
+        int first = 0;
+        ol_add(fn, params, &first);
+        if(first) ol_insert_bare_alias(fn);
+    }
+
     /* lambda / arrow：注册捕获的外层变量为本地槽位（type NONE，VALUE 栈访问）。
      * 箭头函数 _arrow_N 与匿名函数 _lambda_N 共用同一闭包捕获机制 */
     if(name && (strncmp(name, "_lambda_", 8) == 0 ||
@@ -3423,15 +3830,16 @@ static RBTree* func_table_tree(void) {
     return g_func_table;
 }
 
-/* 注册/替换普通函数（同名旧函数被释放） / Register or replace a function */
+/* 注册/替换函数（key 取 fn->table_key 否则 name）；同键旧函数被释放 */
 void ir_func_table_register(BytecodeFunc* fn) {
     if(!fn || !fn->name) return;
+    const char* key = fn->table_key ? fn->table_key : fn->name;
     RBTree* t = func_table_tree();
-    void* old = rbtree_set_data(t, NS_FUNCTION, NULL, fn->name, fn);
+    void* old = rbtree_set_data(t, NS_FUNCTION, NULL, key, fn);
     if(old) {
         if(old != fn) bytecode_func_free((BytecodeFunc*)old);
     } else {
-        rbtree_insert(t, NS_FUNCTION, NULL, fn->name, fn);
+        rbtree_insert(t, NS_FUNCTION, NULL, key, fn);
     }
 }
 
@@ -3478,6 +3886,189 @@ void ir_func_table_reset(void) {
     rbtree_foreach(g_func_table, reset_free_cb, NULL);
     rbtree_destroy(g_func_table);
     g_func_table = NULL;
+}
+
+/* ============================================================
+ * 自由函数重载组（按 arity + 形参声明类型；仅自由函数）
+ * 每个版本以唯一键 __ol__<name>__<seq> 注册进全局函数表，避免同名覆盖；
+ * 调用点 ol_resolve 评分选最佳版本，再走 compile_user_call。
+ * ============================================================ */
+typedef struct {
+    BytecodeFunc* fn;
+    AstNode def_shell;     /* AST_FUNC_DEF，供 compile_user_call 取 params */
+} OlCand;
+typedef struct {
+    char* name;
+    int cnt, cap;
+    OlCand* cands;
+} OlGroup;
+
+static OlGroup* g_ol = NULL;
+static int g_ol_n = 0, g_ol_cap = 0;
+/* g_ol_seq 已在文件前部定义 */
+
+static OlGroup* ol_find_group(const char* name) {
+    for(int i = 0; i < g_ol_n; i++)
+        if(strcmp(g_ol[i].name, name) == 0) return &g_ol[i];
+    return NULL;
+}
+
+static int ol_group_exists(const char* name) { return ol_find_group(name) != NULL; }
+
+/* 分配/登记一个重载版本；first=该组首版本（额外以裸名建别名，兼容函数值/其它裸名查找） */
+static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out) {
+    OlGroup* g = ol_find_group(fn->name);
+    int is_first = 0;
+    if(!g) {
+        if(g_ol_n >= g_ol_cap) {
+            g_ol_cap = g_ol_cap ? g_ol_cap * 2 : 16;
+            g_ol = (OlGroup*)realloc(g_ol, sizeof(OlGroup) * (size_t)g_ol_cap);
+        }
+        g = &g_ol[g_ol_n++];
+        g->name = strdup(fn->name);
+        g->cnt = 0; g->cap = 0; g->cands = NULL;
+        is_first = 1;
+    }
+    /* 去重：重编译（func_compile_recompile）会产生同一函数的新 BytecodeFunc，
+     * 替换旧候选而非追加，避免重复计为歧义 */
+    for(int i = 0; i < g->cnt; i++) {
+        if(g->cands[i].fn->param_cnt == fn->param_cnt &&
+           g->cands[i].fn->has_variadic == fn->has_variadic) {
+            /* 同 arity → 替换（重编译更新） */
+            g->cands[i].fn = fn;
+            memset(&g->cands[i].def_shell, 0, sizeof(AstNode));
+            g->cands[i].def_shell.type = AST_FUNC_DEF;
+            g->cands[i].def_shell.u.func_def.params = params;
+            if(is_first_out) *is_first_out = is_first;
+            return;
+        }
+    }
+    if(g->cnt >= g->cap) {
+        g->cap = g->cap ? g->cap * 2 : 4;
+        g->cands = (OlCand*)realloc(g->cands, sizeof(OlCand) * (size_t)g->cap);
+    }
+    OlCand* c = &g->cands[g->cnt++];
+    c->fn = fn;
+    memset(&c->def_shell, 0, sizeof(AstNode));
+    c->def_shell.type = AST_FUNC_DEF;
+    c->def_shell.u.func_def.params = params;
+    if(is_first_out) *is_first_out = is_first;
+}
+
+/* 给裸名插入别名（仅当不存在），使函数值引用等裸名路径仍可用（返回首版本） */
+static void ol_insert_bare_alias(BytecodeFunc* fn) {
+    RBTree* t = func_table_tree();
+    if(!rbtree_find(t, NS_FUNCTION, NULL, fn->name))
+        rbtree_insert(t, NS_FUNCTION, NULL, fn->name, fn);
+}
+
+/* 类型族：1=整数族 2=浮点族 3=对象/指针族 0=动态 */
+static int ck_family(CastKind k) {
+    switch(k) {
+        case CAST_INT: case CAST_BOOL: case CAST_ASCII: case CAST_CHAR:
+        case CAST_BYTE: case CAST_INT8: case CAST_INT16: case CAST_INT32:
+        case CAST_INT64: case CAST_UINT8: case CAST_UINT16: case CAST_UINT32:
+        case CAST_UINT: case CAST_UINT64: case CAST_LONG: case CAST_LONGLONG:
+        case CAST_ULONG: case CAST_UCHAR: case CAST_SHORT: case CAST_USHORT:
+        case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_PTR:
+            return 1;
+        case CAST_DOUBLE: case CAST_FLOAT: case CAST_LONG_DOUBLE:
+            return 2;
+        case CAST_NONE:
+            return 0;
+        default:
+            return 3;
+    }
+}
+
+/* 单个形参位的匹配评分：越小越优 */
+static int ol_slot_score(CastKind pck, CastKind ack) {
+    if(pck == CAST_NONE) return 2;                 /* 形参动态：宽松，降权 */
+    if(ack == CAST_NONE) return 1;                 /* 实参动态、形参有类型：运行时校验 */
+    if(ack == pck) return 0;                       /* 精确匹配 */
+    if(ck_family(ack) == ck_family(pck)) return 1; /* 同族可转换 */
+    return 6;                                      /* 跨族：勉强/差匹配 */
+}
+
+/* ol_resolve 结果状态 */
+#define OL_OK 0
+#define OL_NOMATCH 1
+#define OL_AMBIG 2
+
+/* 解析重载：对 args（文本序，命名实参取其值节点）按 arity 可行 + 类型评分选唯一最佳。
+ * 返回选中的候选下标（OL_OK），否则 *status 为 NOMATCH/AMBIG。 */
+static int ol_resolve(Ctx* c, const char* name, AstNode* args, int* status) {
+    *status = OL_OK;
+    OlGroup* g = ol_find_group(name);
+    if(!g || g->cnt == 0) { *status = OL_NOMATCH; return -1; }
+
+    /* 收集实参；AST_ASSIGN 取其值节点（命名实参参与类型评分，最终仍按名绑定） */
+    int ac = 0, acap = 0;
+    AstNode** raw = NULL;
+    collect_call_args(args, &raw, &ac, &acap);
+    CastKind* ak = (CastKind*)malloc(sizeof(CastKind) * (size_t)(ac > 0 ? ac : 1));
+    for(int i = 0; i < ac; i++) {
+        AstNode* node = raw[i];
+        if(node->type == AST_ASSIGN) node = node->u.assign.expr;
+        ak[i] = c_expr_cast_type(c, node);
+    }
+
+    int best = -1, best_score = 0;
+    int ties = 0;
+    for(int ci = 0; ci < g->cnt; ci++) {
+        BytecodeFunc* fn = g->cands[ci].fn;
+        /* 统计 required（无默认）与形参类型 */
+        int required = 0, slot = 0;
+        for(AstNode* p = g->cands[ci].def_shell.u.func_def.params; p;
+            p = p->u.param.next, slot++) {
+            if(p->u.param.is_ellipsis) break;
+            if(!p->u.param.default_val) required++;
+        }
+        int variadic = fn->has_variadic;
+        int pcnt = fn->param_cnt;
+        /* arity 可行：实参数 >= 必填，且非可变时 <= 形参数 */
+        if(ac < required) continue;
+        if(!variadic && ac > pcnt) continue;
+
+        int score = 0;
+        for(int i = 0; i < ac; i++) {
+            CastKind pck = CAST_NONE;
+            if(i < pcnt && i < fn->sym_cnt) {
+                int tag = fn->var_type_tags[i];
+                pck = (tag >= 0) ? (CastKind)tag : CAST_NONE;  /* -1=无标注→动态 */
+            }
+            score += ol_slot_score(pck, ak[i]);
+        }
+        if(best < 0 || score < best_score) {
+            best = ci; best_score = score; ties = 1;
+        } else if(score == best_score) {
+            ties++;
+        }
+    }
+    free(ak);
+    free(raw);
+    if(best < 0) { *status = OL_NOMATCH; return -1; }
+    if(ties > 1) { *status = OL_AMBIG; return best; }
+    return best;
+}
+
+/* 供调用路径统一解析自由函数：成功返回候选（*fn_out/*def_out），失败按 status 报错并 exit1 */
+static int resolve_free_call(Ctx* c, const char* name, AstNode* args,
+                             BytecodeFunc** fn_out, AstNode** def_out) {
+    int status = OL_OK;
+    int ci = ol_resolve(c, name, args, &status);
+    OlGroup* g = ol_find_group(name);
+    if(status == OL_NOMATCH) {
+        fprintf(stderr, "IR: 没有匹配函数 %s 的重载版本\n", name);
+        return 0;
+    }
+    if(status == OL_AMBIG) {
+        fprintf(stderr, "IR: 调用 %s 存在多个同样匹配的重载，存在歧义\n", name);
+        return 0;
+    }
+    *fn_out = g->cands[ci].fn;
+    *def_out = &g->cands[ci].def_shell;
+    return 1;
 }
 
 /* rbtree 遍历回调（5 参数）→ 对外回调（4 参数）适配 */

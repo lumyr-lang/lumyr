@@ -57,6 +57,8 @@ typedef enum {
     AST_INTERFACE_ANNOTATION, // 接口类型标注 <Interface>expr：给变量打接口引用类型标记
     AST_CLASS_NEW,       // 创建 class 实例（C 结构体）：ClassNew("Animal")
     AST_METHOD_CALL,     // 接收者绑定的方法调用 recv.method(args)：类型化分派（含继承/多态）
+    AST_COMP_LIST,       // 列表推导式 [expr for x in iter (if cond)]
+    AST_COMP_MAP,        // 字典推导式 {k:v for x in iter (if cond)}
 } AstType;
 
 // 二元运算符
@@ -82,6 +84,14 @@ typedef enum {
     OP_UNARY_PLUS,
     OP_UNARY_MINUS,
     OP_IMPLEMENTS,  // obj implements Interface
+    OP_BIT_AND,     // 按位与 &
+    OP_BIT_OR,      // 按位或 |
+    OP_BIT_XOR,     // 按位异或 ^
+    OP_BIT_NOT,     // 按位取反 ~（一元）
+    OP_SHL,         // 左移 <<
+    OP_SHR,         // 算术右移 >>（保留符号）
+    OP_POW,         // 中缀幂 **（int+非负整数指数→整数，否则浮点）
+    OP_NONNULL_ASSERT, // 非空断言（一元，值为 null 时抛错，否则原样透传），用于非空 T 类型校验
 } BinOp;
 
 // 辅助：ValueType → C源码字符串（用于语义检查错误消息，需覆盖所有类型）

@@ -70,6 +70,15 @@ typedef enum {
     OPC_INT64_NE,       // 不等于
     OPC_INT64_TO_VALUE, // 从 int64 栈弹出，包装成 Value，压入 Value 栈（兼容赋值等通用逻辑）
 
+    /* ===== int64 栈位运算（统一整数栈，二补码） ===== */
+    OPC_INT64_BAND,     // 弹2个 int64，按位与
+    OPC_INT64_BOR,      // 按位或
+    OPC_INT64_BXOR,     // 按位异或
+    OPC_INT64_BNOT,     // 弹1个 int64，按位取反，压回
+    OPC_INT64_SHL,      // 左移（移位量按 64 位掩码 &63）
+    OPC_INT64_SHR,      // 算术右移（保留符号，移位量 &63）
+    OPC_INT64_POW,      // 弹2个 int64（非负指数），整数幂
+
     /* ===== double 栈算术运算（统一浮点栈，零检查零转换） ===== */
     OPC_DOUBLE_ADD,     // 弹2个 double，相加，结果压回 double 栈
     OPC_DOUBLE_SUB,     // 弹2个 double，相减
@@ -82,6 +91,7 @@ typedef enum {
     OPC_DOUBLE_EQ,      // 等于
     OPC_DOUBLE_NE,      // 不等于
     OPC_DOUBLE_TO_VALUE, // 从 double 栈弹出，包装成 Value，压入 Value 栈
+    OPC_DOUBLE_POW,     // 弹2个 double，幂（pow）
 
     /* ===== ptr 栈算术运算（字符串拼接等） ===== */
     OPC_PTR_ADD,        // 弹2个指针（字符串），拼接，结果压回 ptr 栈
@@ -193,7 +203,13 @@ typedef enum {
     OPC_VADD,           // VALUE 栈弹2 → lumyr_add → 压结果
     OPC_VSUB, OPC_VMUL, OPC_VDIV, OPC_VMOD,
     OPC_VNEG,           // VALUE 栈弹1 → lumyr_unary_minus
+    OPC_VPOW,           // VALUE 栈弹2：int且非负指数→int幂，否则double幂
     OPC_VGT, OPC_VLT, OPC_VGE, OPC_VLE, OPC_VEQ, OPC_VNE, // 弹2 → bool Value
+    OPC_VBAND, OPC_VBOR, OPC_VBXOR, // VALUE 栈弹2，运行时校验整数 → 位运算
+    OPC_VBNOT,         // VALUE 栈弹1，运行时校验整数 → 按位取反
+    OPC_VSHL, OPC_VSHR,// VALUE 栈弹2，运行时校验整数 → 移位
+
+    OPC_ASSERT_NONNULL, // VALUE 栈弹1：VAL_NONE→抛 NullError，否则原样压回（净0），非空 T 校验
     OPC_JMP_IF_TRUE_V,  // 条件在 VALUE 栈（truthy 判断）
     OPC_JMP_IF_FALSE_V,
 
@@ -385,6 +401,9 @@ typedef enum {
     BUILTIN_NORMALIZE,       // normalize(v)：L2 归一化 → 新数组/同型 TypedArray
     BUILTIN_SOFTMAX,         // softmax(v)：softmax → 新数组/同型 TypedArray
 
+    /* ===== enum 增强 ===== */
+    BUILTIN_FROM_VALUE,      // fromValue(map, val)：按值反查键名（enum 逆向查找）
+
     BUILTIN_COUNT
 } BuiltinId;
 
@@ -438,6 +457,7 @@ typedef struct {
  * ============================================================ */
 typedef struct {
     const char* name;          // 函数名（main 为 NULL）
+    const char* table_key;     // 全局函数表注册键（重载唯一键；NULL 时等同 name）
     int is_main;
     Instruction* code;
     int code_len, code_cap;

@@ -1,0 +1,42 @@
+// 多行反引号字符串测试
+// 语法：`...` 反引号分隔，可跨行，原样保留换行
+
+// 1. 基本多行字符串
+s = `一行
+二行
+三行`;
+print(s);
+
+// 2. 单行反引号字符串
+s2 = `hello`;
+print(s2);
+
+// 3. 包含空行
+s3 = `a
+
+b`;
+print(s3);
+
+// 4. 字符串拼接
+s4 = `line1
+line2` + " | " + `line3`;
+print(s4);
+
+// 5. 包含引号（不需转义）
+s5 = `say "hello" and 'world'`;
+print(s5);
+
+// 6. 包含缩进
+s6 = `  indented
+  still indented`;
+print(s6);
+
+// 7. 转义序列
+s7 = `tab\there\nnewline`;
+print(s7);
+
+// 8. 作为函数参数
+func greet(name) {
+    return `Hello, ` + name + `!`;
+}
+print(greet("World"));

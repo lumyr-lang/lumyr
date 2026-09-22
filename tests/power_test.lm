@@ -1,0 +1,71 @@
+// tests/power_test.lm
+// 中缀幂 ** 测试：int 且非负指数 → 整数，否则浮点；右结合；一元运算符优先级高于 **
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 1. 整数幂 =====
+check((2 ** 3) == 8, "2**3");
+check((2 ** 10) == 1024, "2**10");
+check((3 ** 4) == 81, "3**4");
+check((10 ** 6) == 1000000, "10**6");
+check((2 ** 0) == 1, "2**0");
+check((0 ** 5) == 0, "0**5");
+check((1 ** 100) == 1, "1**100");
+check(((-2) ** 3) == -8, "(-2)**3");
+check(((-2) ** 2) == 4, "(-2)**2");
+
+// ===== 2. 右结合 =====
+check((2 ** 3 ** 2) == 512, "right assoc 2**(3**2)");
+check((2 ** 2 ** 3) == 256, "right assoc 2**(2**3)");
+
+// ===== 3. 一元负号优先级低于 **（Python 语义：-2**2 = -4） =====
+check((-2 ** 2) == -4, "unary looser 1");
+check((-2 ** 3) == -8, "unary looser 2");
+
+// ===== 4. 浮点结果 =====
+check((2 ** -1) == 0.5, "negative exp");
+check((2 ** -2) == 0.25, "negative exp 2");
+check((4 ** 0.5) == 2.0, "fractional exp");
+check((9 ** 0.5) == 3.0, "sqrt 9");
+check((2.0 ** 3) == 8.0, "double base");
+check((1.5 ** 2) == 2.25, "double both");
+
+// ===== 5. 结果类型 =====
+ri = <int>2 ** 4;
+check(ri == 16, "typed result value");
+check(type(ri) == "int64", "typed result stack");
+rd = 2 ** -1;
+check(type(rd) == "double", "double result stack");
+rf = 4 ** 0.5;
+check(type(rf) == "double", "sqrt result stack");
+
+// ===== 6. 指数为变量（符号编译期未知 → 动态运行时判定） =====
+n = 3;
+check((2 ** n) == 8, "var exp positive");
+m = -1;
+check((2 ** m) == 0.5, "var exp negative");
+check((2 ** (2 + 1)) == 8, "expr exp");
+k = 0;
+check((5 ** k) == 1, "var zero exp");
+
+// ===== 7. 与其它运算混用：** 优先级高于 * + =====
+check((2 ** 3 * 2) == 16, "pow before mul");   // 8*2
+check((2 ** 3 + 1) == 9, "pow before add");    // 8+1
+check((2 * 3 ** 2) == 18, "pow before mul 2"); // 2*9
+check(((2 ** 3) ** 2) == 64, "paren power");
+
+// ===== 8. 幂用于条件 / 函数返回 =====
+func square(x) { return x ** 2; }
+check(square(9) == 81, "func square");
+check(square(-5) == 25, "func square neg");
+if(2 ** 2 == 4) {} else { throw "pow in if"; }
+
+// ===== 9. 大数（整数幂，二补码回绕不报错） =====
+check((2 ** 62) == 4611686018427387904, "2**62");
+
+print("power_test ALL PASS");
+
+// ===== 反例（放 /tmp，语义说明：本特性对非法输入宽容，不强制 exit1） =====
+// 2 ** "x"  —— 非数值底数/指数，value_as_number 得 NaN，结果为 NaN（不抛错）

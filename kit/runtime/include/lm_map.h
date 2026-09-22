@@ -11,6 +11,7 @@ int   lumyr_map_has(Value map, Value key);                  // 键是否存在
 Value lumyr_map_del(Value* map, Value key);                  // 原地删键，返回自身
 Value lumyr_map_keys(Value map);                            // keys(d) → 键数组（任意类型）
 Value lumyr_map_values(Value map);                          // values(d) → 值数组
+Value lumyr_map_find_key(Value map, Value val);            // 按值反查键（enum fromValue）
 Value lumyr_map_lit(Value* kv, int n);                      // OPC_MAP_LIT：键值交替构造
 Value lumyr_map_shallow_copy(Value map);                    // 浅拷贝：新 map 共享值（struct 赋值用）
 

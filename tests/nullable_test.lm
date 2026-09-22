@@ -1,0 +1,110 @@
+// tests/nullable_test.lm
+// 可空类型 T?：可空位置允许 null；非空显式类型在声明写入 / 实参绑定时校验非空；
+// 未标注动态变量不校验。配合 ?.（安全导航）与 ??（null 合并）。
+//
+// 支持范围：
+//   - 可空局部变量 / 形参：int?/string?/Point? 均可（落动态 VALUE）。
+//   - 可空字段 T?：引用族（class/struct/map）以 NULL 指针表示 null，支持；
+//     示例用“先声明的外部类”。primitive(int/double) 字段受对象 C 布局限制无法存 null。
+//   - null 引用字段读取为 null，链式 ?. / ?? 正常。
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+// ===== 1. 可空局部变量 T? =====
+a: int? = null;
+check(a == null, "nullable local default null");
+a = 7;
+check(a == 7, "nullable local reassign");
+s: string? = null;
+check(s == null, "nullable string null");
+s = "hi";
+check(s == "hi", "nullable string value");
+
+// ===== 2. ?? null 合并 =====
+b: int? = null;
+check((b ?? 42) == 42, "?? fallback");
+b = 9;
+check((b ?? 42) == 9, "?? keeps value");
+check((null ?? 5) == 5, "?? literal null");
+check((3 ?? 5) == 3, "?? literal non-null");
+
+// ===== 3. ?. 安全导航（属性） =====
+m = {x: 5};
+check(m?.x == 5, "safe nav map");
+n = null;
+check(n?.x == null, "safe nav null short circuit");
+class Point {
+    x: int = 5;
+}
+p = Point{};
+check(p?.x == 5, "safe nav class");
+pnull: Point? = null;
+check(pnull?.x == null, "safe nav nullable class null");
+
+// ===== 4. 可空形参 + 函数内 ?? =====
+func first(x: int?) { return x ?? -1; }
+check(first(null) == -1, "nullable param null");
+check(first(9) == 9, "nullable param value");
+func greet(name: string?) { return "hi " + (name ?? "guest"); }
+check(greet(null) == "hi guest", "nullable string param");
+check(greet("sam") == "hi sam", "nullable string param value");
+
+// ===== 5. 可空引用字段（外部类，避免自引用） =====
+class Child {
+    val: int = 0;
+}
+class Parent {
+    child: Child? = null;
+}
+pa = Parent{};
+check(pa.child == null, "nullable reference field default null");
+c = Child{};
+c.val = 42;
+pa.child = c;
+check(pa.child != null, "nullable reference field assigned");
+check(pa.child.val == 42, "traverse nullable reference field");
+check(pa?.child?.val == 42, "safe nav through nullable field");
+
+// ===== 6. 未指向对象的可空字段：链式 ?. / ?? =====
+pb = Parent{};
+check(pb.child == null, "second holder null child");
+check((pb?.child?.val ?? 99) == 99, "chained ?. then ??");
+check((pa?.child?.val ?? 0) == 42, "chained ?. value");
+
+// ===== 7. 非空 T 正常写入不报错 =====
+ia: int = 5;
+check(ia == 5, "nonnull int ok");
+func add(x: int, y: int) { return x + y; }
+check(add(3, 4) == 7, "nonnull params ok");
+class Strict { v: int = 10; }
+st = Strict{};
+check(st.v == 10, "nonnull field ok");
+
+// ===== 8. 未标注动态变量不校验，null 正常 =====
+d = null;
+check(d == null, "dynamic null ok");
+d = 1;
+check(d == 1, "dynamic reassign");
+func dynf(x) { return x; }
+check(dynf(null) == null, "dynamic param null");
+
+// ===== 9. NullError 可被 try/catch 捕获 =====
+caught = 0;
+try {
+    z: int = null;
+} catch (e) { caught = caught + 1; }
+try {
+    add(null, 2);
+} catch (e) { caught = caught + 1; }
+check(caught == 2, "NullError catchable");
+
+print("nullable_test ALL PASS");
+
+// ===== 反例 / 局限（放 /tmp，exit 1；此处仅列明） =====
+// a: int = null;             // 非空局部变量写 null → NullError
+// func f(x: int){} f(null);  // 非空形参绑 null → NullError
+// class B { v: int = null; } // 非空字段初始 null → NullError
+// 局限1：primitive(int/double) 字段因对象 C 布局无法存 null，可空 primitive 请用局部/形参。
+// 局限2：自引用类字段（class Node { next: Node }）经动态路径读取为既有缺陷，非本次引入。

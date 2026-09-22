@@ -169,6 +169,7 @@ struct AstNode {
             AstNode* next;   // 参数链表
             char* constraint; // 泛型参数类型约束（如 "Comparable"），NULL=无约束/普通函数参数
             int is_ref;      // 1=引用传递参数（ref p），0=值传递（默认）
+            int is_nullable; // 1=可空类型 T?（允许 null），0=非空（默认，绑定/写入时校验非空）
         } param;
 
         struct {
@@ -233,6 +234,15 @@ struct AstNode {
             char* method;        // 方法名（不含类前缀，运行时按 recv 实际类型分派）
             AstNode* args;       // 实参列表（AST_SEQ 链，不含 self）
         } method_call;
+
+        /* 推导式：列表 [expr for x in iter (if cond)] / 字典 {k:v for x in iter (if cond)} */
+        struct {
+            AstNode* expr;       // 元素表达式（列表）或键表达式（字典）
+            AstNode* value;       // 值表达式（字典专用；列表为 NULL）
+            AstNode* var;         // 循环变量（AST_VAR）
+            AstNode* iter;        // 可迭代对象
+            AstNode* cond;        // 过滤条件（NULL=无过滤）
+        } comp;
     } u;
 };
 
