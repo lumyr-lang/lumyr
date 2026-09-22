@@ -19,6 +19,8 @@ static char g_last_id_text[256] = {0};
 /* 多行反引号字符串缓冲区 */
 static char mstr_buf[65536];
 static int mstr_len = 0;
+/* 多行反引号字符串是否为 f-string（支持 {expr} 内插） */
+static int mstr_is_fstring = 0;
 
 // 表达式结束类 token（其后 `[` 是下标）
 static int in_case_expr = 0;   /* case 值后的冒号 → CASE_COLON（与字典/三元冒号区分） */
@@ -150,12 +152,13 @@ static int is_expr_end(int t)
     LEX_RET(STRING_LIT);
 }
 
-"`"  { BEGIN(MSTR); mstr_buf[0]='\0'; mstr_len=0; }
+"`"  { BEGIN(MSTR); mstr_buf[0]='\0'; mstr_len=0; mstr_is_fstring=0; }
+"f`" { BEGIN(MSTR); mstr_buf[0]='\0'; mstr_len=0; mstr_is_fstring=1; }
 <MSTR>"`"  {
     BEGIN(INITIAL);
     mstr_buf[mstr_len] = '\0';
     yylval.s = strdup(mstr_buf);
-    LEX_RET(STRING_LIT);
+    LEX_RET(mstr_is_fstring ? FSTRING_LIT : STRING_LIT);
 }
 <MSTR>\n  { mstr_buf[mstr_len++]='\n'; }
 <MSTR>\\n  { mstr_buf[mstr_len++]='\n'; }
@@ -163,7 +166,7 @@ static int is_expr_end(int t)
 <MSTR>\\r  { mstr_buf[mstr_len++]='\r'; }
 <MSTR>\\\\ { mstr_buf[mstr_len++]='\\'; }
 <MSTR>.  { mstr_buf[mstr_len++]=yytext[0]; }
-<MSTR><<EOF>> { BEGIN(INITIAL); mstr_buf[mstr_len]='\0'; yylval.s=strdup(mstr_buf); LEX_RET(STRING_LIT); }
+<MSTR><<EOF>> { BEGIN(INITIAL); mstr_buf[mstr_len]='\0'; yylval.s=strdup(mstr_buf); LEX_RET(mstr_is_fstring ? FSTRING_LIT : STRING_LIT); }
 
 f\"([^"\\]|\\.)*\"   {
     yylval.s = strdup(yytext+2);   /* 跳过 f 和开头引号 */

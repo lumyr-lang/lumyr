@@ -40,3 +40,32 @@ func greet(name) {
     return `Hello, ` + name + `!`;
 }
 print(greet("World"));
+
+// 9. 多行 f-string：{n} 内插
+n = 42;
+s9 = f`一行
+二行
+三
+{n}
+
+`;
+print(s9);
+
+// 10. 多变量多行 f-string
+a = 10;
+b = 20;
+s10 = f`a={a}
+b={b}
+sum={a+b}`;
+print(s10);
+
+// 11. f-string 含表达式与方法调用
+arr = [1, 2, 3];
+s11 = f`len={arr.len()}
+first={arr[0]}`;
+print(s11);
+
+// 12. 无内插的 f`...` 退化为普通多行字符串
+s12 = f`no interp
+here`;
+print(s12);
