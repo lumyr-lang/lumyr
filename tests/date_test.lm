@@ -103,7 +103,7 @@ assert type(td) == "date";
 s = f"{d1}";
 assert s == "2026-09-22";
 s2 = f"{dt1}";
-assert s2 == "2026-09-22T10:30:45Local";
+assert s2 == "2026-09-22T10:30:45";
 s3 = f"{t1}";
 assert s3 == "10:30:45";
 s4 = f"{td1}";

@@ -315,10 +315,12 @@ char* lumyr_date_to_iso(Value v) {
     }
     case VAL_DATETIME: {
         date_fill_cache(o);
-        char tzbuf[8];
-        char* tz = lumyr_date_tz_str(o->tz_offset_min);
-        strncpy(tzbuf, tz, sizeof(tzbuf)-1); tzbuf[sizeof(tzbuf)-1] = '\0';
-        free(tz);
+        char tzbuf[8] = {0};
+        if(o->tz_offset_min != TZ_LOCAL) {
+            char* tz = lumyr_date_tz_str(o->tz_offset_min);
+            strncpy(tzbuf, tz, sizeof(tzbuf)-1); tzbuf[sizeof(tzbuf)-1] = '\0';
+            free(tz);
+        }
         if(o->nsec != 0) {
             snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%09d%s",
                 o->year, o->month, o->day, o->hour, o->min, o->sec, o->nsec, tzbuf);
