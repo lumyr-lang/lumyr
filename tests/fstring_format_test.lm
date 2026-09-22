@@ -1,0 +1,118 @@
+// tests/fstring_format_test.lm
+// f-string format spec测试
+// 语法：f"{expr:spec}" / format("{:spec}", x)
+// spec: [[fill]align][sign][#][0][width][,][.prec][type]
+
+pi = 3.14159;
+
+// ===== 浮点精度 .prec f/F =====
+assert f"{pi:.2f}" == "3.14";
+assert f"{pi:.4f}" == "3.1416";
+assert f"{pi:.3f}" == "3.142";
+assert f"{pi:.0f}" == "3";
+assert f"{2.71828:.2f}" == "2.72";
+assert f"{0.0:.2f}" == "0.00";
+assert f"{-3.14:.2f}" == "-3.14";
+
+// ===== 整数进制 d/x/X/o/b/c =====
+assert f"{255:x}" == "ff";
+assert f"{255:X}" == "FF";
+assert f"{8:o}" == "10";
+assert f"{5:b}" == "101";
+assert f"{5:d}" == "5";
+assert f"{65:c}" == "A";
+assert f"{0:b}" == "0";
+assert f"{0:x}" == "0";
+
+// ===== 进制前缀 # =====
+assert f"{255:#x}" == "0xff";
+assert f"{255:#X}" == "0XFF";
+assert f"{8:#o}" == "0o10";
+assert f"{5:#b}" == "0b101";
+
+// ===== 科学计数 e/E =====
+assert f"{1000000:.2e}" == "1.00e+06";
+assert f"{0.0001:.2e}" == "1.00e-04";
+assert f"{5.5:.2E}" == "5.50E+00";
+
+// ===== 通用 g/G =====
+assert f"{5.5:g}" == "5.5";
+assert f"{0.0001:g}" == "0.0001";
+
+// ===== 百分比 % =====
+assert f"{0.5:%}" == "50.000000%";
+assert f"{0.5:.0%}" == "50%";
+assert f"{0.125:%}" == "12.500000%";
+
+// ===== 符号 sign =====
+assert f"{5:+d}" == "+5";
+assert f"{5: d}" == " 5";
+assert f"{-5:d}" == "-5";
+assert f"{-5:+d}" == "-5";
+assert f"{5:+08d}" == "+0000005";
+
+// ===== 对齐 align/width =====
+assert f"{5:>8d}" == "       5";
+assert f"{5:<8d}" == "5       ";
+assert f"{5:^8d}" == "   5    ";
+assert f"{5:08d}" == "00000005";
+assert f"{5:0>8d}" == "00000005";
+assert f"{5:*>8d}" == "*******5";
+assert f"{5:*<8d}" == "5*******";
+assert f"{5:*^8d}" == "***5****";
+// f-string 词法用双引号边界，内嵌字符串需通过变量引用
+s = "abc";
+assert f"{s:>6s}" == "   abc";
+assert f"{s:<6s}" == "abc   ";
+assert f"{s:^6s}" == " abc  ";
+assert f"{s:.2s}" == "ab";
+
+// ===== 千分位 , =====
+assert f"{1234:,d}" == "1,234";
+assert f"{1234567:,d}" == "1,234,567";
+assert f"{1234.5:,g}" == "1,234.5";
+assert f"{-1234:,d}" == "-1,234";
+
+// ===== 组合 sign + , + align（spec 顺序：[[fill]align][sign][#][0][width][,][.prec][type]）=====
+assert f"{1234:>+10,d}" == "    +1,234";
+assert f"{1234:,.2f}" == "1,234.00";
+assert f"{-1234.5:,.2f}" == "-1,234.50";
+
+// ===== 多占位 / 表达式内插 =====
+assert f"{1:.2f}+{2:.2f}" == "1.00+2.00";
+assert f"{1+2:.2f}" == "3.00";
+assert f"{5*5:d}" == "25";
+assert f"hex={255:x}" == "hex=ff";
+
+// ===== 无 spec（向后兼容）=====
+assert f"{5}" == "5";
+assert f"{3.14}" == "3.14";
+h = "hi";
+assert f"{h}" == "hi";
+assert f"{[1, 2, 3]}" == "[1, 2, 3]";
+assert f"{[[1, 2], [3, 4]]}" == "[[1, 2], [3, 4]]";
+
+// ===== 全局 format(fmt, args...) =====
+assert format("{:.2f}", pi) == "3.14";
+assert format("{}-{}", "a", "b") == "a-b";
+assert format("{:x}", 255) == "ff";
+assert format("{:>5}", 7) == "    7";
+assert format("{}", [1, 2, 3]) == "[1, 2, 3]";
+
+// ===== 多行 f-string 带 spec =====
+ms = f`{pi:.2f}
+{255:x}`;
+print(ms);
+
+// ===== 转义 {{ }} =====
+assert f"a{{b}}" == "a{{b}}";   // lumin: 无内插时 {{ 不折叠，原样保留
+assert f"x={5:d} {{}}" == "x=5 {}";   // 有内插走 format，{{ }} 折叠为字面 { }
+
+print("fstring_format_test ALL PASS");
+
+// ===== 反例（放 /tmp，exit 非 0） =====
+// /tmp/fs_fail1.lm:  print(f"{5:z}");          // 无效 type 字符
+// /tmp/fs_fail2.lm:  print(format("{", 5));    // 未配对 '{'
+// /tmp/fs_fail3.lm:  print(f"{5:.2f");         // 未闭合 '{'
+// /tmp/fs_fail4.lm:  print(format("{}", 1, 2)); // 占位数不匹配
+// /tmp/fs_fail5.lm:  print(f"{:5}");           // 空内插表达式

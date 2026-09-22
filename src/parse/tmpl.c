@@ -514,17 +514,25 @@ AstNode* maybe_template(const char* s)
         }
         if(p[0] == '{') {
             // 找匹配 '}'（跳过字符串/字符，跟踪 ( [ { 深度；内插结束 = 深度 0 的 '}'）
+            // 同时找第一个深度 0 的 ':' 作为 spec 分隔符（{expr:spec}）
+            // 三元运算符的 ':' 也会被当作分隔符，需用括号包住：{(a?b:c):spec}
             const char* q = p + 1;
             const char* expr_start = q;
             int depth = 0;
             const char* close = NULL;
+            const char* colon = NULL;   // spec 分隔符位置（第一个顶层冒号）
             while(*q) {
                 if(*q == '\\' && q[1]) { q += 2; continue; }   // 跳过转义序列（\" 等）
                 if(*q == '"' || *q == '\'') { skip_quoted(&q, s + strlen(s)); continue; }
                 if(*q == '(' || *q == '[' || *q == '{') depth++;
-                else if(*q == ')' || *q == ']' || *q == '}') {
-                    if(depth == 0 && *q == '}') { close = q; break; }
+                else if(*q == ')') depth--;
+                else if(*q == ']') depth--;
+                else if(*q == '}') {
+                    if(depth == 0) { close = q; break; }
                     depth--;
+                }
+                else if(*q == ':' && depth == 0 && !colon) {
+                    colon = q;   // 记录 spec 分隔符
                 }
                 q++;
             }
@@ -532,12 +540,13 @@ AstNode* maybe_template(const char* s)
                 fprintf(stderr, "语义错误(第%d行)：模板字符串未闭合的 '{'\n", yylineno);
                 exit(EXIT_FAILURE);
             }
-            // 提取表达式文本
-            size_t elen = (size_t)(close - expr_start);
+            // 提取表达式文本（到 colon 或 close）
+            const char* expr_end = colon ? colon : close;
+            size_t elen = (size_t)(expr_end - expr_start);
             char* etext = (char*)malloc(elen + 1);
             memcpy(etext, expr_start, elen);
             etext[elen] = '\0';
-            // 空表达式：{} 不是内插 → 报错（字面花括号用 {{}}）
+            // 空 spec 分隔但空表达式：{:spec} 不允许（空内插）
             {
                 const char* e = etext;
                 while(*e && isspace((unsigned char)*e)) e++;
@@ -558,9 +567,19 @@ AstNode* maybe_template(const char* s)
                 exit(EXIT_FAILURE);
             }
             free(etext);
-            // fmt 加占位
-            if(w + 2 > cap) { cap *= 2; fmt = (char*)realloc(fmt, cap + 1); }
-            fmt[w++] = '{'; fmt[w++] = '}';
+            // fmt 加占位：{spec}（spec 可空）；spec 原样写进 fmt，由 format 运行时解析
+            // spec 内不含 '{' '}'（colon 到 close 之间，已确保无顶层 '}'）
+            size_t slen = colon ? (size_t)(close - (colon + 1)) : 0;
+            if(w + 2 + slen > cap) {
+                while(w + 2 + slen > cap) cap *= 2;
+                fmt = (char*)realloc(fmt, cap + 1);
+            }
+            fmt[w++] = '{';
+            if(slen > 0) {
+                memcpy(fmt + w, colon + 1, slen);
+                w += slen;
+            }
+            fmt[w++] = '}';
             // expr 挂链（左嵌套，与 yacc arg_list 一致）
             exprs = exprs ? ast_seq(exprs, e) : e;
             n_expr++;
