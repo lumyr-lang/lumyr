@@ -148,6 +148,19 @@ static int builtin_id_by_name(const char* name) {
         {"days", BUILTIN_DAYS}, {"seconds", BUILTIN_SECONDS}, {"total_seconds", BUILTIN_TOTAL_SECONDS},
         {"format_date", BUILTIN_FORMAT_DATE},
         {"diff", BUILTIN_DATE_DIFF},
+        /* tuple/bytes/complex 构造（全局形式） */
+        {"tuple", BUILTIN_TUPLE_MAKE},
+        {"bytes", BUILTIN_BYTES_MAKE},
+        {"complex", BUILTIN_COMPLEX_MAKE},
+        /* set 方法（非冲突名） */
+        {"union", BUILTIN_SET_UNION},
+        {"intersect", BUILTIN_SET_INTERSECT},
+        /* bytes 方法 */
+        {"hex", BUILTIN_BYTES_HEX},
+        {"to_str", BUILTIN_BYTES_TO_STR},
+        {"from_hex", BUILTIN_BYTES_FROM_HEX},
+        /* complex 方法 */
+        {"conjugate", BUILTIN_COMPLEX_CONJUGATE},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {

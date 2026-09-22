@@ -824,6 +824,43 @@ void gc_mark(Value v)
         if (GC_VALID_PTR(v.v.date_obj)) gc_mark_ptr(v.v.date_obj);
         break;
     }
+    case VAL_TUPLE: {
+        /* tuple：标记对象 + items 缓冲区 + 递归标记每个元素 */
+        TupleObj* o = v.v.tuple_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr(o)) break;
+        if (o->items) {
+            gc_mark_ptr(o->items);
+            for (int i = 0; i < o->len; i++) {
+                gc_mark(o->items[i]);
+            }
+        }
+        break;
+    }
+    case VAL_SET: {
+        /* set：标记对象 + 递归标记底层 ValueMap（构造 VAL_MAP 调 gc_mark 扫描键） */
+        SetObj* o = v.v.set_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr(o)) break;
+        if (o->map) {
+            Value mv; mv.type = VAL_MAP; mv.str_inline = 0; mv.v.map = o->map;
+            gc_mark(mv);
+        }
+        break;
+    }
+    case VAL_BYTES: {
+        /* bytes：标记对象 + data 缓冲区（无 Value 引用） */
+        BytesObj* o = v.v.bytes_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr(o)) break;
+        if (o->data) gc_mark_ptr(o->data);
+        break;
+    }
+    case VAL_COMPLEX: {
+        /* complex：仅含 double 字段无 Value 引用，标记对象本身 */
+        if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr(v.v.complex_obj);
+        break;
+    }
     default:
         break;
     }
@@ -1029,6 +1066,38 @@ void gc_mark_value_to_stack(Value v)
         if (!gc_mark_ptr_to_stack(ta)) break;
         break;
     }
+    case VAL_TUPLE: {
+        /* tuple：容器变灰入栈，items 内部缓冲区标记黑色，子元素由 gc_mark_one 扫描 */
+        TupleObj* o = v.v.tuple_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr_to_stack(o)) break;
+        if (o->items) gc_mark_internal_black(o->items);
+        break;
+    }
+    case VAL_SET: {
+        /* set：容器变灰入栈，底层 ValueMap 递归标记（构造 VAL_MAP 调本函数） */
+        SetObj* o = v.v.set_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr_to_stack(o)) break;
+        if (o->map) {
+            Value mv; mv.type = VAL_MAP; mv.str_inline = 0; mv.v.map = o->map;
+            gc_mark_value_to_stack(mv);
+        }
+        break;
+    }
+    case VAL_BYTES: {
+        /* bytes：容器变灰入栈，data 内部缓冲区标记黑色（无 Value 引用） */
+        BytesObj* o = v.v.bytes_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr_to_stack(o)) break;
+        if (o->data) gc_mark_internal_black(o->data);
+        break;
+    }
+    case VAL_COMPLEX: {
+        /* complex：仅含 double 字段无 Value 引用，容器变灰入栈 */
+        if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr_to_stack(v.v.complex_obj);
+        break;
+    }
     default:
         /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
         break;
@@ -1136,6 +1205,38 @@ void gc_mark_one(GCObject* obj)
         }
         break;
     }
+    case VAL_TUPLE: {
+        /* TupleObj 弹栈：items 标内部黑，子元素变灰入栈 */
+        TupleObj* o = (TupleObj*)obj_to_ptr(obj);
+        if (o->items && (!GC_VALID_PTR(o->items) || ((unsigned long long)o->items & 0xF) != 0))
+            break;
+        if (o->len < 0) break;
+        if (o->items) {
+            gc_mark_internal_black(o->items);
+            for (int i = 0; i < o->len; i++) {
+                gc_mark_value_to_stack(o->items[i]);
+            }
+        }
+        break;
+    }
+    case VAL_SET: {
+        /* SetObj 弹栈：底层 ValueMap 由 VAL_MAP 独立处理（gc_mark_value_to_stack 已标记 map 入栈） */
+        SetObj* o = (SetObj*)obj_to_ptr(obj);
+        if (o->map) {
+            Value mv; mv.type = VAL_MAP; mv.str_inline = 0; mv.v.map = o->map;
+            gc_mark_value_to_stack(mv);
+        }
+        break;
+    }
+    case VAL_BYTES: {
+        /* BytesObj 弹栈：data 内部缓冲区标记黑色（无 Value 引用） */
+        BytesObj* o = (BytesObj*)obj_to_ptr(obj);
+        if (o->data && GC_VALID_PTR(o->data)) gc_mark_internal_black(o->data);
+        break;
+    }
+    case VAL_COMPLEX:
+        /* ComplexObj 仅含 double 字段，无子对象 */
+        break;
     default:
         break;
     }
@@ -1274,6 +1375,29 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(ta)) gc_mark_ptr_to_stack(ta);
         break;
     }
+    case VAL_TUPLE: {
+        TupleObj* o = v.v.tuple_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_SET: {
+        SetObj* o = v.v.set_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        if (o && o->map) {
+            Value mv; mv.type = VAL_MAP; mv.str_inline = 0; mv.v.map = o->map;
+            gc_mark_value_to_stack_minor(mv);
+        }
+        break;
+    }
+    case VAL_BYTES: {
+        BytesObj* o = v.v.bytes_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_COMPLEX: {
+        if (GC_VALID_PTR(v.v.complex_obj)) gc_mark_ptr_to_stack(v.v.complex_obj);
+        break;
+    }
     default:
         break;
     }
@@ -1358,6 +1482,34 @@ static void gc_mark_one_minor(GCObject* obj)
         }
         break;
     }
+    case VAL_TUPLE: {
+        TupleObj* o = (TupleObj*)obj_to_ptr(obj);
+        if (o->items && (!GC_VALID_PTR(o->items) || ((unsigned long long)o->items & 0xF) != 0))
+            break;
+        if (o->len < 0) break;
+        if (o->items) {
+            gc_mark_internal_black(o->items);
+            for (int i = 0; i < o->len; i++) {
+                gc_mark_value_to_stack_minor(o->items[i]);
+            }
+        }
+        break;
+    }
+    case VAL_SET: {
+        SetObj* o = (SetObj*)obj_to_ptr(obj);
+        if (o->map) {
+            Value mv; mv.type = VAL_MAP; mv.str_inline = 0; mv.v.map = o->map;
+            gc_mark_value_to_stack_minor(mv);
+        }
+        break;
+    }
+    case VAL_BYTES: {
+        BytesObj* o = (BytesObj*)obj_to_ptr(obj);
+        if (o->data && GC_VALID_PTR(o->data)) gc_mark_internal_black(o->data);
+        break;
+    }
+    case VAL_COMPLEX:
+        break;
     default:
         break;
     }

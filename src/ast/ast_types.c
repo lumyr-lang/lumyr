@@ -173,6 +173,10 @@ ValueType castkind_to_valtype(int ck)
         case CAST_DATETIME: return VAL_DATETIME;
         case CAST_TIME: return VAL_TIME;
         case CAST_TIMEDELTA: return VAL_TIMEDELTA;
+        case CAST_TUPLE: return VAL_TUPLE;
+        case CAST_SET: return VAL_SET;
+        case CAST_BYTES: return VAL_BYTES;
+        case CAST_COMPLEX: return VAL_COMPLEX;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
         /* 容器引用：字段持堆指针（8 字节） */
         case CAST_MAP: return VAL_MAP;
@@ -222,6 +226,10 @@ int valuetype_to_castkind(int vt) {
         case VAL_DATETIME: return CAST_DATETIME;
         case VAL_TIME: return CAST_TIME;
         case VAL_TIMEDELTA: return CAST_TIMEDELTA;
+        case VAL_TUPLE: return CAST_TUPLE;
+        case VAL_SET: return CAST_SET;
+        case VAL_BYTES: return CAST_BYTES;
+        case VAL_COMPLEX: return CAST_COMPLEX;
         /* 容器/引用类型：cast 语义为透传（保持容器不被标量化） */
         case VAL_MAP: return CAST_MAP;
         case VAL_ARRAY: return CAST_ARRAY;
@@ -268,6 +276,10 @@ char* castkind_to_name(int ck) {
         case CAST_DATETIME: return strdup("datetime");
         case CAST_TIME: return strdup("time");
         case CAST_TIMEDELTA: return strdup("timedelta");
+        case CAST_TUPLE: return strdup("tuple");
+        case CAST_SET: return strdup("set");
+        case CAST_BYTES: return strdup("bytes");
+        case CAST_COMPLEX: return strdup("complex");
         default: return strdup("int");
     }
 }

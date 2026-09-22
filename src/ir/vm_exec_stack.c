@@ -9,6 +9,7 @@
 #include "lm_map.h"
 #include "lm_type.h"
 #include "lm_time.h"
+#include "lm_container.h"
 #include "vm_exec.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
@@ -262,6 +263,37 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
         /* date 族字段访问：d.year / td.days 等（统一委托 lumyr_date_field） */
         if(idx.type == VAL_STRING) {
             r = lumyr_date_field(arr, lumyr_str_cstr(&idx));
+        }
+    } else if(arr.type == VAL_TUPLE) {
+        /* tuple 整数下标访问 / len 属性 */
+        if(idx.type == VAL_STRING) {
+            const char* name = lumyr_str_cstr(&idx);
+            if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_tuple_len(arr)); }
+        } else {
+            int64_t i = value_to_index(idx);
+            r = lumyr_tuple_get(arr, (int)i);
+        }
+    } else if(arr.type == VAL_BYTES) {
+        /* bytes 整数下标访问（返回 int 0-255）/ len 属性 */
+        if(idx.type == VAL_STRING) {
+            const char* name = lumyr_str_cstr(&idx);
+            if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_bytes_len(arr)); }
+        } else {
+            int64_t i = value_to_index(idx);
+            r = lumyr_bytes_get(arr, (int)i);
+        }
+    } else if(arr.type == VAL_SET) {
+        /* set len 属性 */
+        if(idx.type == VAL_STRING) {
+            const char* name = lumyr_str_cstr(&idx);
+            if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_set_len(arr)); }
+        }
+    } else if(arr.type == VAL_COMPLEX) {
+        /* complex 属性访问：real/imag */
+        if(idx.type == VAL_STRING) {
+            const char* name = lumyr_str_cstr(&idx);
+            if(name && strcmp(name, "real") == 0) r = lumyr_make_double(lumyr_complex_real(arr));
+            else if(name && strcmp(name, "imag") == 0) r = lumyr_make_double(lumyr_complex_imag(arr));
         }
     } else if(arr.type == VAL_TYPED_ARRAY) {
         TypedArray* ta = arr.v.typed_array;

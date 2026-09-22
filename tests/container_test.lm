@@ -1,0 +1,181 @@
+// tests/container_test.lm
+// 容器与数值扩展类型（tuple / set / bytes / complex）
+// tuple：不可变固定长度异构序列；set：无序唯一元素集；bytes：不可变字节串；complex：复数
+
+// ===== 1. tuple 基本构造与访问 =====
+t = tuple(1, "hello", 3.14);
+assert type(t) == "tuple";
+assert t.len == 3;
+assert t[0] == 1;
+assert t[1] == "hello";
+assert t[2] == 3.14;
+
+// 空 tuple
+et = tuple();
+assert et.len == 0;
+
+// tuple.get 方法
+assert t.get(0) == 1;
+assert t.get(2) == 3.14;
+
+// ===== 2. tuple 不可变与值相等 =====
+t2 = tuple(1, "hello", 3.14);
+assert t == t2;
+assert t != tuple(1, "world", 3.14);
+assert t != tuple(1, "hello");
+
+// tuple 嵌套
+nt = tuple(tuple(1, 2), tuple(3, 4));
+assert nt[0][0] == 1;
+assert nt[1][1] == 4;
+assert nt.len == 2;
+
+// ===== 3. tuple f-string 与 print =====
+s = f"{t}";
+assert s == "(1, hello, 3.14)";
+assert format(t) == "(1, hello, 3.14)";
+
+// ===== 4. set 基本构造与去重 =====
+s1 = set(1, 2, 3, 2, 1);
+assert type(s1) == "set";
+assert s1.len == 3;
+assert s1.has(1);
+assert s1.has(2);
+assert s1.has(3);
+assert !s1.has(4);
+
+// 空 set
+es = set();
+assert es.len == 0;
+
+// ===== 5. set 添加与删除 =====
+s2 = set(1, 2);
+s2.add(3);
+assert s2.len == 3;
+assert s2.has(3);
+s2.add(1);  // 重复添加
+assert s2.len == 3;
+s2.remove(2);
+assert !s2.has(2);
+assert s2.len == 2;
+
+// ===== 6. set 集合运算 =====
+a = set(1, 2, 3);
+b = set(2, 3, 4);
+u = a.union(b);
+assert u.len == 4;
+assert u.has(1);
+assert u.has(4);
+i = a.intersect(b);
+assert i.len == 2;
+assert i.has(2);
+assert i.has(3);
+d = a.diff(b);
+assert d.len == 1;
+assert d.has(1);
+
+// ===== 7. set f-string =====
+ss = f"{set(1, 2, 3)}";
+// set 无序，仅校验包含关系
+assert ss.contains("1");
+assert ss.contains("2");
+assert ss.contains("3");
+
+// ===== 8. bytes 基本构造 =====
+b1 = bytes("hello");
+assert type(b1) == "bytes";
+assert b1.len == 5;
+assert b1[0] == 104;   // 'h'
+assert b1[1] == 101;   // 'e'
+assert b1[4] == 111;   // 'o'
+
+// bytes 从数组构造
+b2 = bytes([104, 101, 108, 108, 111]);
+assert b2.len == 5;
+assert b2 == b1;
+
+// 空 bytes
+eb = bytes("");
+assert eb.len == 0;
+
+// ===== 9. bytes 方法 =====
+assert b1.hex() == "68656c6c6f";
+b3 = from_hex("68656c6c6f");
+assert b3 == b1;
+assert b3.len == 5;
+
+// bytes to_str
+bs = b1.to_str();
+assert bs.contains("hello");
+assert bs.len == 8;  // b"hello" = 8 chars
+
+// ===== 10. bytes 不可变与值相等 =====
+assert b1 == b2;
+assert b1 != bytes("world");
+
+// ===== 11. bytes f-string =====
+sb = f"{b1}";
+assert sb.contains("hello");
+assert sb.len == 8;
+
+// ===== 12. complex 基本构造 =====
+c1 = complex(1.0, 2.0);
+assert type(c1) == "complex";
+assert c1.real == 1.0;
+assert c1.imag == 2.0;
+
+c2 = complex(3.0, 0.0);
+assert c2.real == 3.0;
+assert c2.imag == 0.0;
+
+// 单参数 complex
+c3 = complex(5.0);
+assert c3.real == 5.0;
+assert c3.imag == 0.0;
+
+// ===== 13. complex 运算 =====
+a1 = complex(1.0, 2.0);
+a2 = complex(3.0, 4.0);
+sum = a1 + a2;
+assert sum.real == 4.0;
+assert sum.imag == 6.0;
+
+diff = a2 - a1;
+assert diff.real == 2.0;
+assert diff.imag == 2.0;
+
+prod = a1 * a2;
+// (1+2i)(3+4i) = 3+4i+6i+8i^2 = -5+10i
+assert prod.real == -5.0;
+assert prod.imag == 10.0;
+
+// ===== 14. complex 方法 =====
+assert complex(3.0, 4.0).abs() == 5.0;
+conj = complex(1.0, 2.0).conjugate();
+assert conj.real == 1.0;
+assert conj.imag == -2.0;
+
+// ===== 15. complex 值相等 =====
+assert complex(1.0, 2.0) == complex(1.0, 2.0);
+assert complex(1.0, 2.0) != complex(2.0, 1.0);
+
+// ===== 16. complex f-string =====
+sc = f"{complex(1.0, 2.0)}";
+assert sc == "(1+2j)";
+sc2 = f"{complex(3.0, -4.0)}";
+assert sc2 == "(3-4j)";
+
+// ===== 17. 全类型混合测试 =====
+// tuple 存 set
+ts = tuple(set(1, 2), set(3, 4));
+assert ts.len == 2;
+assert ts[0].has(1);
+assert ts[1].has(4);
+
+// bytes 下标越界返回 0
+assert bytes("ab")[10] == 0;
+
+// tuple 下标越界
+assert tuple(1, 2)[5] == 0;
+
+print("container_test 全部通过 / All container tests passed");

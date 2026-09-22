@@ -24,6 +24,7 @@
 #include "lm_crypto.h"
 #include "lm_regex.h"
 #include "lm_time.h"
+#include "lm_container.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,6 +130,9 @@ static int bi_len_of(Value v) {
     case VAL_ARRAY:       return v.v.array ? v.v.array->len : 0;
     case VAL_TYPED_ARRAY: return v.v.typed_array ? v.v.typed_array->len : 0;
     case VAL_MAP:         return v.v.map ? v.v.map->len : 0;
+    case VAL_TUPLE:       return lumyr_tuple_len(v);
+    case VAL_SET:         return lumyr_set_len(v);
+    case VAL_BYTES:       return lumyr_bytes_len(v);
     default:              return 0;
     }
 }
@@ -506,7 +510,9 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     /* ===== 通用 ===== */
     case BUILTIN_LEN: {
         if(recv.type != VAL_STRING && recv.type != VAL_ARRAY &&
-           recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP)
+           recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP &&
+           recv.type != VAL_TUPLE && recv.type != VAL_SET &&
+           recv.type != VAL_BYTES)
             return bi_type_err("len", recv);
         *out = lumyr_make_int64(bi_len_of(recv));
         return 1;
@@ -651,6 +657,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             free(s);
             return 1;
         }
+        /* tuple/set/bytes/complex：format(c) → 字符串化（无格式参数时） */
+        if(recv.type == VAL_TUPLE || recv.type == VAL_SET ||
+           recv.type == VAL_BYTES || recv.type == VAL_COMPLEX) {
+            char* s = value_to_str(recv);
+            *out = lumyr_make_string(s ? s : "");
+            free(s);
+            return 1;
+        }
         if(recv.type != VAL_STRING) return bi_type_err("format", recv);
         /* receiver 为格式串。is_method=1：argc 为插值实参个数（不含 receiver）；
          * is_method=0（全局形式）：argv[0]=格式串也是 receiver，实参共 argc-1 个 */
@@ -683,6 +697,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_date_add(recv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
             return 1;
         }
+        /* set.add(x)：原地添加元素（返回 self） */
+        if(recv.type == VAL_SET) {
+            int need = is_method ? 1 : 2;
+            if(argc < need) { runtime_error("add() 参数不足"); return 0; }
+            Value arg = is_method ? argv[1] : argv[1];
+            *out = lumyr_set_add(&recv, arg);
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("add", recv);
         if(!bi_need_args("add", argc, 1)) return 0;
         *out = lumyr_array_add(&recv, argv[1]); /* 原地追加，返回 self */
@@ -695,11 +717,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_ARRAY_REMOVE: {
-        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP)
+        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_SET)
             return bi_type_err("remove", recv);
         if(!bi_need_args("remove", argc, 1)) return 0;
-        if(recv.type == VAL_MAP) *out = lumyr_map_del(&recv, argv[1]);
-        else                     *out = lumyr_del(&recv, argv[1]);
+        if(recv.type == VAL_SET)      *out = lumyr_set_remove(&recv, argv[1]);
+        else if(recv.type == VAL_MAP) *out = lumyr_map_del(&recv, argv[1]);
+        else                          *out = lumyr_del(&recv, argv[1]);
         return 1;
     }
     case BUILTIN_ARRAY_CLEAR: {
@@ -735,9 +758,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_map_get(recv, argv[1]);
             return 1;
         }
+        /* tuple/bytes.get(i)：下标访问 */
+        if(recv.type == VAL_TUPLE || recv.type == VAL_BYTES) {
+            if(!bi_need_args("get", argc, 1)) return 0;
+            int idx = (int)bi_num_i64(argv[1]);
+            *out = (recv.type == VAL_TUPLE) ? lumyr_tuple_get(recv, idx) : lumyr_bytes_get(recv, idx);
+            return 1;
+        }
         return bi_type_err("get", recv);
     }
     case BUILTIN_SET: {
+        /* set(...) 全局构造（is_method=0）：set(1,2,3) → 新 VAL_SET */
+        if(!is_method) {
+            *out = lumyr_set_make(argc, argv);
+            return 1;
+        }
         if(recv.type == VAL_ARRAY) {
             if(!bi_need_args("set", argc, 2)) return 0;
             *out = lumyr_array_set_method(recv, argv[1], argv[2]); /* 原地写返回 self */
@@ -1001,6 +1036,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_map_values(recv);
         return 1;
     case BUILTIN_MAP_HAS:
+        if(recv.type == VAL_SET) {
+            if(!bi_need_args("has", argc, 1)) return 0;
+            *out = lumyr_make_bool(lumyr_set_has(recv, argv[1]));
+            return 1;
+        }
         if(recv.type != VAL_MAP) return bi_type_err("has", recv);
         if(!bi_need_args("has", argc, 1)) return 0;
         *out = lumyr_make_bool(lumyr_map_has(recv, argv[1]));
@@ -1403,6 +1443,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_ceil(recv);
         return 1;
     case BUILTIN_ABS:
+        /* complex.abs() → 模 |c|（double） */
+        if(recv.type == VAL_COMPLEX) {
+            *out = lumyr_make_double(lumyr_complex_abs(recv));
+            return 1;
+        }
         *out = lumyr_abs(recv);
         return 1;
     case BUILTIN_SQRT:
@@ -1677,9 +1722,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int need = is_method ? 1 : 2;
         if(argc < need) { runtime_error("diff() 参数不足"); return 0; }
         Value a = argv[0], b = argv[1];
+        /* set.diff(b)：差集 a-b → 新 set */
+        if(a.type == VAL_SET && b.type == VAL_SET) {
+            *out = lumyr_set_diff(a, b);
+            return 1;
+        }
         if((a.type != VAL_DATE && a.type != VAL_DATETIME && a.type != VAL_TIME && a.type != VAL_TIMEDELTA) ||
            (b.type != VAL_DATE && b.type != VAL_DATETIME && b.type != VAL_TIME && b.type != VAL_TIMEDELTA)) {
-            runtime_error("diff() 参数必须是 date 族对象");
+            runtime_error("diff() 参数必须是 date 族对象或 set");
             return 0;
         }
         *out = lumyr_date_diff(a, b);
@@ -1697,6 +1747,69 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         if(argv[2].type != VAL_STRING) { runtime_error("add() 单位参数必须是字符串"); return 0; }
         *out = lumyr_date_add(dv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
+        return 1;
+    }
+    /* ===== tuple（VAL_TUPLE） ===== */
+    case BUILTIN_TUPLE_MAKE: {
+        /* tuple(...)：全局形式 argc=全部参数；方法形式不适用 */
+        if(is_method) { runtime_error("tuple() 不支持方法形式"); return 0; }
+        *out = lumyr_tuple_make(argc, argv);
+        return 1;
+    }
+    /* ===== set 方法（非冲突名） ===== */
+    case BUILTIN_SET_UNION: {
+        Value a = argv[0], b = is_method ? argv[1] : argv[1];
+        if(a.type != VAL_SET || b.type != VAL_SET) { runtime_error("union() 参数必须是 set"); return 0; }
+        *out = lumyr_set_union(a, b);
+        return 1;
+    }
+    case BUILTIN_SET_INTERSECT: {
+        Value a = argv[0], b = is_method ? argv[1] : argv[1];
+        if(a.type != VAL_SET || b.type != VAL_SET) { runtime_error("intersect() 参数必须是 set"); return 0; }
+        *out = lumyr_set_intersect(a, b);
+        return 1;
+    }
+    /* ===== bytes（VAL_BYTES） ===== */
+    case BUILTIN_BYTES_MAKE: {
+        /* bytes(...)：全局形式；单参数字符串/数组或多参数整数 */
+        if(is_method) { runtime_error("bytes() 不支持方法形式"); return 0; }
+        *out = lumyr_bytes_make(argc, argv);
+        return 1;
+    }
+    case BUILTIN_BYTES_HEX: {
+        if(recv.type != VAL_BYTES) return bi_type_err("hex", recv);
+        char* s = lumyr_bytes_hex(recv);
+        *out = lumyr_make_string(s ? s : "");
+        free(s);
+        return 1;
+    }
+    case BUILTIN_BYTES_TO_STR: {
+        if(recv.type != VAL_BYTES) return bi_type_err("to_str", recv);
+        char* s = lumyr_bytes_to_str(recv);
+        *out = lumyr_make_string(s ? s : "");
+        free(s);
+        return 1;
+    }
+    case BUILTIN_BYTES_FROM_HEX: {
+        /* from_hex(s)：全局形式，十六进制字符串 → bytes */
+        if(is_method) { runtime_error("from_hex() 不支持方法形式"); return 0; }
+        if(argc < 1 || argv[0].type != VAL_STRING) { runtime_error("from_hex() 参数必须是字符串"); return 0; }
+        *out = lumyr_bytes_from_hex(lumyr_str_cstr(&argv[0]));
+        return 1;
+    }
+    /* ===== complex（VAL_COMPLEX） ===== */
+    case BUILTIN_COMPLEX_MAKE: {
+        /* complex(re, im)：全局形式 */
+        if(is_method) { runtime_error("complex() 不支持方法形式"); return 0; }
+        double re = 0.0, im = 0.0;
+        if(argc >= 1) re = value_as_number(argv[0]);
+        if(argc >= 2) im = value_as_number(argv[1]);
+        *out = lumyr_complex_make(re, im);
+        return 1;
+    }
+    case BUILTIN_COMPLEX_CONJUGATE: {
+        if(recv.type != VAL_COMPLEX) return bi_type_err("conjugate", recv);
+        *out = lumyr_complex_conjugate(recv);
         return 1;
     }
 
@@ -1827,6 +1940,15 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FORMAT_DATE: return "format_date";
     case BUILTIN_DATE_DIFF: return "diff";
     case BUILTIN_DATE_ADD: return "add";
+    case BUILTIN_TUPLE_MAKE: return "tuple";
+    case BUILTIN_SET_UNION: return "union";
+    case BUILTIN_SET_INTERSECT: return "intersect";
+    case BUILTIN_BYTES_MAKE: return "bytes";
+    case BUILTIN_BYTES_HEX: return "hex";
+    case BUILTIN_BYTES_TO_STR: return "to_str";
+    case BUILTIN_BYTES_FROM_HEX: return "from_hex";
+    case BUILTIN_COMPLEX_MAKE: return "complex";
+    case BUILTIN_COMPLEX_CONJUGATE: return "conjugate";
     default: return "?";
     }
 }

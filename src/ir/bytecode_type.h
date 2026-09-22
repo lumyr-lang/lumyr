@@ -431,6 +431,28 @@ typedef enum {
     BUILTIN_FORMAT_DATE,     // format_date(d, fmt)：strftime 格式化
     BUILTIN_DATE_DIFF,       // diff(a, b)：a - b → timedelta
     BUILTIN_DATE_ADD,        // add(v, n, unit)：v + n*unit，返回同类型新对象
+    /* tuple（VAL_TUPLE） */
+    BUILTIN_TUPLE_MAKE,      // tuple(...)：构造 VAL_TUPLE
+    BUILTIN_TUPLE_GET,       // get(t, i)：下标访问
+    BUILTIN_TUPLE_LEN,       // len(t)：长度（属性形式）
+    /* set（VAL_SET） */
+    BUILTIN_SET_MAKE,        // set(...)：构造 VAL_SET
+    BUILTIN_SET_HAS,        // has(s, x)：包含判断
+    BUILTIN_SET_ADD,        // add(s, x)：原地添加（返回自身）
+    BUILTIN_SET_REMOVE,     // remove(s, x)：原地删除（返回自身）
+    BUILTIN_SET_UNION,      // union(a, b)：并集 → 新 set
+    BUILTIN_SET_INTERSECT,  // intersect(a, b)：交集 → 新 set
+    BUILTIN_SET_DIFF,       // diff(a, b)：差集 a-b → 新 set
+    /* bytes（VAL_BYTES） */
+    BUILTIN_BYTES_MAKE,     // bytes(...)：构造 VAL_BYTES
+    BUILTIN_BYTES_GET,      // get(b, i)：下标访问（返回 int）
+    BUILTIN_BYTES_HEX,      // hex(b)：转十六进制字符串
+    BUILTIN_BYTES_TO_STR,  // to_str(b)：转 b"..." 字符串
+    BUILTIN_BYTES_FROM_HEX,// from_hex(s)：从十六进制构造
+    /* complex（VAL_COMPLEX） */
+    BUILTIN_COMPLEX_MAKE,   // complex(re, im)：构造 VAL_COMPLEX
+    BUILTIN_COMPLEX_ABS,    // abs(c)：模 |c| → double
+    BUILTIN_COMPLEX_CONJUGATE, // conjugate(c)：共轭 → complex
     BUILTIN_COUNT
 } BuiltinId;
 

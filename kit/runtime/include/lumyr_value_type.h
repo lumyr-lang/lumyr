@@ -82,6 +82,11 @@ typedef enum {
     CAST_DATETIME,   // datetime：日期+时间对象
     CAST_TIME,       // time：当天时间对象
     CAST_TIMEDELTA,  // timedelta：时间间隔对象
+    /* 容器与数值扩展类型（堆分配，PTR 栈存储） */
+    CAST_TUPLE,      // tuple：不可变固定长度异构序列
+    CAST_SET,        // set：无序唯一元素集合
+    CAST_BYTES,      // bytes：不可变字节串
+    CAST_COMPLEX,    // complex：复数（real+imag double）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -106,6 +111,10 @@ typedef enum {
     VAL_DATETIME,     // datetime：日期+时间对象（epoch + nsec）
     VAL_TIME,         // time：当天时间对象（epoch 为当天秒数 [0,86400) + nsec）
     VAL_TIMEDELTA,    // timedelta：时间间隔对象（可负，epoch + nsec，规整同号）
+    VAL_TUPLE,        // tuple：不可变固定长度异构序列（堆分配对象）
+    VAL_SET,         // set：无序唯一元素集合（堆分配对象，基于哈希）
+    VAL_BYTES,       // bytes：不可变字节串（堆分配对象）
+    VAL_COMPLEX,     // complex：复数（堆分配对象，real+imag double）
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -228,6 +237,10 @@ struct Value {
         void* decimal;          // VAL_DECIMAL：Decimal* 指针（堆分配对象）
         void* bitdecimal;       // VAL_BITDECIMAL：BitDecimal* 指针（堆分配对象，基于 GMP mpf_t）
         void* date_obj;         // VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA：DateObj* 指针（堆分配对象）
+        void* tuple_obj;        // VAL_TUPLE：TupleObj* 指针（堆分配对象）
+        void* set_obj;          // VAL_SET：SetObj* 指针（堆分配对象）
+        void* bytes_obj;        // VAL_BYTES：BytesObj* 指针（堆分配对象）
+        void* complex_obj;      // VAL_COMPLEX：ComplexObj* 指针（堆分配对象）
     } v;
 };
 
@@ -338,5 +351,40 @@ typedef struct DateObj {
     uint8_t cached;      // 1=缓存字段已填充
     ValueType kind;      // VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA
 } DateObj;
+
+// tuple 对象，VAL_TUPLE 使用（不可变固定长度异构序列，堆分配，GC 管理）
+// GC 管理：TupleObj* 由 gc_alloc(vtype=VAL_TUPLE) 分配；
+//          items 缓冲区也由 gc_alloc(vtype=VAL_TUPLE) 管理，gc_mark 递归标记 items[i]
+// stack_alloc：0=堆分配（默认），1=编译通道栈分配（无 GCObject 头，GC 标记跳过自身但仍递归标记 items[i]）
+typedef struct {
+    Value* items;        // 元素数组（不可变，构造后只读）
+    int len;             // 元素个数
+    uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
+} TupleObj;
+
+// set 对象，VAL_SET 使用（无序唯一元素集合，堆分配，GC 管理）
+// 复用 ValueMap 作底层存储（key=元素，value=null 标记存在性），复用已测试的哈希/扩容机制
+// GC 管理：SetObj* 由 gc_alloc(vtype=VAL_SET) 分配；内部 ValueMap 由 gc_alloc(VAL_MAP) 管理，
+//          gc_mark 递归标记 map 指针
+typedef struct {
+    ValueMap* map;        // 底层 map（key=元素，value=null）
+    uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
+} SetObj;
+
+// bytes 对象，VAL_BYTES 使用（不可变字节串，堆分配，GC 管理）
+// GC 管理：BytesObj* 由 gc_alloc(vtype=VAL_BYTES) 分配；
+//          data 缓冲区也由 gc_alloc(vtype=VAL_BYTES) 管理（无内部 Value 引用，无需递归标记）
+typedef struct {
+    uint8_t* data;        // 字节数据（不可变，构造后只读）
+    int len;              // 字节长度
+    uint8_t stack_alloc;  // 0=堆分配，1=编译通道栈分配
+} BytesObj;
+
+// complex 对象，VAL_COMPLEX 使用（复数 real+imag double，堆分配，GC 管理）
+// 无内部 Value 引用，gc_mark 只标记自身
+typedef struct {
+    double real;     // 实部
+    double imag;     // 虚部
+} ComplexObj;
 
 #endif //LUMYR_VALUE_TYPE_H
