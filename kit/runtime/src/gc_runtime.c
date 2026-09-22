@@ -815,6 +815,15 @@ void gc_mark(Value v)
         }
         break;
     }
+    case VAL_DATE:
+    case VAL_DATETIME:
+    case VAL_TIME:
+    case VAL_TIMEDELTA: {
+        /* date 族对象：DateObj 由 gc_alloc 分配，仅含整数字段无 Value 引用，
+         * 只需标记对象本身为活，防止被回收 */
+        if (GC_VALID_PTR(v.v.date_obj)) gc_mark_ptr(v.v.date_obj);
+        break;
+    }
     default:
         break;
     }

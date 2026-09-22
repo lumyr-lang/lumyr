@@ -405,6 +405,32 @@ typedef enum {
     BUILTIN_FROM_VALUE,      // fromValue(map, val)：按值反查键名（enum 逆向查找）
 
     BUILTIN_ASSERT,          // __assert(cond [, msg])：断言失败 exit(1)
+
+    /* ===== date 族对象构造与方法 =====
+     * 构造（全局形式）：date(args) / datetime(args) / time(args) / timedelta(args)
+     *   接受 1 个 ISO 字符串 或 多个整数参数（y,m,d / y,m,d,h,mi,s,ns / h,m,s,ns / sec,nsec）
+     * 方法（接收者形式）：d.year / d.month / d.diff(b) / d.add(n,"days") 等
+     * now()/today() 全局无参数 */
+    BUILTIN_DATE_MAKE,       // date(...)：构造 VAL_DATE
+    BUILTIN_DATETIME_MAKE,   // datetime(...)：构造 VAL_DATETIME
+    BUILTIN_TIME_MAKE,       // time(...)：构造 VAL_TIME
+    BUILTIN_TIMEDELTA_MAKE,  // timedelta(...)：构造 VAL_TIMEDELTA
+    BUILTIN_TODAY,           // today()：当前 UTC 日期（VAL_DATE）
+    /* 字段访问（方法形式 d.year；全局形式 year(d)） */
+    BUILTIN_YEAR,            // year(d)：年
+    BUILTIN_MONTH,           // month(d)：月 1-12
+    BUILTIN_DAY,             // day(d)：日 1-31
+    BUILTIN_HOUR,            // hour(d)：时 0-23
+    BUILTIN_MINUTE,          // minute(d)：分 0-59
+    BUILTIN_SECOND,          // second(d)：秒 0-59
+    BUILTIN_WEEKDAY,         // weekday(d)：周几 0=周日..6=周六
+    BUILTIN_YEARDAY,         // yearday(d)：年内序日 1-366
+    BUILTIN_DAYS,            // days(td)：天数（timedelta 专用）
+    BUILTIN_SECONDS,         // seconds(td)：天内剩余秒数 [0,86399]
+    BUILTIN_TOTAL_SECONDS,   // total_seconds(td)：总秒数（double）
+    BUILTIN_FORMAT_DATE,     // format_date(d, fmt)：strftime 格式化
+    BUILTIN_DATE_DIFF,       // diff(a, b)：a - b → timedelta
+    BUILTIN_DATE_ADD,        // add(v, n, unit)：v + n*unit，返回同类型新对象
     BUILTIN_COUNT
 } BuiltinId;
 

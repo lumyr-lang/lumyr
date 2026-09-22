@@ -866,6 +866,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token TOK_CHAR_LIT
 %token TOK_INT TOK_DOUBLE TOK_CHAR TOK_STRING TOK_BOOL TOK_ASCII TOK_BYTE
 %token TOK_INT8 TOK_INT16 TOK_INT32 TOK_INT64 TOK_UINT8 TOK_UINT16 TOK_UINT32 TOK_UINT64 TOK_UINT TOK_LONG TOK_LONGLONG TOK_FLOAT TOK_ULONG TOK_UCHAR TOK_SHORT TOK_USHORT TOK_SIZE_T TOK_SSIZE_T TOK_VOID TOK_LONG_DOUBLE TOK_PTR
+%token TOK_DATE TOK_DATETIME TOK_TIME_KW TOK_TIMEDELTA
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
 %token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
@@ -2247,6 +2248,16 @@ primary
     | char_lit                { $$ = ast_new_char($1); }
     | ID                      { $$ = L(ast_var($1)); }
     | TOK_SUPER               { $$ = L(ast_var(strdup("super"))); }  /* super 关键字：父类引用 */
+    /* date 族构造：date(y,m,d) / datetime(y,m,d,h,mi,s,ns) / time(h,m,s,ns) / timedelta(sec,nsec) */
+    | TOK_DATE LPAREN arg_list RPAREN      { $$ = L(ast_call(strdup("date"), $3)); }
+    | TOK_DATETIME LPAREN arg_list RPAREN  { $$ = L(ast_call(strdup("datetime"), $3)); }
+    | TOK_TIME_KW LPAREN arg_list RPAREN   { $$ = L(ast_call(strdup("time"), $3)); }
+    | TOK_TIMEDELTA LPAREN arg_list RPAREN { $$ = L(ast_call(strdup("timedelta"), $3)); }
+    /* date 族 ISO 字面量：date"2026-09-22" / datetime"2026-09-22T10:30:00" / time"10:30:00" / timedelta"1 day" */
+    | TOK_DATE STRING_LIT      { $$ = L(ast_call(strdup("date"), ast_string($2))); free($2); }
+    | TOK_DATETIME STRING_LIT  { $$ = L(ast_call(strdup("datetime"), ast_string($2))); free($2); }
+    | TOK_TIME_KW STRING_LIT   { $$ = L(ast_call(strdup("time"), ast_string($2))); free($2); }
+    | TOK_TIMEDELTA STRING_LIT { $$ = L(ast_call(strdup("timedelta"), ast_string($2))); free($2); }
     | ID LPAREN arg_list RPAREN {
           /* 宏调用：如果是已注册的宏，则展开；否则作为普通函数调用 */
           if(macro_is_defined($1)) {
@@ -3182,6 +3193,10 @@ builtin_type_name
     | TOK_VOID                   { $$ = CAST_VOID; }
     | TOK_LONG_DOUBLE            { $$ = CAST_LONG_DOUBLE; }
     | TOK_PTR                    { $$ = CAST_PTR; }
+    | TOK_DATE                   { $$ = CAST_DATE; }
+    | TOK_DATETIME               { $$ = CAST_DATETIME; }
+    | TOK_TIME_KW                { $$ = CAST_TIME; }
+    | TOK_TIMEDELTA              { $$ = CAST_TIMEDELTA; }
     ;
 type_name
     : builtin_type_name          { g_last_custom_type_name = NULL; $$ = castkind_to_valtype($1); }

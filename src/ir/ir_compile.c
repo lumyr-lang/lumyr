@@ -134,6 +134,20 @@ static int builtin_id_by_name(const char* name) {
         {"next", BUILTIN_NEXT}, {"send", BUILTIN_SEND},
         {"receive", BUILTIN_RECEIVE}, {"close", BUILTIN_CLOSE},
         {"__assert", BUILTIN_ASSERT},
+        /* date 族构造（全局形式 date(...) / datetime(...) / time(...) / timedelta(...)） */
+        {"date", BUILTIN_DATE_MAKE},
+        {"datetime", BUILTIN_DATETIME_MAKE},
+        {"time", BUILTIN_TIME_MAKE},
+        {"timedelta", BUILTIN_TIMEDELTA_MAKE},
+        {"now", BUILTIN_NOW},     /* now()：当前 UTC 时间（VAL_DATETIME） */
+        {"today", BUILTIN_TODAY}, /* today()：当前 UTC 日期（VAL_DATE） */
+        /* date 族字段访问（全局形式 year(d) / month(d) ...） */
+        {"year", BUILTIN_YEAR}, {"month", BUILTIN_MONTH}, {"day", BUILTIN_DAY},
+        {"hour", BUILTIN_HOUR}, {"minute", BUILTIN_MINUTE}, {"second", BUILTIN_SECOND},
+        {"weekday", BUILTIN_WEEKDAY}, {"yearday", BUILTIN_YEARDAY},
+        {"days", BUILTIN_DAYS}, {"seconds", BUILTIN_SECONDS}, {"total_seconds", BUILTIN_TOTAL_SECONDS},
+        {"format_date", BUILTIN_FORMAT_DATE},
+        {"diff", BUILTIN_DATE_DIFF},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {

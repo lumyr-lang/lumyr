@@ -8,6 +8,7 @@
 #include "gc_runtime.h"
 #include "lm_map.h"
 #include "lm_type.h"
+#include "lm_time.h"
 #include "vm_exec.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
@@ -256,6 +257,12 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             r = arr.v.array->items[i];
     } else if(arr.type == VAL_MAP) {
         r = lumyr_map_get(arr, idx);
+    } else if(arr.type == VAL_DATE || arr.type == VAL_DATETIME ||
+              arr.type == VAL_TIME || arr.type == VAL_TIMEDELTA) {
+        /* date 族字段访问：d.year / td.days 等（统一委托 lumyr_date_field） */
+        if(idx.type == VAL_STRING) {
+            r = lumyr_date_field(arr, lumyr_str_cstr(&idx));
+        }
     } else if(arr.type == VAL_TYPED_ARRAY) {
         TypedArray* ta = arr.v.typed_array;
         if(typed_ptr_ok(ta)) {

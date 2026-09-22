@@ -77,6 +77,11 @@ typedef enum {
     CAST_BIGINT,     // bigint：任意精度整数（堆分配，PTR 栈存储）
     CAST_DECIMAL,    // decimal：高精度十进制浮点（堆分配，PTR 栈存储）
     CAST_BITDECIMAL, // bitdecimal：基于 GMP mpf_t 的高精度十进制浮点（堆分配，PTR 栈存储）
+    /* 日期时间族（堆分配，PTR 栈存储） */
+    CAST_DATE,       // date：日期对象（仅日期）
+    CAST_DATETIME,   // datetime：日期+时间对象
+    CAST_TIME,       // time：当天时间对象
+    CAST_TIMEDELTA,  // timedelta：时间间隔对象
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -97,6 +102,10 @@ typedef enum {
     VAL_STRUCT_PTR,  // C结构体指针：零拷贝传递，直接存储void*，配合__structname__标识类型
     VAL_CLASS_PTR,    // class实例指针：零拷贝传递，直接存储void*，配合vtable标识类型，与struct区分
     VAL_TYPED_ARRAY,  // 类型化数组：统一处理 IntArray、DoubleArray、StringArray 等，通过 elem_type 区分元素类型
+    VAL_DATE,         // date：日期对象（仅日期，不含时间，epoch 为当天 00:00 UTC 秒）
+    VAL_DATETIME,     // datetime：日期+时间对象（epoch + nsec）
+    VAL_TIME,         // time：当天时间对象（epoch 为当天秒数 [0,86400) + nsec）
+    VAL_TIMEDELTA,    // timedelta：时间间隔对象（可负，epoch + nsec，规整同号）
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -218,6 +227,7 @@ struct Value {
         void* bigint;           // VAL_BIGINT：BigInt* 指针（堆分配对象）
         void* decimal;          // VAL_DECIMAL：Decimal* 指针（堆分配对象）
         void* bitdecimal;       // VAL_BITDECIMAL：BitDecimal* 指针（堆分配对象，基于 GMP mpf_t）
+        void* date_obj;         // VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA：DateObj* 指针（堆分配对象）
     } v;
 };
 
@@ -306,5 +316,27 @@ static inline int lumyr_str_len(const Value* v) {
     if (v->type != VAL_STRING) return 0;
     return v->str_inline ? (int)v->v.sso.len : (int)(v->v.s ? strlen(v->v.s) : 0);
 }
+
+// 日期时间对象，VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA 使用（堆分配，GC 管理）
+// 双模式存储：epoch 为主存储（用于 diff/add 等整数运算），字段为缓存（懒计算）
+// 语义按 kind 解释：
+//  - VAL_DATE: epoch = UTC 当天 00:00 的秒数（自 1970-01-01）；缓存 year/month/day/weekday/yearday
+//  - VAL_DATETIME: epoch = 自 1970-01-01 00:00:00 UTC 的秒数；nsec 纳秒；缓存全部字段
+//  - VAL_TIME: epoch = 当天 00:00 起的秒数 (0-86399)；nsec 纳秒；缓存 hour/min/sec
+//  - VAL_TIMEDELTA: epoch = 总秒数（可负）；nsec 纳秒（与 epoch 同号规整到 |nsec|<1e9）
+typedef struct DateObj {
+    int64_t epoch;       // epoch 秒（按 kind 解释语义）
+    int32_t nsec;        // 纳秒部分（0-999999999，timedelta 与 epoch 同号规整）
+    int32_t year;        // 缓存：年（date/datetime）
+    int32_t month;       // 缓存：月 1-12
+    int32_t day;         // 缓存：日 1-31
+    int32_t hour;        // 缓存：时 0-23（datetime/time）
+    int32_t min;         // 缓存：分 0-59
+    int32_t sec;         // 缓存：秒 0-59
+    int32_t weekday;     // 缓存：周几 0=周日..6=周六（date/datetime）
+    int32_t yearday;     // 缓存：年内序日 1-366
+    uint8_t cached;      // 1=缓存字段已填充
+    ValueType kind;      // VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA
+} DateObj;
 
 #endif //LUMYR_VALUE_TYPE_H

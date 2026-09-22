@@ -14,7 +14,7 @@
 #include "vm_exec.h"
 #include "vm_generator.h"
 #include "stack_manager.h"
-#include "lumyr_value.h"
+#include "lm_value.h"
 #include "gc_runtime.h"
 #include "lm_value.h"
 #include "lm_string.h"
@@ -23,6 +23,7 @@
 #include "lm_math.h"
 #include "lm_crypto.h"
 #include "lm_regex.h"
+#include "lm_time.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -640,6 +641,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
 
     /* ===== 格式化（模板字符串 f"{x}" 编译目标） ===== */
     case BUILTIN_FORMAT: {
+        /* date 族：d.format(fmt) → strftime 格式化（与全局 format_date 等价） */
+        if(recv.type == VAL_DATE || recv.type == VAL_DATETIME ||
+           recv.type == VAL_TIME || recv.type == VAL_TIMEDELTA) {
+            if(!bi_need_args("format", argc, 1)) return 0;
+            if(argv[1].type != VAL_STRING) return bi_type_err("format", argv[1]);
+            char* s = lumyr_date_format(recv, lumyr_str_cstr(&argv[1]));
+            *out = lumyr_make_string(s ? s : "");
+            free(s);
+            return 1;
+        }
         if(recv.type != VAL_STRING) return bi_type_err("format", recv);
         /* receiver 为格式串。is_method=1：argc 为插值实参个数（不含 receiver）；
          * is_method=0（全局形式）：argv[0]=格式串也是 receiver，实参共 argc-1 个 */
@@ -655,10 +666,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
 
     /* ===== 数组组 ===== */
     case BUILTIN_ARRAY_ADD: {
-        /* receiver 分派：数组追加 / 字典设键值（均原地修改并返回 self） */
+        /* receiver 分派：数组追加 / 字典设键值 / date 族加偏移
+         * （数组/字典：原地修改并返回 self；date 族：返回同类型新对象） */
         if(recv.type == VAL_MAP) {
             if(!bi_need_args("add", argc, 2)) return 0;
             *out = lumyr_map_add(recv, argv[1], argv[2]);
+            return 1;
+        }
+        if(recv.type == VAL_DATE || recv.type == VAL_DATETIME ||
+           recv.type == VAL_TIME || recv.type == VAL_TIMEDELTA) {
+            /* date 族 add(n, "days"/"months"/"years"/...) → 新对象
+             * 方法形式 argc=2（n, unit）；全局形式 argc=3（recv, n, unit） */
+            int need = is_method ? 2 : 3;
+            if(argc < need) { runtime_error("add() 参数不足（需 n, unit）"); return 0; }
+            if(argv[2].type != VAL_STRING) { runtime_error("add() 单位参数必须是字符串"); return 0; }
+            *out = lumyr_date_add(recv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
             return 1;
         }
         if(recv.type != VAL_ARRAY) return bi_type_err("add", recv);
@@ -1454,6 +1476,230 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
 
+    /* ===== date 族构造（接受 ISO 字符串 或 多个整数参数） ===== */
+    case BUILTIN_DATE_MAKE: {
+        /* 全局形式 date(...)：argv[0] 是第 1 个实参
+         *   date("2026-09-22")         → ISO 字符串构造
+         *   date(epoch)                → 整数 epoch 构造
+         *   date(y, m, d)              → 日历字段构造 */
+        if(argc < 1) { runtime_error("date() 至少需要 1 个参数"); return 0; }
+        Value a0 = argv[0];
+        if(a0.type == VAL_STRING) {
+            /* ISO 字符串：解析为 y/m/d 后构造 */
+            int y = 0, mo = 0, d = 0;
+            if(sscanf(lumyr_str_cstr(&a0), "%d-%d-%d", &y, &mo, &d) != 3) {
+                runtime_error("date() ISO 字符串格式错误（需 YYYY-MM-DD）");
+                return 0;
+            }
+            *out = lumyr_make_date_ymd(y, mo, d);
+            return 1;
+        }
+        if(argc == 1) {
+            *out = lumyr_make_date(bi_num_i64(a0));
+            return 1;
+        }
+        if(argc >= 3) {
+            *out = lumyr_make_date_ymd((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]));
+            return 1;
+        }
+        runtime_error("date() 参数个数错误（需 ISO 字符串 / epoch / y,m,d）");
+        return 0;
+    }
+    case BUILTIN_DATETIME_MAKE: {
+        /* datetime("2026-09-22T10:30:00" [.ns])
+         * datetime(epoch [, nsec])
+         * datetime(y, m, d, h, mi, s [, ns]) */
+        if(argc < 1) { runtime_error("datetime() 至少需要 1 个参数"); return 0; }
+        Value a0 = argv[0];
+        if(a0.type == VAL_STRING) {
+            int y=0,mo=0,d=0,h=0,mi=0,s=0; int ns=0;
+            int n = sscanf(lumyr_str_cstr(&a0), "%d-%d-%dT%d:%d:%d.%d", &y,&mo,&d,&h,&mi,&s,&ns);
+            if(n < 6) n = sscanf(lumyr_str_cstr(&a0), "%d-%d-%d %d:%d:%d.%d", &y,&mo,&d,&h,&mi,&s,&ns);
+            if(n < 6) {
+                runtime_error("datetime() ISO 字符串格式错误（需 YYYY-MM-DDTHH:MM:SS）");
+                return 0;
+            }
+            *out = lumyr_make_datetime_ymd(y, mo, d, h, mi, s, ns);
+            return 1;
+        }
+        if(argc == 1) {
+            *out = lumyr_make_datetime(bi_num_i64(a0), 0);
+            return 1;
+        }
+        if(argc == 2) {
+            *out = lumyr_make_datetime(bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]));
+            return 1;
+        }
+        if(argc >= 6) {
+            int ns = (argc >= 7) ? (int)bi_num_i64(argv[6]) : 0;
+            *out = lumyr_make_datetime_ymd(
+                (int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]),
+                (int)bi_num_i64(argv[3]), (int)bi_num_i64(argv[4]), (int)bi_num_i64(argv[5]),
+                ns);
+            return 1;
+        }
+        runtime_error("datetime() 参数个数错误");
+        return 0;
+    }
+    case BUILTIN_TIME_MAKE: {
+        /* time("10:30:00" [.ns])
+         * time(sec [, nsec])
+         * time(h, m, s [, ns]) */
+        if(argc < 1) { runtime_error("time() 至少需要 1 个参数"); return 0; }
+        Value a0 = argv[0];
+        if(a0.type == VAL_STRING) {
+            int h=0,mi=0,s=0; int ns=0;
+            int n = sscanf(lumyr_str_cstr(&a0), "%d:%d:%d.%d", &h,&mi,&s,&ns);
+            if(n < 3) {
+                runtime_error("time() ISO 字符串格式错误（需 HH:MM:SS）");
+                return 0;
+            }
+            *out = lumyr_make_time_hms(h, mi, s, ns);
+            return 1;
+        }
+        if(argc == 1) {
+            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), 0);
+            return 1;
+        }
+        if(argc == 2) {
+            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]));
+            return 1;
+        }
+        if(argc >= 3) {
+            int ns = (argc >= 4) ? (int)bi_num_i64(argv[3]) : 0;
+            *out = lumyr_make_time_hms((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]), ns);
+            return 1;
+        }
+        runtime_error("time() 参数个数错误");
+        return 0;
+    }
+    case BUILTIN_TIMEDELTA_MAKE: {
+        /* timedelta("1 day 02:03:04") / timedelta(sec [, nsec]) */
+        if(argc < 1) { runtime_error("timedelta() 至少需要 1 个参数"); return 0; }
+        Value a0 = argv[0];
+        if(a0.type == VAL_STRING) {
+            /* 简化解析：支持 "d day(s) hh:mm:ss" / "hh:mm:ss" / 纯秒数 */
+            int days=0, h=0, mi=0, s=0;
+            long long sec;
+            const char* str = lumyr_str_cstr(&a0);
+            int n = sscanf(str, "%d day(s) %d:%d:%d", &days, &h, &mi, &s);
+            if(n == 4) {
+                sec = (long long)days * 86400 + h * 3600 + mi * 60 + s;
+                *out = lumyr_make_timedelta(sec, 0);
+                return 1;
+            }
+            n = sscanf(str, "%d:%d:%d", &h, &mi, &s);
+            if(n == 3) {
+                sec = h * 3600 + mi * 60 + s;
+                *out = lumyr_make_timedelta(sec, 0);
+                return 1;
+            }
+            if(sscanf(str, "%lld", &sec) == 1) {
+                *out = lumyr_make_timedelta(sec, 0);
+                return 1;
+            }
+            runtime_error("timedelta() ISO 字符串格式错误");
+            return 0;
+        }
+        if(argc == 1) {
+            *out = lumyr_make_timedelta(bi_num_i64(a0), 0);
+            return 1;
+        }
+        *out = lumyr_make_timedelta(bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]));
+        return 1;
+    }
+    case BUILTIN_NOW:
+        /* now()：当前 UTC 时间 → VAL_DATETIME */
+        *out = lumyr_date_now();
+        return 1;
+    case BUILTIN_TODAY:
+        /* today()：当前 UTC 日期 → VAL_DATE */
+        *out = lumyr_date_today();
+        return 1;
+
+    /* ===== date 族字段访问（方法形式 d.year；全局形式 year(d)） ===== */
+    case BUILTIN_YEAR:
+    case BUILTIN_MONTH:
+    case BUILTIN_DAY:
+    case BUILTIN_HOUR:
+    case BUILTIN_MINUTE:
+    case BUILTIN_SECOND:
+    case BUILTIN_WEEKDAY:
+    case BUILTIN_YEARDAY:
+    case BUILTIN_DAYS:
+    case BUILTIN_SECONDS:
+    case BUILTIN_TOTAL_SECONDS: {
+        /* 方法形式：argv[0]=receiver；全局形式：argv[0]=参数（语义相同） */
+        if(argc < 1) { runtime_error("date 族字段访问至少需要 1 个参数"); return 0; }
+        Value dv = argv[0];
+        if(dv.type != VAL_DATE && dv.type != VAL_DATETIME &&
+           dv.type != VAL_TIME && dv.type != VAL_TIMEDELTA) {
+            runtime_error("date 族字段访问的接收者必须是 date/datetime/time/timedelta");
+            return 0;
+        }
+        const char* fname = NULL;
+        switch(id) {
+        case BUILTIN_YEAR:         fname = "year"; break;
+        case BUILTIN_MONTH:       fname = "month"; break;
+        case BUILTIN_DAY:         fname = "day"; break;
+        case BUILTIN_HOUR:        fname = "hour"; break;
+        case BUILTIN_MINUTE:      fname = "minute"; break;
+        case BUILTIN_SECOND:      fname = "second"; break;
+        case BUILTIN_WEEKDAY:     fname = "weekday"; break;
+        case BUILTIN_YEARDAY:     fname = "yearday"; break;
+        case BUILTIN_DAYS:        fname = "days"; break;
+        case BUILTIN_SECONDS:     fname = "seconds"; break;
+        case BUILTIN_TOTAL_SECONDS: fname = "total_seconds"; break;
+        default: break;
+        }
+        *out = lumyr_date_field(dv, fname);
+        return 1;
+    }
+    case BUILTIN_FORMAT_DATE: {
+        /* 方法形式 d.format(fmt)：argc=1（fmt）；全局形式 format_date(d, fmt)：argc=2 */
+        int need = is_method ? 1 : 2;
+        if(argc < need) { runtime_error("format() 参数不足"); return 0; }
+        Value dv = argv[0];
+        Value fmtv = argv[1];
+        if(dv.type != VAL_DATE && dv.type != VAL_DATETIME &&
+           dv.type != VAL_TIME && dv.type != VAL_TIMEDELTA) {
+            runtime_error("format() 接收者必须是 date 族对象");
+            return 0;
+        }
+        if(fmtv.type != VAL_STRING) { runtime_error("format() 格式串必须是字符串"); return 0; }
+        char* s = lumyr_date_format(dv, lumyr_str_cstr(&fmtv));
+        *out = lumyr_make_string(s ? s : "");
+        free(s);
+        return 1;
+    }
+    case BUILTIN_DATE_DIFF: {
+        /* 方法形式 a.diff(b)：argc=1；全局形式 diff(a, b)：argc=2 */
+        int need = is_method ? 1 : 2;
+        if(argc < need) { runtime_error("diff() 参数不足"); return 0; }
+        Value a = argv[0], b = argv[1];
+        if((a.type != VAL_DATE && a.type != VAL_DATETIME && a.type != VAL_TIME && a.type != VAL_TIMEDELTA) ||
+           (b.type != VAL_DATE && b.type != VAL_DATETIME && b.type != VAL_TIME && b.type != VAL_TIMEDELTA)) {
+            runtime_error("diff() 参数必须是 date 族对象");
+            return 0;
+        }
+        *out = lumyr_date_diff(a, b);
+        return 1;
+    }
+    case BUILTIN_DATE_ADD: {
+        /* 方法形式 d.add(n, "days")：argc=2；全局形式 add(d, n, "days")：argc=3 */
+        int need = is_method ? 2 : 3;
+        if(argc < need) { runtime_error("add() 参数不足（需 n, unit）"); return 0; }
+        Value dv = argv[0];
+        if(dv.type != VAL_DATE && dv.type != VAL_DATETIME &&
+           dv.type != VAL_TIME && dv.type != VAL_TIMEDELTA) {
+            runtime_error("add() 接收者必须是 date 族对象");
+            return 0;
+        }
+        if(argv[2].type != VAL_STRING) { runtime_error("add() 单位参数必须是字符串"); return 0; }
+        *out = lumyr_date_add(dv, bi_num_i64(argv[1]), lumyr_str_cstr(&argv[2]));
+        return 1;
+    }
+
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
         return 0;
@@ -1562,6 +1808,25 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOFTMAX: return "softmax";
     case BUILTIN_FROM_VALUE: return "fromValue";
     case BUILTIN_ASSERT: return "__assert";
+    case BUILTIN_DATE_MAKE: return "date";
+    case BUILTIN_DATETIME_MAKE: return "datetime";
+    case BUILTIN_TIME_MAKE: return "time";
+    case BUILTIN_TIMEDELTA_MAKE: return "timedelta";
+    case BUILTIN_TODAY: return "today";
+    case BUILTIN_YEAR: return "year";
+    case BUILTIN_MONTH: return "month";
+    case BUILTIN_DAY: return "day";
+    case BUILTIN_HOUR: return "hour";
+    case BUILTIN_MINUTE: return "minute";
+    case BUILTIN_SECOND: return "second";
+    case BUILTIN_WEEKDAY: return "weekday";
+    case BUILTIN_YEARDAY: return "yearday";
+    case BUILTIN_DAYS: return "days";
+    case BUILTIN_SECONDS: return "seconds";
+    case BUILTIN_TOTAL_SECONDS: return "total_seconds";
+    case BUILTIN_FORMAT_DATE: return "format_date";
+    case BUILTIN_DATE_DIFF: return "diff";
+    case BUILTIN_DATE_ADD: return "add";
     default: return "?";
     }
 }

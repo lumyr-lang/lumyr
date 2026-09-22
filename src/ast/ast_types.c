@@ -169,6 +169,10 @@ ValueType castkind_to_valtype(int ck)
         case CAST_BIGINT: return VAL_BIGINT;
         case CAST_DECIMAL: return VAL_DECIMAL;
         case CAST_BITDECIMAL: return VAL_BITDECIMAL;
+        case CAST_DATE: return VAL_DATE;
+        case CAST_DATETIME: return VAL_DATETIME;
+        case CAST_TIME: return VAL_TIME;
+        case CAST_TIMEDELTA: return VAL_TIMEDELTA;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
         /* 容器引用：字段持堆指针（8 字节） */
         case CAST_MAP: return VAL_MAP;
@@ -214,6 +218,10 @@ int valuetype_to_castkind(int vt) {
         case VAL_BIGINT: return CAST_BIGINT;
         case VAL_DECIMAL: return CAST_DECIMAL;
         case VAL_BITDECIMAL: return CAST_BITDECIMAL;
+        case VAL_DATE: return CAST_DATE;
+        case VAL_DATETIME: return CAST_DATETIME;
+        case VAL_TIME: return CAST_TIME;
+        case VAL_TIMEDELTA: return CAST_TIMEDELTA;
         /* 容器/引用类型：cast 语义为透传（保持容器不被标量化） */
         case VAL_MAP: return CAST_MAP;
         case VAL_ARRAY: return CAST_ARRAY;
@@ -256,6 +264,10 @@ char* castkind_to_name(int ck) {
         case CAST_BIGINT: return strdup("bigint");
         case CAST_DECIMAL: return strdup("decimal");
         case CAST_BITDECIMAL: return strdup("bitdecimal");
+        case CAST_DATE: return strdup("date");
+        case CAST_DATETIME: return strdup("datetime");
+        case CAST_TIME: return strdup("time");
+        case CAST_TIMEDELTA: return strdup("timedelta");
         default: return strdup("int");
     }
 }

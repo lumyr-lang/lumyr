@@ -4,6 +4,7 @@
 #include "lm_bigint.h"
 #include "lm_decimal.h"
 #include "lm_bitdecimal.h"
+#include "lm_time.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -304,6 +305,50 @@ char* value_to_str(Value v) {
         }
         case VAL_MAP:
             return lumyr_json_stringify(v);
+        /* 数组/类型化数组：递归展开为 "[e1, e2, ...]"（与 print 一致，字符串元素不加引号） */
+        case VAL_ARRAY: {
+            ValueArray* a = v.v.array;
+            if(!a || a->len == 0) return strdup("[]");
+            size_t cap = 16;
+            char* out = (char*)malloc(cap);
+            if(!out) { perror("value_to_str"); exit(EXIT_FAILURE); }
+            size_t w = 0;
+            out[w++] = '[';
+            for(int i = 0; i < a->len; i++) {
+                if(i) { if(w + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); } out[w++] = ','; out[w++] = ' '; }
+                char* es = value_to_str(a->items[i]);
+                size_t el = strlen(es);
+                while(w + el + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
+                memcpy(out + w, es, el);
+                w += el;
+                free(es);
+            }
+            out[w++] = ']';
+            out[w] = '\0';
+            return out;
+        }
+        case VAL_TYPED_ARRAY: {
+            TypedArray* t = v.v.typed_array;
+            if(!t || t->len == 0) return strdup("[]");
+            size_t cap = 16;
+            char* out = (char*)malloc(cap);
+            if(!out) { perror("value_to_str"); exit(EXIT_FAILURE); }
+            size_t w = 0;
+            out[w++] = '[';
+            for(int i = 0; i < t->len; i++) {
+                if(i) { if(w + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); } out[w++] = ','; out[w++] = ' '; }
+                Value e = lumyr_index_get(v, lumyr_make_int(i));
+                char* es = value_to_str(e);
+                size_t el = strlen(es);
+                while(w + el + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
+                memcpy(out + w, es, el);
+                w += el;
+                free(es);
+            }
+            out[w++] = ']';
+            out[w] = '\0';
+            return out;
+        }
         /* 高精度数值：动态 cast (string) 需经各自 to_string，此前落 default 返回空串 */
         case VAL_BIGINT:
             return v.v.bigint ? lumyr_bigint_to_string(v.v.bigint) : strdup("");
@@ -311,6 +356,11 @@ char* value_to_str(Value v) {
             return v.v.decimal ? lumyr_decimal_to_string(v.v.decimal) : strdup("");
         case VAL_BITDECIMAL:
             return v.v.bitdecimal ? lumyr_bitdecimal_to_string(v.v.bitdecimal) : strdup("");
+        case VAL_DATE:
+        case VAL_DATETIME:
+        case VAL_TIME:
+        case VAL_TIMEDELTA:
+            return lumyr_date_to_iso(v);
         default:
             strcpy(buf, "");
             break;
@@ -483,6 +533,15 @@ Value lumyr_len(Value v) {
 
 // 下标读：数组元素 / 字符串字符（返回 char） / 字典键
 Value lumyr_index_get(Value c, Value idx) {
+    /* date 族字段访问：d.year / d.month / d.hour / td.days / td.seconds 等 */
+    if(c.type == VAL_DATE || c.type == VAL_DATETIME ||
+       c.type == VAL_TIME || c.type == VAL_TIMEDELTA) {
+        if(idx.type != VAL_STRING) {
+            runtime_error("date 族对象字段访问必须是字符串键");
+            return val_none();
+        }
+        return lumyr_date_field(c, lumyr_str_cstr(&idx));
+    }
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
     }
@@ -644,6 +703,10 @@ Value lumyr_type(Value v) {
         case VAL_BIGINT:   return lumyr_make_string("bigint");
         case VAL_DECIMAL:  return lumyr_make_string("decimal");
         case VAL_BITDECIMAL: return lumyr_make_string("bitdecimal");
+        case VAL_DATE:     return lumyr_make_string("date");
+        case VAL_DATETIME: return lumyr_make_string("datetime");
+        case VAL_TIME:     return lumyr_make_string("time");
+        case VAL_TIMEDELTA: return lumyr_make_string("timedelta");
     }
     return lumyr_make_string("unknown");
 }
@@ -921,6 +984,14 @@ Value lumyr_eq(Value a, Value b) {
         if (sa == NULL || sb == NULL) return lumyr_make_bool(0);
         return lumyr_make_bool(strcmp(sa, sb) == 0);
     }
+    /* date 族对象相等：必须 kind 相同，比较 epoch + nsec */
+    if ((a.type == VAL_DATE || a.type == VAL_DATETIME || a.type == VAL_TIME || a.type == VAL_TIMEDELTA) &&
+        a.type == b.type) {
+        DateObj* oa = (DateObj*)a.v.date_obj;
+        DateObj* ob = (DateObj*)b.v.date_obj;
+        if(!oa || !ob) return lumyr_make_bool(oa == ob);
+        return lumyr_make_bool(oa->epoch == ob->epoch && oa->nsec == ob->nsec);
+    }
     if (is_string(a,b)) {
         char *sa = value_to_str(a);
         char *sb = value_to_str(b);
@@ -1035,7 +1106,11 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_DECIMAL:
         case VAL_BITDECIMAL:
         case VAL_FUNC:
-        case VAL_GENERATOR: return v.v.struct_ptr != NULL;
+        case VAL_GENERATOR:
+        case VAL_DATE:
+        case VAL_DATETIME:
+        case VAL_TIME:
+        case VAL_TIMEDELTA: return v.v.date_obj != NULL;
         default: return 1;  // 其他未知类型默认为 true
     }
 }
@@ -1324,6 +1399,13 @@ long long lumyr_extract_ll(Value v) {
         case VAL_FLOAT:   return (long long)v.v.f;
         case VAL_DOUBLE:  return (long long)v.v.d;
         case VAL_LONG_DOUBLE: return (long long)v.v.ld;
+        case VAL_DATE:
+        case VAL_DATETIME:
+        case VAL_TIME:
+        case VAL_TIMEDELTA: {
+            DateObj* o = (DateObj*)v.v.date_obj;
+            return o ? (long long)o->epoch : 0;
+        }
         default:          return 0;
     }
 }
@@ -1389,6 +1471,15 @@ void lumyr_print(Value v) {
         }
         case VAL_BITDECIMAL: {
             char* s = lumyr_bitdecimal_to_string(v.v.bitdecimal);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_DATE:
+        case VAL_DATETIME:
+        case VAL_TIME:
+        case VAL_TIMEDELTA: {
+            char* s = lumyr_date_to_iso(v);
             printf("%s\n", s ? s : "(null)");
             free(s);
             break;
@@ -1538,6 +1629,15 @@ void lumyr_print_inline(Value v) {
             char* js = lumyr_json_stringify(v);
             printf("%s", js);
             free(js);
+            break;
+        }
+        case VAL_DATE:
+        case VAL_DATETIME:
+        case VAL_TIME:
+        case VAL_TIMEDELTA: {
+            char* s = lumyr_date_to_iso(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
             break;
         }
         default:

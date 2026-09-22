@@ -46,6 +46,7 @@ static int is_expr_end(int t)
         case TOK_ULONG: case TOK_UCHAR: case TOK_SHORT: case TOK_USHORT:
         case TOK_SIZE_T: case TOK_SSIZE_T: case TOK_VOID:
         case TOK_LONG_DOUBLE: case TOK_PTR:
+        case TOK_DATE: case TOK_DATETIME: case TOK_TIME_KW: case TOK_TIMEDELTA:
         case ARROW:                 /* => { → 函数体块 */
             return 1;
         default:
@@ -141,6 +142,10 @@ static int is_expr_end(int t)
 "ptr"           { LEX_RET(TOK_PTR); }
 "pointer"       { LEX_RET(TOK_PTR); }
 "handle"        { LEX_RET(TOK_PTR); }
+"date"          { LEX_RET(TOK_DATE); }
+"datetime"      { LEX_RET(TOK_DATETIME); }
+"time"          { LEX_RET(TOK_TIME_KW); }
+"timedelta"     { LEX_RET(TOK_TIMEDELTA); }
 "static"        { LEX_RET(TOK_STATIC); }
 "abstract"      { LEX_RET(TOK_ABSTRACT); }
 "public"        { LEX_RET(TOK_PUBLIC); }
