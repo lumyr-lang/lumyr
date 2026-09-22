@@ -27,10 +27,12 @@
 #include "lm_container.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
+#include "lm_io.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <sys/stat.h>
 
 /* ===== 整型族元素读取/写入（与 vm_exec_stack.c 同语义，零装箱） ===== */
 
@@ -590,6 +592,31 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return 0;
         }
         *out = lumyr_make_char(s[i]);
+        return 1;
+    }
+    /* 文件 I/O 简写函数（read "path" / write "path" value 语法糖映射到此） */
+    case BUILTIN_READ_FILE: {
+        if(argc < 1 || argv[0].type != VAL_STRING) {
+            runtime_error("read_file() 参数必须是文件路径字符串");
+            return 0;
+        }
+        Value args[1] = { argv[0] };
+        *out = lumyr_read_file(args, 1);
+        return 1;
+    }
+    case BUILTIN_WRITE_FILE: {
+        if(argc < 2) { runtime_error("write_file() 需要 (路径, 内容) 两个参数"); return 0; }
+        Value args[2] = { argv[0], argv[1] };
+        *out = lumyr_write_file(args, 2);
+        return 1;
+    }
+    case BUILTIN_FILE_EXISTS: {
+        if(argc < 1 || argv[0].type != VAL_STRING) {
+            runtime_error("file_exists() 参数必须是文件路径字符串");
+            return 0;
+        }
+        struct stat st;
+        *out = lumyr_make_bool(stat(lumyr_str_cstr(&argv[0]), &st) == 0);
         return 1;
     }
 
@@ -2145,6 +2172,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_REPLACE: return "replace";
     case BUILTIN_STARTSWITH: return "startswith";
     case BUILTIN_ENDSWITH: return "endswith";
+    case BUILTIN_READ_FILE: return "read_file";
+    case BUILTIN_WRITE_FILE: return "write_file";
+    case BUILTIN_FILE_EXISTS: return "file_exists";
     case BUILTIN_CONTAINS: return "contains";
     case BUILTIN_ARRAY_INDEXOF: return "indexOf";
     case BUILTIN_JOIN: return "join";

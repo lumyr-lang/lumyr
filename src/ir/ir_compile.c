@@ -60,6 +60,10 @@ static int builtin_id_by_name(const char* name) {
         {"type", BUILTIN_TYPE},
         {"range", BUILTIN_RANGE},
         {"format", BUILTIN_FORMAT},
+        /* 文件 I/O 简写函数（read "path" / write "path" value 语法糖映射到此） */
+        {"read_file", BUILTIN_READ_FILE},
+        {"write_file", BUILTIN_WRITE_FILE},
+        {"file_exists", BUILTIN_FILE_EXISTS},
         /* 字符串组 */
         {"substr", BUILTIN_SUBSTR}, {"substring", BUILTIN_SUBSTR},
         {"toupper", BUILTIN_TOUPPER}, {"toUpperCase", BUILTIN_TOUPPER}, {"upper", BUILTIN_TOUPPER},
