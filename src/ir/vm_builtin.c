@@ -1524,38 +1524,49 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     /* ===== date 族构造（接受 ISO 字符串 或 多个整数参数） ===== */
     case BUILTIN_DATE_MAKE: {
         /* 全局形式 date(...)：argv[0] 是第 1 个实参
-         *   date("2026-09-22")         → ISO 字符串构造
-         *   date(epoch)                → 整数 epoch 构造
-         *   date(y, m, d)              → 日历字段构造 */
+         *   date("2026-09-22" [, tz])  → ISO 字符串构造
+         *   date(epoch [, tz])         → 整数 epoch 构造
+         *   date(y, m, d [, tz])       → 日历字段构造
+         *   tz：时区偏移分钟（0=UTC，480=UTC+8），省略=本地时区 */
         if(argc < 1) { runtime_error("date() 至少需要 1 个参数"); return 0; }
         Value a0 = argv[0];
+        int32_t tz = INT32_MIN;  // 默认本地
         if(a0.type == VAL_STRING) {
-            /* ISO 字符串：解析为 y/m/d 后构造 */
             int y = 0, mo = 0, d = 0;
             if(sscanf(lumyr_str_cstr(&a0), "%d-%d-%d", &y, &mo, &d) != 3) {
                 runtime_error("date() ISO 字符串格式错误（需 YYYY-MM-DD）");
                 return 0;
             }
-            *out = lumyr_make_date_ymd(y, mo, d);
+            if(argc >= 2) tz = (int32_t)bi_num_i64(argv[1]);
+            *out = lumyr_make_date_ymd_tz(y, mo, d, tz);
             return 1;
         }
         if(argc == 1) {
-            *out = lumyr_make_date(bi_num_i64(a0));
+            *out = lumyr_make_date(bi_num_i64(a0), tz);
+            return 1;
+        }
+        if(argc == 2) {
+            // date(epoch, tz)
+            tz = (int32_t)bi_num_i64(argv[1]);
+            *out = lumyr_make_date(bi_num_i64(a0), tz);
             return 1;
         }
         if(argc >= 3) {
-            *out = lumyr_make_date_ymd((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]));
+            // date(y, m, d [, tz])
+            if(argc >= 4) tz = (int32_t)bi_num_i64(argv[3]);
+            *out = lumyr_make_date_ymd_tz((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]), tz);
             return 1;
         }
         runtime_error("date() 参数个数错误（需 ISO 字符串 / epoch / y,m,d）");
         return 0;
     }
     case BUILTIN_DATETIME_MAKE: {
-        /* datetime("2026-09-22T10:30:00" [.ns])
-         * datetime(epoch [, nsec])
-         * datetime(y, m, d, h, mi, s [, ns]) */
+        /* datetime("..." [, tz])
+         * datetime(epoch [, nsec [, tz]])
+         * datetime(y, m, d, h, mi, s [, ns [, tz]]) */
         if(argc < 1) { runtime_error("datetime() 至少需要 1 个参数"); return 0; }
         Value a0 = argv[0];
+        int32_t tz = INT32_MIN;
         if(a0.type == VAL_STRING) {
             int y=0,mo=0,d=0,h=0,mi=0,s=0; int ns=0;
             int n = sscanf(lumyr_str_cstr(&a0), "%d-%d-%dT%d:%d:%d.%d", &y,&mo,&d,&h,&mi,&s,&ns);
@@ -1564,34 +1575,44 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 runtime_error("datetime() ISO 字符串格式错误（需 YYYY-MM-DDTHH:MM:SS）");
                 return 0;
             }
-            *out = lumyr_make_datetime_ymd(y, mo, d, h, mi, s, ns);
+            if(argc >= 2) tz = (int32_t)bi_num_i64(argv[1]);
+            *out = lumyr_make_datetime_ymd_tz(y, mo, d, h, mi, s, ns, tz);
             return 1;
         }
         if(argc == 1) {
-            *out = lumyr_make_datetime(bi_num_i64(a0), 0);
+            *out = lumyr_make_datetime(bi_num_i64(a0), 0, tz);
             return 1;
         }
         if(argc == 2) {
-            *out = lumyr_make_datetime(bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]));
+            *out = lumyr_make_datetime(bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]), tz);
+            return 1;
+        }
+        if(argc == 3) {
+            // datetime(epoch, nsec, tz)
+            tz = (int32_t)bi_num_i64(argv[2]);
+            *out = lumyr_make_datetime(bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]), tz);
             return 1;
         }
         if(argc >= 6) {
             int ns = (argc >= 7) ? (int)bi_num_i64(argv[6]) : 0;
-            *out = lumyr_make_datetime_ymd(
+            if(argc >= 8) tz = (int32_t)bi_num_i64(argv[7]);
+            else if(argc == 7) { /* 7 = y,m,d,h,mi,s,ns → local */ }
+            *out = lumyr_make_datetime_ymd_tz(
                 (int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]),
                 (int)bi_num_i64(argv[3]), (int)bi_num_i64(argv[4]), (int)bi_num_i64(argv[5]),
-                ns);
+                ns, tz);
             return 1;
         }
         runtime_error("datetime() 参数个数错误");
         return 0;
     }
     case BUILTIN_TIME_MAKE: {
-        /* time("10:30:00" [.ns])
-         * time(sec [, nsec])
-         * time(h, m, s [, ns]) */
+        /* time("..." [, tz])
+         * time(sec [, nsec])           → 本地时区（epoch 形式不支持 tz）
+         * time(h, m, s [, ns [, tz]]) */
         if(argc < 1) { runtime_error("time() 至少需要 1 个参数"); return 0; }
         Value a0 = argv[0];
+        int32_t tz = INT32_MIN;
         if(a0.type == VAL_STRING) {
             int h=0,mi=0,s=0; int ns=0;
             int n = sscanf(lumyr_str_cstr(&a0), "%d:%d:%d.%d", &h,&mi,&s,&ns);
@@ -1599,20 +1620,23 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 runtime_error("time() ISO 字符串格式错误（需 HH:MM:SS）");
                 return 0;
             }
-            *out = lumyr_make_time_hms(h, mi, s, ns);
+            if(argc >= 2) tz = (int32_t)bi_num_i64(argv[1]);
+            *out = lumyr_make_time_hms_tz(h, mi, s, ns, tz);
             return 1;
         }
         if(argc == 1) {
-            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), 0);
+            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), 0, tz);
             return 1;
         }
         if(argc == 2) {
-            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]));
+            *out = lumyr_make_time_obj((int32_t)bi_num_i64(a0), (int32_t)bi_num_i64(argv[1]), tz);
             return 1;
         }
         if(argc >= 3) {
+            // time(h, m, s [, ns [, tz]])
             int ns = (argc >= 4) ? (int)bi_num_i64(argv[3]) : 0;
-            *out = lumyr_make_time_hms((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]), ns);
+            if(argc >= 5) tz = (int32_t)bi_num_i64(argv[4]);
+            *out = lumyr_make_time_hms_tz((int)bi_num_i64(a0), (int)bi_num_i64(argv[1]), (int)bi_num_i64(argv[2]), ns, tz);
             return 1;
         }
         runtime_error("time() 参数个数错误");
@@ -1694,7 +1718,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         case BUILTIN_YEARDAY:     fname = "yearday"; break;
         case BUILTIN_DAYS:        fname = "days"; break;
         case BUILTIN_SECONDS:     fname = "seconds"; break;
-        case BUILTIN_TOTAL_SECONDS: fname = "total_seconds"; break;
+        case BUILTIN_TOTAL_SECONDS: fname = "totalSeconds"; break;
         default: break;
         }
         *out = lumyr_date_field(dv, fname);
@@ -1936,7 +1960,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_YEARDAY: return "yearday";
     case BUILTIN_DAYS: return "days";
     case BUILTIN_SECONDS: return "seconds";
-    case BUILTIN_TOTAL_SECONDS: return "total_seconds";
+    case BUILTIN_TOTAL_SECONDS: return "totalSeconds";
     case BUILTIN_FORMAT_DATE: return "format_date";
     case BUILTIN_DATE_DIFF: return "diff";
     case BUILTIN_DATE_ADD: return "add";

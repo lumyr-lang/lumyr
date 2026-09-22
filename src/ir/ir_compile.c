@@ -145,7 +145,7 @@ static int builtin_id_by_name(const char* name) {
         {"year", BUILTIN_YEAR}, {"month", BUILTIN_MONTH}, {"day", BUILTIN_DAY},
         {"hour", BUILTIN_HOUR}, {"minute", BUILTIN_MINUTE}, {"second", BUILTIN_SECOND},
         {"weekday", BUILTIN_WEEKDAY}, {"yearday", BUILTIN_YEARDAY},
-        {"days", BUILTIN_DAYS}, {"seconds", BUILTIN_SECONDS}, {"total_seconds", BUILTIN_TOTAL_SECONDS},
+        {"days", BUILTIN_DAYS}, {"seconds", BUILTIN_SECONDS}, {"totalSeconds", BUILTIN_TOTAL_SECONDS},
         {"format_date", BUILTIN_FORMAT_DATE},
         {"diff", BUILTIN_DATE_DIFF},
         /* tuple/bytes/complex 构造（全局形式） */

@@ -26,7 +26,7 @@ assert dt1.second == 45;
 dt2 = datetime(2026, 9, 22, 10, 30, 45);
 assert dt1 == dt2;
 
-dt3 = datetime(0);  // 1970-01-01 00:00:00 UTC
+dt3 = datetime(0, 0, 0);  // 1970-01-01 00:00:00 UTC（tz=0）
 assert dt3.year == 1970;
 assert dt3.hour == 0;
 
@@ -48,12 +48,12 @@ assert t3.second == 0;
 td1 = timedelta(90061);  // 1 day 01:01:01
 assert td1.days == 1;
 assert td1.seconds == 3661;
-assert td1.total_seconds == 90061.0;
+assert td1.totalSeconds == 90061.0;
 
 td2 = timedelta(86400, 500000000);  // 1 day + 0.5s
 assert td2.days == 1;
 assert td2.seconds == 0;
-assert td2.total_seconds == 86400.5;
+assert td2.totalSeconds == 86400.5;
 
 // ===== 5. weekday/yearday =====
 assert d1.weekday == 2;  // 2026-09-22 是周二
@@ -74,7 +74,7 @@ diff = dt2.diff(datetime"2026-09-22T00:00:00");
 // dt2 = 2026-09-22 10:30:45，减去 2026-09-22 00:00:00 = 10:30:45 = 37845 秒
 assert diff.days == 0;
 assert diff.seconds == 37845;
-assert diff.total_seconds == 37845.0;
+assert diff.totalSeconds == 37845.0;
 
 // ===== 8. add：v + n*unit =====
 d4 = d1.add(1, "days");
@@ -103,10 +103,56 @@ assert type(td) == "date";
 s = f"{d1}";
 assert s == "2026-09-22";
 s2 = f"{dt1}";
-assert s2 == "2026-09-22T10:30:45";
+assert s2 == "2026-09-22T10:30:45Local";
 s3 = f"{t1}";
 assert s3 == "10:30:45";
 s4 = f"{td1}";
 assert s4 == "1 day(s) 01:01:01";
+
+// ===== 11. 时区支持 =====
+// 默认本地时区
+d_local = date(2026, 9, 22);
+assert d_local.timezone == "Local";
+
+// UTC 时区（偏移 0）
+d_utc = date(2026, 9, 22, 0);
+assert d_utc.timezone == "+00:00";
+assert d_utc.year == 2026;
+assert d_utc.month == 9;
+assert d_utc.day == 22;
+
+// UTC+8 时区（偏移 480 分钟）
+d_utc8 = date(2026, 9, 22, 480);
+assert d_utc8.timezone == "+08:00";
+assert d_utc8.year == 2026;
+assert d_utc8.day == 22;
+
+// UTC-5 时区（偏移 -300 分钟）
+d_utc5 = date(2026, 9, 22, -300);
+assert d_utc5.timezone == "-05:00";
+
+// datetime 时区
+dt_utc = datetime(2026, 9, 22, 10, 30, 45, 0, 0);
+assert dt_utc.timezone == "+00:00";
+assert dt_utc.hour == 10;
+
+dt_utc8 = datetime(2026, 9, 22, 10, 30, 45, 0, 480);
+assert dt_utc8.timezone == "+08:00";
+assert dt_utc8.hour == 10;
+
+// time 时区
+t_utc = time(10, 30, 45, 0, 0);
+assert t_utc.timezone == "+00:00";
+
+// ISO 字符串 + 时区
+d_iso_tz = date("2026-09-22", 480);
+assert d_iso_tz.timezone == "+08:00";
+assert d_iso_tz.year == 2026;
+
+// 跨时区 epoch 相同（同一时刻不同时区显示）
+dt_a = datetime(2026, 9, 22, 10, 0, 0, 0, 480);  // UTC+8 10:00
+dt_b = datetime(2026, 9, 22, 2, 0, 0, 0, 0);      // UTC 02:00
+// UTC+8 10:00 = UTC 02:00，epoch 应相同
+assert dt_a == dt_b;
 
 print("date_test ALL PASS");

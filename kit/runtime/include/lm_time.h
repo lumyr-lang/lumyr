@@ -27,31 +27,36 @@ char* lumyr_format_time(const char* fmt, double ts);
 void lumyr_log(int level, const char* msg);
 
 // ===== date 族对象（VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA） =====
-// 双模式存储：epoch 秒为主 + 缓存字段懒计算（gmtime_r，UTC）
-// 构造（epoch 秒）
-Value lumyr_make_date(int64_t epoch);              // date：epoch 规整到当天 00:00 (UTC)
-Value lumyr_make_datetime(int64_t epoch, int32_t nsec);
-Value lumyr_make_time_obj(int32_t sec, int32_t nsec);   // time：当天秒数 [0,86400)
-Value lumyr_make_timedelta(int64_t sec, int32_t nsec); // timedelta：可负，nsec 规整到 [0,1e9) 同号
-// 构造（日历字段，UTC，用 timegm）
+// 双模式存储：epoch 秒为主 + 缓存字段懒计算；时区支持（默认本地电脑时区）
+// tz_offset_min：INT32_MIN=本地时区，0=UTC，480=UTC+8，-300=UTC-5
+// 构造（epoch 秒 + 时区偏移）
+Value lumyr_make_date(int64_t epoch, int32_t tz_offset_min);
+Value lumyr_make_datetime(int64_t epoch, int32_t nsec, int32_t tz_offset_min);
+Value lumyr_make_time_obj(int32_t sec, int32_t nsec, int32_t tz_offset_min);
+Value lumyr_make_timedelta(int64_t sec, int32_t nsec);
+// 构造（日历字段 + 时区偏移）
+Value lumyr_make_date_ymd_tz(int y, int mo, int d, int32_t tz_offset_min);
+Value lumyr_make_datetime_ymd_tz(int y, int mo, int d, int h, int mi, int s, int ns, int32_t tz_offset_min);
+Value lumyr_make_time_hms_tz(int h, int mi, int s, int ns, int32_t tz_offset_min);
+// 兼容旧接口（默认本地时区）
 Value lumyr_make_date_ymd(int y, int mo, int d);
 Value lumyr_make_datetime_ymd(int y, int mo, int d, int h, int mi, int s, int ns);
 Value lumyr_make_time_hms(int h, int mi, int s, int ns);
-// 当前时间对象
-Value lumyr_date_now(void);      // → VAL_DATETIME（当前 UTC）
-Value lumyr_date_today(void);    // → VAL_DATE（UTC 当天）
-// 字段访问：year/month/day/hour/minute/second/weekday/yearday；
-// timedelta：days/seconds/total_seconds（统一入口，未知返回 0）
+// 当前时间对象（本地时区）
+Value lumyr_date_now(void);
+Value lumyr_date_today(void);
+// 时区偏移字符串："+08:00" / "-05:30" / "Local"（malloc，调用方 free）
+char* lumyr_date_tz_str(int32_t tz_offset_min);
+// 字段访问：year/month/day/hour/minute/second/weekday/yearday/timezone；
+// timedelta：days/seconds/totalSeconds（统一入口，未知返回 0）
 Value lumyr_date_field(Value v, const char* name);
 // ISO 字符串（value_to_str/print 用，malloc 返回）
 char* lumyr_date_to_iso(Value v);
-// 格式化：strftime 风格（%Y %m %d %H %M %S 等，UTC）
+// 格式化：strftime 风格（%Y %m %d %H %M %S 等，按对象时区）
 char* lumyr_date_format(Value v, const char* fmt);
 // diff(a, b) = a - b → VAL_TIMEDELTA
 Value lumyr_date_diff(Value a, Value b);
 // add(v, n, unit)：v + n*unit，返回同类型新对象
-//   unit：second(s)/minute(s)/hour(s)/day(s)/week(s)/month(s)/year(s)
-//   month/year 对 date/datetime 走日历，其他按秒近似
 Value lumyr_date_add(Value v, int64_t n, const char* unit);
 
 #endif // LM_TIME_H

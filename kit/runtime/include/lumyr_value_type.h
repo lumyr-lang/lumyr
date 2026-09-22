@@ -348,6 +348,7 @@ typedef struct DateObj {
     int32_t sec;         // 缓存：秒 0-59
     int32_t weekday;     // 缓存：周几 0=周日..6=周六（date/datetime）
     int32_t yearday;     // 缓存：年内序日 1-366
+    int32_t tz_offset_min; // 时区偏移（分钟）：INT32_MIN=本地时区，0=UTC，480=UTC+8，-300=UTC-5
     uint8_t cached;      // 1=缓存字段已填充
     ValueType kind;      // VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA
 } DateObj;
