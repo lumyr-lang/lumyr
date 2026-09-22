@@ -68,10 +68,10 @@ int vm_exec_load_string_const(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* PUSH_INT_VAL：小 int32 直接构造 int64 Value 压 VALUE 栈（省去 INT 压栈 + BOX） */
+/* PUSH_INT_VAL：小 int32 直接构造 int Value 压 VALUE 栈（省去 INT 压栈 + BOX） */
 int vm_exec_load_int_val(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;
-    Value v = lumyr_make_int64((int64_t)in->a);
+    Value v = lumyr_make_int((int)in->a);
     stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }

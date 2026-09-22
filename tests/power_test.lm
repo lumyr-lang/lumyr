@@ -35,7 +35,7 @@ check((1.5 ** 2) == 2.25, "double both");
 // ===== 5. 结果类型 =====
 ri = <int>2 ** 4;
 check(ri == 16, "typed result value");
-check(type(ri) == "int64", "typed result stack");
+check(type(ri) == "int", "typed result stack");
 rd = 2 ** -1;
 check(type(rd) == "double", "double result stack");
 rf = 4 ** 0.5;

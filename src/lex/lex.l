@@ -5,6 +5,7 @@
 #include "ast/ast_types.h"  /* struct_lookup / class_lookup / type_lookup */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
 
@@ -57,6 +58,130 @@ static int is_expr_end(int t)
 }
 
 #define LEX_RET(t) do { prev_prev_token = prev_token; prev_token = (t); return (t); } while(0)
+
+/* ===== 字面量后缀类型推断（数字字面量规则共用，yacc 动作读取） =====
+ * 无后缀 = CAST_NONE：编译期按值推断（int32 范围内=int，否则=int64/double）
+ * 有后缀 = 精确类型：
+ *   整数：5L→long  5LL→long long  5u→uint  5ul→ulong  5ull→uint64
+ *         5i8/5i16/5i32/5i64  5u8/5u16/5u32/5u64
+ *   浮点：5f→float  5d→double  5ld→long double（f/F/d/D/ld/LD/lD/Ld）
+ *   进制不影响类型：0x1F/0b1010/0o17 按值推断（同十进制）
+ */
+CastKind g_lit_cast = CAST_NONE;
+
+/* 后缀类型传递队列：YYSTYPE 是 union（所有字段偏移0），无法同时携带值与 CastKind；
+ * 而 bison LALR(1) 会因 lookahead 提前 lex 下一个 token，单个全局变量会被覆盖。
+ * lex 数字 token 时入队，对应归约动作出队（FIFO 深度≤2）。 */
+#define CAST_Q_CAP 16
+static int castQ[CAST_Q_CAP];
+static int castQHead = 0, castQTail = 0;
+static void castQ_push(int ck) {
+    castQ[castQTail] = ck;
+    castQTail = (castQTail + 1) & (CAST_Q_CAP - 1);
+}
+int g_cast_take(void) {
+    int x = castQ[castQHead];
+    castQHead = (castQHead + 1) & (CAST_Q_CAP - 1);
+    return x;
+}
+
+/* 从串尾扫描整数后缀（宽度家族 i8..u64，含数字，需先于 [uUlL] 家族判定） */
+static CastKind lit_int_suffix(const char* s, int len)
+{
+    if(len >= 3) {
+        const char* r = s + len - 3;
+        if((r[0]=='i'||r[0]=='u') && r[1]=='1' && r[2]=='6') return r[0]=='i'?CAST_INT16:CAST_UINT16;
+        if((r[0]=='i'||r[0]=='u') && r[1]=='3' && r[2]=='2') return r[0]=='i'?CAST_INT32:CAST_UINT32;
+        if((r[0]=='i'||r[0]=='u') && r[1]=='6' && r[2]=='4') return r[0]=='i'?CAST_INT64:CAST_UINT64;
+    }
+    if(len >= 2) {
+        const char* q = s + len - 2;
+        if(q[0]=='i' && q[1]=='8') return CAST_INT8;
+        if(q[0]=='u' && q[1]=='8') return CAST_UINT8;
+    }
+    /* [uUlL]{0,3} 家族（十六进制数字不含 u/U/l/L，从尾回扫安全） */
+    int u = 0, l = 0;
+    const char* p = s + len;
+    while(p > s) {
+        char ch = p[-1];
+        if(ch=='u'||ch=='U') { u = 1; p--; }
+        else if(ch=='l'||ch=='L') { l++; p--; }
+        else break;
+    }
+    if(!u && !l) return CAST_NONE;
+    if(u) return (l>=2)?CAST_UINT64 : (l==1)?CAST_ULONG : CAST_UINT;
+    return (l>=2)?CAST_LONGLONG : CAST_LONG;
+}
+
+/* 数字字面量统一入口：识别进制前缀/小数/指数/后缀，
+ * 填充 yylval 与 g_lit_cast，返回 token（INTEGER/NUMBER/BIG_INTEGER/BIG_DECIMAL） */
+static int lex_number(const char* s)
+{
+    int len = (int)strlen(s);
+    g_lit_cast = CAST_NONE;
+
+    /* ===== 进制前缀：十六进制/二进制/八进制整数（后缀仅 [uUlL] 家族） ===== */
+    if(s[0]=='0' && len>=2 && (s[1]=='x'||s[1]=='X'||s[1]=='b'||s[1]=='B'||s[1]=='o'||s[1]=='O')) {
+        int base = (s[1]=='x'||s[1]=='X') ? 16 : (s[1]=='b'||s[1]=='B') ? 2 : 8;
+        errno = 0;
+        /* 跳过 0x/0b/0o 前缀：strtoull 仅十六进制自带 0x 前缀识别 */
+        unsigned long long v = strtoull(s + 2, NULL, base);
+        if(errno == ERANGE) {
+            /* 超过 uint64 最大值，存成字符串（用于 <bigint> 类型） */
+            yylval.s = strdup(s);
+            return BIG_INTEGER;
+        }
+        g_lit_cast = lit_int_suffix(s, len);
+        castQ_push((int)g_lit_cast);
+        yylval.ll = (long long)v;
+        return INTEGER;
+    }
+
+    /* ===== 十进制：小数点或指数 → 浮点字面量 ===== */
+    int has_dot = 0, has_exp = 0;
+    for(int i = 0; i < len; i++) {
+        if(s[i]=='.') has_dot = 1;
+        else if(s[i]=='e'||s[i]=='E') has_exp = 1;
+    }
+    if(has_dot || has_exp) {
+        /* 浮点后缀：ld/LD/lD/Ld → long double，f/F → float，d/D → double */
+        char c1 = s[len-1];
+        if((c1=='d'||c1=='D') && len>=2 && (s[len-2]=='l'||s[len-2]=='L')) g_lit_cast = CAST_LONG_DOUBLE;
+        else if(c1=='f'||c1=='F') g_lit_cast = CAST_FLOAT;
+        else if(c1=='d'||c1=='D') g_lit_cast = CAST_DOUBLE;
+        if(g_lit_cast == CAST_NONE) {
+            /* 无后缀：小数部分超过 15 位（double 精度）→ 存成字符串（用于 <decimal>） */
+            const char* dot = strchr(s, '.');
+            int frac_len = dot ? (int)strlen(dot + 1) : 0;
+            if(frac_len > 15) {
+                yylval.s = strdup(s);
+                return BIG_DECIMAL;
+            }
+        }
+        castQ_push((int)g_lit_cast);
+        yylval.d = atof(s);   /* atof 遇到后缀字符自动停止 */
+        return NUMBER;
+    }
+
+    /* ===== 十进制整数 ===== */
+    /* 浮点后缀作用于整数字面量：5f→float(5.0) 5d→double(5.0) 5ld→long double(5.0) */
+    char c1 = s[len-1];
+    if(c1=='f'||c1=='F') { g_lit_cast = CAST_FLOAT; castQ_push((int)CAST_FLOAT); yylval.d = atof(s); return NUMBER; }
+    if((c1=='d'||c1=='D') && len>=2 && (s[len-2]=='l'||s[len-2]=='L')) { g_lit_cast = CAST_LONG_DOUBLE; castQ_push((int)CAST_LONG_DOUBLE); yylval.d = atof(s); return NUMBER; }
+    if(c1=='d'||c1=='D') { g_lit_cast = CAST_DOUBLE; castQ_push((int)CAST_DOUBLE); yylval.d = atof(s); return NUMBER; }
+
+    errno = 0;
+    unsigned long long v = strtoull(s, NULL, 10);
+    if(errno == ERANGE) {
+        /* 超过 uint64 最大值，存成字符串（用于 <bigint> 类型） */
+        yylval.s = strdup(s);
+        return BIG_INTEGER;
+    }
+    g_lit_cast = lit_int_suffix(s, len);
+    castQ_push((int)g_lit_cast);
+    yylval.ll = (long long)v;
+    return INTEGER;
+}
 %}
 
 %option yylineno
@@ -190,8 +315,22 @@ f\"([^"\\]|\\.)*\"   {
     LEX_RET(FSTRING_LIT);
 }
 
-'[^'\''\n]'      {
-    yylval.ch = yytext[1];
+'(\\.|[^'\''\\\n])'      {   /* 字符字面量：'A' 或转义 \n \t \r \0 \\ \' \" */
+    if(yytext[1] == '\\') {
+        char c = yytext[2];
+        switch(c) {
+            case 'n':  yylval.ch = '\n'; break;
+            case 't':  yylval.ch = '\t'; break;
+            case 'r':  yylval.ch = '\r'; break;
+            case '0':  yylval.ch = '\0'; break;
+            case '\\': yylval.ch = '\\'; break;
+            case '\'': yylval.ch = '\''; break;
+            case '"':  yylval.ch = '"';  break;
+            default:   yylval.ch = c;    break;
+        }
+    } else {
+        yylval.ch = yytext[1];
+    }
     LEX_RET(TOK_CHAR_LIT);
 }
 
@@ -207,6 +346,25 @@ f\"([^"\\]|\\.)*\"   {
     LEX_RET(ID);
 }
 
+0[xX][0-9a-fA-F]+(i8|i16|i32|i64|u8|u16|u32|u64|[uUlL]{0,3})  |
+0[bB][01]+(i8|i16|i32|i64|u8|u16|u32|u64|[uUlL]{0,3})         |
+0[oO][0-7]+(i8|i16|i32|i64|u8|u16|u32|u64|[uUlL]{0,3})        |
+[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?(ld|LD|lD|Ld|[fFdD])?  |
+[0-9]+[eE][+-]?[0-9]+(ld|LD|lD|Ld|[fFdD])?             |
+[0-9]+(i8|i16|i32|i64|u8|u16|u32|u64|[uU][lL]{0,2}|[lL][lL]?[uU]?|[fFdD]|[lL][dD])  {
+    /* 数字字面量统一入口：进制前缀 0x/0b/0o、小数/指数、类型后缀
+     * 5L→long 5LL→long long 5u/5ul/5ull→uint 族 5i8..5u64→对应宽度
+     * 5.5f→float 5.5d→double 5.5ld→long double；进制不影响类型 */
+    /* 注意：不可用 LEX_RET(lex_number(yytext))——宏会把实参求值两次，
+     * 导致后缀队列双份入队 */
+    {
+        int tkNum = lex_number(yytext);
+        prev_prev_token = prev_token;
+        prev_token = tkNum;
+        return tkNum;
+    }
+}
+
 [0-9]+\.[0-9]+          {
     /* 浮点数字面量：
      * 如果小数部分超过 15 位有效数字（double 的精度），存成字符串（用于 <decimal> 类型）
@@ -218,6 +376,7 @@ f\"([^"\\]|\\.)*\"   {
         yylval.s = strdup(yytext);
         LEX_RET(BIG_DECIMAL);
     } else {
+        castQ_push((int)CAST_NONE);
         yylval.d = atof(yytext);
         LEX_RET(NUMBER);
     }
@@ -234,6 +393,7 @@ f\"([^"\\]|\\.)*\"   {
         yylval.s = strdup(yytext);
         LEX_RET(BIG_INTEGER);
     } else {
+        castQ_push((int)CAST_NONE);
         yylval.ll = (long long)ullval;
         LEX_RET(INTEGER);
     }

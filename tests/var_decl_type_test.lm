@@ -16,7 +16,7 @@ a_int: int = 42;
 b_int = <int>42;
 check(a_int == 42, "int: a: int = 42");
 check(a_int == b_int, "int: 等价于 <int>42");
-check(type(a_int) == "int64", "int: type == int64");
+check(type(a_int) == "int", "int: type == int");
 
 // 1.2 int8
 a_i8: int8 = 100;

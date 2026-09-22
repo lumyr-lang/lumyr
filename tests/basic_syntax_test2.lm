@@ -95,7 +95,7 @@ check(fs == "pi = 3.14", "fstring: double interpolation");
 
 b_val = true;
 fb = f"b = {b_val}";
-check(fb == "b = 1", "fstring: bool interpolation (1/0)");
+check(fb == "b = true", "fstring: bool interpolation (true/false)");
 
 a1 = 1; b1 = 2; c1 = 3;
 fmulti = f"{a1}+{b1}+{c1} = {a1 + b1 + c1}";

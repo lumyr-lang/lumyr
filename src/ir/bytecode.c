@@ -377,6 +377,7 @@ const char* opc_name(OpCode op)
         case OPC_INT64_BOR: return "INT64_BOR";
         case OPC_INT64_BXOR: return "INT64_BXOR";
         case OPC_INT64_BNOT: return "INT64_BNOT";
+        case OPC_INT64_TRUNC: return "INT64_TRUNC";
         case OPC_INT64_SHL: return "INT64_SHL";
         case OPC_INT64_SHR: return "INT64_SHR";
         case OPC_INT64_POW: return "INT64_POW";

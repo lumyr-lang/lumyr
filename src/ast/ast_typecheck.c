@@ -1542,7 +1542,7 @@ int typecheck_expr(AstNode* node)
                 break;
             }
             switch(node->u.type_annotation.cast_type) {
-                case CAST_INT:      node->val_type = VAL_INT; break;
+                case CAST_INT: case CAST_INT_INFER: node->val_type = VAL_INT; break;
                 case CAST_DOUBLE:   node->val_type = VAL_DOUBLE; break;
                 case CAST_CHAR:     node->val_type = VAL_CHAR; break;
                 case CAST_BOOL:     node->val_type = VAL_BOOL; break;

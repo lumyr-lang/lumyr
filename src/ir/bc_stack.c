@@ -205,6 +205,9 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_INT64_BNOT:
             /* 弹1压1，净变化 0 */
             break;
+        case OPC_INT64_TRUNC:
+            /* 弹1压1（截断后压回），净变化 0 */
+            break;
         case OPC_INT64_GT: case OPC_INT64_LT:
         case OPC_INT64_GE: case OPC_INT64_LE:
         case OPC_INT64_EQ: case OPC_INT64_NE:

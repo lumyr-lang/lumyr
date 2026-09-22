@@ -1,0 +1,305 @@
+/* 字面量类型推断全量测试：后缀 → 精确类型，无后缀按值推断 */
+
+/* ========== 第一组：无后缀整数按值推断 ========== */
+i1 = 5;
+assert type(i1) == "int";
+assert i1 == 5;
+
+i2 = 5000000000;
+assert type(i2) == "int64";
+assert i2 == 5000000000;
+
+/* ========== 第二组：整数后缀 ========== */
+l1 = 5L;
+assert type(l1) == "long";
+assert l1 == 5;
+
+ll1 = 5LL;
+assert type(ll1) == "long long";
+assert ll1 == 5;
+
+u1 = 5u;
+assert type(u1) == "uint";
+assert u1 == 5;
+
+ul1 = 5ul;
+assert type(ul1) == "unsigned long";
+assert ul1 == 5;
+
+ull1 = 5ull;
+assert type(ull1) == "uint64";
+assert ull1 == 5;
+
+a8 = 5i8;
+assert type(a8) == "int8";
+assert a8 == 5;
+
+a16 = 5i16;
+assert type(a16) == "int16";
+assert a16 == 5;
+
+a32 = 5i32;
+assert type(a32) == "int32";
+assert a32 == 5;
+
+a64 = 5i64;
+assert type(a64) == "int64";
+assert a64 == 5;
+
+b8 = 5u8;
+assert type(b8) == "uint8";
+assert b8 == 5;
+
+b16 = 5u16;
+assert type(b16) == "uint16";
+assert b16 == 5;
+
+b32 = 5u32;
+assert type(b32) == "uint32";
+assert b32 == 5;
+
+b64 = 5u64;
+assert type(b64) == "uint64";
+assert b64 == 5;
+
+/* ========== 第三组：浮点字面量 ========== */
+f1 = 5.5;
+assert type(f1) == "double";
+assert f1 == 5.5;
+
+f2 = 1e10;
+assert type(f2) == "double";
+assert f2 == 1e10;
+
+f3 = 1.5e-3;
+assert type(f3) == "double";
+assert f3 == 0.0015;
+
+f4 = 5.5f;
+assert type(f4) == "float";
+assert f4 == 5.5;
+
+f5 = 5.5d;
+assert type(f5) == "double";
+assert f5 == 5.5;
+
+f6 = 5.5ld;
+assert type(f6) == "long double";
+assert f6 == 5.5;
+
+/* 整数字面量 + 浮点后缀 */
+f7 = 5f;
+assert type(f7) == "float";
+assert f7 == 5.0;
+
+f8 = 5d;
+assert type(f8) == "double";
+assert f8 == 5.0;
+
+f9 = 5ld;
+assert type(f9) == "long double";
+assert f9 == 5.0;
+
+/* ========== 第四组：char / bool / string ========== */
+c1 = 'A';
+assert type(c1) == "char";
+assert c1 == 65;
+
+c2 = '\n';
+assert type(c2) == "char";
+assert c2 == 10;
+
+c3 = '\t';
+assert type(c3) == "char";
+assert c3 == 9;
+
+c4 = '\r';
+assert type(c4) == "char";
+assert c4 == 13;
+
+c5 = '\\';
+assert type(c5) == "char";
+assert c5 == 92;
+
+c6 = '\'';
+assert type(c6) == "char";
+assert c6 == 39;
+
+c7 = '\0';
+assert type(c7) == "char";
+assert c7 == 0;
+
+bo1 = true;
+assert type(bo1) == "bool";
+assert bo1 == 1;
+
+bo2 = false;
+assert type(bo2) == "bool";
+assert bo2 == 0;
+
+s1 = "hello";
+assert type(s1) == "string";
+assert s1 == "hello";
+
+/* ========== 第五组：进制前缀（按值推断，进制不影响类型） ========== */
+h1 = 0x1F;
+assert type(h1) == "int";
+assert h1 == 31;
+
+h2 = 0xFF;
+assert h2 == 255;
+
+h3 = 0xDeAdBeEf;
+assert h3 == 3735928559;
+
+h4 = 0xFFFFFFFFF;
+assert type(h4) == "int64";
+assert h4 == 68719476735;
+
+hb1 = 0b1010;
+assert type(hb1) == "int";
+assert hb1 == 10;
+
+hb2 = 0b11111111;
+assert hb2 == 255;
+
+ho1 = 0o17;
+assert type(ho1) == "int";
+assert ho1 == 15;
+
+/* 进制 + 后缀组合 */
+h5 = 0xFFu8;
+assert type(h5) == "uint8";
+assert h5 == 255;
+
+h6 = 0x1FL;
+assert type(h6) == "long";
+assert h6 == 31;
+
+/* ========== 第六组：混合运算类型提升（C 规则） ========== */
+p1 = 5 + 5L;
+assert type(p1) == "long";
+assert p1 == 10;
+
+p2 = 5L + 5LL;
+assert type(p2) == "long long";
+assert p2 == 10;
+
+p3 = 5i16 + 3;
+assert type(p3) == "int";
+assert p3 == 8;
+
+p4 = 5u + 3;
+assert type(p4) == "uint";
+assert p4 == 8;
+
+p5 = 5u + 5L;
+assert type(p5) == "long";   /* C 规则：uint+long → long（long 可表示全部 uint 值） */
+assert p5 == 10;
+
+p5b = 5u + 5ul;
+assert type(p5b) == "unsigned long";
+assert p5b == 10;
+
+p6 = 5u64 + 1;
+assert type(p6) == "uint64";
+assert p6 == 6;
+
+p7 = 1 + 2.5;
+assert type(p7) == "double";
+assert p7 == 3.5;
+
+p8 = 5f + 1;
+assert type(p8) == "double";
+assert p8 == 6.0;
+
+p9 = 5.5f + 1.5d;
+assert type(p9) == "double";
+assert p9 == 7.0;
+
+p10 = 1.5ld + 1;
+assert type(p10) == "long double";
+assert p10 == 2.5;
+
+/* 窄类型运算结果回写窄变量：C 风格截断 */
+n1 = 5i8;
+n1 = n1 + 250i8;
+assert type(n1) == "int8";
+assert n1 == -1;
+
+/* ========== 第七组：整数除法（C 风格） ========== */
+d1 = 5 / 2;
+assert type(d1) == "int";
+assert d1 == 2;
+
+d2 = 5L / 2;
+assert type(d2) == "long";
+assert d2 == 2;
+
+d3 = 5 / 2.0;
+assert type(d3) == "double";
+assert d3 == 2.5;
+
+/* ========== 第八组：重赋值类型迁移 ========== */
+r1 = 5;
+assert type(r1) == "int";
+r1 = "now a string";
+assert type(r1) == "string";
+
+r2 = 5;
+r2 = 2.5;
+assert type(r2) == "int";   /* 既有语义：已有整数变量重赋值数值 → C 风格转换截断，不迁移 */
+assert r2 == 2;
+
+/* ========== 第九组：与显式标注共存（标注优先） ========== */
+x1 = <long>5;
+assert type(x1) == "long";
+assert x1 == 5;
+
+x2 = <byte>200;
+assert type(x2) == "byte";
+assert x2 == 200;
+
+/* ========== 第十组：字面量在容器/调用中的装箱类型 ========== */
+arr = [5, 5L, 5.5f, 'A', true, "str"];
+assert type(arr[0]) == "int";
+assert type(arr[1]) == "long";
+assert type(arr[2]) == "float";
+assert type(arr[3]) == "char";
+assert type(arr[4]) == "bool";
+assert type(arr[5]) == "string";
+
+/* ========== 第十一组：推断软 int vs 显式硬 int（溢出行为） ========== */
+/* 软 int（无后缀推断）：溢出 int32 时迁移为 int64，值保留 */
+soft1 = 5000000000;
+assert type(soft1) == "int64";
+assert soft1 == 5000000000;
+
+soft2 = 5;
+soft2 = 5000000000;
+assert type(soft2) == "int64";
+assert soft2 == 5000000000;
+
+/* 硬 int（类型标注/强转）：严格 C 风格截断为 32 位 */
+/* 5000000000 mod 2^32 = 705032704 */
+hard1: int = 5000000000;
+assert type(hard1) == "int";
+assert hard1 == 705032704;
+
+hard2 = <int>5000000000;
+assert type(hard2) == "int";
+assert hard2 == 705032704;
+
+/* 硬 int 变量重赋值仍保持硬、截断 */
+hard3: int = 5;
+hard3 = 5000000000;
+assert type(hard3) == "int";
+assert hard3 == 705032704;
+
+/* 小值两种写法无差异 */
+assert type(5) == "int";
+small: int = 42;
+assert type(small) == "int";
+assert small == 42;
+
+print("=== 字面量类型推断全部通过 / all literal inference tests passed ===");

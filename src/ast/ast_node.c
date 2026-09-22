@@ -13,6 +13,17 @@ AstNode* ast_int(long long v)
 {
     AstNode* p = ast_new(AST_INT);
     p->val_type = VAL_INT;
+    p->lit_cast = CAST_NONE;   /* 无后缀：编译期按值推断（int32 范围内=int，否则=int64） */
+    p->u.inum = v;
+    return p;
+}
+
+/* 带后缀的整数字面量：5L→CAST_LONG 5u8→CAST_UINT8 等（lit_cast 由 lexer 推断） */
+AstNode* ast_int_typed(long long v, CastKind ck)
+{
+    AstNode* p = ast_new(AST_INT);
+    p->val_type = VAL_INT;
+    p->lit_cast = ck;
     p->u.inum = v;
     return p;
 }
@@ -22,6 +33,20 @@ AstNode* ast_num(double v)
     AstNode* p = malloc(sizeof(AstNode));
     p->type = AST_NUM;
     p->val_type = VAL_DOUBLE;
+    p->line = yylineno;
+    p->lit_cast = CAST_NONE;   /* 无后缀：默认 double */
+    p->u.num = v;
+    return p;
+}
+
+/* 带后缀的浮点字面量：5f→CAST_FLOAT 5ld→CAST_LONG_DOUBLE 等 */
+AstNode* ast_num_typed(double v, CastKind ck)
+{
+    AstNode* p = malloc(sizeof(AstNode));
+    p->type = AST_NUM;
+    p->val_type = VAL_DOUBLE;
+    p->line = yylineno;
+    p->lit_cast = ck;
     p->u.num = v;
     return p;
 }
@@ -325,8 +350,8 @@ AstNode* ast_clone_node(const AstNode* src)
 {
     if(!src) return NULL;
     switch(src->type) {
-        case AST_INT:    return ast_int(src->u.inum);
-        case AST_NUM:    return ast_num(src->u.num);
+        case AST_INT:    { AstNode* n = ast_int(src->u.inum); n->lit_cast = src->lit_cast; return n; }
+        case AST_NUM:    { AstNode* n = ast_num(src->u.num); n->lit_cast = src->lit_cast; return n; }
         case AST_BOOL:   return ast_bool(src->u.bval ? 1 : 0);
         case AST_NONE:   return ast_none();
         case AST_CHAR:   return ast_new_char(src->u.ch);

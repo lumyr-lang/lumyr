@@ -50,6 +50,14 @@ int arith_is_ssize_t_var(Ctx* c, AstNode* node);
 /* CastKind → ExprType：4 核心栈映射（所有整数合并 INT64，浮点合并 DOUBLE，动态类型 NONE） */
 ExprType castkind_to_exprtype(CastKind ct);
 
+/* 按目标 CastKind 对 int64 做 C 风格宽度截断（写入硬类型变量/形参前使用）。
+ * CAST_INT_INFER（推断软 int）及 64 位类型不截断；其余整型按位宽截断。 */
+int64_t ir_int_truncate(int64_t v, CastKind ck);
+
+/* 编译期谓词：该 CastKind 写入变量/形参前是否需要宽度截断
+ * （硬窄类型=1；CAST_INT_INFER 软 int 及 64 位类型=0） */
+int ir_int_tag_truncates(CastKind ck);
+
 /* 获取表达式的类型（用于算术运算结果的上下文感知） */
 ExprType arith_get_expr_type(Ctx* c, AstNode* node);
 

@@ -90,6 +90,7 @@ typedef enum {
     CAST_CALENDAR,   // calendar：综合日历对象（月视图+农历+日历算术）
     CAST_FILE,       // file：文件对象（路径+模式，按需 fopen/fclose，GC 安全）
     CAST_FOLDER,     // folder：目录对象（路径，目录操作）
+    CAST_INT_INFER,  // 推断 int（无后缀小整数字面量）：溢出 int32 时弹性升级 int64；区别于显式 CAST_INT（严格截断）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）

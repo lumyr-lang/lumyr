@@ -77,13 +77,13 @@ check((string)big["bigint"] == "99", "mixed map: bigint value");
 check((string)big["decimal"] == "99", "mixed map: decimal value");
 check((string)big["bitdecimal"] == "99", "mixed map: bitdecimal value");
 
-// 逐个读回类型（确认不串型；注意：普通 map 中 int/bool/char 字面量坍缩为 int64）
-check(type(big["int"]) == "int64", "mixed map vtype: int->int64");
+// 逐个读回类型（确认不串型；精确类型推断后 int/bool/char 保留自身类型，不再坍缩为 int64）
+check(type(big["int"]) == "int", "mixed map vtype: int");
 check(type(big["double"]) == "double", "mixed map vtype: double");
 check(type(big["string"]) == "string", "mixed map vtype: string");
-check(type(big["bool"]) == "int64", "mixed map vtype: bool->int64");
+check(type(big["bool"]) == "bool", "mixed map vtype: bool");
 check(type(big["ascii"]) == "int", "mixed map vtype: ascii->int");
-check(type(big["char"]) == "int64", "mixed map vtype: char->int64");
+check(type(big["char"]) == "char", "mixed map vtype: char");
 check(type(big["byte"]) == "byte", "mixed map vtype: byte");
 check(type(big["int8"]) == "int8", "mixed map vtype: int8");
 check(type(big["int16"]) == "int16", "mixed map vtype: int16");
@@ -102,8 +102,8 @@ check(type(big["short"]) == "short", "mixed map vtype: short");
 check(type(big["ushort"]) == "unsigned short", "mixed map vtype: ushort");
 check(type(big["size_t"]) == "size_t", "mixed map vtype: size_t");
 check(type(big["ssize_t"]) == "ssize_t", "mixed map vtype: ssize_t");
-check(type(big["float"]) == "double", "mixed map vtype: float->double");
-check(type(big["longdouble"]) == "double", "mixed map vtype: long double->double");
+check(type(big["float"]) == "float", "mixed map vtype: float->double");
+check(type(big["longdouble"]) == "long double", "mixed map vtype: long double->double");
 check(type(big["bigint"]) == "bigint", "mixed map vtype: bigint");
 check(type(big["decimal"]) == "decimal", "mixed map vtype: decimal");
 check(type(big["bitdecimal"]) == "bitdecimal", "mixed map vtype: bitdecimal");
@@ -196,6 +196,6 @@ check((string)af.f_bitdecimal == "99", "type shape: bitdecimal");
 check(type(af.f_bigint) == "bigint", "type shape vtype: bigint");
 check(type(af.f_decimal) == "decimal", "type shape vtype: decimal");
 check(type(af.f_bitdecimal) == "bitdecimal", "type shape vtype: bitdecimal");
-check(type(af.f_float) == "double", "type shape vtype: float->double");
+check(type(af.f_float) == "float", "type shape vtype: float");
 
 print("mixed_container_test ALL PASS");

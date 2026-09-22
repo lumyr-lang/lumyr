@@ -62,6 +62,7 @@ int vm_exec_arith_int64_band(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_bor(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_bxor(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_bnot(VMExecCtx* ctx, Instruction* in);
+int vm_exec_arith_int64_trunc(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_shl(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_shr(VMExecCtx* ctx, Instruction* in);
 int vm_exec_arith_int64_pow(VMExecCtx* ctx, Instruction* in);
@@ -270,6 +271,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_INT64_BOR:  handled = vm_exec_arith_int64_bor(ctx, &in); break;
         case OPC_INT64_BXOR: handled = vm_exec_arith_int64_bxor(ctx, &in); break;
         case OPC_INT64_BNOT: handled = vm_exec_arith_int64_bnot(ctx, &in); break;
+        case OPC_INT64_TRUNC: handled = vm_exec_arith_int64_trunc(ctx, &in); break;
         case OPC_INT64_SHL:  handled = vm_exec_arith_int64_shl(ctx, &in); break;
         case OPC_INT64_SHR:  handled = vm_exec_arith_int64_shr(ctx, &in); break;
         case OPC_INT64_POW:  handled = vm_exec_arith_int64_pow(ctx, &in); break;

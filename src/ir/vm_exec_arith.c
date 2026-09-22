@@ -4,6 +4,7 @@
  */
 #include "vm_types.h"
 #include "stack_manager.h"
+#include "ir_arith.h"
 #include "lm_value.h"
 #include "lm_bigint.h"
 #include "lm_decimal.h"
@@ -100,6 +101,15 @@ int vm_exec_arith_int64_bnot(VMExecCtx* ctx, Instruction* in) {
     int64_t a;
     stack_vm_pop(g_stack_mgr, STACK_INT64, &a);
     a = ~a;
+    stack_vm_push(g_stack_mgr, STACK_INT64, &a);
+    return 1;
+}
+
+/* 宽度截断：按 a=CastKind 截断为目标整型宽度（写硬类型变量/形参前） */
+int vm_exec_arith_int64_trunc(VMExecCtx* ctx, Instruction* in) {
+    int64_t a;
+    stack_vm_pop(g_stack_mgr, STACK_INT64, &a);
+    a = ir_int_truncate(a, (CastKind)in->a);
     stack_vm_push(g_stack_mgr, STACK_INT64, &a);
     return 1;
 }

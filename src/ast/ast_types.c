@@ -249,7 +249,7 @@ int valuetype_to_castkind(int vt) {
 char* castkind_to_name(int ck) {
     switch(ck) {
         case CAST_STRING: return strdup("string");
-        case CAST_INT: return strdup("int");
+        case CAST_INT: case CAST_INT_INFER: return strdup("int");
         case CAST_DOUBLE: return strdup("double");
         case CAST_BOOL: return strdup("bool");
         case CAST_CHAR: return strdup("char");

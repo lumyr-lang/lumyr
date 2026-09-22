@@ -15,6 +15,10 @@
 /* yyerror 定义在 %% 之后，helper 中提前使用需前置声明 */
 void yyerror(const char* s);
 
+/* lexer 数字字面量后缀推断的精确类型（lex_number 填充，INTEGER/NUMBER 动作读取；CAST_NONE=按值推断） */
+extern CastKind g_lit_cast;
+int g_cast_take(void);   /* 从后缀 FIFO 队列取出当前数字 token 的 CastKind */
+
 /* 最近一次 type_name 归约中的自定义类型名（ID 分支；builtin 分支为 NULL）
  * 归约后立即由上层字段声明动作消费（所有权转移），仅作单次传递，不持久保存 */
 static char* g_last_custom_type_name = NULL;
@@ -2181,8 +2185,8 @@ type_keyword
 
 /* case后面只能是编译期常量：数字、整数、char字面量、字符串字面量、enum 成员（ID.ID） */
 const_expr
-    : NUMBER                  { $$ = ast_num($1); }
-    | INTEGER                 { $$ = ast_int($1); }
+    : NUMBER                  { $$ = ast_num_typed($1, (CastKind)g_cast_take()); }
+    | INTEGER                 { $$ = ast_int_typed($1, (CastKind)g_cast_take()); }
     | BIG_INTEGER             { $$ = ast_string($1); free($1); }  /* 超大整数存成字符串，用于 <bigint> */
     | BIG_DECIMAL             { $$ = ast_string($1); free($1); }  /* 高精度浮点存成字符串，用于 <decimal> */
     | char_lit                { $$ = ast_new_char($1); }
@@ -2237,8 +2241,8 @@ char_lit
     ;
 
 primary
-    : NUMBER                  { $$ = ast_num($1); }
-    | INTEGER                 { $$ = ast_int($1); }
+    : NUMBER                  { $$ = ast_num_typed($1, (CastKind)g_cast_take()); }
+    | INTEGER                 { $$ = ast_int_typed($1, (CastKind)g_cast_take()); }
     | BIG_INTEGER             { $$ = ast_string($1); free($1); }  /* 超大整数存成字符串，用于 <bigint> */
     | BIG_DECIMAL             { $$ = ast_string($1); free($1); }  /* 高精度浮点存成字符串，用于 <decimal> */
     | TRUE                    { $$ = ast_bool(1); }
@@ -3279,8 +3283,8 @@ enum_members
     ;
 enum_member
     : ID                         { $$ = ast_map_entry(ast_string(strdup($1)), ast_int(g_enum_next_val)); free($1); g_enum_next_val++; }
-    | ID ASSIGN INTEGER          { $$ = ast_map_entry(ast_string(strdup($1)), ast_int($3)); free($1); g_enum_next_val = $3 + 1; }
-    | ID ASSIGN MINUS INTEGER    { $$ = ast_map_entry(ast_string(strdup($1)), ast_int(-$4)); free($1); g_enum_next_val = -$4 + 1; }
+    | ID ASSIGN INTEGER          { (void)g_cast_take(); $$ = ast_map_entry(ast_string(strdup($1)), ast_int($3)); free($1); g_enum_next_val = $3 + 1; }
+    | ID ASSIGN MINUS INTEGER    { (void)g_cast_take(); $$ = ast_map_entry(ast_string(strdup($1)), ast_int(-$4)); free($1); g_enum_next_val = -$4 + 1; }
     ;
 
 unary_expr

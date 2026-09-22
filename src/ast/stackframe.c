@@ -411,7 +411,7 @@ void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, in
     int ct = (caller_slot < caller->cap) ? caller->type_tags[caller_slot] : -1;
     void* ptr;
     switch((CastKind)ct) {
-    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_INT: case CAST_INT_INFER: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
     case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
     case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
     case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:

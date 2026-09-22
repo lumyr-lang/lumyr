@@ -248,7 +248,7 @@ static int c_add_var(Ctx* c, const char* name, ExprType type) {
  * 返回：int/double/string/bigint/decimal/bitdecimal/ptr/unknown */
 static const char* castkind_canonical_name(CastKind ck) {
     switch(ck) {
-    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_INT: case CAST_INT_INFER: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
     case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
     case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
     case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
@@ -2152,18 +2152,53 @@ static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs) {
     c->fn->var_struct_names[bf_idx] = owner;
 }
 
+/* 整数 CastKind → C 风格提升秩；*out 规范化（窄类型→int）。
+ * 返回 -1 表示非整数类型（不参与整数提升）。
+ * 秩序：int < uint < long < ulong < long long < uint64（C 规则：同宽无符号 ≥ 有符号） */
+static int int_cast_rank(CastKind ck, CastKind* out)
+{
+    switch(ck) {
+    case CAST_BOOL: case CAST_CHAR: case CAST_BYTE: case CAST_ASCII:
+    case CAST_INT8: case CAST_INT16: case CAST_SHORT:
+    case CAST_UINT8: case CAST_UINT16: case CAST_USHORT: case CAST_UCHAR:
+        *out = CAST_INT; return 0;   /* 窄类型提升为 int */
+    case CAST_INT_INFER:
+        *out = CAST_INT_INFER; return 1;   /* 推断软 int：保持软（溢出时装箱升级） */
+    case CAST_INT: case CAST_INT32: case CAST_SSIZE_T:
+        *out = CAST_INT; return 1;
+    case CAST_UINT: case CAST_UINT32: case CAST_SIZE_T:
+        *out = CAST_UINT; return 2;
+    case CAST_LONG:
+        *out = CAST_LONG; return 3;
+    case CAST_ULONG:
+        *out = CAST_ULONG; return 4;
+    case CAST_LONGLONG: case CAST_INT64:
+        *out = CAST_LONGLONG; return 5;
+    case CAST_UINT64:
+        *out = CAST_UINT64; return 6;
+    default:
+        *out = CAST_INT; return -1;
+    }
+}
+
 /* 获取表达式的精确类型（CastKind），用于打印格式化 */
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(!node) return CAST_NONE;
 
-    /* 字面量：整数按实际宽度返回——超过 int32 的大字面量为 CAST_INT64，
+    /* 字面量：带后缀（5L/5u8/5f/5ld/...）→ 后缀精确类型；
+     * 无后缀整数按实际宽度返回——超过 int32 的大字面量为 CAST_INT64，
      * 否则在"提升装箱到动态"时会被 CAST_INT 截断（如 dyn == 1099511627776 误判）。
      * 与 c_expr_to_value 中 AST_INT 走 PUSH_CONST_VAL(int64) 的处理保持一致。 */
     if(node->type == AST_INT) {
+        if(node->lit_cast != CAST_NONE) return node->lit_cast;
         int64_t lv = node->u.inum;
-        return (lv >= INT32_MIN && lv <= INT32_MAX) ? CAST_INT : CAST_INT64;
+        /* 无后缀：int32 范围内为"推断软 int"（溢出迁移），超出为 int64 */
+        return (lv >= INT32_MIN && lv <= INT32_MAX) ? CAST_INT_INFER : CAST_INT64;
     }
-    if(node->type == AST_NUM) return CAST_DOUBLE;
+    if(node->type == AST_NUM) {
+        if(node->lit_cast != CAST_NONE) return node->lit_cast;
+        return CAST_DOUBLE;
+    }
     if(node->type == AST_BOOL) return CAST_BOOL;
     if(node->type == AST_CHAR) return CAST_CHAR;
     if(node->type == AST_STRING) return CAST_STRING;
@@ -2255,9 +2290,18 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         if(lt == CAST_DOUBLE || rt == CAST_DOUBLE) return CAST_DOUBLE;
         if(lt == CAST_FLOAT || rt == CAST_FLOAT) return CAST_DOUBLE;  /* float 提升为 double */
         
-        /* 5. 整数类型提升（C/C++ 规则：窄类型自动扩到 int） */
-        /* 这里统一返回 CAST_INT，因为所有窄类型都映射到 INT64 栈 */
-        return CAST_INT;
+        /* 5. 整数类型提升（C/C++ 规则：窄类型扩到 int；宽度按最大操作数）
+         *    int+long→long  int+uint→uint  任意+uint64→uint64 ...
+         *    全部仍落在 INT64 栈（运行时统一 64 位），此处只决定装箱标签 */
+        {
+            CastKind li = CAST_INT, ri = CAST_INT;
+            int lr = int_cast_rank(lt, &li);
+            int rr = int_cast_rank(rt, &ri);
+            if(lr < 0 && rr < 0) return CAST_INT;
+            if(lr < 0) return ri;
+            if(rr < 0) return li;
+            return (lr >= rr) ? li : ri;
+        }
     }
 
     /* 三元 cond ? a : b：复用分支类型预判 + 统一规则，把目标类型名转 CastKind。
@@ -2320,7 +2364,7 @@ static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck) {
     if (from == EXPR_TYPE_INT)
         emit(c, OPC_BOX_INT64, (int)ck, 0);   /* 携带整型子类型 uint/char/bool/... */
     else if (from == EXPR_TYPE_DOUBLE)
-        emit(c, OPC_BOX_DOUBLE, 0, 0);
+        emit(c, OPC_BOX_DOUBLE, (int)ck, 0);   /* 携带浮点子类型 float/long double（CAST_NONE=double） */
     else /* PTR */
         emit(c, OPC_BOX_PTR, (int)ck, 0);
 }
@@ -2363,8 +2407,11 @@ static void c_value_fallback(Ctx* c, AstNode* node) {
 static void c_expr_to_value(Ctx* c, AstNode* node) {
     if(!node) return;
     switch(node->type) {
-    /* 字面量：直接构造 Value，零 typed 压栈、零 BOX */
+    /* 字面量：直接构造 Value，零 typed 压栈、零 BOX
+     * 带后缀（5L/5u8/'A'/true/5.5f）→ 走 typed 编译 + 按精确类型装箱，
+     * 保证 [5L, 'A', true, 5.5f] 等容器元素与动态实参的装箱类型精确 */
     case AST_INT: {
+        if(node->lit_cast != CAST_NONE) { c_value_fallback(c, node); return; }
         int64_t v = node->u.inum;
         if(v >= INT32_MIN && v <= INT32_MAX)
             emit(c, OPC_PUSH_INT_VAL, (int)v, 0);
@@ -2374,9 +2421,10 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
         }
         return;
     }
-    case AST_BOOL: emit(c, OPC_PUSH_INT_VAL, node->u.bval ? 1 : 0, 0); return;
-    case AST_CHAR: emit(c, OPC_PUSH_INT_VAL, (int)(int64_t)node->u.ch, 0); return;
+    case AST_BOOL: c_value_fallback(c, node); return;   /* 装箱为 VAL_BOOL（非 VAL_INT） */
+    case AST_CHAR: c_value_fallback(c, node); return;   /* 装箱为 VAL_CHAR（非 VAL_INT） */
     case AST_NUM: {
+        if(node->lit_cast != CAST_NONE) { c_value_fallback(c, node); return; }   /* float/long double */
         int idx = bf_add_double_const(c->fn, node->u.num);
         emit(c, OPC_PUSH_CONST_VAL, idx, 0);
         return;
@@ -3025,8 +3073,16 @@ void c_stmt(Ctx* c, AstNode* node) {
                               (target_et == EXPR_TYPE_INT || target_et == EXPR_TYPE_DOUBLE);
             if (!convertible) target_et = rt;
         }
-        int var_idx = c_add_var(c, var_name, target_et);
+        /* 变量类型粘性（C 风格）：已存在的整数变量重赋值时保持原整数类型标签，
+         * RHS 按值存入 int64 栈，装箱时按变量类型截断。
+         * 注意：必须在 c_add_var 之前读旧标签——c_add_var 会把 ExprType 数值
+         * 当 CastKind 写入 var_type_tags（EXPR_TYPE_INT=1=CAST_INT），
+         * 之后读到的"旧标签"会被默认值污染 */
         int bf_idx = bf_sym(c->fn, var_name);
+        CastKind prev_tag = CAST_NONE;
+        if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt)
+            prev_tag = (CastKind)c->fn->var_type_tags[bf_idx];
+        int var_idx = c_add_var(c, var_name, target_et);
         /* 若 RHS 类型与目标类型不同，进行转换 */
         if (rt != target_et) {
             if (target_et == EXPR_TYPE_NONE) {
@@ -3051,18 +3107,44 @@ void c_stmt(Ctx* c, AstNode* node) {
                 emit_value_cast(c, rt, target_et);
             }
         }
-        /* 记录精确类型到 BytecodeFunc 的 var_type_tags */
-        if (target_et == EXPR_TYPE_INT)
-            c->fn->var_type_tags[bf_idx] = (int)CAST_INT64;
-        else if (target_et == EXPR_TYPE_DOUBLE)
-            c->fn->var_type_tags[bf_idx] = (int)CAST_DOUBLE;
-        else if (target_et == EXPR_TYPE_PTR)
-            c->fn->var_type_tags[bf_idx] = (int)cast_type;
-        else
-            c->fn->var_type_tags[bf_idx] = (int)CAST_NONE;
+        /* 记录精确类型到 BytecodeFunc 的 var_type_tags
+         * INT：变量已有整数标签 → 粘性保持（重赋值不换型）；
+         *      否则用 RHS 精确标签（字面量后缀 5L/5u8/'A'/true、BINOP 提升结果），
+         *      RHS 无标签（动态 unbox）→ CAST_INT64 兜底 */
+        {
+            CastKind norm;
+            if (target_et == EXPR_TYPE_INT) {
+                if (prev_tag == CAST_INT_INFER && rt == EXPR_TYPE_INT &&
+                    cast_type != CAST_NONE && int_cast_rank(cast_type, &norm) >= 0) {
+                    /* 软 int 重赋值为原生整数 RHS（如大字面量 5000000000、5L）：
+                     * 弹性迁移为 RHS 类型，值保留；rt 不同栈（如 double）不在此列 */
+                    c->fn->var_type_tags[bf_idx] = (int)cast_type;
+                }
+                else if (prev_tag != CAST_NONE && int_cast_rank(prev_tag, &norm) >= 0)
+                    c->fn->var_type_tags[bf_idx] = (int)prev_tag;
+                else
+                    c->fn->var_type_tags[bf_idx] = (cast_type != CAST_NONE) ? (int)cast_type : (int)CAST_INT64;
+            }
+            else if (target_et == EXPR_TYPE_DOUBLE) {
+                if (prev_tag == CAST_FLOAT || prev_tag == CAST_LONG_DOUBLE)
+                    c->fn->var_type_tags[bf_idx] = (int)prev_tag;
+                else
+                    c->fn->var_type_tags[bf_idx] = (cast_type == CAST_FLOAT || cast_type == CAST_LONG_DOUBLE)
+                                                   ? (int)cast_type : (int)CAST_DOUBLE;
+            }
+            else if (target_et == EXPR_TYPE_PTR)
+                c->fn->var_type_tags[bf_idx] = (int)cast_type;
+            else
+                c->fn->var_type_tags[bf_idx] = (int)CAST_NONE;
+        }
         /* 记录变量持有的自定义类型名（顶层语句赋值），供后续 recv.method() 推断接收者类型 */
         record_var_owner(c, bf_idx, node->u.assign.expr);
         if(target_et == EXPR_TYPE_INT) {
+            /* 硬类型变量：写入前按目标宽度截断（软 INFER/64 位类型不截断），
+             * 保证 typed 比较/打印/动态装箱所有上下文读到的值一致 */
+            CastKind store_tag = (CastKind)c->fn->var_type_tags[bf_idx];
+            if(ir_int_tag_truncates(store_tag))
+                emit(c, OPC_INT64_TRUNC, (int)store_tag, 0);
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
         } else if(target_et == EXPR_TYPE_DOUBLE) {
             emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
@@ -3652,15 +3734,15 @@ void c_stmt(Ctx* c, AstNode* node) {
                  * 字面量 true/false → INT64 栈 → type() 返回 "int64"（不是 "bool"！）
                  * 字面量 'A' → INT64 栈 → type() 返回 "int64"（不是 "char"！）
                  * 字面量 "abc" → PTR 栈 → type() 返回 "string"
-                 * case int:    → type() == "int64"
+                 * case int:    → type() == "int"（字面量整数按值推断装箱为 VAL_INT）
                  * case double: → type() == "double"
                  * case string: → type() == "string"
-                 * case bool:   → type() == "bool"（仅当变量已声明为 bool 类型时）
-                 * case char:   → type() == "char"（仅当变量已声明为 char 类型时）
+                 * case bool:   → type() == "bool"（字面量 true/false 装箱为 VAL_BOOL）
+                 * case char:   → type() == "char"（字面量 'A' 装箱为 VAL_CHAR）
                  */
                 const char* tn = "int64";
                 switch(cs->u.cs.match_type) {
-                    case VAL_INT:    tn = "int64"; break;   /* 字面量整数实际压 INT64 栈 */
+                    case VAL_INT:    tn = "int"; break;   /* 字面量整数按值推断 → VAL_INT */
                     case VAL_DOUBLE: tn = "double"; break;
                     case VAL_BOOL:   tn = "bool"; break;
                     case VAL_CHAR:   tn = "char"; break;
@@ -4119,7 +4201,7 @@ static void ol_insert_bare_alias(BytecodeFunc* fn) {
 /* 类型族：1=整数族 2=浮点族 3=对象/指针族 0=动态 */
 static int ck_family(CastKind k) {
     switch(k) {
-        case CAST_INT: case CAST_BOOL: case CAST_ASCII: case CAST_CHAR:
+        case CAST_INT: case CAST_INT_INFER: case CAST_BOOL: case CAST_ASCII: case CAST_CHAR:
         case CAST_BYTE: case CAST_INT8: case CAST_INT16: case CAST_INT32:
         case CAST_INT64: case CAST_UINT8: case CAST_UINT16: case CAST_UINT32:
         case CAST_UINT: case CAST_UINT64: case CAST_LONG: case CAST_LONGLONG:

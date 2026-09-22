@@ -6,7 +6,9 @@
 
 // 创建AST节点
 AstNode* ast_int(long long v);
+AstNode* ast_int_typed(long long v, CastKind ck);   /* 带后缀整数字面量（5L/5u8/...） */
 AstNode* ast_num(double v);
+AstNode* ast_num_typed(double v, CastKind ck);      /* 带后缀浮点字面量（5f/5ld/...） */
 AstNode* ast_bool(_Bool v);
 AstNode* ast_none(void);
 AstNode* ast_funcref(const char* name);

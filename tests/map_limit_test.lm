@@ -227,14 +227,14 @@ n = n + 1;
 m_float_max = <string, float>{"v": <float>340000000000000000000000000000000000000};
 check(type(m_float_max) == "map", "float max: container");
 check(m_float_max["v"] == <float><float>340000000000000000000000000000000000000, "float max: value");
-check(type(m_float_max["v"]) == "double", "float max: vtype");
+check(type(m_float_max["v"]) == "float", "float max: vtype");
 n = n + 1;
 
 // ===== V = long double =====
 m_longdouble_large = <string, long double>{"v": <long double>100000000000000000000000000000};
 check(type(m_longdouble_large) == "map", "longdouble large: container");
 check(m_longdouble_large["v"] == <long double><long double>100000000000000000000000000000, "longdouble large: value");
-check(type(m_longdouble_large["v"]) == "double", "longdouble large: vtype");
+check(type(m_longdouble_large["v"]) == "long double", "longdouble large: vtype");
 n = n + 1;
 
 // ===== V = bigint =====

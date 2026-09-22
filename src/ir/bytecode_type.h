@@ -75,6 +75,7 @@ typedef enum {
     OPC_INT64_BOR,      // 按位或
     OPC_INT64_BXOR,     // 按位异或
     OPC_INT64_BNOT,     // 弹1个 int64，按位取反，压回
+    OPC_INT64_TRUNC,    // 弹1个 int64，按 a=CastKind 宽度截断，压回（写硬类型变量/形参前）
     OPC_INT64_SHL,      // 左移（移位量按 64 位掩码 &63）
     OPC_INT64_SHR,      // 算术右移（保留符号，移位量 &63）
     OPC_INT64_POW,      // 弹2个 int64（非负指数），整数幂

@@ -303,7 +303,7 @@ static Value frame_slot_to_value(StackFrame* f, BytecodeFunc* fn, int slot) {
     }
     int tag = (slot < fn->sym_cnt) ? fn->var_type_tags[slot] : -1;
     switch((CastKind)tag) {
-    case CAST_INT: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_INT: case CAST_INT_INFER: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
     case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
     case CAST_BOOL: case CAST_CHAR: case CAST_UCHAR: case CAST_BYTE: case CAST_ASCII:
     case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
@@ -469,6 +469,8 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
             int64_t iv = 0;
             if(args[slot].type == VAL_INT64) iv = args[slot].v.i64;
             else if(args[slot].type == VAL_INT) iv = (int64_t)args[slot].v.i;
+            else if(args[slot].type == VAL_BOOL) iv = args[slot].v.b ? 1 : 0;
+            else if(args[slot].type == VAL_CHAR) iv = (int64_t)(unsigned char)args[slot].v.c;
             else if(args[slot].type == VAL_DOUBLE) iv = (int64_t)args[slot].v.d;
             stackframe_bind_int64(new_frame, pname, iv);
             break;
@@ -478,6 +480,8 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
             if(args[slot].type == VAL_DOUBLE) dv = args[slot].v.d;
             else if(args[slot].type == VAL_INT64) dv = (double)args[slot].v.i64;
             else if(args[slot].type == VAL_INT) dv = (double)args[slot].v.i;
+            else if(args[slot].type == VAL_BOOL) dv = args[slot].v.b ? 1.0 : 0.0;
+            else if(args[slot].type == VAL_CHAR) dv = (double)(unsigned char)args[slot].v.c;
             stackframe_bind_double(new_frame, pname, dv);
             break;
         }
@@ -541,6 +545,7 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
                     else if(dv.type == VAL_INT) iv = (int64_t)dv.v.i;
                     else if(dv.type == VAL_BOOL) iv = dv.v.b ? 1 : 0;
                     else if(dv.type == VAL_DOUBLE) iv = (int64_t)dv.v.d;
+                    iv = ir_int_truncate(iv, pck);   /* 按形参硬类型截断 */
                     stackframe_bind_int64(new_frame, pname, iv);
                     break;
                 }

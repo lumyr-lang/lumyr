@@ -18,6 +18,7 @@ CastKind get_var_cast_type(Ctx* c, const char* name) {
 ExprType castkind_to_exprtype(CastKind ct) {
     switch(ct) {
         case CAST_INT:
+        case CAST_INT_INFER:
         case CAST_INT8:
         case CAST_INT16:
         case CAST_INT32:
@@ -56,6 +57,41 @@ ExprType castkind_to_exprtype(CastKind ct) {
 
         default:
             return EXPR_TYPE_NONE;  /* 动态类型 → Value 栈 */
+    }
+}
+
+int64_t ir_int_truncate(int64_t v, CastKind ck) {
+    switch(ck) {
+        case CAST_BOOL:            return v ? 1 : 0;
+        case CAST_INT8:            return (int8_t)v;
+        case CAST_CHAR:            return (char)v;
+        case CAST_INT16:
+        case CAST_SHORT:           return (int16_t)v;
+        case CAST_BYTE:
+        case CAST_UCHAR:
+        case CAST_UINT8:           return (uint8_t)v;
+        case CAST_UINT16:
+        case CAST_USHORT:          return (uint16_t)v;
+        case CAST_INT:
+        case CAST_ASCII:
+        case CAST_INT32:           return (int32_t)v;
+        case CAST_UINT:
+        case CAST_UINT32:          return (uint32_t)v;
+        default:                   return v;   /* INFER 软 int + 64 位类型：不截断 */
+    }
+}
+
+int ir_int_tag_truncates(CastKind ck) {
+    switch(ck) {
+        case CAST_BOOL: case CAST_INT8: case CAST_CHAR:
+        case CAST_INT16: case CAST_SHORT:
+        case CAST_BYTE: case CAST_UCHAR: case CAST_UINT8:
+        case CAST_UINT16: case CAST_USHORT:
+        case CAST_INT: case CAST_ASCII: case CAST_INT32:
+        case CAST_UINT: case CAST_UINT32:
+            return 1;
+        default:
+            return 0;
     }
 }
 

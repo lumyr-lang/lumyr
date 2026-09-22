@@ -20,6 +20,7 @@ struct AstNode {
     AstType type;
     ValueType val_type;  // 该节点表达式的类型，语义分析后填充
     int line;            // 源码行号（lexer yylineno，解析时填充；报错定位用）
+    CastKind lit_cast;   // 字面量后缀精确类型（AST_INT/AST_NUM 专用；CAST_NONE=按值推断）
     union {
         long long inum;           // AST_INT
         double num;               // AST_NUM

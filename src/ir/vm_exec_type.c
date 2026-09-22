@@ -78,15 +78,23 @@ int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
     Value v;
     switch ((CastKind)in->a) {
-    case CAST_BOOL:    v = lumyr_make_bool(val); break;
+    case CAST_BOOL: v = lumyr_make_bool(val); break;
     case CAST_CHAR:    v = lumyr_make_char((char)val); break;
     case CAST_BYTE:    v = lumyr_make_byte((unsigned char)val); break;
     case CAST_INT8:    v = lumyr_make_int8((int8_t)val); break;
     case CAST_INT16:   v = lumyr_make_int16((int16_t)val); break;
     case CAST_SHORT:   v = lumyr_make_short((int16_t)val); break;
     case CAST_INT32:   v = lumyr_make_int32((int32_t)val); break;
+    case CAST_INT_INFER:
+        /* 推断软 int：溢出 int32 时装箱为 int64（重赋值类型迁移，大值不被截断） */
+        v = (val >= INT32_MIN && val <= INT32_MAX) ? lumyr_make_int((int)val)
+                                                   : lumyr_make_int64(val);
+        break;
     case CAST_INT:
-    case CAST_ASCII:   v = lumyr_make_int((int)val); break;
+    case CAST_ASCII:
+        /* 显式 int：严格 C 风格截断（即使溢出也保持 VAL_INT） */
+        v = lumyr_make_int((int)val);
+        break;
     case CAST_UINT8:   v = lumyr_make_uint8((uint8_t)val); break;
     case CAST_UCHAR:   v = lumyr_make_uchar((unsigned char)val); break;
     case CAST_UINT16:  v = lumyr_make_uint16((uint16_t)val); break;
@@ -105,12 +113,18 @@ int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* BOX_DOUBLE：DOUBLE 栈弹 1 -> Value -> VALUE 栈 */
+/* BOX_DOUBLE：DOUBLE 栈弹 1 -> Value -> VALUE 栈
+   a=CastKind 决定浮点子类型（float/long double）；CAST_NONE 或未列出 → double */
 int vm_exec_box_double(VMExecCtx* ctx, Instruction* in) {
-    (void)ctx; (void)in;
+    (void)ctx;
     double val;
     stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
-    Value v = lumyr_make_double(val);
+    Value v;
+    switch ((CastKind)in->a) {
+    case CAST_FLOAT:       v = lumyr_make_float((float)val); break;
+    case CAST_LONG_DOUBLE: v = lumyr_make_long_double((long double)val); break;
+    default:               v = lumyr_make_double(val); break;
+    }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }
@@ -159,7 +173,9 @@ int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in) {
     int64_t val = 0;
     if (v.type == VAL_INT64) val = v.v.i64;
     else if (v.type == VAL_INT) val = (int64_t)v.v.i;
-    else if (v.type == VAL_BOOL) val = (int64_t)(v.v.i ? 1 : 0);
+    else if (v.type == VAL_BOOL) val = (int64_t)(v.v.b ? 1 : 0);
+    else if (v.type == VAL_CHAR) val = (int64_t)(unsigned char)v.v.c;
+    else if (v.type == VAL_BYTE) val = (int64_t)v.v.by;
     else if (v.type == VAL_DOUBLE) val = (int64_t)v.v.d;
     else if (v.type == VAL_NONE) val = 0;
     else if (v.type == VAL_STRING) {
@@ -169,6 +185,7 @@ int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in) {
     else {
         Value c = lumyr_cast_int64(v);
         if (c.type == VAL_INT64) val = c.v.i64;
+        else if (c.type == VAL_INT) val = (int64_t)c.v.i;
     }
     stack_vm_push(g_stack_mgr, STACK_INT64, &val);
     return 1;
@@ -184,7 +201,9 @@ int vm_exec_unbox_double(VMExecCtx* ctx, Instruction* in) {
     if (v.type == VAL_DOUBLE) val = v.v.d;
     else if (v.type == VAL_INT64) val = (double)v.v.i64;
     else if (v.type == VAL_INT) val = (double)v.v.i;
-    else if (v.type == VAL_BOOL) val = (double)(v.v.i ? 1 : 0);
+    else if (v.type == VAL_BOOL) val = (double)(v.v.b ? 1 : 0);
+    else if (v.type == VAL_CHAR) val = (double)(unsigned char)v.v.c;
+    else if (v.type == VAL_BYTE) val = (double)v.v.by;
     else if (v.type == VAL_NONE) val = 0.0;
     else if (v.type == VAL_STRING) {
         const char* s = v.str_inline ? v.v.sso.data : v.v.s;
