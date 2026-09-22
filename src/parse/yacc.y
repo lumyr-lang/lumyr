@@ -2269,6 +2269,9 @@ primary
     | TOK_FILE LPAREN arg_list RPAREN { $$ = L(ast_call(strdup("file"), $3)); }
     /* folder 构造：folder("path") */
     | TOK_FOLDER LPAREN arg_list RPAREN { $$ = L(ast_call(strdup("folder"), $3)); }
+    /* file/folder 角括号字面量：<file>"path" / <folder>"path" */
+    | TOK_FILE STRING_LIT   { $$ = L(ast_call(strdup("file"), ast_string($2))); free($2); }
+    | TOK_FOLDER STRING_LIT { $$ = L(ast_call(strdup("folder"), ast_string($2))); free($2); }
     | ID LPAREN arg_list RPAREN {
           /* 宏调用：如果是已注册的宏，则展开；否则作为普通函数调用 */
           if(macro_is_defined($1)) {

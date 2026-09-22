@@ -28,6 +28,12 @@ Value lumyr_file_append(Value v, const char* content);
 Value lumyr_file_append_line(Value v, const char* content);
 Value lumyr_file_flush(Value v);
 Value lumyr_file_delete(Value v);
+// 二进制 I/O + 文件管理
+Value lumyr_file_read_bytes(Value v);
+Value lumyr_file_write_bytes(Value v, Value b);
+Value lumyr_file_copy_to(Value v, const char* dest);
+Value lumyr_file_rename_to(Value v, const char* newPath);
+Value lumyr_file_truncate(Value v, int64_t size);
 
 // ===== folder 类型 =====
 // 构造：folder("path") 或 <folder>"path"
@@ -48,5 +54,7 @@ Value lumyr_folder_remove(Value v);
 Value lumyr_folder_walk(Value v);
 Value lumyr_folder_copy_to(Value v, const char* dest);
 Value lumyr_folder_move_to(Value v, const char* dest);
+Value lumyr_folder_rename_to(Value v, const char* newPath);
+Value lumyr_folder_glob(Value v, const char* pattern);
 
 #endif // LM_FILE_H

@@ -129,7 +129,8 @@ d3 = folder("/tmp/lm_folder_test_3");
 d3.remove();
 d1.moveTo("/tmp/lm_folder_test_3");
 assert d3.exists == true;
-assert d1.exists == false;
+assert d1.path == "/tmp/lm_folder_test_3";
+assert d1.exists == true;
 print("12. folder moveTo OK");
 
 // ===== 13. folder.remove 递归删除 =====
@@ -157,6 +158,89 @@ file("/tmp/lm_folder_test_6/x.txt").writeAll("x");
 assert len(d6) == 1;
 d6.remove();
 print("15. len(file)/len(folder) OK");
+
+// ===== 16. <file>"path" / <folder>"path" 角括号字面量 =====
+fBr = <file>"/tmp/lm_file_bracket.txt";
+fBr.writeAll("Bracket");
+assert fBr.readAll() == "Bracket";
+assert fBr.path == "/tmp/lm_file_bracket.txt";
+fBr.delete();
+dBr = <folder>"/tmp/lm_folder_bracket";
+dBr.create();
+assert dBr.exists == true;
+dBr.remove();
+print("16. <file>/<folder> 角括号字面量 OK");
+
+// ===== 17. file 新增字段：name/ext/mtime =====
+fN = file("/tmp/lm_file_fields.txt");
+fN.writeAll("test");
+assert fN.name == "lm_file_fields.txt";
+assert fN.ext == "txt";
+assert fN.mtime > 0;
+fN.delete();
+// 无扩展名
+fN2 = file("/tmp/lm_file_noext");
+fN2.writeAll("x");
+assert fN2.ext == "";
+fN2.delete();
+print("17. file name/ext/mtime 字段 OK");
+
+// ===== 18. 二进制 I/O：readBytes / writeBytes =====
+fB = file("/tmp/lm_file_binary.bin");
+b = bytes("Hello");
+fB.writeBytes(b);
+rb = fB.readBytes();
+assert len(rb) == 5;
+assert rb[0] == 72;  // 'H'
+assert rb[4] == 111; // 'o'
+// 二进制安全：写入非文本字节
+b2 = bytes([0, 255, 128, 1]);
+fB.writeBytes(b2);
+rb2 = fB.readBytes();
+assert len(rb2) == 4;
+assert rb2[0] == 0;
+assert rb2[1] == 255;
+assert rb2[2] == 128;
+assert rb2[3] == 1;
+fB.delete();
+print("18. file readBytes/writeBytes 二进制 I/O OK");
+
+// ===== 19. file copyTo / renameTo / truncate =====
+fC = file("/tmp/lm_file_copy_src.txt");
+fC.writeAll("CopyMe");
+fC.copyTo("/tmp/lm_file_copy_dst.txt");
+fD = file("/tmp/lm_file_copy_dst.txt");
+assert fD.readAll() == "CopyMe";
+fD.delete();
+
+fC.renameTo("/tmp/lm_file_renamed.txt");
+assert fC.path == "/tmp/lm_file_renamed.txt";
+assert fC.readAll() == "CopyMe";
+fC.truncate(3);
+assert fC.size == 3;
+assert fC.readAll() == "Cop";
+fC.delete();
+print("19. file copyTo/renameTo/truncate OK");
+
+// ===== 20. folder size / glob / renameTo =====
+dG = folder("/tmp/lm_folder_glob");
+dG.create();
+file("/tmp/lm_folder_glob/a.txt").writeAll("a");
+file("/tmp/lm_folder_glob/b.txt").writeAll("bb");
+file("/tmp/lm_folder_glob/c.log").writeAll("ccc");
+assert dG.size == 6;  // a=1 + bb=2 + ccc=3 = 6
+txts = dG.glob("*.txt");
+assert len(txts) == 2;
+logs = dG.glob("*.log");
+assert len(logs) == 1;
+allG = dG.glob("*");
+assert len(allG) == 3;
+dG.renameTo("/tmp/lm_folder_glob_renamed");
+assert dG.path == "/tmp/lm_folder_glob_renamed";
+assert dG.exists == true;
+dG.remove();
+assert dG.exists == false;
+print("20. folder size/glob/renameTo OK");
 
 print("");
 print("===== file/folder ALL PASS / 全部通过 =====");

@@ -2,6 +2,7 @@
 // 不持有 FILE* 句柄：每次方法调用 fopen/fclose，避免 GC 回收时的资源泄漏
 #include "lm_file.h"
 #include "lm_array.h"
+#include "lm_container.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,8 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fnmatch.h>
+#include <libgen.h>
 
 // ===== 内部辅助 =====
 
@@ -229,6 +232,31 @@ static int dir_count(const char* path) {
     return n;
 }
 
+// 递归计算目录总大小（所有文件字节数之和）
+static int64_t dir_total_size_recurse(const char* path) {
+    DIR* d = opendir(path);
+    if (!d) return 0;
+    struct dirent* ent;
+    int64_t total = 0;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char child[4096];
+        snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        if (path_is_dir(child)) {
+            total += dir_total_size_recurse(child);
+        } else {
+            total += file_size(child);
+        }
+    }
+    closedir(d);
+    return total;
+}
+
+static int64_t dir_total_size(const char* path) {
+    if (!path_exists(path)) return 0;
+    return dir_total_size_recurse(path);
+}
+
 // ===== file 公共 API =====
 
 Value lumyr_file_make(const char* path, const char* mode) {
@@ -275,6 +303,29 @@ Value lumyr_file_field(Value v, const char* name) {
         int n = content ? count_lines(content) : 0;
         free(content);
         return lumyr_make_int(n);
+    }
+    if (strcmp(name, "name") == 0) {
+        /* 文件名（不含目录） */
+        char* dup = strdup(o->path);
+        char* bn = basename(dup);
+        Value r = lumyr_make_string(bn);
+        free(dup);
+        return r;
+    }
+    if (strcmp(name, "ext") == 0) {
+        /* 扩展名（不含 .，无扩展返回空串） */
+        char* dup = strdup(o->path);
+        char* bn = basename(dup);
+        char* dot = strrchr(bn, '.');
+        Value r = (dot && dot != bn) ? lumyr_make_string(dot + 1) : lumyr_make_string("");
+        free(dup);
+        return r;
+    }
+    if (strcmp(name, "mtime") == 0) {
+        /* 最后修改时间（epoch 秒） */
+        struct stat st;
+        if (stat(o->path, &st) != 0) return lumyr_make_int(0);
+        return lumyr_make_int64((int64_t)st.st_mtime);
     }
     return lumyr_make_int(0);
 }
@@ -515,6 +566,116 @@ Value lumyr_file_delete(Value v) {
     return val_none();
 }
 
+/* ===== file 二进制 I/O + 文件管理 ===== */
+
+Value lumyr_file_read_bytes(Value v) {
+    if (v.type != VAL_FILE) { runtime_error("readBytes() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("readBytes() 文件对象无效"); return val_none(); }
+    long sz = 0;
+    char* content = read_whole_file(o->path, &sz);
+    if (!content) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "readBytes() 无法读取文件: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    /* 构造 BytesObj */
+    BytesObj* bo = (BytesObj*)gc_alloc(sizeof(BytesObj), VAL_BYTES);
+    if (!bo) { free(content); return val_none(); }
+    bo->len = (int)sz;
+    bo->data = (uint8_t*)gc_alloc((size_t)sz + 1, VAL_BYTES);
+    if (bo->data) {
+        memcpy(bo->data, content, (size_t)sz);
+    }
+    bo->stack_alloc = 0;
+    free(content);
+    Value r;
+    r.type = VAL_BYTES;
+    r.str_inline = 0;
+    r.v.bytes_obj = bo;
+    return r;
+}
+
+Value lumyr_file_write_bytes(Value v, Value b) {
+    if (v.type != VAL_FILE) { runtime_error("writeBytes() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("writeBytes() 文件对象无效"); return val_none(); }
+    if (b.type != VAL_BYTES) { runtime_error("writeBytes() 参数必须是 bytes 对象"); return val_none(); }
+    BytesObj* bo = (BytesObj*)b.v.bytes_obj;
+    if (!bo) { runtime_error("writeBytes() bytes 对象无效"); return val_none(); }
+    FILE* f = fopen(o->path, "wb");
+    if (!f) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "writeBytes() 无法打开文件: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    size_t wr = fwrite(bo->data, 1, (size_t)bo->len, f);
+    fclose(f);
+    if (wr != (size_t)bo->len) { runtime_error("writeBytes() 写入不完整"); return val_none(); }
+    return val_none();
+}
+
+Value lumyr_file_copy_to(Value v, const char* dest) {
+    if (v.type != VAL_FILE) { runtime_error("copyTo() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("copyTo() 文件对象无效"); return val_none(); }
+    if (!dest) { runtime_error("copyTo() 目标路径为空"); return val_none(); }
+    long sz = 0;
+    char* content = read_whole_file(o->path, &sz);
+    if (!content) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "copyTo() 无法读取源文件: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    FILE* f = fopen(dest, "wb");
+    if (!f) {
+        free(content);
+        char buf[512];
+        snprintf(buf, sizeof(buf), "copyTo() 无法打开目标文件: %s", dest);
+        runtime_error(buf);
+        return val_none();
+    }
+    fwrite(content, 1, (size_t)sz, f);
+    fclose(f);
+    free(content);
+    return val_none();
+}
+
+Value lumyr_file_rename_to(Value v, const char* newPath) {
+    if (v.type != VAL_FILE) { runtime_error("renameTo() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("renameTo() 文件对象无效"); return val_none(); }
+    if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
+    if (rename(o->path, newPath) != 0) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)", o->path, newPath, strerror(errno));
+        runtime_error(buf);
+        return val_none();
+    }
+    /* 更新内部路径 */
+    size_t plen = strlen(newPath);
+    /* 释放旧路径（GC 管理，不手动 free） */
+    o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
+    if (o->path) memcpy(o->path, newPath, plen + 1);
+    return val_none();
+}
+
+Value lumyr_file_truncate(Value v, int64_t size) {
+    if (v.type != VAL_FILE) { runtime_error("truncate() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("truncate() 文件对象无效"); return val_none(); }
+    if (truncate(o->path, (off_t)size) != 0) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "truncate() 截断失败: %s (%s)", o->path, strerror(errno));
+        runtime_error(buf);
+        return val_none();
+    }
+    return val_none();
+}
+
 // ===== folder 公共 API =====
 
 Value lumyr_folder_make(const char* path) {
@@ -544,6 +705,10 @@ Value lumyr_folder_field(Value v, const char* name) {
     if (strcmp(name, "path") == 0)    return lumyr_make_string(o->path);
     if (strcmp(name, "exists") == 0)  return lumyr_make_bool(path_exists(o->path) && path_is_dir(o->path));
     if (strcmp(name, "count") == 0)  return lumyr_make_int(dir_count(o->path));
+    if (strcmp(name, "size") == 0) {
+        /* 目录总大小（递归所有文件字节数） */
+        return lumyr_make_int64(dir_total_size(o->path));
+    }
     return lumyr_make_int(0);
 }
 
@@ -647,7 +812,13 @@ Value lumyr_folder_move_to(Value v, const char* dest) {
     if (!o || !o->path) { runtime_error("moveTo() 目录对象无效"); return val_none(); }
     if (!dest) { runtime_error("moveTo() 目标路径为空"); return val_none(); }
     // 先尝试 rename（同文件系统快），失败则复制+删除
-    if (rename(o->path, dest) == 0) return val_none();
+    if (rename(o->path, dest) == 0) {
+        /* 更新内部路径 */
+        size_t plen = strlen(dest);
+        o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
+        if (o->path) memcpy(o->path, dest, plen + 1);
+        return val_none();
+    }
     if (copy_dir_recursive(o->path, dest) != 0) {
         char buf[512];
         snprintf(buf, sizeof(buf), "moveTo() 移动失败: %s -> %s", o->path, dest);
@@ -655,5 +826,47 @@ Value lumyr_folder_move_to(Value v, const char* dest) {
         return val_none();
     }
     remove_dir_recursive(o->path);
+    /* 更新内部路径 */
+    size_t plen = strlen(dest);
+    o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
+    if (o->path) memcpy(o->path, dest, plen + 1);
     return val_none();
+}
+
+Value lumyr_folder_rename_to(Value v, const char* newPath) {
+    if (v.type != VAL_FOLDER) { runtime_error("renameTo() 仅适用于 folder 对象"); return val_none(); }
+    FolderObj* o = (FolderObj*)v.v.folder_obj;
+    if (!o || !o->path) { runtime_error("renameTo() 目录对象无效"); return val_none(); }
+    if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
+    if (rename(o->path, newPath) != 0) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)", o->path, newPath, strerror(errno));
+        runtime_error(buf);
+        return val_none();
+    }
+    /* 更新内部路径 */
+    size_t plen = strlen(newPath);
+    o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
+    if (o->path) memcpy(o->path, newPath, plen + 1);
+    return val_none();
+}
+
+Value lumyr_folder_glob(Value v, const char* pattern) {
+    if (v.type != VAL_FOLDER) { runtime_error("glob() 仅适用于 folder 对象"); return val_array(0); }
+    FolderObj* o = (FolderObj*)v.v.folder_obj;
+    if (!o || !o->path) { runtime_error("glob() 目录对象无效"); return val_array(0); }
+    if (!pattern) { runtime_error("glob() 模式为空"); return val_array(0); }
+    Value arr = val_array(0);
+    DIR* d = opendir(o->path);
+    if (!d) return arr;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        if (fnmatch(pattern, ent->d_name, 0) == 0) {
+            Value s = lumyr_make_string(ent->d_name);
+            lumyr_array_add(&arr, s);
+        }
+    }
+    closedir(d);
+    return arr;
 }

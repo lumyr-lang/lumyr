@@ -472,6 +472,10 @@ typedef enum {
     BUILTIN_FILE_APPEND_LINE,   // f.appendLine(s)：追加一行
     BUILTIN_FILE_FLUSH,         // f.flush()：刷新（no-op）
     BUILTIN_FILE_DELETE,        // f.delete()：删除文件
+    BUILTIN_FILE_READ_BYTES,    // f.readBytes()：读取为 bytes 对象
+    BUILTIN_FILE_WRITE_BYTES,   // f.writeBytes(b)：写入 bytes
+    BUILTIN_FILE_TRUNCATE,      // f.truncate(size)：截断/扩展
+    BUILTIN_FILE_RENAME_TO,     // f.renameTo(newPath)：重命名（更新内部路径）
     /* folder 目录对象 */
     BUILTIN_FOLDER_MAKE,        // folder(path)：构造 VAL_FOLDER
     BUILTIN_FOLDER_LIST,        // d.list()：列出所有条目
@@ -482,6 +486,8 @@ typedef enum {
     BUILTIN_FOLDER_WALK,        // d.walk()：递归遍历
     BUILTIN_FOLDER_COPY_TO,     // d.copyTo(dest)：复制
     BUILTIN_FOLDER_MOVE_TO,     // d.moveTo(dest)：移动
+    BUILTIN_FOLDER_RENAME_TO,   // d.renameTo(newPath)：重命名
+    BUILTIN_FOLDER_GLOB,        // d.glob(pattern)：通配符匹配
     BUILTIN_COUNT
 } BuiltinId;
 

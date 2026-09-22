@@ -1981,6 +1981,36 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_file_delete(recv);
         return 1;
     }
+    case BUILTIN_FILE_READ_BYTES: {
+        if(recv.type != VAL_FILE) return bi_type_err("readBytes", recv);
+        *out = lumyr_file_read_bytes(recv);
+        return 1;
+    }
+    case BUILTIN_FILE_WRITE_BYTES: {
+        if(recv.type != VAL_FILE) return bi_type_err("writeBytes", recv);
+        if(argc < 1) { runtime_error("writeBytes(b) 需要 1 个 bytes 参数"); return 0; }
+        *out = lumyr_file_write_bytes(recv, argv[1]);
+        return 1;
+    }
+    case BUILTIN_FILE_TRUNCATE: {
+        if(recv.type != VAL_FILE) return bi_type_err("truncate", recv);
+        if(argc < 1) { runtime_error("truncate(size) 需要 1 个参数"); return 0; }
+        *out = lumyr_file_truncate(recv, bi_num_i64(argv[1]));
+        return 1;
+    }
+    case BUILTIN_FILE_RENAME_TO: {
+        if(recv.type == VAL_FILE) {
+            if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("renameTo(newPath) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_file_rename_to(recv, lumyr_str_cstr(&argv[1]));
+            return 1;
+        }
+        if(recv.type == VAL_FOLDER) {
+            if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("renameTo(newPath) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_folder_rename_to(recv, lumyr_str_cstr(&argv[1]));
+            return 1;
+        }
+        return bi_type_err("renameTo", recv);
+    }
     /* ===== folder 目录对象 ===== */
     case BUILTIN_FOLDER_MAKE: {
         if(argc < 1 || argv[0].type != VAL_STRING) {
@@ -2021,6 +2051,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_FOLDER_COPY_TO: {
+        /* copyTo 同时支持 file 和 folder */
+        if(recv.type == VAL_FILE) {
+            if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("copyTo(dest) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_file_copy_to(recv, lumyr_str_cstr(&argv[1]));
+            return 1;
+        }
         if(recv.type != VAL_FOLDER) return bi_type_err("copyTo", recv);
         if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("copyTo(dest) 需要 1 个字符串参数"); return 0; }
         *out = lumyr_folder_copy_to(recv, lumyr_str_cstr(&argv[1]));
@@ -2030,6 +2066,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_FOLDER) return bi_type_err("moveTo", recv);
         if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("moveTo(dest) 需要 1 个字符串参数"); return 0; }
         *out = lumyr_folder_move_to(recv, lumyr_str_cstr(&argv[1]));
+        return 1;
+    }
+    case BUILTIN_FOLDER_RENAME_TO: {
+        /* 由 BUILTIN_FILE_RENAME_TO 统一处理 file+folder，此处不会到达 */
+        if(recv.type == VAL_FOLDER) {
+            if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("renameTo(newPath) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_folder_rename_to(recv, lumyr_str_cstr(&argv[1]));
+            return 1;
+        }
+        return bi_type_err("renameTo", recv);
+    }
+    case BUILTIN_FOLDER_GLOB: {
+        if(recv.type != VAL_FOLDER) return bi_type_err("glob", recv);
+        if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("glob(pattern) 需要 1 个字符串参数"); return 0; }
+        *out = lumyr_folder_glob(recv, lumyr_str_cstr(&argv[1]));
         return 1;
     }
 
@@ -2184,15 +2235,20 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FILE_APPEND_LINE: return "appendLine";
     case BUILTIN_FILE_FLUSH: return "flush";
     case BUILTIN_FILE_DELETE: return "delete";
+    case BUILTIN_FILE_READ_BYTES: return "readBytes";
+    case BUILTIN_FILE_WRITE_BYTES: return "writeBytes";
+    case BUILTIN_FILE_TRUNCATE: return "truncate";
+    case BUILTIN_FILE_RENAME_TO: return "renameTo";
     case BUILTIN_FOLDER_MAKE: return "folder";
     case BUILTIN_FOLDER_LIST: return "list";
     case BUILTIN_FOLDER_FILES: return "files";
     case BUILTIN_FOLDER_DIRS: return "dirs";
     case BUILTIN_FOLDER_CREATE: return "create";
-    case BUILTIN_FOLDER_REMOVE: return "remove";
     case BUILTIN_FOLDER_WALK: return "walk";
     case BUILTIN_FOLDER_COPY_TO: return "copyTo";
     case BUILTIN_FOLDER_MOVE_TO: return "moveTo";
+    case BUILTIN_FOLDER_RENAME_TO: return "renameTo";
+    case BUILTIN_FOLDER_GLOB: return "glob";
     default: return "?";
     }
 }

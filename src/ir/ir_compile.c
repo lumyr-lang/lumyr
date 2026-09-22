@@ -176,6 +176,10 @@ static int builtin_id_by_name(const char* name) {
         {"appendLine", BUILTIN_FILE_APPEND_LINE},
         {"flush", BUILTIN_FILE_FLUSH},
         {"delete", BUILTIN_FILE_DELETE},
+        {"readBytes", BUILTIN_FILE_READ_BYTES},
+        {"writeBytes", BUILTIN_FILE_WRITE_BYTES},
+        {"truncate", BUILTIN_FILE_TRUNCATE},
+        {"renameTo", BUILTIN_FILE_RENAME_TO},
         {"folder", BUILTIN_FOLDER_MAKE},
         {"list", BUILTIN_FOLDER_LIST},
         {"files", BUILTIN_FOLDER_FILES},
@@ -184,6 +188,7 @@ static int builtin_id_by_name(const char* name) {
         {"walk", BUILTIN_FOLDER_WALK},
         {"copyTo", BUILTIN_FOLDER_COPY_TO},
         {"moveTo", BUILTIN_FOLDER_MOVE_TO},
+        {"glob", BUILTIN_FOLDER_GLOB},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {
