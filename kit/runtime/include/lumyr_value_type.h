@@ -393,7 +393,8 @@ typedef struct {
 //          data 缓冲区也由 gc_alloc(vtype=VAL_BYTES) 管理（无内部 Value 引用，无需递归标记）
 typedef struct {
     uint8_t* data;        // 字节数据（不可变，构造后只读）
-    int len;              // 字节长度
+    int len;              // 字节长度（byte 数）
+    ValueType elem_type;  // 元素类型（默认 VAL_UINT8 普通字节；VAL_INT8/INT16/.../FLOAT/DOUBLE 为类型化 bytes）
     uint8_t stack_alloc;  // 0=堆分配，1=编译通道栈分配
 } BytesObj;
 

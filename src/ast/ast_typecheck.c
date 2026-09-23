@@ -1554,6 +1554,14 @@ int typecheck_expr(AstNode* node)
                 node->val_type = node->u.type_annotation.expr->val_type;
                 break;
             }
+            /* <T>bytes(...)：类型化 bytes，结果仍是 bytes（动态，可下标 / .len），
+             * 不能按 CAST_DOUBLE/INT 等定型，否则 d[0] 等下标会被拦截 */
+            if(node->u.type_annotation.expr->type == AST_CALL &&
+               node->u.type_annotation.expr->u.call.name &&
+               strcmp(node->u.type_annotation.expr->u.call.name, "bytes") == 0) {
+                node->val_type = VAL_NONE;
+                break;
+            }
             switch(node->u.type_annotation.cast_type) {
                 case CAST_INT: case CAST_INT_INFER: node->val_type = VAL_INT; break;
                 case CAST_DOUBLE:   node->val_type = VAL_DOUBLE; break;

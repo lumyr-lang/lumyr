@@ -491,6 +491,21 @@ static void compile_formdata_lit(Ctx* c, AstNode* src) {
     }
 }
 
+/* 判断 CastKind 是否可作为类型化 bytes 的元素类型（数值类） */
+static int is_typed_bytes_cast(CastKind ct) {
+    switch(ct) {
+    case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT: case CAST_UINT64:
+    case CAST_BYTE: case CAST_UCHAR: case CAST_CHAR: case CAST_BOOL:
+    case CAST_SHORT: case CAST_USHORT: case CAST_LONG: case CAST_LONGLONG:
+    case CAST_ULONG: case CAST_SIZE_T: case CAST_SSIZE_T:
+    case CAST_INT: case CAST_FLOAT: case CAST_DOUBLE: case CAST_LONG_DOUBLE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
@@ -744,6 +759,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
+        /* <T>bytes(arg)：类型化 bytes 构造（按 T 打包元素 / 重解释字节）
+         * 仅当 T 为数值类型且子表达式是单参 bytes() 调用时拦截 */
+        if(ann_child && ann_child->type == AST_CALL && ann_child->u.call.name &&
+           strcmp(ann_child->u.call.name, "bytes") == 0 &&
+           is_typed_bytes_cast(ct)) {
+            AstNode* arg = ann_child->u.call.args;
+            if(arg && arg->type != AST_SEQ) {
+                c_expr_to_value(c, arg);   /* 实参装箱到 VALUE 栈 */
+                emit(c, OPC_TYPED_BYTES, (int)ct, 0);
+                return EXPR_TYPE_NONE;
+            }
+        }
         /* formdata 字面量：<formdata>{...} 或 <formdata>[[k,v],...] */
         if(ct == CAST_FORMDATA && ann_child &&
            (ann_child->type == AST_MAP_LIT || ann_child->type == AST_ARRAY_LIT)) {

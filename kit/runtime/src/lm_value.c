@@ -1440,6 +1440,8 @@ Value lumyr_cast_double(Value v) {
             lumyr_map_set(&r, __k, lumyr_cast_double(__v));
         return r;
     }
+    /* VAL_BYTES 重解释为 double 视图（8 字节小端） */
+    if(v.type == VAL_BYTES) return lumyr_bytes_reinterpret(v, VAL_DOUBLE);
     /* 字符串单独处理（value_as_number 不处理字符串） */
     if(v.type == VAL_STRING) {
         const char* t = lumyr_str_cstr(&v);
@@ -2031,6 +2033,20 @@ static Value cast_int_width(Value v, int bits, int is_signed) {
         }
         return r;
     }
+    /* VAL_BYTES 重解释：按 bits+is_signed 选目标元素类型，共享缓冲仅改 elem_type。
+     * 让 <uint32>rawBytes / <int16>b 等 reinterpret 语法走类型化 bytes 视图，
+     * 而不是落入 value_to_ll 的"整数强转: 不支持的类型"错误。 */
+    if(v.type == VAL_BYTES) {
+        ValueType et;
+        switch(bits) {
+            case 8:  et = is_signed ? VAL_INT8  : VAL_UINT8;  break;
+            case 16: et = is_signed ? VAL_INT16 : VAL_UINT16; break;
+            case 32: et = is_signed ? VAL_INT32 : VAL_UINT32; break;
+            case 64: et = is_signed ? VAL_INT64 : VAL_UINT64; break;
+            default: et = VAL_UINT8; break;
+        }
+        return lumyr_bytes_reinterpret(v, et);
+    }
     long long ll = value_to_ll(v);
     unsigned long long ull = value_to_ull(v);
     switch(bits) {
@@ -2068,6 +2084,8 @@ static Value cast_float_rec(Value v) {
             lumyr_map_set(&r, __k, cast_float_rec(__v));
         return r;
     }
+    /* VAL_BYTES 重解释为 float 视图（4 字节小端） */
+    if(v.type == VAL_BYTES) return lumyr_bytes_reinterpret(v, VAL_FLOAT);
     /* 标量类型：统一走 value_as_number（已补全所有类型） */
     double d = value_as_number(v);
     return lumyr_make_float((float)d);

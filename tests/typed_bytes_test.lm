@@ -1,0 +1,77 @@
+// 类型化 bytes 测试：<T>bytes(...) 构造与重解释
+// 覆盖：int8/uint8/int16/uint16/uint32/int64/float/double 打包、小端序、符号、重解释、socket 二进制往返
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ===== 1. uint16 打包（小端序）=====
+b = <uint16>bytes([1, 2, 300]);
+check(type(b) == "bytes", "uint16 type");
+check(b.len == 3, "uint16 len=3, got " + b.len);
+check(b[0] == 1, "uint16[0]=1, got " + b[0]);
+check(b[1] == 2, "uint16[1]=2, got " + b[1]);
+check(b[2] == 300, "uint16[2]=300, got " + b[2]);
+
+// ===== 2. int16 符号（-1 = 0xFFFF）=====
+s = <int16>bytes([1, -1, -2]);
+check(s.len == 3, "int16 len=3");
+check(s[0] == 1, "int16[0]=1");
+check(s[1] == -1, "int16[1]=-1, got " + s[1]);
+check(s[2] == -2, "int16[2]=-2, got " + s[2]);
+
+// ===== 3. uint32 单元素 =====
+u = <uint32>bytes([0x12345678]);
+check(u.len == 1, "uint32 len=1, got " + u.len);
+check(u[0] == 0x12345678, "uint32[0]=0x12345678, got " + u[0]);
+
+// ===== 4. int8 溢出符号（200 → -56）=====
+i8 = <int8>bytes([200]);
+check(i8[0] == -56, "int8(200)=-56, got " + i8[0]);
+
+// ===== 5. uint8 与普通 bytes 一致 =====
+u8 = <uint8>bytes([0x41, 0x00, 0x42]);
+check(u8.len == 3, "uint8 len=3");
+check(u8[0] == 0x41 && u8[1] == 0x00 && u8[2] == 0x42, "uint8 content A\\0B");
+
+// ===== 6. int64 =====
+b64 = <int64>bytes([1000000000000]);
+check(b64.len == 1, "int64 len=1");
+check(b64[0] == 1000000000000, "int64[0]=1e12, got " + b64[0]);
+
+// ===== 7. float / double =====
+f = <float>bytes([1.5]);
+check(f.len == 1, "float len=1");
+check(f[0] == 1.5, "float[0]=1.5, got " + f[0]);
+d = <double>bytes([3.14]);
+check(d.len == 1, "double len=1");
+check(d[0] == 3.14, "double[0]=3.14, got " + d[0]);
+
+// ===== 8. 重解释：4 字节 → 1 个 uint32（小端）=====
+raw = bytes([0x78, 0x56, 0x34, 0x12]);
+check(raw.len == 4, "raw bytes len=4");
+ru = <uint32>bytes(raw);
+check(ru.len == 1, "reinterpret uint32 len=1, got " + ru.len);
+check(ru[0] == 0x12345678, "reinterpret uint32[0]=0x12345678, got " + ru[0]);
+// 重解释不改原 raw（共享不可变数据，raw 仍是 uint8 视图）
+check(raw[0] == 0x78, "raw unchanged[0]=0x78");
+
+// ===== 9. socket 二进制往返：uint16 数组打包后发送，对端按字节接收校验 =====
+port = 42821;
+srv = TcpSocket{host: "127.0.0.1", port: port, listen: true};
+cli = <TcpSocket>{host: "127.0.0.1", port: port};
+conn = srv.accept();
+pkt = <uint16>bytes([0x1234, 0x5678]);
+check(pkt.len == 2, "pkt len=2");
+n = cli.send(pkt);
+check(n == 4, "send uint16[2] = 4 bytes, got " + n);
+rb = conn.recv(16, 0, true);
+check(type(rb) == "bytes", "recv bytes type");
+check(rb.len == 4, "recv 4 bytes, got " + rb.len);
+check(rb[0] == 0x34 && rb[1] == 0x12 && rb[2] == 0x78 && rb[3] == 0x56, "recv LE bytes 34 12 78 56");
+// 对端再把收到的 4 字节重解释为 uint16[2]
+ru2 = <uint16>bytes(rb);
+check(ru2.len == 2, "reinterpret recv as uint16[2]");
+check(ru2[0] == 0x1234 && ru2[1] == 0x5678, "reinterpret uint16 roundtrip");
+conn.close(); cli.close(); srv.close();
+
+print("typed bytes test ALL PASS");

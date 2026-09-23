@@ -45,6 +45,19 @@ _Bool lumyr_set_eq(Value a, Value b);
 Value lumyr_bytes_make(int argc, const Value* args);
 // 从原始字节缓冲构造（二进制安全，可含 NUL）：socket recv bytes 路径用
 Value lumyr_bytes_from_buf(const uint8_t* data, int len);
+// 元素类型对应的字节宽度（VAL_INT8/UINT8=1, INT16/UINT16=2, INT32/UINT32/FLOAT=4, INT64/UINT64/DOUBLE=8）
+int lumyr_elem_size(ValueType t);
+// CastKind → ValueType（CAST_INT8→VAL_INT8 等；非数值返回 VAL_UINT8）
+ValueType lumyr_cast_kind_to_value_type(int cast_kind);
+// 类型化 bytes 构造：<T>bytes(src) 用
+//   src=VAL_ARRAY → 各元素按 T 打包（小端序）；
+//   src=VAL_BYTES → 重解释（共享数据，设 elem_type，元素数=字节长度/宽度）；
+//   src=VAL_STRING → 字符串字节重解释为 T；
+//   src=标量 → 单元素打包（宽度=es 字节）
+Value lumyr_bytes_typed(int cast_kind, Value src);
+// 重解释：把已有 bytes 按目标元素类型重新视图化（共享不可变缓冲，仅改 elem_type）
+// 供 <T>bytes_expr 重解释路径（如 <uint32>rawBytes）的数值 cast 函数调用
+Value lumyr_bytes_reinterpret(Value src, ValueType et);
 // 从十六进制字符串构造（"48656c6c6f" → bytes）
 Value lumyr_bytes_from_hex(const char* hex);
 // 长度

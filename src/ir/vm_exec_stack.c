@@ -67,6 +67,16 @@ int vm_exec_array_lit(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* TYPED_BYTES：弹 VALUE 栈顶（数组/bytes/字符串/标量），按 a=CastKind 构造类型化 bytes 压回 */
+int vm_exec_typed_bytes(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    Value src;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &src);
+    Value r = lumyr_bytes_typed(in->a, src);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+    return 1;
+}
+
 /* INT64_TO_PTR：弹 INT64 栈顶整数，作为裸地址压 PTR 栈 */
 int vm_exec_int64_to_ptr(VMExecCtx* ctx, Instruction* in) {
     (void)ctx; (void)in;

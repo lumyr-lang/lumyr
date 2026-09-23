@@ -146,6 +146,7 @@ typedef enum {
     OPC_DOUBLE_ARRAY_LIT,  // b=元素个数；弹 b 个 double 元素，压入 double 类型化数组
     OPC_PTR_ARRAY_LIT,    // b=元素个数；弹 b 个指针元素，压入指针类型化数组
     OPC_MAP_LIT,        // b=键值对个数；弹 2b 个值（键、值交替）压字典
+    OPC_TYPED_BYTES,    // a=CastKind：弹 1 个 Value（数组/bytes/字符串/标量），构造类型化 bytes 压 VALUE 栈
 
     /* ===== 下标访问/赋值 ===== */
     OPC_INDEX_GET,      // 弹 arr,idx 压元素（数组元素 / 字符串字符 / 字典键）

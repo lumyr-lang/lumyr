@@ -272,6 +272,7 @@ static Value bytes_alloc(const uint8_t* data, int len) {
         Value z; z.type = VAL_NONE; z.str_inline = 0; return z;
     }
     o->len = len;
+    o->elem_type = VAL_UINT8;   /* 默认普通 uint8 字节 */
     o->stack_alloc = 0;
     if(len > 0) {
         o->data = (uint8_t*)gc_alloc(sizeof(uint8_t) * (len > 0 ? len : 1), VAL_BYTES);
@@ -289,6 +290,166 @@ static Value bytes_alloc(const uint8_t* data, int len) {
 
 Value lumyr_bytes_from_buf(const uint8_t* data, int len) {
     return bytes_alloc(data, len);
+}
+
+// 元素类型 → 字节宽度
+int lumyr_elem_size(ValueType t) {
+    switch(t) {
+    case VAL_INT8: case VAL_UINT8: case VAL_UCHAR: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL:
+        return 1;
+    case VAL_INT16: case VAL_UINT16: case VAL_SHORT: case VAL_USHORT:
+        return 2;
+    case VAL_INT32: case VAL_UINT32: case VAL_UINT: case VAL_FLOAT:
+        return 4;
+    case VAL_INT64: case VAL_UINT64: case VAL_LONG: case VAL_LONG_LONG:
+    case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T: case VAL_DOUBLE: case VAL_LONG_DOUBLE:
+        return 8;
+    default:
+        return 1;
+    }
+}
+
+// CastKind → ValueType（类型化 bytes 用）
+ValueType lumyr_cast_kind_to_value_type(int cast_kind) {
+    switch((CastKind)cast_kind) {
+    case CAST_INT8:     return VAL_INT8;
+    case CAST_UINT8:    return VAL_UINT8;
+    case CAST_BYTE:     return VAL_BYTE;
+    case CAST_UCHAR:    return VAL_UCHAR;
+    case CAST_CHAR:      return VAL_CHAR;
+    case CAST_BOOL:      return VAL_BOOL;
+    case CAST_INT16:    return VAL_INT16;
+    case CAST_UINT16:   return VAL_UINT16;
+    case CAST_SHORT:    return VAL_SHORT;
+    case CAST_USHORT:   return VAL_USHORT;
+    case CAST_INT32:    return VAL_INT32;
+    case CAST_UINT32:   return VAL_UINT32;
+    case CAST_UINT:     return VAL_UINT;
+    case CAST_INT:      return VAL_INT32;   /* int 默认 32 位 */
+    case CAST_INT64:    return VAL_INT64;
+    case CAST_UINT64:   return VAL_UINT64;
+    case CAST_LONG:     return VAL_LONG;
+    case CAST_LONGLONG: return VAL_LONG_LONG;
+    case CAST_ULONG:    return VAL_ULONG;
+    case CAST_SIZE_T:   return VAL_SIZE_T;
+    case CAST_SSIZE_T:  return VAL_SSIZE_T;
+    case CAST_FLOAT:    return VAL_FLOAT;
+    case CAST_DOUBLE: case CAST_LONG_DOUBLE: return VAL_DOUBLE;
+    default:            return VAL_UINT8;
+    }
+}
+
+// 把单个 Value 打包为 elem_type 的字节（小端序），写入 p[0..es-1]
+static void pack_elem(uint8_t* p, int es, ValueType et, Value v) {
+    /* 提取整数（尽量宽）与浮点 */
+    int64_t iv = 0;
+    double dv = 0.0;
+    int is_double = 0;
+    switch(v.type) {
+    case VAL_INT:        iv = v.v.i; break;
+    case VAL_INT8:       iv = v.v.i8; break;
+    case VAL_INT16:      iv = v.v.i16; break;
+    case VAL_SHORT:      iv = v.v.sh; break;
+    case VAL_INT32:      iv = v.v.i32; break;
+    case VAL_INT64:      iv = v.v.i64; break;
+    case VAL_LONG:       iv = v.v.l; break;
+    case VAL_LONG_LONG:  iv = v.v.ll; break;
+    case VAL_UINT8:       iv = v.v.u8; break;
+    case VAL_UCHAR:       iv = v.v.uc; break;
+    case VAL_BYTE:        iv = v.v.by; break;
+    case VAL_CHAR:        iv = v.v.c; break;
+    case VAL_BOOL:        iv = v.v.b ? 1 : 0; break;
+    case VAL_UINT16:      iv = v.v.u16; break;
+    case VAL_USHORT:      iv = v.v.us; break;
+    case VAL_UINT32:      iv = v.v.u32; break;
+    case VAL_UINT:        iv = v.v.ui; break;
+    case VAL_UINT64:      iv = (int64_t)v.v.u64; break;
+    case VAL_ULONG:       iv = (int64_t)v.v.ul; break;
+    case VAL_SIZE_T:      iv = (int64_t)v.v.st; break;
+    case VAL_SSIZE_T:     iv = v.v.sst; break;
+    case VAL_DOUBLE:      dv = v.v.d; is_double = 1; break;
+    case VAL_FLOAT:       dv = v.v.f; is_double = 1; break;
+    case VAL_LONG_DOUBLE: dv = (double)v.v.ld; is_double = 1; break;
+    default:              iv = 0; break;
+    }
+    switch(et) {
+    case VAL_INT8: { int8_t x = (int8_t)iv; memcpy(p, &x, 1); break; }
+    case VAL_UINT8: case VAL_UCHAR: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL: {
+        uint8_t x = (uint8_t)iv; memcpy(p, &x, 1); break;
+    }
+    case VAL_INT16: case VAL_SHORT: { int16_t x = (int16_t)iv; memcpy(p, &x, 2); break; }
+    case VAL_UINT16: case VAL_USHORT: { uint16_t x = (uint16_t)iv; memcpy(p, &x, 2); break; }
+    case VAL_INT32: case VAL_UINT: { int32_t x = (int32_t)iv; memcpy(p, &x, 4); break; }
+    case VAL_UINT32: { uint32_t x = (uint32_t)iv; memcpy(p, &x, 4); break; }
+    case VAL_INT64: case VAL_LONG: case VAL_LONG_LONG: case VAL_SSIZE_T: {
+        int64_t x = iv; memcpy(p, &x, 8); break;
+    }
+    case VAL_UINT64: case VAL_ULONG: case VAL_SIZE_T: {
+        uint64_t x = (uint64_t)iv; memcpy(p, &x, 8); break;
+    }
+    case VAL_FLOAT: { float x = (float)(is_double ? dv : (double)iv); memcpy(p, &x, 4); break; }
+    case VAL_DOUBLE: case VAL_LONG_DOUBLE: { double x = is_double ? dv : (double)iv; memcpy(p, &x, 8); break; }
+    default: { uint8_t x = (uint8_t)iv; memcpy(p, &x, 1); break; }
+    }
+    (void)es;
+}
+
+/* 重解释：把已有 bytes 按目标元素类型重新视图化（共享不可变数据缓冲，仅改 elem_type） */
+Value lumyr_bytes_reinterpret(Value src, ValueType et) {
+    BytesObj* s = (BytesObj*)src.v.bytes_obj;
+    BytesObj* o = (BytesObj*)gc_alloc(sizeof(BytesObj), VAL_BYTES);
+    if(!o) { Value z; z.type = VAL_NONE; z.str_inline = 0; return z; }
+    o->elem_type = et;
+    o->stack_alloc = 0;
+    o->data = s ? s->data : NULL;
+    o->len = s ? s->len : 0;
+    Value r;
+    r.type = VAL_BYTES;
+    r.str_inline = 0;
+    r.v.bytes_obj = o;
+    return r;
+}
+
+Value lumyr_bytes_typed(int cast_kind, Value src) {
+    ValueType et = lumyr_cast_kind_to_value_type(cast_kind);
+    int es = lumyr_elem_size(et);
+    /* 重解释路径：src 已是 bytes，共享缓冲仅改 elem_type */
+    if(src.type == VAL_BYTES) return lumyr_bytes_reinterpret(src, et);
+    BytesObj* o = (BytesObj*)gc_alloc(sizeof(BytesObj), VAL_BYTES);
+    if(!o) { Value z; z.type = VAL_NONE; z.str_inline = 0; return z; }
+    o->elem_type = et;
+    o->stack_alloc = 0;
+    o->data = NULL;
+    o->len = 0;
+    if(src.type == VAL_ARRAY) {
+        ValueArray* a = src.v.array;
+        int n = a ? a->len : 0;
+        int blen = n * es;
+        o->len = blen;
+        if(blen > 0) {
+            o->data = (uint8_t*)gc_alloc(blen, VAL_BYTES);
+            if(!o->data) { o->len = 0; }
+            else for(int i = 0; i < n; i++) pack_elem(o->data + i*es, es, et, a->items[i]);
+        }
+    } else if(src.type == VAL_STRING) {
+        const char* str = lumyr_str_cstr(&src);
+        int blen = str ? (int)strlen(str) : 0;
+        o->len = blen;
+        if(blen > 0) {
+            o->data = (uint8_t*)gc_alloc(blen, VAL_BYTES);
+            if(o->data) memcpy(o->data, str, blen); else o->len = 0;
+        }
+    } else {
+        /* 标量 → 单元素（宽度 es 字节） */
+        o->len = es;
+        o->data = (uint8_t*)gc_alloc(es > 0 ? es : 1, VAL_BYTES);
+        if(o->data) pack_elem(o->data, es, et, src); else o->len = 0;
+    }
+    Value r;
+    r.type = VAL_BYTES;
+    r.str_inline = 0;
+    r.v.bytes_obj = o;
+    return r;
 }
 
 Value lumyr_bytes_make(int argc, const Value* args) {
@@ -365,14 +526,64 @@ Value lumyr_bytes_from_hex(const char* hex) {
 int lumyr_bytes_len(Value v) {
     if(v.type != VAL_BYTES) return 0;
     BytesObj* o = (BytesObj*)v.v.bytes_obj;
-    return o ? o->len : 0;
+    if(!o) return 0;
+    /* 类型化 bytes：返回元素个数（字节长度 / 元素宽度） */
+    int es = lumyr_elem_size(o->elem_type);
+    if(es <= 1) return o->len;
+    return o->len / es;
+}
+
+// 按 elem_type 读取第 idx 个元素（小端序）→ Value
+static Value bytes_read_elem(BytesObj* o, int idx) {
+    int es = lumyr_elem_size(o->elem_type);
+    int off = idx * es;
+    if(off < 0 || off + es > o->len) return lumyr_make_int(0);
+    const uint8_t* p = o->data + off;
+    switch(o->elem_type) {
+    case VAL_INT8: {
+        int8_t x; memcpy(&x, p, 1); return lumyr_make_int((long long)x);
+    }
+    case VAL_UINT8: case VAL_UCHAR: case VAL_BYTE: case VAL_CHAR: case VAL_BOOL: {
+        uint8_t x; memcpy(&x, p, 1); return lumyr_make_int((long long)x);
+    }
+    case VAL_INT16: case VAL_SHORT: {
+        int16_t x; memcpy(&x, p, 2); return lumyr_make_int((long long)x);
+    }
+    case VAL_UINT16: case VAL_USHORT: {
+        uint16_t x; memcpy(&x, p, 2); return lumyr_make_int((long long)x);
+    }
+    case VAL_INT32: {
+        int32_t x; memcpy(&x, p, 4); return lumyr_make_int((long long)x);
+    }
+    case VAL_UINT: case VAL_UINT32: {
+        /* uint32 范围可能超过 INT32_MAX，用 int64 承载避免截断 */
+        uint32_t x; memcpy(&x, p, 4); return lumyr_make_int64((int64_t)(uint64_t)x);
+    }
+    case VAL_INT64: case VAL_LONG: case VAL_LONG_LONG: case VAL_SSIZE_T: {
+        int64_t x; memcpy(&x, p, 8); return lumyr_make_int64(x);
+    }
+    case VAL_UINT64: case VAL_ULONG: case VAL_SIZE_T: {
+        uint64_t x; memcpy(&x, p, 8); return lumyr_make_int64((int64_t)x);
+    }
+    case VAL_FLOAT: {
+        float x; memcpy(&x, p, 4); return lumyr_make_double((double)x);
+    }
+    case VAL_DOUBLE: case VAL_LONG_DOUBLE: {
+        double x; memcpy(&x, p, 8); return lumyr_make_double(x);
+    }
+    default: {
+        uint8_t x; memcpy(&x, p, 1); return lumyr_make_int((long long)x);
+    }
+    }
 }
 
 Value lumyr_bytes_get(Value v, int idx) {
     if(v.type != VAL_BYTES) return lumyr_make_int(0);
     BytesObj* o = (BytesObj*)v.v.bytes_obj;
-    if(!o || idx < 0 || idx >= o->len) return lumyr_make_int(0);
-    return lumyr_make_int((int)o->data[idx]);
+    if(!o) return lumyr_make_int(0);
+    int cnt = lumyr_bytes_len(v);
+    if(idx < 0 || idx >= cnt) return lumyr_make_int(0);
+    return bytes_read_elem(o, idx);
 }
 
 char* lumyr_bytes_to_str(Value v) {

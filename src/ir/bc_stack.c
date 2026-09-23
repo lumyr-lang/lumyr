@@ -39,6 +39,7 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_GET_ERR:
         case OPC_ARRAY_LIT:
         case OPC_MAP_LIT:
+        case OPC_TYPED_BYTES:
             d.value = +1;
             break;
 
@@ -468,6 +469,7 @@ int op_stack_push(OpCode op)
         case OPC_DOUBLE_ARRAY_LIT:
         case OPC_PTR_ARRAY_LIT:
         case OPC_MAP_LIT:
+        case OPC_TYPED_BYTES:
             return 1;
 
         default:
