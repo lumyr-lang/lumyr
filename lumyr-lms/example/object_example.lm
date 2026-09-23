@@ -1,0 +1,64 @@
+// ============================================================
+// lumyr-Object 示例：继承 Object 基类并重写值语义方法
+// 运行：./bin/lumyr lumyr-lms/example/object_example.lm
+// ============================================================
+
+import <Function/Object> as obj;
+
+// alias 模式：extends obj.Object 会被文本重写为 extends __lm_mod_<id>_Object
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// 子类：重写 equals / hashCode / toString
+class Person extends obj.Object {
+    name: string;
+    age: int;
+    func Person(n: string, a: int) { self.name = n; self.age = a; }
+    func equals(other): bool {
+        if (type(other) != "Person") { return false; }
+        return self.name == other.name && self.age == other.age;
+    }
+    func hashCode(): int { return len(self.name) + self.age; }
+    // 注意：lumin 当前 f-string 在方法内插值 self.field 失效，字符串拼接可用
+    func toString(): string { return self.name + "(" + self.age + ")"; }
+}
+
+p = Person("alice", 30);
+q = Person("alice", 30);
+r = Person("bob", 25);
+
+// 1. 继承自 Object 的方法
+check(p.className() == "Person", "className=Person, got " + p.className());
+check(!p.isNull(), "p not null");
+check(p.isInstanceOf("Person"), "p is Person");
+check(!p.isInstanceOf("Cat"), "p not Cat");
+
+// 2. 重写的值相等
+check(p.equals(q), "p == q by value");
+check(!p.equals(r), "p != r by value");
+check(!p.equals("string"), "p != string");
+
+// 3. 重写的 hashCode
+check(p.hashCode() == 35, "hashCode alice+30=35, got " + p.hashCode());
+
+// 4. 重写的 toString
+check(p.toString() == "alice(30)", "toString, got " + p.toString());
+
+// 5. 默认 toString（未重写时委托 toJSONString）
+class Box extends obj.Object {
+    v: int;
+    func Box(x: int) { self.v = x; }
+}
+b = Box(42);
+check(b.toString() == b.toJSONString(), "default toString == toJSONString");
+check(b.className() == "Box", "Box className");
+
+// 6. copy 深拷贝独立性
+b2 = b.copy();
+b2.v = 99;
+check(b.v == 42, "copy independence: orig unchanged, got " + b.v);
+check(b2.v == 99, "copy independence: copy changed, got " + b2.v);
+
+print("lumyr-Object example ALL PASS");

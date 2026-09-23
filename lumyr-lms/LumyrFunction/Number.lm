@@ -1,0 +1,118 @@
+// ============================================================
+// lumyr-Number：Number 抽象基类
+// 所有数值封装类（Integer/Double/Float/Long/Byte/Short）的父类
+// 定义数值通用契约：相等、比较、转换、零/正/负判断、绝对值、取反
+//
+// 用法：
+//   import <Function/Number>;
+//   public class Integer extends Number { ... }
+//
+// 抽象类不可直接实例化；子类必须重写核心方法
+// ============================================================
+
+import <Function/Object>;
+
+public abstract class Number extends Object {
+    // ====== 子类必须重写以下方法 ======
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self == other;
+    }
+
+    func hashCode(): int {
+        return 0;
+    }
+
+    func compareTo(other): int {
+        return -2;
+    }
+
+    func toString(): string {
+        return self.toJSONString();
+    }
+
+    func toDouble(): double {
+        return 0.0;
+    }
+
+    func isZero(): bool {
+        return false;
+    }
+
+    func isPositive(): bool {
+        return false;
+    }
+
+    func isNegative(): bool {
+        return false;
+    }
+
+    func abs() {
+        return self;
+    }
+
+    func negate() {
+        return self;
+    }
+
+    // ====== 具体方法（子类可直接使用） ======
+
+    // 类型名
+    func className(): string {
+        return type(self);
+    }
+
+    // 字符串值（toString 别名）
+    func stringValue(): string {
+        return self.toString();
+    }
+
+    // 是否等于某值（便捷方法）
+    func equalsValue(v): bool {
+        return self.toDouble() == v;
+    }
+
+    // 是否在 [min, max] 范围内
+    func inRange(minVal: double, maxVal: double): bool {
+        d = self.toDouble();
+        return d >= minVal && d <= maxVal;
+    }
+
+    // 与另一个数值比较（跨类型，基于 double）
+    func compareNumeric(other): int {
+        a = self.toDouble();
+        if (type(other) != type(self)) {
+            b = other.toDouble();
+        } else {
+            b = other.toDouble();
+        }
+        if (a < b) { return -1; }
+        if (a > b) { return 1; }
+        return 0;
+    }
+
+    // ====== 静态方法（类函数） ======
+
+    // 判断值是否为数值类型
+    static func isNumber(v): bool {
+        t = type(v);
+        return t == "Integer" || t == "Double" || t == "Float" || t == "Long" || t == "Byte" || t == "Short";
+    }
+
+    // 返回两个值中的较大者（基于 double 比较）
+    static func max(a, b) {
+        da = a.toDouble();
+        db = b.toDouble();
+        if (da >= db) { return a; }
+        return b;
+    }
+
+    // 返回两个值中的较小者
+    static func min(a, b) {
+        da = a.toDouble();
+        db = b.toDouble();
+        if (da <= db) { return a; }
+        return b;
+    }
+}

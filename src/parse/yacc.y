@@ -86,7 +86,40 @@ static char* g_current_class_name = NULL; /* 当前正在解析的 class 名，�
 static char* g_current_class_parent = NULL; /* 当前 class 的父类名 */
 static int g_current_class_is_abstract = 0; /* 当前 class 是否是抽象类 */
 static AstNode** g_class_methods = NULL; /* 当前 class 的方法定义临时列表 */
-static AstNode* g_class_constructor = NULL; /* 当前 class 的构造函数（__init__ 方法） */
+AstNode* g_class_constructor = NULL; /* 当前 class 的构造函数（__init__ 方法，非 static 供 class_add_method 前置设置） */
+
+/* 构造函数重载列表：类体内多个 func <类名>(...) 按声明序收集。
+ * 根因修复：此前 g_class_constructor 为单值，后一个构造函数覆盖前一个
+ * （且 class_set_constructor 幂等跳过），多构造函数只有最后一个生效。 */
+static AstNode** g_class_ctor_list = NULL;
+static int g_class_ctor_cnt = 0, g_class_ctor_cap = 0;
+static void g_class_ctor_push(AstNode* fn) {
+    if(g_class_ctor_cnt >= g_class_ctor_cap) {
+        int nc = g_class_ctor_cap > 0 ? g_class_ctor_cap * 2 : 4;
+        g_class_ctor_list = (AstNode**)realloc(g_class_ctor_list, (size_t)nc * sizeof(AstNode*));
+        g_class_ctor_cap = nc;
+    }
+    g_class_ctor_list[g_class_ctor_cnt++] = fn;
+}
+static void g_class_ctor_list_clear(void) {
+    free(g_class_ctor_list);
+    g_class_ctor_list = NULL;
+    g_class_ctor_cnt = 0;
+    g_class_ctor_cap = 0;
+}
+
+/* 编译并注册当前类的全部构造函数重载：
+ * 首个保持 <Cls>___init__（主构造，super() 链与无参合成路径依赖此名），
+ * 后续按声明序唯一化为 <Cls>___init__2/3...（AST_CLASS_NEW 按实参数选重载） */
+static void compile_class_ctors(const char* cls) {
+    for(int i = 0; i < g_class_ctor_cnt; i++) {
+        AstNode* ctor = g_class_ctor_list[i];
+        if(!ctor || ctor->type != AST_FUNC_DEF) continue;
+        RuntimeFunc* rf = compile_func_from_ast(ctor);
+        class_add_constructor(cls, ctor, rf);
+    }
+}
+
 static char** g_class_interfaces = NULL; /* 当前 class 实现的接口名列表 */
 static int g_class_ninterfaces = 0; /* 当前 class 实现的接口数量 */
 
@@ -115,6 +148,7 @@ static void g_class_method_clear(void) {
     g_class_method_n = 0;
     g_class_method_cap = 0;
     g_class_constructor = NULL;
+    g_class_ctor_list_clear();
 }
 
 /* 构造 class 静态属性 assign 节点、注册静态成员访问表并压入方法列表 */
@@ -383,11 +417,17 @@ static int apply_field_initializers(void) {
     AstNode* stmts = g_class_init_stmts;
     g_class_init_stmts = NULL;
 
-    if(g_class_constructor) {
-        AstNode* body = g_class_constructor->u.func_def.body;
-        if(body && body->type == AST_BLOCK) {
-            AstNode* old = body->u.block.stmts;
-            body->u.block.stmts = ast_seq(stmts, old);
+    if(g_class_ctor_cnt > 0) {
+        /* 注入到全部构造函数重载（每个构造函数都要先初始化字段） */
+        for(int i = 0; i < g_class_ctor_cnt; i++) {
+            AstNode* ctor = g_class_ctor_list[i];
+            if(!ctor || ctor->type != AST_FUNC_DEF) continue;
+            AstNode* body = ctor->u.func_def.body;
+            if(body && body->type == AST_BLOCK) {
+                /* ast_seq 新建 SEQ 节点包装，同一 stmts 子树可安全共享给多个构造函数 */
+                AstNode* old = body->u.block.stmts;
+                body->u.block.stmts = ast_seq(stmts, old);
+            }
         }
         return 0;
     }
@@ -441,6 +481,7 @@ static int apply_field_initializers(void) {
     free(nm);
     ctor->u.func_def.is_class_method = 1;
     g_class_constructor = ctor;
+    g_class_ctor_push(ctor);
     return 0;
 }
 
@@ -910,7 +951,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %type<node> switch_stmt case_list case_item break_stmt continue_stmt assert_stmt defer_stmt const_expr return_stmt yield_stmt expr_list
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
-%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_start class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
+%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_start class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header abstract_class_header_inherit abstract_class_header_inherit_implements enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
 %type<ll> type_name builtin_type_name type_keyword access_modifier map_generic_type
 %type<s> type_name_str
 %type <ch> char_lit
@@ -1118,13 +1159,13 @@ closed_stmt
           /* write "path" value → write_file(path, value)；普通路径不内插 */
           AstNode* p = ast_string($2);
           free($2);
-          $$ = L(ast_call(strdup("write_file"), ast_seq(p, $3)));
+          $$ = L(ast_call(strdup("writeFile"), ast_seq(p, $3)));
       }
     | WRITE FSTRING_LIT expr SEMI {
           /* write f"path" value → write_file(path, value)；f 前缀路径支持模板内插 */
           AstNode* p = L(maybe_template($2));
           free($2);
-          $$ = L(ast_call(strdup("write_file"), ast_seq(p, $3)));
+          $$ = L(ast_call(strdup("writeFile"), ast_seq(p, $3)));
       }
     | try_stmt { $$ = $1; }
     | THROW expr SEMI {
@@ -1216,10 +1257,8 @@ closed_stmt
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1236,6 +1275,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               } else {
@@ -1267,10 +1307,8 @@ closed_stmt
               }
           }
           /* 保存构造函数（__init__ 方法）到 TypeDef */
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           /* 把静态属性与静态方法的 AST 节点保存到临时顶层列表 */
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
@@ -1289,6 +1327,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;  // 恢复
               } else {
@@ -1314,10 +1353,8 @@ closed_stmt
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1335,6 +1372,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1359,10 +1397,8 @@ closed_stmt
               }
           }
           /* 保存构造函数（__init__ 方法）到 TypeDef */
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           /* 收集需在顶层执行的初始化节点：静态属性 AST_ASSIGN；静态方法在此编译 */
           AstNode* method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
@@ -1381,6 +1417,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               } else {
@@ -1407,10 +1444,8 @@ closed_stmt
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           AstNode* method_list2 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1428,6 +1463,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1460,10 +1496,8 @@ closed_stmt
               }
           }
           /* 保存构造函数（__init__ 方法）到 TypeDef */
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
           AstNode* method_list2 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
@@ -1482,6 +1516,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1519,10 +1554,8 @@ closed_stmt
               }
           }
           /* 保存构造函数（__init__ 方法）到 TypeDef */
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
           AstNode* abs_method_list = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
@@ -1541,6 +1574,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1550,6 +1584,104 @@ closed_stmt
           g_current_class_name = NULL;
           g_current_class_is_abstract = 0;
           $$ = abs_method_list ? L(abs_method_list) : L(ast_none());
+      }
+    | abstract_class_header_inherit class_prop_list RBRACE {
+          /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          apply_accessors(0);
+          TypeDef* td = type_lookup(g_current_class_name);
+          if(td) td->is_abstract = 1;
+          if(apply_field_initializers()) YYABORT;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
+          AstNode* abs_method_list2 = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  abs_method_list2 = abs_method_list2 ? ast_seq(abs_method_list2, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
+                  }
+                  g_current_class_name = saved_class_name;
+              }
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_parent = NULL;
+          g_current_class_is_abstract = 0;
+          $$ = abs_method_list2 ? L(abs_method_list2) : L(ast_none());
+      }
+    | abstract_class_header_inherit_implements class_prop_list RBRACE {
+          /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          apply_accessors(0);
+          TypeDef* td = type_lookup(g_current_class_name);
+          if(td) td->is_abstract = 1;
+          if(apply_field_initializers()) YYABORT;
+          /* 添加方法到 class 方法表（静态方法不加入）。
+           * 根因修复：接口实现检查必须在方法注册之后——此前的检查
+           * 位于 class_add_method 之前，方法表尚为空，
+           * 抽象类实现接口必误报"未实现接口方法" */
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
+          AstNode* abs_method_list3 = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  abs_method_list3 = abs_method_list3 ? ast_seq(abs_method_list3, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
+                  }
+                  g_current_class_name = saved_class_name;
+              }
+          }
+          /* 接口方法检查：必须在方法注册后执行（见上方根因修复注释） */
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) {
+              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_parent = NULL;
+          g_current_class_is_abstract = 0;
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) free(g_class_interfaces[ii]);
+          free(g_class_interfaces);
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          $$ = abs_method_list3 ? L(abs_method_list3) : L(ast_none());
       }
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
@@ -1565,10 +1697,8 @@ closed_stmt
                   class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
               }
           }
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           AstNode* method_list3 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
               AstNode* mnode = g_class_methods[mi];
@@ -1586,6 +1716,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1618,10 +1749,8 @@ closed_stmt
               }
           }
           /* 保存构造函数（__init__ 方法）到 TypeDef */
-          if(g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-              RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
-              class_set_constructor(g_current_class_name, g_class_constructor, ctor_rf);
-          }
+          /* 全部构造函数重载编译注册（首个为主构造，见 compile_class_ctors） */
+          compile_class_ctors(g_current_class_name);
           /* 把方法定义的 AST 节点保存到临时列表（包括构造函数） */
           AstNode* method_list3 = NULL;
           for(int mi = 0; mi < g_class_method_n; mi++) {
@@ -1640,6 +1769,7 @@ closed_stmt
                       fv.v.func.is_ffi = 0;
                       fv.v.func.func_obj = (void*)rf;
                       sym_set(mnode->u.func_def.name, fv);
+                        static_sym_put(mnode->u.func_def.name, VAL_FUNC);
                   }
                   g_current_class_name = saved_class_name;
               }
@@ -1680,6 +1810,19 @@ closed_stmt
           interface_register($2, $6, $4);
           free($2);
           free($4);
+          $$ = L(ast_none());
+      }
+    | TOK_PUBLIC TOK_INTERFACE ID LBRACE interface_methods RBRACE {
+          /* public interface X { ... }：public 仅为显式标注，interface 默认全局可见 */
+          interface_register($3, $5, NULL);
+          free($3);
+          $$ = L(ast_none());
+      }
+    | TOK_PUBLIC TOK_INTERFACE ID TOK_EXTENDS ID LBRACE interface_methods RBRACE {
+          /* public interface X extends Y { ... }：public 仅为显式标注 */
+          interface_register($3, $7, $5);
+          free($3);
+          free($5);
           $$ = L(ast_none());
       }
     | TOK_EXTEND ID LBRACE func_def_list RBRACE {
@@ -2306,8 +2449,11 @@ primary
           if(macro_is_defined($1)) {
               AstNode* mdef = macro_lookup($1);
               $$ = L(macro_expand(mdef, $3));
-          } else if(struct_lookup($1) || class_lookup($1)) {
-              /* 已注册的 struct/class 名：构造调用 → ast_class_new */
+          } else if(struct_lookup($1) || class_lookup($1) ||
+                    (g_current_class_name && strcmp($1, g_current_class_name) == 0) ||
+                    (g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
+              /* 已注册的 struct/class 名：构造调用 → ast_class_new
+               * 含类体内自构造（class_register 尚未执行，g_current_class_name 兜底） */
               int argc = 0;
               for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
               $$ = L(ast_class_new($1, argc, $3));
@@ -2557,13 +2703,13 @@ primary
           /* read "path" → 文件内容；普通路径不内插；结果可后续缀（.len() 等） */
           AstNode* p = ast_string($2);
           free($2);
-          $$ = L(ast_call(strdup("read_file"), p));
+          $$ = L(ast_call(strdup("readFile"), p));
       }
     | READ FSTRING_LIT {
           /* read f"path" → 文件内容；f 前缀路径支持模板内插；结果可后续缀 */
           AstNode* p = L(maybe_template($2));
           free($2);
-          $$ = L(ast_call(strdup("read_file"), p));
+          $$ = L(ast_call(strdup("readFile"), p));
       }
     ;
 
@@ -2827,11 +2973,16 @@ class_prop_list
             $2->u.func_def.is_class_method = 1;
             $2->u.func_def.access_modifier = $1;
             if(g_current_class_name && strcmp($2->u.func_def.name, g_current_class_name) == 0) {
-                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
-                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                /* 构造函数重载：首个 <Cls>___init__，后续 <Cls>___init__2/3... */
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 16);
+                if(g_class_ctor_cnt > 0)
+                    sprintf(ctor_name, "%s___init__%d", g_current_class_name, g_class_ctor_cnt + 1);
+                else
+                    sprintf(ctor_name, "%s___init__", g_current_class_name);
                 free($2->u.func_def.name);
                 $2->u.func_def.name = ctor_name;
-                g_class_constructor = $2;
+                if(g_class_ctor_cnt == 0) g_class_constructor = $2;
+                g_class_ctor_push($2);
             } else {
                 g_class_method_push($2);
             }
@@ -2879,12 +3030,17 @@ class_prop_list
             $2->u.func_def.is_class_method = 1;
             /* 构造函数：方法名与类名相同，不加入方法表，单独保存 */
             if(g_current_class_name && strcmp($2->u.func_def.name, g_current_class_name) == 0) {
-                /* 给构造函数一个唯一的名字 <类名>___init__，避免 CC 模式下多个类的构造函数冲突 */
-                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
-                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                /* 给构造函数一个唯一的名字 <类名>___init__，避免 CC 模式下多个类的构造函数冲突；
+                 * 重载版本按声明序 <类名>___init__2/3... */
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 16);
+                if(g_class_ctor_cnt > 0)
+                    sprintf(ctor_name, "%s___init__%d", g_current_class_name, g_class_ctor_cnt + 1);
+                else
+                    sprintf(ctor_name, "%s___init__", g_current_class_name);
                 free($2->u.func_def.name);
                 $2->u.func_def.name = ctor_name;
-                g_class_constructor = $2;
+                if(g_class_ctor_cnt == 0) g_class_constructor = $2;
+                g_class_ctor_push($2);
             } else {
                 g_class_method_push($2);
             }
@@ -2989,11 +3145,16 @@ class_prop_list
             $3->u.func_def.is_class_method = 1;
             $3->u.func_def.access_modifier = $2;
             if(g_current_class_name && strcmp($3->u.func_def.name, g_current_class_name) == 0) {
-                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 10);
-                sprintf(ctor_name, "%s___init__", g_current_class_name);
+                /* 构造函数重载：首个 <Cls>___init__，后续 <Cls>___init__2/3... */
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 16);
+                if(g_class_ctor_cnt > 0)
+                    sprintf(ctor_name, "%s___init__%d", g_current_class_name, g_class_ctor_cnt + 1);
+                else
+                    sprintf(ctor_name, "%s___init__", g_current_class_name);
                 free($3->u.func_def.name);
                 $3->u.func_def.name = ctor_name;
-                g_class_constructor = $3;
+                if(g_class_ctor_cnt == 0) g_class_constructor = $3;
+                g_class_ctor_push($3);
             } else {
                 g_class_method_push($3);
             }
@@ -3488,11 +3649,69 @@ abstract_class_header: TOK_ABSTRACT class_start ID LBRACE {
           g_current_class_parent = NULL;
           $$ = NULL;
       }
-    | class_start TOK_ABSTRACT TOK_CLASS ID LBRACE {
+    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID LBRACE {
           /* public abstract class 顺序（等价写法） */
           g_current_class_name = $4;
           g_current_class_is_abstract = 1;
           g_current_class_parent = NULL;
+          $$ = NULL;
+      }
+    ;
+abstract_class_header_inherit: TOK_ABSTRACT class_start ID TOK_EXTENDS ID LBRACE {
+          /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
+          g_current_class_name = $3;
+          g_current_class_parent = $5;
+          g_current_class_is_abstract = 1;
+          $$ = NULL;
+      }
+    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID TOK_EXTENDS ID LBRACE {
+          /* public abstract class Number extends Object { ... }（等价写法） */
+          g_current_class_name = $4;
+          g_current_class_parent = $6;
+          g_current_class_is_abstract = 1;
+          $$ = NULL;
+      }
+    ;
+abstract_class_header_inherit_implements: TOK_ABSTRACT class_start ID TOK_EXTENDS ID TOK_IMPLEMENTS interface_list LBRACE {
+          /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
+          g_current_class_name = $3;
+          g_current_class_parent = $5;
+          g_current_class_is_abstract = 1;
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          AstNode* _iface = $7;
+          while(_iface) {
+              if(_iface->u.param.name) {
+                  g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+                  g_class_interfaces[g_class_ninterfaces++] = strdup(_iface->u.param.name);
+              }
+              _iface = _iface->u.param.next;
+          }
+          if(g_class_interfaces) {
+              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+              g_class_interfaces[g_class_ninterfaces] = NULL;
+          }
+          $$ = NULL;
+      }
+    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID TOK_EXTENDS ID TOK_IMPLEMENTS interface_list LBRACE {
+          /* public abstract class Number extends Object implements IFoo { ... }（等价写法） */
+          g_current_class_name = $4;
+          g_current_class_parent = $6;
+          g_current_class_is_abstract = 1;
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          AstNode* _iface = $8;
+          while(_iface) {
+              if(_iface->u.param.name) {
+                  g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+                  g_class_interfaces[g_class_ninterfaces++] = strdup(_iface->u.param.name);
+              }
+              _iface = _iface->u.param.next;
+          }
+          if(g_class_interfaces) {
+              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+              g_class_interfaces[g_class_ninterfaces] = NULL;
+          }
           $$ = NULL;
       }
     ;

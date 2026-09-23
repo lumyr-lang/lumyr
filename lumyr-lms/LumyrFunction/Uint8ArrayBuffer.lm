@@ -1,0 +1,43 @@
+// ============================================================
+// lumyr-Uint8ArrayBuffer：Uint8ArrayBuffer 数组缓冲区封装类
+// 内部使用 <uint8> 类型化数组存储，元素写入由运行时按元素类型原生截断到 uint8 范围 (0..255)
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/Uint8ArrayBuffer>;
+//   buf = Uint8ArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class Uint8ArrayBuffer extends AbstractBuffer {
+    value: <uint8>array;
+
+    func Uint8ArrayBuffer(arr) {
+        self.value = <uint8>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): Uint8ArrayBuffer {
+        r = Uint8ArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): Uint8ArrayBuffer {
+        r = Uint8ArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): Uint8ArrayBuffer {
+        r = Uint8ArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

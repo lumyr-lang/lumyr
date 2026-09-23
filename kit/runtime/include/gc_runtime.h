@@ -43,6 +43,11 @@ void* gc_realloc(void* ptr, size_t new_size);
  * （items/buckets/tree/MapEntry），避免被老年代容器引用时 Minor GC 错误回收 */
 void* gc_alloc_old(size_t size, int vtype);
 
+/* 读 GC 对象头的运行时 vtype（ptr 须为 gc_alloc 返回的用户指针）；
+ * 指针无效返回 -1。供 BOX_PTR 装箱按运行时身份打标（修复字段声明类型
+ * 与运行时容器类型不一致时身份丢失）。 */
+int gc_obj_vtype(void* ptr);
+
 /* Remembered set 检查：老年代容器写入新值时，若新值可能引用新生代对象，
  * 将容器加入 remembered set。在所有修改堆对象内部引用的位置调用。 */
 void gc_remembered_set_check(Value owner, Value new_val);

@@ -1,0 +1,404 @@
+// ============================================================
+// Buffer 封装类综合测试
+// 覆盖 Array / StringBuffer / ArrayBuffer / 15 种类型化数组 Buffer
+// 运行：./bin/lumyr lumyr-lms/example/buffer_example.lm
+// ============================================================
+
+import <Function/Array>;
+import <Function/StringBuffer>;
+import <Function/ArrayBuffer>;
+import <Function/Int8ArrayBuffer>;
+import <Function/Int16ArrayBuffer>;
+import <Function/Int32ArrayBuffer>;
+import <Function/Int64ArrayBuffer>;
+import <Function/Uint8ArrayBuffer>;
+import <Function/Uint16ArrayBuffer>;
+import <Function/Uint32ArrayBuffer>;
+import <Function/Uint64ArrayBuffer>;
+import <Function/CharArrayBuffer>;
+import <Function/ByteArrayBuffer>;
+import <Function/ShortArrayBuffer>;
+import <Function/LongArrayBuffer>;
+import <Function/LongLongArrayBuffer>;
+import <Function/LongDoubleArrayBuffer>;
+import <Function/ULongArrayBuffer>;
+import <Function/UCharArrayBuffer>;
+import <Function/UShortArrayBuffer>;
+import <Function/UIntArrayBuffer>;
+import <Function/SizeTArrayBuffer>;
+import <Function/SsizeTArrayBuffer>;
+import <Function/FloatArrayBuffer>;
+import <Function/DoubleArrayBuffer>;
+import <Function/BoolArrayBuffer>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ============================================================
+// 第一节：Array 测试
+// ============================================================
+print("=== Array ===");
+
+arr = Array();
+arr.push(1).push(2).push(3);
+check(arr.size() == 3, "Array.size after push 3");
+check(arr.sum() == 6, "Array.sum");
+check(arr.first() == 1, "Array.first");
+check(arr.last() == 3, "Array.last");
+
+check(arr.pop() == 3, "Array.pop");
+check(arr.size() == 2, "Array.size after pop");
+check(arr.shift() == 1, "Array.shift");
+check(arr.size() == 1, "Array.size after shift");
+
+arr.unshift(10);
+check(arr.first() == 10, "Array.unshift");
+
+arr2 = Array();
+arr2.push(1).push(2).push(3);
+arr2.set(0, 99);
+check(arr2.get(0) == 99, "Array.set/get");
+
+arr2.insert(1, 50);
+check(arr2.get(1) == 50, "Array.insert");
+
+arr2.remove(0);
+check(arr2.get(0) == 50, "Array.remove");
+
+arr3 = Array();
+arr3.push(3).push(1).push(2);
+arr3.sort();
+check(arr3.get(0) == 1, "Array.sort[0]");
+check(arr3.get(2) == 3, "Array.sort[2]");
+
+arr3.reverse();
+check(arr3.get(0) == 3, "Array.reverse[0]");
+
+arr4 = Array();
+arr4.push(1).push(2);
+arr5 = Array();
+arr5.push(3).push(4);
+cc = arr4.concat(arr5);
+check(cc.size() == 4, "Array.concat returns Array");
+
+cp = arr4.copy();
+arr4.push(99);
+check(cp.size() == 2, "Array.copy independence");
+
+arr6 = Array();
+arr6.push(5).push(10).push(15);
+check(arr6.avg() == 10.0, "Array.avg");
+check(arr6.min() == 5, "Array.min");
+check(arr6.max() == 15, "Array.max");
+check(arr6.indexOf(10) == 1, "Array.indexOf");
+check(arr6.contains(15), "Array.contains");
+check(!arr6.contains(99), "Array.contains false");
+
+arr6.clear();
+check(arr6.size() == 0, "Array.clear");
+
+print("Array PASS");
+
+// ============================================================
+// 第二节：StringBuffer 测试
+// ============================================================
+print("=== StringBuffer ===");
+
+sb = StringBuffer();
+sb.append("hello").append(" ").append("world");
+check(sb.toString() == "hello world", "StringBuffer.append+toString");
+check(sb.size() == 3, "StringBuffer.size (fragments)");
+
+sb2 = StringBuffer("start");
+check(sb2.toString() == "start", "StringBuffer(string) ctor");
+
+sb.appendLine("end");
+check(sb.toString().contains("end"), "StringBuffer.appendLine");
+
+sb3 = StringBuffer();
+sb3.appendInt(42);
+check(sb3.toString() == "42", "StringBuffer.appendInt");
+
+print("StringBuffer PASS");
+
+// ============================================================
+// 第三节：ArrayBuffer 测试
+// ============================================================
+print("=== ArrayBuffer ===");
+
+ab = ArrayBuffer("hello");
+check(ab.size() == 5, "ArrayBuffer(string).size");
+check(ab.get(0) == 104, "ArrayBuffer.get(0)=h");
+
+ab.set(0, 65);
+check(ab.get(0) == 65, "ArrayBuffer.set");
+
+ab2 = ArrayBuffer();
+ab2.append(72).append(73);
+check(ab2.size() == 2, "ArrayBuffer.append");
+
+cp3 = ab.copy();
+ab.append(99);
+check(cp3.size() == 5, "ArrayBuffer.copy independence");
+
+print("ArrayBuffer PASS");
+
+// ============================================================
+// 第四节：Int8ArrayBuffer 详细测试
+// ============================================================
+print("=== Int8ArrayBuffer ===");
+
+i8 = Int8ArrayBuffer();
+i8.append(1).append(2).append(3);
+check(i8.size() == 3, "Int8.size");
+check(i8.sum() == 6, "Int8.sum");
+check(i8.get(0) == 1, "Int8.get(0)");
+check(i8.get(2) == 3, "Int8.get(2)");
+
+i8.insert(1, 99);
+check(i8.size() == 4, "Int8.insert size");
+check(i8.get(1) == 99, "Int8.insert value");
+
+i8.remove(0);
+check(i8.size() == 3, "Int8.remove size");
+check(i8.get(0) == 99, "Int8.remove shift");
+
+check(i8.indexOf(2) == 1, "Int8.indexOf");
+check(i8.contains(2), "Int8.contains");
+check(!i8.contains(999), "Int8.contains false");
+
+i8.sort();
+check(i8.get(0) == 2, "Int8.sort[0]");
+
+i8.reverse();
+check(i8.get(0) == 99, "Int8.reverse[0]");
+
+cp8 = i8.copy();
+i8.append(77);
+check(cp8.size() == 3, "Int8.copy independence");
+
+i8.clear();
+check(i8.size() == 0, "Int8.clear");
+
+print("Int8ArrayBuffer PASS");
+
+// ============================================================
+// 第五节：全类型 typed array 冒烟测试
+// ============================================================
+print("=== typed array smoke ===");
+
+// Int16
+i16 = Int16ArrayBuffer();
+i16.append(10).append(20).append(30);
+check(i16.size() == 3, "Int16.size");
+check(i16.sum() == 60, "Int16.sum");
+i16.insert(0, 5);
+check(i16.get(0) == 5, "Int16.insert");
+i16.remove(0);
+check(i16.get(0) == 10, "Int16.remove");
+i16.sort();
+check(i16.get(0) == 10, "Int16.sort[0]");
+i16.reverse();
+check(i16.get(0) == 30, "Int16.reverse[0]");
+check(i16.indexOf(20) == 1, "Int16.indexOf");
+check(i16.contains(20), "Int16.contains");
+i16.clear();
+check(i16.size() == 0, "Int16.clear");
+
+// Int32
+i32 = Int32ArrayBuffer();
+i32.append(10).append(20).append(30);
+check(i32.size() == 3, "Int32.size");
+check(i32.sum() == 60, "Int32.sum");
+i32.sort();
+check(i32.get(0) == 10, "Int32.sort[0]");
+i32.clear();
+check(i32.size() == 0, "Int32.clear");
+
+// Int64
+i64 = Int64ArrayBuffer();
+i64.append(10).append(20).append(30);
+check(i64.size() == 3, "Int64.size");
+check(i64.sum() == 60, "Int64.sum");
+i64.clear();
+check(i64.size() == 0, "Int64.clear");
+
+// Uint8
+u8 = Uint8ArrayBuffer();
+u8.append(10).append(20).append(30);
+check(u8.size() == 3, "Uint8.size");
+check(u8.sum() == 60, "Uint8.sum");
+u8.clear();
+check(u8.size() == 0, "Uint8.clear");
+
+// Uint16
+u16 = Uint16ArrayBuffer();
+u16.append(10).append(20).append(30);
+check(u16.size() == 3, "Uint16.size");
+check(u16.sum() == 60, "Uint16.sum");
+u16.clear();
+check(u16.size() == 0, "Uint16.clear");
+
+// Uint32
+u32 = Uint32ArrayBuffer();
+u32.append(10).append(20).append(30);
+check(u32.size() == 3, "Uint32.size");
+check(u32.sum() == 60, "Uint32.sum");
+u32.clear();
+check(u32.size() == 0, "Uint32.clear");
+
+// Uint64
+u64 = Uint64ArrayBuffer();
+u64.append(10).append(20).append(30);
+check(u64.size() == 3, "Uint64.size");
+check(u64.sum() == 60, "Uint64.sum");
+u64.clear();
+check(u64.size() == 0, "Uint64.clear");
+
+// Char
+ch = CharArrayBuffer();
+ch.append(65).append(66).append(67);
+check(ch.size() == 3, "Char.size");
+check(ch.sum() == 198, "Char.sum");
+ch.clear();
+check(ch.size() == 0, "Char.clear");
+
+// Byte
+by = ByteArrayBuffer();
+by.append(10).append(20).append(30);
+check(by.size() == 3, "Byte.size");
+check(by.sum() == 60, "Byte.sum");
+by.clear();
+check(by.size() == 0, "Byte.clear");
+
+// Short
+sh = ShortArrayBuffer();
+sh.append(10).append(20).append(30);
+check(sh.size() == 3, "Short.size");
+check(sh.sum() == 60, "Short.sum");
+sh.clear();
+check(sh.size() == 0, "Short.clear");
+
+// Long
+lg = LongArrayBuffer();
+lg.append(10).append(20).append(30);
+check(lg.size() == 3, "Long.size");
+check(lg.sum() == 60, "Long.sum");
+lg.clear();
+check(lg.size() == 0, "Long.clear");
+
+// Float
+fl = FloatArrayBuffer();
+fl.append(10).append(20).append(30);
+check(fl.size() == 3, "Float.size");
+fl.clear();
+check(fl.size() == 0, "Float.clear");
+
+// Double
+db = DoubleArrayBuffer();
+db.append(10).append(20).append(30);
+check(db.size() == 3, "Double.size");
+check(db.sum() == 60, "Double.sum");
+db.clear();
+check(db.size() == 0, "Double.clear");
+
+// BoolArrayBuffer
+print("--- BoolArrayBuffer ---");
+bbuf = BoolArrayBuffer();
+bbuf.append(true).append(false).append(true);
+check(bbuf.size() == 3, "Bool.size");
+check(bbuf.sum() == 2, "Bool.sum (true=1)");
+bbuf.remove(0);
+check(bbuf.size() == 2, "Bool.remove");
+check(bbuf.indexOf(true) == 1, "Bool.indexOf");
+bbuf.clear();
+check(bbuf.size() == 0, "Bool.clear");
+
+print("BoolArrayBuffer PASS");
+
+// ============================================================
+// 第六节：链式调用 + in-place mutation 验证
+// ============================================================
+print("=== chain + in-place ===");
+
+chain = Int32ArrayBuffer();
+result = chain.append(1).append(2).append(3).sort().reverse();
+check(result == chain, "chain returns self");
+check(chain.size() == 3, "chain in-place size");
+check(chain.get(0) == 3, "chain in-place content");
+
+arrChain = Array();
+r2 = arrChain.push(1).push(2).push(3);
+check(r2 == arrChain, "Array chain returns self");
+check(arrChain.size() == 3, "Array chain in-place");
+
+print("Chain + in-place PASS");
+
+// ============================================================
+// 第七节：扩展整型/浮点 Buffer（LongLong/LongDouble/U 系/SizeT 系）
+// ============================================================
+print("=== extended buffers ===");
+
+// LongLong：int64 全范围
+llb = LongLongArrayBuffer();
+llb.append(1).append(2).append(9223372036854775807);
+check(llb.size() == 3, "LongLong.size");
+check(llb.get(2) == 9223372036854775807, "LongLong int64 max");
+lls = llb.slice(0, 2);
+check(lls.size() == 2 && lls.get(1) == 2, "LongLong.slice");
+llc = llb.copy();
+llc.set(0, 100);
+check(llb.get(0) == 1 && llc.get(0) == 100, "LongLong.copy 独立");
+llb.clear();
+
+// LongDouble
+ldb = LongDoubleArrayBuffer();
+ldb.append(1.5).append(2.5).append(3.0);
+check(ldb.sum() == 7.0, "LongDouble.sum");
+check(ldb.get(0) == 1.5, "LongDouble.get");
+ldc2 = ldb.concat(ldb);
+check(ldc2.size() == 6, "LongDouble.concat");
+ldb.clear();
+
+// UChar：写入截断到 uint8（300-256=44）
+ucb = UCharArrayBuffer();
+ucb.append(300).append(128);
+check(ucb.get(0) == 44 && ucb.get(1) == 128, "UChar 截断 300->44");
+check(ucb.sum() == 172, "UChar.sum");
+ucb.clear();
+
+// UShort：写入截断到 uint16（70000-65536=4464）
+usb = UShortArrayBuffer();
+usb.append(70000).append(65535);
+check(usb.get(0) == 4464 && usb.get(1) == 65535, "UShort 截断 70000->4464");
+usb.clear();
+
+// UInt：写入截断到 uint32
+uib = UIntArrayBuffer();
+uib.append(5000000000).append(4294967295);
+check(uib.get(0) == 705032704 && uib.get(1) == 4294967295, "UInt 截断 5000000000->705032704");
+uib.clear();
+
+// ULong / SizeT / SsizeT
+ulb = ULongArrayBuffer();
+ulb.append(1).append(2);
+check(ulb.sum() == 3, "ULong.sum");
+ulb.clear();
+
+stb = SizeTArrayBuffer();
+stb.append(10).append(20);
+check(stb.sum() == 30, "SizeT.sum");
+stb.clear();
+
+sstb = SsizeTArrayBuffer();
+sstb.append(5).append(-5);
+check(sstb.sum() == 0, "SsizeT.sum 含负数");
+sstb.clear();
+
+print("Extended buffers PASS");
+
+// ============================================================
+// 结果
+// ============================================================
+print("buffer ALL PASS");

@@ -518,6 +518,27 @@ typedef enum {
     BUILTIN_SOCKET_SETOPT,      // s.setOption(name, val)
     BUILTIN_SOCKET_GETOPT,      // s.getOption(name)
     BUILTIN_SOCKET_FILENO,      // s.fileno() → int
+    /* ===== 三角/反三角/对数/指数（全局形式透传，1~2 参，返回 double） ===== */
+    BUILTIN_SIN,           // sin(x)：正弦（弧度）
+    BUILTIN_COS,           // cos(x)：余弦（弧度）
+    BUILTIN_TAN,           // tan(x)：正切（弧度）
+    BUILTIN_ASIN,          // asin(x)：反正弦
+    BUILTIN_ACOS,          // acos(x)：反余弦
+    BUILTIN_ATAN,          // atan(x)：反正切
+    BUILTIN_ATAN2,         // atan2(y, x)：双参数反正切
+    BUILTIN_LOG,           // log(x)：自然对数
+    BUILTIN_LOG10,         // log10(x)：常用对数
+    BUILTIN_LOG2,          // log2(x)：二进对数
+    BUILTIN_EXP,           // exp(x)：e^x
+    BUILTIN_POW,           // pow(x, y)：x^y
+    BUILTIN_ROUND,          // round(x)：四舍五入（返回 double）
+    BUILTIN_CBRT,          // cbrt(x)：立方根
+    BUILTIN_HYPOT,         // hypot(x, y)：sqrt(x²+y²)
+    BUILTIN_SIGN,          // sign(x)：符号函数 -1/0/1
+    BUILTIN_DEGREES,       // degrees(x)：弧度→角度
+    BUILTIN_RADIANS,       // radians(x)：角度→弧度
+    BUILTIN_TRUNC,         // trunc(x)：向零取整
+    BUILTIN_RANDOM,        // random()：返回 [0,1) 随机 double
     BUILTIN_COUNT
 } BuiltinId;
 

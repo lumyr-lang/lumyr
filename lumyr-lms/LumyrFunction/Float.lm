@@ -1,0 +1,96 @@
+// ============================================================
+// lumyr-Float：Float 单精度浮点封装类
+// 包装 float 值，提供值语义方法：相等、比较、取整、数学运算
+//
+// 用法：
+//   import <Function/Float> as Flt;
+//   f = Flt.Float(3.14);
+//   print(f.toString());      // "3.140000"
+//   print(f.round());         // 3
+// ============================================================
+
+import <Function/Number>;
+
+public class Float extends Number {
+    value: float;
+
+    func Float(v: float) {
+        self.value = v;
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        return (int)self.value;
+    }
+
+    // 比较：-1 <, 0 ==, 1 >
+    func compareTo(other): int {
+        if (type(other) != type(self)) { return -2; }
+        if (self.value < other.value) { return -1; }
+        if (self.value > other.value) { return 1; }
+        return 0;
+    }
+
+    func toString(): string {
+        v = self.value;
+        return "" + v;
+    }
+
+    func toDouble(): double {
+        v = self.value;
+        return v + 0.0;
+    }
+
+    func toInteger(): int {
+        return (int)self.value;
+    }
+
+    func abs(): Float {
+        if (self.value < 0.0) {
+            return Float(-self.value);
+        }
+        return self;
+    }
+
+    func round(): int {
+        return (int)(self.value + 0.5);
+    }
+
+    func floor(): int {
+        v = self.value;
+        r = (int)v;
+        if (v < 0.0 && v != r + 0.0) {
+            return r - 1;
+        }
+        return r;
+    }
+
+    func ceil(): int {
+        v = self.value;
+        r = (int)v;
+        if (v > 0.0 && v != r + 0.0) {
+            return r + 1;
+        }
+        return r;
+    }
+
+    func negate(): Float {
+        return Float(-self.value);
+    }
+
+    func isNegative(): bool {
+        return self.value < 0.0;
+    }
+
+    func isZero(): bool {
+        return self.value == 0.0;
+    }
+
+    func isPositive(): bool {
+        return self.value > 0.0;
+    }
+}

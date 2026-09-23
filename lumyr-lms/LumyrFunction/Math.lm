@@ -1,0 +1,64 @@
+// ============================================================
+// lumyr-Math：Math 数学工具类
+// 提供数学常量与静态方法：三角、反三角、对数、指数、幂、取整等
+// 全部方法委托 lumin 内置数学函数（C math.h 透传）
+//
+// 用法（no-alias 模式）：
+//   import <Function/Math>;
+//   r = Math_sin(1.5707963267948966);   // sin(π/2) ≈ 1
+//   pi = Math_PI;                       // 3.14159...
+//   e  = Math_E;                        // 2.71828...
+// ============================================================
+
+public class Math {
+    // ====== 数学常量 ======
+    static PI: double = 3.141592653589793;
+    static E: double  = 2.718281828459045;
+    static LN2: double = 0.693147180559945;     // log(2)
+    static LN10: double = 2.302585092994046;     // log(10)
+    static SQRT2: double = 1.414213562373095;    // sqrt(2)
+
+    // ====== 三角函数（弧度制）======
+    static func sin(x): double { return sin(x); }
+    static func cos(x): double { return cos(x); }
+    static func tan(x): double { return tan(x); }
+
+    // ====== 反三角函数 ======
+    static func asin(x): double { return asin(x); }
+    static func acos(x): double { return acos(x); }
+    static func atan(x): double { return atan(x); }
+    static func atan2(y, x): double { return atan2(y, x); }
+
+    // ====== 对数 ======
+    static func log(x): double { return log(x); }          // 自然对数
+    static func log10(x): double { return log10(x); }    // 常用对数
+    static func log2(x): double { return log2(x); }      // 二进对数
+
+    // ====== 指数与幂 ======
+    static func exp(x): double { return exp(x); }        // e^x
+    static func pow(x, y): double { return pow(x, y); }  // x^y
+    static func sqrt(x): double { return sqrt(x); }
+    static func cbrt(x): double { return cbrt(x); }      // 立方根
+    static func hypot(x, y): double { return hypot(x, y); }  // sqrt(x²+y²)
+
+    // ====== 取整 ======
+    static func floor(x) { return floor(x); }
+    static func ceil(x)  { return ceil(x); }
+    static func round(x): double { return round(x); }    // 四舍五入（返回 double）
+    static func trunc(x): double { return trunc(x); }     // 向零取整
+
+    // ====== 绝对值与符号 ======
+    static func abs(x) { return abs(x); }
+    static func sign(x): double { return sign(x); }      // -1 / 0 / 1
+
+    // ====== 角度转换 ======
+    static func degrees(x): double { return degrees(x); }   // 弧度→角度
+    static func radians(x): double { return radians(x); }   // 角度→弧度
+
+    // ====== 极值 ======
+    static func max(a, b) { return max(a, b); }
+    static func min(a, b) { return min(a, b); }
+
+    // ====== 随机数 ======
+    static func random(): double { return random(); }   // 返回 [0,1) 随机数
+}

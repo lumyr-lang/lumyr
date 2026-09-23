@@ -692,6 +692,12 @@ void class_add_method(const char* class_name, const char* method_name, struct As
 {
     TypeDef* td = class_lookup(class_name);
     if(!td) return;
+    /* 前置设置构造函数：方法体内自构造（如 return Counter(v)）需要 td->constructor
+     * 已就绪才能在 IR 编译时生成 __init__ 调用。class_set_constructor 幂等，后续重复调用安全跳过 */
+    if(!td->constructor && g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
+        RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+        class_set_constructor(class_name, g_class_constructor, ctor_rf);
+    }
     /* 跳过构造函数：构造函数已经通过 class_set_constructor 单独设置，
        不需要再作为普通方法添加，否则会导致 class_name 重复设置和函数名冲突 */
     if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.name) {
@@ -711,6 +717,26 @@ void class_add_method(const char* class_name, const char* method_name, struct As
         }
     }
     // 编译方法为 RuntimeFunc（传递 class_name，让函数表注册时正确设置 class_name）
+    // 先预登记方法 AST 到 TypeDef 方法表（rf 暂置 NULL），编译中递归自调用可查到方法签名
+    {
+        int pre_found = 0;
+        for(int i = 0; i < td->nmethods; i++) {
+            if(strcmp(td->method_names[i], method_name) == 0) {
+                td->method_nodes[i] = method_node;
+                pre_found = 1; break;
+            }
+        }
+        if(!pre_found) {
+            int n = td->nmethods + 1;
+            td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
+            td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
+            td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
+            td->method_names[td->nmethods] = strdup(method_name);
+            td->method_nodes[td->nmethods] = method_node;
+            td->method_funcs[td->nmethods] = NULL;
+            td->nmethods = n;
+        }
+    }
     RuntimeFunc* rf = compile_func_from_ast_with_class(method_node, class_name);
     // 把方法注册到全局符号表中，用 (class_name, method_name) 作为键（红黑树，支持扩展）
     if(rf && method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.name) {
@@ -753,25 +779,13 @@ void class_add_method(const char* class_name, const char* method_name, struct As
             }
         }
     }
-    /* 登记 TypeDef 方法表：同名覆盖（重写），新名追加 */
-    int found = 0;
+    /* 登记 TypeDef 方法表：预登记已在编译前完成，此处仅回填 rf */
     for(int i = 0; i < td->nmethods; i++) {
         if(strcmp(td->method_names[i], method_name) == 0) {
             td->method_nodes[i] = method_node;
             td->method_funcs[i] = rf;
-            found = 1;
             break;
         }
-    }
-    if(!found) {
-        int n = td->nmethods + 1;
-        td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
-        td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
-        td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
-        td->method_names[td->nmethods] = strdup(method_name);
-        td->method_nodes[td->nmethods] = method_node;
-        td->method_funcs[td->nmethods] = rf;
-        td->nmethods = n;
     }
 
     /* 同步 RuntimeTypeInfo 方法表（含父类继承槽位，重写覆盖在原位置）→ 多态分派依据 */
@@ -801,8 +815,23 @@ void class_set_constructor(const char* class_name, struct AstNode* constructor_n
 {
     TypeDef* td = class_lookup(class_name);
     if(!td) return;
+    if(td->constructor) return;  /* 已设置：幂等跳过，避免重复编译 */
     td->constructor = constructor_node;
     td->constructor_func = constructor_func;
+    td->nctor_overloads = 1;
+}
+
+void class_add_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func)
+{
+    TypeDef* td = class_lookup(class_name);
+    if(!td) return;
+    if(!td->constructor) {
+        /* 首个重载成为主构造：super() 链、ctor_owner 上溯、
+         * apply_field_initializers 的父类参数检查都依赖主构造 */
+        td->constructor = constructor_node;
+        td->constructor_func = constructor_func;
+    }
+    td->nctor_overloads++;
 }
 
 // 获取 class 构造函数的 RuntimeFunc（支持继承链查找）

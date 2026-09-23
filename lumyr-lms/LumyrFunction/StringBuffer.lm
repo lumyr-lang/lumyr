@@ -1,0 +1,46 @@
+// ============================================================
+// lumyr-Stringbuffer：StringBuffer 可变字符串构建器
+// 内部用字符串片段数组，toString() 用 join("") 拼接
+// 高效拼接：append 不每次创建新字符串
+//
+// 用法：
+//   import <Function/StringBuffer>;
+//   sb = StringBuffer();
+//   sb.append("hello").append(" ").append("world");
+//   print(sb.toString());    // hello world
+// ============================================================
+
+import <Function/Buffer>;
+
+public class StringBuffer extends AbstractBuffer {
+    value: array;
+
+    func StringBuffer(s) {
+        self.value = [];
+        if (s != null) { self.value = [s]; }
+    }
+
+    func append(s) { self.value.add(s); return self; }
+    func appendChar(c) { self.value.add("" + c); return self; }
+    func appendInt(n) { self.value.add("" + n); return self; }
+    func appendDouble(d) { self.value.add("" + d); return self; }
+    func appendLine(s) { self.value.add(s); self.value.add("\n"); return self; }
+
+    func toString(): string {
+        if (self.value.len == 0) { return ""; }
+        return self.value.join("");
+    }
+
+    func charAt(idx: int): int {
+        s = self.toString();
+        if (idx < 0 || idx >= s.len) { return 0; }
+        sb = bytes(s);
+        return sb[idx];
+    }
+
+    func copy(): StringBuffer {
+        c = StringBuffer();
+        c.value = self.value.copy();
+        return c;
+    }
+}

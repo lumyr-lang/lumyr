@@ -9,7 +9,7 @@ n = 0;
 
 // ===== 1. typed 数组 <V>[max, min] 极限值 =====
 a_int = <int>[2147483647, -2147483648];
-check(type(a_int) == "array", "int: container");
+check(type(a_int) == "typed_array", "int: container");
 check(a_int.len == 2, "int: len");
 check(a_int[0] == <int>2147483647, "int max: value");
 check(type(a_int[0]) == "int", "int max: vtype");
@@ -19,7 +19,7 @@ check(type(a_int[1]) == "int", "int min: vtype");
 n = n + 1;
 
 a_int8 = <int8>[127, -128];
-check(type(a_int8) == "array", "int8: container");
+check(type(a_int8) == "typed_array", "int8: container");
 check(a_int8.len == 2, "int8: len");
 check(a_int8[0] == <int8>127, "int8 max: value");
 check(type(a_int8[0]) == "int8", "int8 max: vtype");
@@ -29,7 +29,7 @@ check(type(a_int8[1]) == "int8", "int8 min: vtype");
 n = n + 1;
 
 a_int16 = <int16>[32767, -32768];
-check(type(a_int16) == "array", "int16: container");
+check(type(a_int16) == "typed_array", "int16: container");
 check(a_int16.len == 2, "int16: len");
 check(a_int16[0] == <int16>32767, "int16 max: value");
 check(type(a_int16[0]) == "int16", "int16 max: vtype");
@@ -39,7 +39,7 @@ check(type(a_int16[1]) == "int16", "int16 min: vtype");
 n = n + 1;
 
 a_int32 = <int32>[2147483647, -2147483648];
-check(type(a_int32) == "array", "int32: container");
+check(type(a_int32) == "typed_array", "int32: container");
 check(a_int32.len == 2, "int32: len");
 check(a_int32[0] == <int32>2147483647, "int32 max: value");
 check(type(a_int32[0]) == "int32", "int32 max: vtype");
@@ -49,7 +49,7 @@ check(type(a_int32[1]) == "int32", "int32 min: vtype");
 n = n + 1;
 
 a_int64 = <int64>[9223372036854775807, -9223372036854775808];
-check(type(a_int64) == "array", "int64: container");
+check(type(a_int64) == "typed_array", "int64: container");
 check(a_int64.len == 2, "int64: len");
 check(a_int64[0] == <int64>9223372036854775807, "int64 max: value");
 check(type(a_int64[0]) == "int64", "int64 max: vtype");
@@ -59,77 +59,77 @@ check(type(a_int64[1]) == "int64", "int64 min: vtype");
 n = n + 1;
 
 a_uint8 = <uint8>[255];
-check(type(a_uint8) == "array", "uint8: container");
+check(type(a_uint8) == "typed_array", "uint8: container");
 check(a_uint8.len == 1, "uint8: len");
 check(a_uint8[0] == <uint8>255, "uint8 max: value");
 check(type(a_uint8[0]) == "uint8", "uint8 max: vtype");
 n = n + 1;
 
 a_uint16 = <uint16>[65535];
-check(type(a_uint16) == "array", "uint16: container");
+check(type(a_uint16) == "typed_array", "uint16: container");
 check(a_uint16.len == 1, "uint16: len");
 check(a_uint16[0] == <uint16>65535, "uint16 max: value");
 check(type(a_uint16[0]) == "uint16", "uint16 max: vtype");
 n = n + 1;
 
 a_uint32 = <uint32>[4294967295];
-check(type(a_uint32) == "array", "uint32: container");
+check(type(a_uint32) == "typed_array", "uint32: container");
 check(a_uint32.len == 1, "uint32: len");
 check(a_uint32[0] == <uint32>4294967295, "uint32 max: value");
 check(type(a_uint32[0]) == "uint32", "uint32 max: vtype");
 n = n + 1;
 
 a_uint64 = <uint64>[18446744073709551615];
-check(type(a_uint64) == "array", "uint64: container");
+check(type(a_uint64) == "typed_array", "uint64: container");
 check(a_uint64.len == 1, "uint64: len");
 check(a_uint64[0] == <uint64>18446744073709551615, "uint64 max: value");
 check(type(a_uint64[0]) == "uint64", "uint64 max: vtype");
 n = n + 1;
 
 a_byte = <byte>[255];
-check(type(a_byte) == "array", "byte: container");
+check(type(a_byte) == "typed_array", "byte: container");
 check(a_byte.len == 1, "byte: len");
 check(a_byte[0] == <byte>255, "byte max: value");
 check(type(a_byte[0]) == "byte", "byte max: vtype");
 n = n + 1;
 
 a_uchar = <uchar>[255];
-check(type(a_uchar) == "array", "uchar: container");
+check(type(a_uchar) == "typed_array", "uchar: container");
 check(a_uchar.len == 1, "uchar: len");
 check(a_uchar[0] == <uchar>255, "uchar max: value");
 check(type(a_uchar[0]) == "unsigned char", "uchar max: vtype");
 n = n + 1;
 
 a_ushort = <ushort>[65535];
-check(type(a_ushort) == "array", "ushort: container");
+check(type(a_ushort) == "typed_array", "ushort: container");
 check(a_ushort.len == 1, "ushort: len");
 check(a_ushort[0] == <ushort>65535, "ushort max: value");
 check(type(a_ushort[0]) == "unsigned short", "ushort max: vtype");
 n = n + 1;
 
 a_ulong = <ulong>[18446744073709551615];
-check(type(a_ulong) == "array", "ulong: container");
+check(type(a_ulong) == "typed_array", "ulong: container");
 check(a_ulong.len == 1, "ulong: len");
 check(a_ulong[0] == <ulong>18446744073709551615, "ulong max: value");
 check(type(a_ulong[0]) == "unsigned long", "ulong max: vtype");
 n = n + 1;
 
 a_uint = <uint>[4294967295];
-check(type(a_uint) == "array", "uint: container");
+check(type(a_uint) == "typed_array", "uint: container");
 check(a_uint.len == 1, "uint: len");
 check(a_uint[0] == <uint>4294967295, "uint max: value");
 check(type(a_uint[0]) == "uint", "uint max: vtype");
 n = n + 1;
 
 a_size_t = <size_t>[18446744073709551615];
-check(type(a_size_t) == "array", "size_t: container");
+check(type(a_size_t) == "typed_array", "size_t: container");
 check(a_size_t.len == 1, "size_t: len");
 check(a_size_t[0] == <size_t>18446744073709551615, "size_t max: value");
 check(type(a_size_t[0]) == "size_t", "size_t max: vtype");
 n = n + 1;
 
 a_short = <short>[32767, -32768];
-check(type(a_short) == "array", "short: container");
+check(type(a_short) == "typed_array", "short: container");
 check(a_short.len == 2, "short: len");
 check(a_short[0] == <short>32767, "short max: value");
 check(type(a_short[0]) == "short", "short max: vtype");
@@ -139,7 +139,7 @@ check(type(a_short[1]) == "short", "short min: vtype");
 n = n + 1;
 
 a_long = <long>[9223372036854775807, -9223372036854775808];
-check(type(a_long) == "array", "long: container");
+check(type(a_long) == "typed_array", "long: container");
 check(a_long.len == 2, "long: len");
 check(a_long[0] == <long>9223372036854775807, "long max: value");
 check(type(a_long[0]) == "long", "long max: vtype");
@@ -149,7 +149,7 @@ check(type(a_long[1]) == "long", "long min: vtype");
 n = n + 1;
 
 a_longlong = <long long>[9223372036854775807, -9223372036854775808];
-check(type(a_longlong) == "array", "longlong: container");
+check(type(a_longlong) == "typed_array", "longlong: container");
 check(a_longlong.len == 2, "longlong: len");
 check(a_longlong[0] == <long long>9223372036854775807, "longlong max: value");
 check(type(a_longlong[0]) == "long long", "longlong max: vtype");
@@ -159,7 +159,7 @@ check(type(a_longlong[1]) == "long long", "longlong min: vtype");
 n = n + 1;
 
 a_ssize_t = <ssize_t>[9223372036854775807, -9223372036854775808];
-check(type(a_ssize_t) == "array", "ssize_t: container");
+check(type(a_ssize_t) == "typed_array", "ssize_t: container");
 check(a_ssize_t.len == 2, "ssize_t: len");
 check(a_ssize_t[0] == <ssize_t>9223372036854775807, "ssize_t max: value");
 check(type(a_ssize_t[0]) == "ssize_t", "ssize_t max: vtype");
@@ -169,7 +169,7 @@ check(type(a_ssize_t[1]) == "ssize_t", "ssize_t min: vtype");
 n = n + 1;
 
 a_char = <char>[127, -128];
-check(type(a_char) == "array", "char: container");
+check(type(a_char) == "typed_array", "char: container");
 check(a_char.len == 2, "char: len");
 check(a_char[0] == <char>127, "char max: value");
 check(type(a_char[0]) == "char", "char max: vtype");
@@ -179,14 +179,14 @@ check(type(a_char[1]) == "char", "char min: vtype");
 n = n + 1;
 
 a_ascii = <ascii>[2147483647];
-check(type(a_ascii) == "array", "ascii: container");
+check(type(a_ascii) == "typed_array", "ascii: container");
 check(a_ascii.len == 1, "ascii: len");
 check(a_ascii[0] == <ascii>2147483647, "ascii max: value");
 check(type(a_ascii[0]) == "int", "ascii max: vtype");
 n = n + 1;
 
 a_bool = <bool>[true, false];
-check(type(a_bool) == "array", "bool: container");
+check(type(a_bool) == "typed_array", "bool: container");
 check(a_bool.len == 2, "bool: len");
 check(a_bool[0] == <bool>true, "bool true: value");
 check(type(a_bool[0]) == "bool", "bool true: vtype");
@@ -196,42 +196,42 @@ check(type(a_bool[1]) == "bool", "bool false: vtype");
 n = n + 1;
 
 a_double = <double>[<double>100000000000000000000000000000];
-check(type(a_double) == "array", "double: container");
+check(type(a_double) == "typed_array", "double: container");
 check(a_double.len == 1, "double: len");
 check(a_double[0] == <double><double>100000000000000000000000000000, "double large: value");
 check(type(a_double[0]) == "double", "double large: vtype");
 n = n + 1;
 
 a_float = <float>[<float>170141183460469231731687303715884105728];
-check(type(a_float) == "array", "float: container");
+check(type(a_float) == "typed_array", "float: container");
 check(a_float.len == 1, "float: len");
 check(a_float[0] == <float><float>170141183460469231731687303715884105728, "float max: value");
 check(type(a_float[0]) == "float", "float max: vtype");
 n = n + 1;
 
 a_longdouble = <long double>[<long double>100000000000000000000000000000];
-check(type(a_longdouble) == "array", "longdouble: container");
+check(type(a_longdouble) == "typed_array", "longdouble: container");
 check(a_longdouble.len == 1, "longdouble: len");
 check(a_longdouble[0] == <long double><long double>100000000000000000000000000000, "longdouble large: value");
 check(type(a_longdouble[0]) == "long double", "longdouble large: vtype");
 n = n + 1;
 
 a_bigint = <bigint>[<bigint>1234567890123456789012345678901234567890];
-check(type(a_bigint) == "array", "bigint: container");
+check(type(a_bigint) == "typed_array", "bigint: container");
 check(a_bigint.len == 1, "bigint: len");
 check((string)a_bigint[0] == "1234567890123456789012345678901234567890", "bigint huge: value");
 check(type(a_bigint[0]) == "bigint", "bigint huge: vtype");
 n = n + 1;
 
 a_decimal = <decimal>[<decimal>3.141592653589793238462643383279];
-check(type(a_decimal) == "array", "decimal: container");
+check(type(a_decimal) == "typed_array", "decimal: container");
 check(a_decimal.len == 1, "decimal: len");
 check((string)a_decimal[0] == "3.141592653589793238462643383279", "decimal precise: value");
 check(type(a_decimal[0]) == "decimal", "decimal precise: vtype");
 n = n + 1;
 
 a_bitdecimal = <bitdecimal>[<bitdecimal>3.141592653589793238462643383279];
-check(type(a_bitdecimal) == "array", "bitdecimal: container");
+check(type(a_bitdecimal) == "typed_array", "bitdecimal: container");
 check(a_bitdecimal.len == 1, "bitdecimal: len");
 check((string)a_bitdecimal[0] == "3.141592653589793238462643383279", "bitdecimal precise: value");
 check(type(a_bitdecimal[0]) == "bitdecimal", "bitdecimal precise: vtype");

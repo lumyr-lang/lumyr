@@ -1,0 +1,263 @@
+// ============================================================
+// lumyr 封装类全量测试：Integer / Double / Float / Long / Byte / Short / Character / String / Boolean / Number
+// 运行：./bin/lumyr lumyr-lms/example/number_example.lm
+// ============================================================
+
+import <Function/Integer>;
+import <Function/Double>;
+import <Function/Float>;
+import <Function/Long>;
+import <Function/Byte>;
+import <Function/Short>;
+import <Function/Character>;
+import <Function/String>;
+import <Function/Boolean>;
+import <Function/Number>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ========== Integer ==========
+n = Integer(42);
+check(n.toString() == "42", "Integer toString");
+check(n.isEven(), "42 isEven");
+check(!n.isOdd(), "42 not isOdd");
+check(!n.isPrime(), "42 not prime");
+check(n.hashCode() == 42, "Integer hashCode");
+check(n.isPositive(), "42 isPositive");
+check(!n.isNegative(), "42 not isNegative");
+check(!n.isZero(), "42 not isZero");
+
+p = Integer(17);
+check(p.isPrime(), "17 isPrime");
+check(p.isOdd(), "17 isOdd");
+
+neg = Integer(-5);
+check(neg.isNegative(), "-5 isNegative");
+na = neg.abs();
+check(na.value == 5, "abs(-5)=5");
+nn = neg.negate();
+check(nn.value == 5, "negate(-5)=5");
+
+check(n.compareTo(p) == 1, "42 > 17");
+check(p.compareTo(n) == -1, "17 < 42");
+check(n.compareTo(Integer(42)) == 0, "42 == 42");
+check(n.equals(Integer(42)), "Integer equals");
+check(!n.equals(p), "Integer not equals");
+check(n.toDouble() == 42.0, "Integer toDouble");
+
+check(Integer(0).toBinary() == "0", "0b = 0");
+check(Integer(10).toBinary() == "1010", "10b = 1010");
+check(Integer(255).toHex() == "ff", "255 hex = ff");
+check(Integer(16).toHex() == "10", "16 hex = 10");
+
+check(n.className() == "Integer", "Integer className");
+
+// ========== Double ==========
+d = Double(3.14);
+check(d.toString() == "3.140000", "Double toString");
+check(d.toInteger() == 3, "3.14 toInteger=3");
+check(d.toDouble() == 3.14, "Double toDouble");
+check(d.isPositive(), "3.14 isPositive");
+check(!d.isNegative(), "3.14 not isNegative");
+check(!d.isZero(), "3.14 not isZero");
+
+check(Double(3.7).round() == 4, "3.7 round=4");
+check(Double(3.2).round() == 3, "3.2 round=3");
+da = Double(-3.7).abs();
+check(da.value == 3.7, "abs(-3.7)=3.7");
+dn = Double(-5.5).negate();
+check(dn.value == 5.5, "negate(-5.5)=5.5");
+
+check(d.compareTo(Double(2.0)) == 1, "3.14 > 2.0");
+check(d.compareTo(Double(3.14)) == 0, "3.14 == 3.14");
+check(d.equals(Double(3.14)), "Double equals");
+check(d.className() == "Double", "Double className");
+
+// ========== Float ==========
+f = Float(2.5);
+check(f.toString() == "2.500000", "Float toString");
+check(f.toDouble() == 2.5, "Float toDouble");
+check(f.toInteger() == 2, "2.5 toInteger=2");
+check(f.isPositive(), "2.5 isPositive");
+check(!f.isZero(), "2.5 not isZero");
+
+fa = Float(-1.5).abs();
+check(fa.value == 1.5, "Float abs(-1.5)=1.5");
+fn = Float(-1.5).negate();
+check(fn.value == 1.5, "Float negate(-1.5)=1.5");
+check(Float(0.0).isZero(), "0.0 isZero");
+check(f.className() == "Float", "Float className");
+
+// ========== Long ==========
+l = Long(1000000);
+check(l.toString() == "1000000", "Long toString");
+check(l.isEven(), "1000000 isEven");
+check(!l.isPrime(), "1000000 not prime");
+check(l.isPositive(), "1000000 isPositive");
+check(l.toDouble() == 1000000.0, "Long toDouble");
+
+lp = Long(999999999999);
+check(lp.toString() == "999999999999", "Long big toString");
+check(lp.isOdd(), "999999999999 isOdd");
+
+lneg = Long(-42);
+check(lneg.isNegative(), "-42 isNegative");
+la = lneg.abs();
+check(la.value == 42, "Long abs(-42)=42");
+check(l.className() == "Long", "Long className");
+
+check(Long(255).toHex() == "ff", "Long 255 hex=ff");
+check(Long(10).toBinary() == "1010", "Long 10b=1010");
+
+// ========== Byte ==========
+b = Byte(200);
+check(b.toString() == "200", "Byte 200 toString");
+check(b.toInt() == 200, "Byte toInt=200");
+check(b.toDouble() == 200.0, "Byte toDouble=200.0");
+check(b.isPositive(), "200 isPositive");
+check(!b.isNegative(), "200 not isNegative");
+check(!b.isZero(), "200 not isZero");
+check(!b.isMax(), "200 not isMax");
+
+bmax = Byte(255);
+check(bmax.isMax(), "255 isMax");
+check(bmax.toHex() == "ff", "Byte 255 hex=ff");
+check(bmax.toBinary() == "11111111", "Byte 255 binary");
+
+bzero = Byte(0);
+check(bzero.isZero(), "Byte 0 isZero");
+check(bzero.toBinary() == "00000000", "Byte 0 binary=00000000");
+check(b.className() == "Byte", "Byte className");
+
+// Byte abs 是自身
+ba = b.abs();
+check(ba.value == 200, "Byte abs=200");
+
+// ========== Short ==========
+s = Short(-100);
+check(s.toString() == "-100", "Short toString");
+check(s.toInt() == -100, "Short toInt=-100");
+check(s.toDouble() == -100.0, "Short toDouble");
+check(s.isNegative(), "-100 isNegative");
+check(!s.isPositive(), "-100 not isPositive");
+check(!s.isZero(), "-100 not isZero");
+check(s.isEven(), "-100 isEven");
+check(!s.isOdd(), "-100 not isOdd");
+
+sa = s.abs();
+check(sa.value == 100, "Short abs(-100)=100");
+sn = s.negate();
+check(sn.value == 100, "Short negate(-100)=100");
+check(s.className() == "Short", "Short className");
+
+check(Short(0).isZero(), "Short 0 isZero");
+check(Short(42).isPositive(), "Short 42 isPositive");
+
+// ========== Character ==========
+c = Character(<char>'A');
+check(c.isUpper(), "A isUpper");
+check(!c.isLower(), "A not isLower");
+check(c.isLetter(), "A isLetter");
+check(!c.isDigit(), "A not isDigit");
+check(c.toInt() == 65, "A toInt=65");
+check(c.toString() == "A", "A toString");
+
+cl = c.toLower();
+check(cl.value == <char>'a', "A toLower=a");
+check(cl.isLower(), "a isLower");
+check(!cl.isUpper(), "a not isUpper");
+
+cu = cl.toUpper();
+check(cu.value == <char>'A', "a toUpper=A");
+check(cu.isUpper(), "A isUpper");
+
+d0 = Character(<char>'5');
+check(d0.isDigit(), "5 isDigit");
+check(!d0.isLetter(), "5 not isLetter");
+
+sp = Character(<char>' ');
+check(sp.isWhitespace(), "space isWhitespace");
+
+check(c.className() == "Character", "Character className");
+check(c.equals(Character(<char>'A')), "Character equals");
+check(!c.equals(d0), "Character not equals");
+check(c.compareTo(Character(<char>'B')) == -1, "A < B");
+
+// ========== String ==========
+str = String("hello");
+check(str.length() == 5, "String length=5");
+check(str.toString() == "hello", "String toString");
+check(!str.isEmpty(), "hello not empty");
+check(String("").isEmpty(), "empty is empty");
+check(str.equals(String("hello")), "String equals");
+check(!str.equals(String("world")), "String not equals");
+
+sc = str.concat(String(" world"));
+check(sc.value == "hello world", "String concat");
+
+check(str.startsWith("hel"), "String startsWith hel");
+check(str.endsWith("llo"), "String endsWith llo");
+check(str.contains("ell"), "String contains ell");
+check(!str.contains("xyz"), "String not contains xyz");
+
+su = str.toUpper();
+check(su.value == "HELLO", "String toUpper");
+sl = su.toLower();
+check(sl.value == "hello", "String toLower");
+
+check(String("  hi  ").trim().value == "hi", "String trim");
+check(String("ab").repeat(3).value == "ababab", "String repeat");
+
+rp = String("hello").replace("llo", "y");
+check(rp.value == "hey", "String replace");
+
+sub = String("hello world").substring(0, 5);
+check(sub.value == "hello", "String substring");
+
+check(str.className() == "String", "String className");
+check(str.compareTo(String("world")) == -1, "hello < world");
+
+// ========== Boolean ==========
+bt = Boolean(true);
+bf = Boolean(false);
+check(bt.toString() == "true", "true toString");
+check(bf.toString() == "false", "false toString");
+check(bt.isTrue(), "isTrue");
+check(bf.isFalse(), "isFalse");
+r1 = bt.logicalNot(); check(r1.value == false, "not true = false");
+r2 = bf.logicalNot(); check(r2.value == true, "not false = true");
+r3 = bt.logicalAnd(bf); check(r3.value == false, "true && false = false");
+r4 = bt.logicalOr(bf); check(r4.value == true, "true || false = true");
+r5 = bt.xor(bf); check(r5.value == true, "true xor false = true");
+r6 = bt.xor(bt); check(r6.value == false, "true xor true = false");
+check(bt.hashCode() == 1, "true hashCode=1");
+check(bf.hashCode() == 0, "false hashCode=0");
+check(bt.equals(Boolean(true)), "Boolean equals");
+check(bt.className() == "Boolean", "Boolean className");
+
+// ========== Number 静态方法 ==========
+check(Number_isNumber(Integer(42)), "Integer isNumber");
+check(Number_isNumber(Double(3.14)), "Double isNumber");
+check(Number_isNumber(Float(1.5)), "Float isNumber");
+check(Number_isNumber(Long(100)), "Long isNumber");
+check(Number_isNumber(Byte(200)), "Byte isNumber");
+check(Number_isNumber(Short(-10)), "Short isNumber");
+check(!Number_isNumber(Boolean(true)), "Boolean not isNumber");
+check(!Number_isNumber(Character(<char>'A')), "Character not isNumber");
+check(!Number_isNumber(String("hi")), "String not isNumber");
+
+// Number.max / Number.min
+mx = Number_max(Integer(10), Integer(20));
+check(mx.value == 20, "max(10,20)=20");
+mn = Number_min(Integer(10), Integer(20));
+check(mn.value == 10, "min(10,20)=10");
+
+// Number 实例方法（通过子类继承）
+check(n.inRange(10.0, 100.0), "42 inRange(10,100)");
+check(!n.inRange(50.0, 100.0), "42 not inRange(50,100)");
+check(n.stringValue() == "42", "Integer stringValue");
+check(n.equalsValue(42.0), "42 equalsValue 42.0");
+
+print("lumyr all wrapper classes ALL PASS");

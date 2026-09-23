@@ -1,0 +1,55 @@
+// ============================================================
+// lumyr-Arraybuffer：ArrayBuffer 字节缓冲区
+// 内部用 int 数组（0-255），set 时自动 wrap 到 byte 范围
+// 提供 toBytes()/hex()/toStr() 转回 bytes 语义
+//
+// 用法：
+//   import <Function/ArrayBuffer>;
+//   buf = ArrayBuffer("hello");
+//   print(buf.size());        // 5
+//   print(buf.hex());         // 68656c6c6f
+//   buf.set(0, 65);           // 'A'
+//   print(buf.toStr());       // Aello
+// ============================================================
+
+import <Function/Buffer>;
+
+public class ArrayBuffer extends AbstractBuffer {
+    value: array;
+
+    func ArrayBuffer(arg) {
+        self.value = [];
+        if (arg != null) {
+            atype = type(arg);
+            if (atype == "string") {
+                b = bytes(arg);
+                i = 0;
+                while (i < b.len) { self.value.add(b[i]); i = i + 1; }
+            } else if (atype == "bytes") {
+                i = 0;
+                while (i < arg.len) { self.value.add(arg[i]); i = i + 1; }
+            } else {
+                self.value = copy(arg);
+            }
+        }
+    }
+
+    // set 时 wrap 到 0-255（uint8 语义）
+    func set(idx: int, v) {
+        b = v;
+        while (b < 0) { b = b + 256; }
+        while (b > 255) { b = b - 256; }
+        self.value.set(idx, b);
+        return self;
+    }
+
+    func toBytes() { return bytes(self.value); }
+    func hex() { return self.toBytes().hex(); }
+    func toStr() { return self.toBytes().toStr(); }
+
+    func copy(): ArrayBuffer {
+        c = ArrayBuffer();
+        c.value = self.value.copy();
+        return c;
+    }
+}

@@ -1,0 +1,44 @@
+// ============================================================
+// lumyr-UIntArrayBuffer：UIntArrayBuffer 数组缓冲区封装类
+// 内部使用 <uint> 类型化数组存储，元素写入由运行时按元素类型原生截断到
+// unsigned int 范围 (0..4294967295)
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/UIntArrayBuffer>;
+//   buf = UIntArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class UIntArrayBuffer extends AbstractBuffer {
+    value: <uint>array;
+
+    func UIntArrayBuffer(arr) {
+        self.value = <uint>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): UIntArrayBuffer {
+        r = UIntArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): UIntArrayBuffer {
+        r = UIntArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): UIntArrayBuffer {
+        r = UIntArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

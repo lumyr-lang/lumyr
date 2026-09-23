@@ -1,0 +1,43 @@
+// ============================================================
+// lumyr-BoolArrayBuffer：BoolArrayBuffer 数组缓冲区封装类
+// 内部使用常规数组 [] 存储（布尔类型，set 不做截断）
+// 避免类型化数组存入类字段后丢失元素类型的 VM bug
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/BoolArrayBuffer>;
+//   buf = BoolArrayBuffer();
+//   buf.append(true).append(false).append(true);
+//   print(buf.size());        // 3
+// ============================================================
+
+import <Function/Buffer>;
+
+public class BoolArrayBuffer extends AbstractBuffer {
+    value: array;
+
+    func BoolArrayBuffer(arr) {
+        self.value = [];
+        if (arr != null) { self.value = copy(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): BoolArrayBuffer {
+        r = BoolArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): BoolArrayBuffer {
+        r = BoolArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): BoolArrayBuffer {
+        r = BoolArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

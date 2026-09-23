@@ -1,0 +1,44 @@
+// ============================================================
+// lumyr-LongDoubleArrayBuffer：LongDoubleArrayBuffer 数组缓冲区封装类
+// 内部使用 <long double> 类型化数组存储，元素为扩展精度浮点（80 位扩展精度 /
+// 16 字节存储），写入由运行时按元素类型原生转换
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/LongDoubleArrayBuffer>;
+//   buf = LongDoubleArrayBuffer();
+//   buf.append(1.5).append(2.5).append(3.5);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 7.5
+// ============================================================
+
+import <Function/Buffer>;
+
+public class LongDoubleArrayBuffer extends AbstractBuffer {
+    value: <long double>array;
+
+    func LongDoubleArrayBuffer(arr) {
+        self.value = <long double>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): LongDoubleArrayBuffer {
+        r = LongDoubleArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): LongDoubleArrayBuffer {
+        r = LongDoubleArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): LongDoubleArrayBuffer {
+        r = LongDoubleArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

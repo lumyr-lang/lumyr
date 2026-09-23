@@ -1,0 +1,62 @@
+// ============================================================
+// lumyr-Boolean：Boolean 布尔封装类
+// 包装 bool 值，提供值语义方法：相等、逻辑运算
+//
+// 用法：
+//   import <Function/Boolean> as Bool;
+//   b = Bool.Boolean(true);
+//   print(b.toString());        // "true"
+//   print(b.logicalNot());       // false
+// ============================================================
+
+import <Function/Object>;
+
+public class Boolean extends Object {
+    value: bool;
+
+    func Boolean(v: bool) {
+        self.value = v;
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        if (self.value) { return 1; }
+        return 0;
+    }
+
+    func toString(): string {
+        if (self.value) { return "true"; }
+        return "false";
+    }
+
+    func isTrue(): bool {
+        return self.value;
+    }
+
+    func isFalse(): bool {
+        return !self.value;
+    }
+
+    func logicalAnd(other): Boolean {
+        if (type(other) != type(self)) { return Boolean(false); }
+        return Boolean(self.value && other.value);
+    }
+
+    func logicalOr(other): Boolean {
+        if (type(other) != type(self)) { return Boolean(self.value); }
+        return Boolean(self.value || other.value);
+    }
+
+    func logicalNot(): Boolean {
+        return Boolean(!self.value);
+    }
+
+    func xor(other): Boolean {
+        if (type(other) != type(self)) { return Boolean(false); }
+        return Boolean(self.value != other.value);
+    }
+}

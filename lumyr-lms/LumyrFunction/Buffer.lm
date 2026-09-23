@@ -1,0 +1,87 @@
+// ============================================================
+// lumyr-Buffer：BufferInterface 接口 + AbstractBuffer 抽象基类
+// 所有缓冲区/集合封装类的统一契约与通用实现
+//
+// 用法：
+//   import <Function/Buffer>;
+//   public class Array extends AbstractBuffer { ... }
+// ============================================================
+
+import <Function/Object>;
+
+// 统一缓冲区契约
+interface BufferInterface {
+    func size(): int;
+    func isEmpty(): bool;
+    func get(idx: int);
+    func set(idx: int, val);
+    func append(val);
+    func insert(idx: int, val);
+    func remove(idx: int);
+    func clear();
+    func sort();
+    func reverse();
+    func slice(start: int, end: int);
+    func concat(other);
+    func sum();
+    func avg(): double;
+    func min();
+    func max();
+    func indexOf(val): int;
+    func contains(val): bool;
+    func first();
+    func last();
+    func copy();
+    func toArray();
+    func toString(): string;
+    func className(): string;
+    func equals(other): bool;
+    func hashCode(): int;
+}
+
+// 抽象基类：所有通用方法委托 self.value 上的内置数组方法
+// 子类只需声明 value 字段并实现构造函数
+public abstract class AbstractBuffer extends Object implements BufferInterface {
+    func size(): int { return self.value.len; }
+    func isEmpty(): bool { return self.value.len == 0; }
+
+    func get(idx: int) { return self.value.get(idx); }
+    func set(idx: int, val) { self.value.set(idx, val); return self; }
+
+    // 动态增删默认实现（适用于 VAL_ARRAY 内部存储）
+    func append(val) { self.value.add(val); return self; }
+    func insert(idx: int, val) { self.value.insert(idx, val); return self; }
+    func remove(idx: int) { self.value.remove(idx); return self; }
+    func clear() { self.value.clear(); return self; }
+
+    func sort() { self.value.sort(); return self; }
+    func reverse() { self.value.reverse(); return self; }
+
+    func slice(start: int, end: int) { return self.value.slice(start, end); }
+    func concat(other) { return self.value.concat(other.value); }
+
+    func sum() { return self.value.sum(); }
+    func avg(): double { return self.value.avg(); }
+    func min() { return self.value.min(); }
+    func max() { return self.value.max(); }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    func first() { return self.value.first(); }
+    func last() { return self.value.last(); }
+
+    func copy() {
+        c = copy(self);
+        return c;
+    }
+    func toArray() { return self.value.copy(); }
+
+    func className(): string { return type(self); }
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.toJSONString() == other.toJSONString();
+    }
+    func hashCode(): int { return self.value.len; }
+    func toString(): string { return self.toJSONString(); }
+}

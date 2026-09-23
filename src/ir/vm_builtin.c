@@ -131,6 +131,173 @@ static void bi_write_et(ValueType et, void* items, int i, int64_t iv, double dv)
     }
 }
 
+/* ===== TypedArray 动态操作辅助（add/set/insert/remove/clear/addAll 共用） =====
+ * 根因修复：此前类型化数组不支持任何动态增长操作（add/insert/remove/clear/
+ * addAll/set 只有 VAL_ARRAY 分支），存入类字段后无法原地修改，
+ * Buffer 封装类被迫用普通数组 + 手工截断规避。 */
+
+static int64_t bi_num_i64(Value v);
+
+/* 确保容量 >= need（2x 增长，items 经 gc_realloc 扩容，与数组 add 同策略） */
+static void bi_ta_reserve(TypedArray* ta, int need) {
+    if(!ta || need <= ta->cap) return;
+    int nc = ta->cap > 0 ? ta->cap * 2 : 8;
+    while(nc < need) nc *= 2;
+    size_t isz = lumyr_etype_itemsz(ta->elem_type);
+    ta->items = gc_realloc(ta->items, isz * (size_t)nc);
+    ta->cap = nc;
+}
+
+/* 把 Value 写入 TypedArray 第 i 个元素槽（与 vm_exec_stack.c 下标写同语义）：
+ * 数值族经 bi_write_et 按元素类型截断；string 槽复制为 GC 堆串；
+ * PTR 族槽（容器/实例/高精度）存裸指针 */
+static void bi_ta_write_value(TypedArray* ta, int i, Value v) {
+    ValueType et = ta->elem_type;
+    if(bi_is_float_et(et)) {
+        double d = (v.type == VAL_DOUBLE)        ? v.v.d :
+                   (v.type == VAL_FLOAT)         ? (double)v.v.f :
+                   (v.type == VAL_LONG_DOUBLE)   ? (double)v.v.ld :
+                   (v.type == VAL_STRING)        ? 0.0 :
+                                                   (double)bi_num_i64(v);
+        bi_write_et(et, ta->items, i, 0, d);
+        return;
+    }
+    if(et == VAL_STRING) {
+        const char* s = NULL;
+        char buf[40];
+        if(v.type == VAL_STRING) {
+            s = v.str_inline ? v.v.sso.data : v.v.s;
+        } else if(v.type == VAL_DOUBLE || v.type == VAL_FLOAT || v.type == VAL_LONG_DOUBLE) {
+            double d = (v.type == VAL_DOUBLE) ? v.v.d :
+                       (v.type == VAL_FLOAT) ? (double)v.v.f : (double)v.v.ld;
+            snprintf(buf, sizeof(buf), "%g", d);
+            s = buf;
+        } else {
+            snprintf(buf, sizeof(buf), "%lld", (long long)bi_num_i64(v));
+            s = buf;
+        }
+        size_t l = s ? strlen(s) : 0;
+        char* gs = (char*)gc_alloc(l + 1, VAL_STRING);
+        if(l) memcpy(gs, s, l);
+        gs[l] = '\0';
+        ((char**)ta->items)[i] = gs;
+        return;
+    }
+    if(lumyr_etype_stackcls(et) == 3) {
+        /* PTR 族槽位：容器/实例/高精度对象存裸指针 */
+        void* raw = NULL;
+        switch(v.type) {
+        case VAL_PTR:        raw = v.v.struct_ptr; break;
+        case VAL_STRUCT_PTR: raw = v.v.struct_ptr; break;
+        case VAL_CLASS_PTR:  raw = v.v.struct_ptr; break;
+        case VAL_BIGINT:     raw = v.v.bigint; break;
+        case VAL_DECIMAL:    raw = v.v.decimal; break;
+        case VAL_BITDECIMAL: raw = v.v.bitdecimal; break;
+        case VAL_MAP:        raw = v.v.map; break;
+        case VAL_ARRAY:      raw = v.v.array; break;
+        case VAL_TYPED_ARRAY: raw = v.v.typed_array; break;
+        default: break;
+        }
+        ((void**)ta->items)[i] = raw;
+        return;
+    }
+    bi_write_et(et, ta->items, i, bi_num_i64(v), 0);
+}
+
+/* TypedArray 第 i 个元素裸指针（PTR 族槽位通用读取） */
+static void* bi_ptr_et(TypedArray* ta, int i) {
+    return ta->items ? ((void**)ta->items)[i] : NULL;
+}
+
+/* TypedArray 第 i 个元素装箱为 Value（与 vm_exec_stack.c typed_box_elem 同语义：
+ * 保留精确元素类型） */
+static Value bi_ta_read_value(TypedArray* ta, int i) {
+    Value r = val_none();
+    if(!ta || i < 0 || i >= ta->len) return r;
+    ValueType et = ta->elem_type;
+    int cls = lumyr_etype_stackcls(et);
+    if(cls == 1) {
+        r.type = et;
+        r.v.ll = bi_read_i64_et(et, ta->items, i);
+    } else if(cls == 2) {
+        r.type = et;
+        if(et == VAL_DOUBLE)      r.v.d = ((const double*)ta->items)[i];
+        else if(et == VAL_FLOAT)  r.v.f = ((const float*)ta->items)[i];
+        else                      r.v.ld = ((const long double*)ta->items)[i];
+    } else if(cls == 3) {
+        r.type = et;
+        r.str_inline = 0;
+        r.v.s = (et == VAL_STRING) ? ((char**)ta->items)[i] : (char*)bi_ptr_et(ta, i);
+    }
+    return r;
+}
+
+/* TypedArray 尾部追加一个 Value（原地修改） */
+static TypedArray* bi_ta_add(TypedArray* ta, Value v) {
+    bi_ta_reserve(ta, ta->len + 1);
+    bi_ta_write_value(ta, ta->len, v);
+    ta->len++;
+    return ta;
+}
+
+/* TypedArray 第 idx 处整体后移一位并写入（insert 语义） */
+static void bi_ta_insert(TypedArray* ta, int idx, Value v) {
+    if(idx < 0) idx = 0;
+    if(idx > ta->len) idx = ta->len;
+    bi_ta_reserve(ta, ta->len + 1);
+    if(idx < ta->len) {
+        size_t isz = lumyr_etype_itemsz(ta->elem_type);
+        char* base = (char*)ta->items;
+        memmove(base + (size_t)(idx + 1) * isz, base + (size_t)idx * isz,
+                (size_t)(ta->len - idx) * isz);
+    }
+    bi_ta_write_value(ta, idx, v);
+    ta->len++;
+}
+
+/* TypedArray 删除第 idx 个元素并整体前移（remove 语义，与 lumyr_del 同为按下标） */
+static void bi_ta_remove(TypedArray* ta, int idx) {
+    if(idx < 0 || idx >= ta->len) {
+        char b[96];
+        snprintf(b, sizeof b, "typed array remove: 下标 %d 越界（长度 %d）", idx, ta->len);
+        runtime_error(b);
+        return;
+    }
+    if(idx < ta->len - 1) {
+        size_t isz = lumyr_etype_itemsz(ta->elem_type);
+        char* base = (char*)ta->items;
+        memmove(base + (size_t)idx * isz, base + (size_t)(idx + 1) * isz,
+                (size_t)(ta->len - idx - 1) * isz);
+    }
+    ta->len--;
+}
+
+/* TypedArray 追加 src 的全部元素（addAll 语义：VAL_ARRAY / VAL_TYPED_ARRAY 通用） */
+static void bi_ta_addall(TypedArray* ta, Value src) {
+    if(src.type == VAL_TYPED_ARRAY && src.v.typed_array) {
+        TypedArray* o = src.v.typed_array;
+        if(o->elem_type == ta->elem_type && o->len > 0) {
+            /* 同元素类型：整块 memcpy 零装箱 */
+            bi_ta_reserve(ta, ta->len + o->len);
+            size_t isz = lumyr_etype_itemsz(ta->elem_type);
+            memcpy((char*)ta->items + (size_t)ta->len * isz, o->items,
+                   (size_t)o->len * isz);
+            ta->len += o->len;
+            return;
+        }
+        for(int i = 0; i < o->len; i++)
+            bi_ta_add(ta, bi_ta_read_value(o, i));
+        return;
+    }
+    if(src.type == VAL_ARRAY && src.v.array) {
+        ValueArray* a = src.v.array;
+        for(int i = 0; i < a->len; i++)
+            bi_ta_add(ta, a->items[i]);
+        return;
+    }
+    runtime_error("typed array addAll: 参数必须是数组或类型化数组");
+}
+
 /* ===== 向量/矩阵元素读取抽象（VAL_ARRAY 直读 union / TypedArray 裸读） ===== */
 
 static int bi_len_of(Value v) {
@@ -216,6 +383,29 @@ static int64_t bi_num_i64(Value v) {
     case VAL_LONG_DOUBLE: return (int64_t)v.v.ld;
     default:        return 0;
     }
+}
+
+/* 第 i 个元素作为 int64：整型聚合的零精度损失路径。
+ * 根因修复：此前整型 sum/dot/matmul/transpose 经 bi_vec_dbl（double）往返，
+ * int64 大值（如 2^63-1）转 double 舍入为 2^63，回转 int64 得 INT64_MIN，精度丢失。
+ * 整型元素原生读取，仅浮点元素保留截断语义。 */
+static int64_t bi_vec_i64(Value v, int i) {
+    if(v.type == VAL_ARRAY) {
+        Value e = v.v.array->items[i];
+        switch(e.type) {
+        case VAL_DOUBLE: case VAL_FLOAT: case VAL_LONG_DOUBLE:
+            return (int64_t)bi_vec_dbl(v, i);
+        default:
+            return bi_num_i64(e);
+        }
+    }
+    if(v.type == VAL_TYPED_ARRAY && v.v.typed_array) {
+        TypedArray* ta = v.v.typed_array;
+        if(bi_is_float_et(ta->elem_type))
+            return (int64_t)bi_read_dbl_et(ta->elem_type, ta->items, i);
+        return bi_read_i64_et(ta->elem_type, ta->items, i);
+    }
+    return 0;
 }
 
 /* ===== 值相等 / 引用身份 ===== */
@@ -329,7 +519,11 @@ static int bi_check_shape(Value v, const int* dims, int level, int nd) {
     return 0;
 }
 
-/* 按输入种类构造同构数值数组输出：typed → 同 et 新 TypedArray；array → val_array */
+/* 按输入种类构造同构数值数组输出：typed → 同 et 新 TypedArray；array → val_array
+ * vals 契约：is_double=1 → double 数组（每元素 8 字节）；
+ *           is_double=0 → 按 et 原生宽度的裸元素缓冲（isz 字节/元素）。
+ * 根因修复：此前 is_double=0 一律按 int64（8 字节）读取，而 slice/concat
+ * 传入的是原生宽度缓冲（如 int 为 4 字节）→ 错位读 + 越界，输出乱值。 */
 static Value bi_vec_out(Value proto, ValueType et, int n, const void* vals, int is_double) {
     if(proto.type == VAL_TYPED_ARRAY) {
         Value r;
@@ -341,18 +535,19 @@ static Value bi_vec_out(Value proto, ValueType et, int n, const void* vals, int 
         ta->stack_alloc = 0;
         ta->len = n;
         ta->cap = n > 0 ? n : 8;
+        size_t isz = lumyr_etype_itemsz(et);
+        /* 根因修复：空结果同样分配缓冲区（此前 cap=8 而 items=NULL，
+         * 容量承诺与实际分配不符 → 后续写 NULL 指针 SIGSEGV） */
+        ta->items = gc_alloc_old(isz * (size_t)ta->cap, VAL_TYPED_ARRAY);
+        gc_mark_internal_buf(ta->items);
         if(n > 0) {
-            size_t isz = lumyr_etype_itemsz(et);
-            ta->items = gc_alloc_old(isz * (size_t)ta->cap, VAL_TYPED_ARRAY);
-            gc_mark_internal_buf(ta->items);
-            for(int i = 0; i < n; i++) {
-                if(is_double) bi_write_et(et, ta->items, i, (int64_t)((const double*)vals)[i],
-                                          ((const double*)vals)[i]);
-                else bi_write_et(et, ta->items, i, ((const int64_t*)vals)[i],
-                                 (double)((const int64_t*)vals)[i]);
+            if(is_double) {
+                for(int i = 0; i < n; i++)
+                    bi_write_et(et, ta->items, i, (int64_t)((const double*)vals)[i],
+                                ((const double*)vals)[i]);
+            } else {
+                memcpy(ta->items, vals, isz * (size_t)n);   /* 原生宽度裸元素直拷 */
             }
-        } else {
-            ta->items = NULL;
         }
         r.v.typed_array = ta;
         gc_enable();
@@ -362,7 +557,7 @@ static Value bi_vec_out(Value proto, ValueType et, int n, const void* vals, int 
     Value r = val_array(n);
     for(int i = 0; i < n; i++) {
         if(is_double) r.v.array->items[i] = lumyr_make_double(((const double*)vals)[i]);
-        else          r.v.array->items[i] = lumyr_make_int64(((const int64_t*)vals)[i]);
+        else          r.v.array->items[i] = lumyr_make_int64(bi_read_i64_et(et, vals, i));
     }
     return r;
 }
@@ -410,6 +605,15 @@ static double bi_mat_read(Value A, int r, int c) {
     if(row.type == VAL_TYPED_ARRAY && row.v.typed_array)
         return bi_read_dbl_et(row.v.typed_array->elem_type, row.v.typed_array->items, c);
     return 0.0;
+}
+
+/* 2D 矩阵元素读取为 int64：整型路径零精度损失（配合 bi_vec_i64） */
+static int64_t bi_mat_i64(Value A, int r, int c) {
+    Value row = A.v.array->items[r];
+    if(row.type == VAL_ARRAY) return bi_vec_i64(row, c);
+    if(row.type == VAL_TYPED_ARRAY && row.v.typed_array)
+        return bi_read_i64_et(row.v.typed_array->elem_type, row.v.typed_array->items, c);
+    return 0;
 }
 
 /* 2D 校验：rows/cols 输出；非法返回 0 */
@@ -676,7 +880,9 @@ static Value bi_copy(Value v) {
         nta->elem_type = et;
         nta->stack_alloc = 0;
         nta->len = n;
-        nta->cap = ta ? ta->cap : (n > 0 ? n : 8);
+        /* 根因修复：源 items 为空时容量置 0（不虚报 cap），
+         * 保持"cap 承诺与实际分配一致"不变式 */
+        nta->cap = (ta && ta->items) ? ta->cap : 0;
         if(n > 0 && ta->items) {
             size_t isz = lumyr_etype_itemsz(et);
             nta->items = gc_alloc_old(isz * (size_t)nta->cap, VAL_TYPED_ARRAY);
@@ -1068,8 +1274,8 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_endswith(recv, argv[1]);
         return 1;
     case BUILTIN_CHAR_AT: {
-        if(recv.type != VAL_STRING) return bi_type_err("char_at", recv);
-        if(!bi_need_args("char_at", argc, 1)) return 0;
+        if(recv.type != VAL_STRING) return bi_type_err("charAt", recv);
+        if(!bi_need_args("charAt", argc, 1)) return 0;
         const char* s = lumyr_str_cstr(&recv);
         int64_t i = bi_num_i64(argv[1]);
         int len = lumyr_str_len(&recv);
@@ -1148,21 +1354,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_REGEX_MATCH: {
-        if(recv.type != VAL_STRING) return bi_type_err("regex_match", recv);
-        if(!bi_need_args("regex_match", argc, 1)) return 0;
+        if(recv.type != VAL_STRING) return bi_type_err("regexMatch", recv);
+        if(!bi_need_args("regexMatch", argc, 1)) return 0;
         *out = lumyr_make_bool(lumyr_regex_match(lumyr_str_cstr(&recv),
                                                  lumyr_str_cstr(&argv[1])));
         return 1;
     }
     case BUILTIN_REGEX_SEARCH: {
-        if(recv.type != VAL_STRING) return bi_type_err("regex_search", recv);
-        if(!bi_need_args("regex_search", argc, 1)) return 0;
+        if(recv.type != VAL_STRING) return bi_type_err("regexSearch", recv);
+        if(!bi_need_args("regexSearch", argc, 1)) return 0;
         *out = lumyr_regex_search(lumyr_str_cstr(&recv), lumyr_str_cstr(&argv[1]));
         return 1;
     }
     case BUILTIN_REGEX_REPLACE: {
-        if(recv.type != VAL_STRING) return bi_type_err("regex_replace", recv);
-        if(!bi_need_args("regex_replace", argc, 2)) return 0;
+        if(recv.type != VAL_STRING) return bi_type_err("regexReplace", recv);
+        if(!bi_need_args("regexReplace", argc, 2)) return 0;
         char* h = lumyr_regex_replace(lumyr_str_cstr(&recv), lumyr_str_cstr(&argv[1]),
                                       lumyr_str_cstr(&argv[2]));
         *out = lumyr_make_string(h ? h : "");
@@ -1238,12 +1444,29 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_set_add(&recv, arg);
             return 1;
         }
+        /* 类型化数组追加：按元素类型截断写入（原地修改，返回 self）。
+         * 根因修复：此前 TypedArray 无 add 分支，报"类型 array 不支持方法 .add" */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("add", argc, 1)) return 0;
+            if(!recv.v.typed_array) { *out = recv; return 1; }
+            bi_ta_add(recv.v.typed_array, argv[1]);
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("add", recv);
         if(!bi_need_args("add", argc, 1)) return 0;
         *out = lumyr_array_add(&recv, argv[1]); /* 原地追加，返回 self */
         return 1;
     }
     case BUILTIN_INSERT: {
+        /* 类型化数组按元素类型截断写入（原地插入，返回 self） */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("insert", argc, 2)) return 0;
+            if(recv.v.typed_array)
+                bi_ta_insert(recv.v.typed_array, (int)bi_num_i64(argv[1]), argv[2]);
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("insert", recv);
         if(!bi_need_args("insert", argc, 2)) return 0;
         *out = lumyr_insert(&recv, argv[1], argv[2]); /* 原地插入，返回 self */
@@ -1255,6 +1478,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_folder_remove(recv);
             return 1;
         }
+        /* 类型化数组按下标删除（与 lumyr_del 同语义），整体前移 */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("remove", argc, 1)) return 0;
+            if(recv.v.typed_array)
+                bi_ta_remove(recv.v.typed_array, (int)bi_num_i64(argv[1]));
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_SET)
             return bi_type_err("remove", recv);
         if(!bi_need_args("remove", argc, 1)) return 0;
@@ -1264,6 +1495,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_ARRAY_CLEAR: {
+        /* 类型化数组清空：只重置长度，容量保留 */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(recv.v.typed_array) recv.v.typed_array->len = 0;
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_ARRAY && recv.type != VAL_MAP)
             return bi_type_err("clear", recv);
         if(recv.type == VAL_MAP) {
@@ -1279,6 +1516,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_ARRAY_ADDALL: {
+        /* 类型化数组批量追加（VAL_ARRAY / VAL_TYPED_ARRAY 通用） */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("addAll", argc, 1)) return 0;
+            if(recv.v.typed_array) bi_ta_addall(recv.v.typed_array, argv[1]);
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_ARRAY && recv.type != VAL_MAP)
             return bi_type_err("addAll", recv);
         if(!bi_need_args("addAll", argc, 1)) return 0;
@@ -1289,6 +1533,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type == VAL_ARRAY) {
             if(!bi_need_args("get", argc, 1)) return 0;
             *out = lumyr_array_get_safe(recv, argv[1]);
+            return 1;
+        }
+        /* 类型化数组下标取值（越界返回 none，与数组 get_safe 同语义） */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("get", argc, 1)) return 0;
+            TypedArray* ta = recv.v.typed_array;
+            int idx = (int)bi_num_i64(argv[1]);
+            if(!ta || idx < 0 || idx >= ta->len) { *out = val_none(); return 1; }
+            *out = bi_ta_read_value(ta, idx);
             return 1;
         }
         if(recv.type == VAL_MAP) {
@@ -1328,6 +1581,23 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = recv;
             return 1;
         }
+        /* 类型化数组下标写：按元素类型截断（原地修改，返回 self） */
+        if(recv.type == VAL_TYPED_ARRAY) {
+            if(!bi_need_args("set", argc, 2)) return 0;
+            TypedArray* ta = recv.v.typed_array;
+            if(ta) {
+                int idx = (int)bi_num_i64(argv[1]);
+                if(idx < 0 || idx >= ta->len) {
+                    char b[96];
+                    snprintf(b, sizeof b, "typed array set: 下标 %d 越界（长度 %d）", idx, ta->len);
+                    runtime_error(b);
+                    return 0;
+                }
+                bi_ta_write_value(ta, idx, argv[2]);
+            }
+            *out = recv;
+            return 1;
+        }
         if(recv.type == VAL_FORMDATA) {
             /* formdata.set(name, value)：删除全部同名后写入（覆盖语义），返回 self */
             if(!bi_need_args("set", argc, 2)) return 0;
@@ -1338,6 +1608,20 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return bi_type_err("set", recv);
     }
     case BUILTIN_ARRAY_INDEXOF: {
+        if(recv.type == VAL_TYPED_ARRAY) {
+            /* 类型化数组按值查找：元素装箱后与数组同语义比较 */
+            if(!bi_need_args("indexOf", argc, 1)) return 0;
+            TypedArray* ta = recv.v.typed_array;
+            int found = -1;
+            if(ta) {
+                for(int i = 0; i < ta->len; i++) {
+                    Value eq = lumyr_eq(bi_ta_read_value(ta, i), argv[1]);
+                    if(lumyr_to_bool(eq)) { found = i; break; }
+                }
+            }
+            *out = lumyr_make_int(found);
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("indexOf", recv);
         if(!bi_need_args("indexOf", argc, 1)) return 0;
         *out = lumyr_index_of(recv, argv[1]); /* 按值相等 */
@@ -1357,10 +1641,20 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_ARRAY_FIRST:
+        if(recv.type == VAL_TYPED_ARRAY) {
+            TypedArray* ta = recv.v.typed_array;
+            *out = (ta && ta->len > 0) ? bi_ta_read_value(ta, 0) : val_none();
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("first", recv);
         *out = lumyr_array_first(recv);
         return 1;
     case BUILTIN_ARRAY_LAST:
+        if(recv.type == VAL_TYPED_ARRAY) {
+            TypedArray* ta = recv.v.typed_array;
+            *out = (ta && ta->len > 0) ? bi_ta_read_value(ta, ta->len - 1) : val_none();
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("last", recv);
         *out = lumyr_array_last(recv);
         return 1;
@@ -1392,7 +1686,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         if(bi_vec_int_only(recv)) {
             int64_t s = 0;
-            for(int i = 0; i < n; i++) s += (int64_t)bi_vec_dbl(recv, i);
+            for(int i = 0; i < n; i++) s += bi_vec_i64(recv, i);
             if(id == BUILTIN_SUM) { *out = lumyr_make_int64(s); return 1; }
             *out = lumyr_make_double((double)s / (double)n);
             return 1;
@@ -1808,11 +2102,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_ARRAY && recv.type != VAL_TYPED_ARRAY && recv.type != VAL_STRING)
             return bi_type_err("slice", recv);
         int n = bi_len_of(recv);
-        /* argv[1]=start（null/缺省→0），argv[2]=end（null/缺省→n） */
+        /* 参数布局（builtin_dispatch 契约）：argv[0]=receiver，argv[1]=start，argv[2]=end；
+         * argc = 用户实参个数（不含 receiver）。
+         * 根因修复：此前按全局形式（argc 含 receiver）判下标，方法形式整体偏移一位
+         * → slice(start, end) 的 end 永远被忽略（当成缺省 n）。 */
         int64_t start = 0;
-        if(argc >= 2 && argv[1].type != VAL_NONE) start = bi_num_i64(argv[1]);
+        if(argc >= 1 && argv[1].type != VAL_NONE) start = bi_num_i64(argv[1]);
         int64_t end = n;
-        if(argc >= 3 && argv[2].type != VAL_NONE) end = bi_num_i64(argv[2]);
+        if(argc >= 2 && argv[2].type != VAL_NONE) end = bi_num_i64(argv[2]);
         if(start < 0) start = 0;
         if(end > n) end = n;
         if(start > end) start = end;
@@ -1901,7 +2198,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(bi_vec_int_only(recv) && bi_vec_int_only(other)) {
             int64_t s = 0;
             for(int i = 0; i < n; i++)
-                s += (int64_t)bi_vec_dbl(recv, i) * (int64_t)bi_vec_dbl(other, i);
+                s += bi_vec_i64(recv, i) * bi_vec_i64(other, i);
             *out = lumyr_make_int64(s);
             return 1;
         }
@@ -1931,9 +2228,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 double acc = 0.0;
                 int64_t iacc = 0;
                 for(int t = 0; t < k1; t++) {
-                    double x = bi_mat_read(recv, i, t) * bi_mat_read(B, t, j);
-                    acc += x;
-                    iacc += (int64_t)x;
+                    if(int_only) {
+                        iacc += bi_mat_i64(recv, i, t) * bi_mat_i64(B, t, j);
+                    } else {
+                        double x = bi_mat_read(recv, i, t) * bi_mat_read(B, t, j);
+                        acc += x;
+                    }
                 }
                 row.v.array->items[j] = int_only ? lumyr_make_int64(iacc)
                                                  : lumyr_make_double(acc);
@@ -1955,9 +2255,8 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         for(int i = 0; i < cols; i++) {
             Value row = val_array(rows);
             for(int j = 0; j < rows; j++) {
-                double x = bi_mat_read(recv, j, i);
-                row.v.array->items[j] = int_only ? lumyr_make_int64((int64_t)x)
-                                                 : lumyr_make_double(x);
+                row.v.array->items[j] = int_only ? lumyr_make_int64(bi_mat_i64(recv, j, i))
+                                                 : lumyr_make_double(bi_mat_read(recv, j, i));
             }
             r.v.array->items[i] = row;
         }
@@ -2073,6 +2372,36 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_SQRT:
         *out = lumyr_sqrt(recv);
         return 1;
+    /* ===== 三角/反三角/对数/指数（1~2 参，返回 double） ===== */
+    case BUILTIN_SIN:    *out = lumyr_sin(recv);    return 1;
+    case BUILTIN_COS:    *out = lumyr_cos(recv);    return 1;
+    case BUILTIN_TAN:    *out = lumyr_tan(recv);    return 1;
+    case BUILTIN_ASIN:   *out = lumyr_asin(recv);   return 1;
+    case BUILTIN_ACOS:   *out = lumyr_acos(recv);   return 1;
+    case BUILTIN_ATAN:   *out = lumyr_atan(recv);   return 1;
+    case BUILTIN_ATAN2:
+        if(!bi_need_args("atan2", argc, 2)) return 0;
+        *out = lumyr_atan2(recv, argv[1]);
+        return 1;
+    case BUILTIN_LOG:    *out = lumyr_ln(recv);    return 1;
+    case BUILTIN_LOG10:  *out = lumyr_log10(recv);  return 1;
+    case BUILTIN_LOG2:   *out = lumyr_log2(recv);   return 1;
+    case BUILTIN_EXP:    *out = lumyr_exp(recv);    return 1;
+    case BUILTIN_POW:
+        if(!bi_need_args("pow", argc, 2)) return 0;
+        *out = lumyr_pow(recv, argv[1]);
+        return 1;
+    case BUILTIN_ROUND:  *out = lumyr_round(recv);  return 1;
+    case BUILTIN_CBRT:   *out = lumyr_cbrt(recv);   return 1;
+    case BUILTIN_HYPOT:
+        if(!bi_need_args("hypot", argc, 2)) return 0;
+        *out = lumyr_hypot(recv, argv[1]);
+        return 1;
+    case BUILTIN_SIGN:   *out = lumyr_sign(recv);   return 1;
+    case BUILTIN_DEGREES: *out = lumyr_degrees(recv); return 1;
+    case BUILTIN_RADIANS: *out = lumyr_radians(recv); return 1;
+    case BUILTIN_TRUNC:  *out = lumyr_trunc(recv);  return 1;
+    case BUILTIN_RANDOM: *out = lumyr_random(); return 1;
     case BUILTIN_DEL:
         if(!bi_need_args("del", argc, 1)) return 0;
         *out = lumyr_del(&recv, argv[1]);
@@ -2452,7 +2781,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_BYTES_TO_STR: {
-        if(recv.type != VAL_BYTES) return bi_type_err("to_str", recv);
+        if(recv.type != VAL_BYTES) return bi_type_err("toStr", recv);
         char* s = lumyr_bytes_to_str(recv);
         *out = lumyr_make_string(s ? s : "");
         free(s);
@@ -2922,9 +3251,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_REPLACE: return "replace";
     case BUILTIN_STARTSWITH: return "startswith";
     case BUILTIN_ENDSWITH: return "endswith";
-    case BUILTIN_READ_FILE: return "read_file";
-    case BUILTIN_WRITE_FILE: return "write_file";
-    case BUILTIN_FILE_EXISTS: return "file_exists";
+    case BUILTIN_READ_FILE: return "readFile";
+    case BUILTIN_WRITE_FILE: return "writeFile";
+    case BUILTIN_FILE_EXISTS: return "fileExists";
     case BUILTIN_CONTAINS: return "contains";
     case BUILTIN_ARRAY_INDEXOF: return "indexOf";
     case BUILTIN_JOIN: return "join";
@@ -2945,6 +3274,26 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FLOOR: return "floor";
     case BUILTIN_CEIL: return "ceil";
     case BUILTIN_SQRT: return "sqrt";
+    case BUILTIN_SIN: return "sin";
+    case BUILTIN_COS: return "cos";
+    case BUILTIN_TAN: return "tan";
+    case BUILTIN_ASIN: return "asin";
+    case BUILTIN_ACOS: return "acos";
+    case BUILTIN_ATAN: return "atan";
+    case BUILTIN_ATAN2: return "atan2";
+    case BUILTIN_LOG: return "log";
+    case BUILTIN_LOG10: return "log10";
+    case BUILTIN_LOG2: return "log2";
+    case BUILTIN_EXP: return "exp";
+    case BUILTIN_POW: return "pow";
+    case BUILTIN_ROUND: return "round";
+    case BUILTIN_CBRT: return "cbrt";
+    case BUILTIN_HYPOT: return "hypot";
+    case BUILTIN_SIGN: return "sign";
+    case BUILTIN_DEGREES: return "degrees";
+    case BUILTIN_RADIANS: return "radians";
+    case BUILTIN_TRUNC: return "trunc";
+    case BUILTIN_RANDOM: return "random";
     case BUILTIN_ARRAY_FIRST: return "first";
     case BUILTIN_ARRAY_LAST: return "last";
     case BUILTIN_ARRAY_FLAT: return "flat";
@@ -2960,7 +3309,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_TAKE: return "take";
     case BUILTIN_ENUMERATE: return "enumerate";
     case BUILTIN_OBJECT_INDEX: return "objectIndex";
-    case BUILTIN_CHAR_AT: return "char_at";
+    case BUILTIN_CHAR_AT: return "charAt";
     case BUILTIN_SHAPE: return "shape";
     case BUILTIN_RESHAPE: return "reshape";
     case BUILTIN_SLICE: return "slice";
@@ -2996,7 +3345,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_DAYS: return "days";
     case BUILTIN_SECONDS: return "seconds";
     case BUILTIN_TOTAL_SECONDS: return "totalSeconds";
-    case BUILTIN_FORMAT_DATE: return "format_date";
+    case BUILTIN_FORMAT_DATE: return "formatDate";
     case BUILTIN_DATE_DIFF: return "diff";
     case BUILTIN_DATE_ADD: return "add";
     case BUILTIN_TUPLE_MAKE: return "tuple";
@@ -3004,8 +3353,8 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SET_INTERSECT: return "intersect";
     case BUILTIN_BYTES_MAKE: return "bytes";
     case BUILTIN_BYTES_HEX: return "hex";
-    case BUILTIN_BYTES_TO_STR: return "to_str";
-    case BUILTIN_BYTES_FROM_HEX: return "from_hex";
+    case BUILTIN_BYTES_TO_STR: return "toStr";
+    case BUILTIN_BYTES_FROM_HEX: return "fromHex";
     case BUILTIN_COMPLEX_MAKE: return "complex";
     case BUILTIN_COMPLEX_CONJUGATE: return "conjugate";
     case BUILTIN_CALENDAR_MAKE: return "calendar";

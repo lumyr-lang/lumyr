@@ -188,7 +188,7 @@ gen func tint_gen() {
 }
 g = tint_gen();
 t1 = next(g);
-check(type(t1) == "array", "tint: type = array");
+check(type(t1) == "typed_array", "tint: type = array");
 check(len(t1) == 3, "tint: len = 3");
 check(t1[0] == 10 && t1[1] == 20 && t1[2] == 30, "tint: elements");
 t2 = next(g);
@@ -201,7 +201,7 @@ gen func tdbl_gen() {
 }
 g = tdbl_gen();
 d1 = next(g);
-check(type(d1) == "array" && len(d1) == 3, "tdbl: len = 3");
+check(type(d1) == "typed_array" && len(d1) == 3, "tdbl: len = 3");
 check(d1[0] == 1.5 && d1[1] == 2.5 && d1[2] == 3.5, "tdbl: elements");
 d2 = next(g);
 check(len(d2) == 1 && d2[0] == 4.5, "tdbl: second yield");
@@ -213,7 +213,7 @@ gen func tstr_gen() {
 }
 g = tstr_gen();
 s1 = next(g);
-check(type(s1) == "array" && len(s1) == 3, "tstr: len = 3");
+check(type(s1) == "typed_array" && len(s1) == 3, "tstr: len = 3");
 check(s1[0] == "a" && s1[1] == "b" && s1[2] == "c", "tstr: elements");
 s2 = next(g);
 check(len(s2) == 1 && s2[0] == "x", "tstr: second yield");
@@ -224,7 +224,7 @@ gen func tbool_gen() {
 }
 g = tbool_gen();
 b1 = next(g);
-check(type(b1) == "array" && len(b1) == 3, "tbool: len = 3");
+check(type(b1) == "typed_array" && len(b1) == 3, "tbool: len = 3");
 check(b1[0] == true && b1[1] == false && b1[2] == true, "tbool: elements");
 
 // 3.5 <char> typed array
@@ -233,7 +233,7 @@ gen func tchar_gen() {
 }
 g = tchar_gen();
 c1 = next(g);
-check(type(c1) == "array" && len(c1) == 3, "tchar: len = 3");
+check(type(c1) == "typed_array" && len(c1) == 3, "tchar: len = 3");
 check(c1[0] == 'X' && c1[1] == 'Y' && c1[2] == 'Z', "tchar: elements");
 
 // 3.6 <byte> typed array（极限/边界值）
@@ -243,10 +243,10 @@ gen func tbyte_gen() {
 }
 g = tbyte_gen();
 by1 = next(g);
-check(type(by1) == "array" && len(by1) == 3, "tbyte: len = 3");
+check(type(by1) == "typed_array" && len(by1) == 3, "tbyte: len = 3");
 check(by1[0] == 0 && by1[1] == 127 && by1[2] == 255, "tbyte: boundary values");
 by2 = next(g);
-check(type(by2) == "array" && len(by2) == 0, "tbyte: empty typed array");
+check(type(by2) == "typed_array" && len(by2) == 0, "tbyte: empty typed array");
 
 // 3.7 typed array 元素类型转换（<int>[1.9, 2.1] → [1, 2]）
 gen func tint_conv_gen() {

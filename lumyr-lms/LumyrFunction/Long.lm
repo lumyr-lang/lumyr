@@ -1,0 +1,120 @@
+// ============================================================
+// lumyr-Long：Long 64位整数封装类
+// 包装 int64 值，提供值语义方法：相等、比较、数学判断、进制转换
+//
+// 用法：
+//   import <Function/Long> as Lng;
+//   n = Lng.Long(9223372036854775807);
+//   print(n.toString());
+//   print(n.isOdd());
+// ============================================================
+
+import <Function/Number>;
+
+public class Long extends Number {
+    value: int64;
+
+    func Long(v: int64) {
+        self.value = v;
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        return (int)self.value;
+    }
+
+    // 比较：-1 <, 0 ==, 1 >
+    func compareTo(other): int {
+        if (type(other) != type(self)) { return -2; }
+        if (self.value < other.value) { return -1; }
+        if (self.value > other.value) { return 1; }
+        return 0;
+    }
+
+    func toString(): string {
+        v = self.value;
+        return "" + v;
+    }
+
+    func toDouble(): double {
+        v = self.value;
+        return v + 0.0;
+    }
+
+    func isZero(): bool {
+        return self.value == 0;
+    }
+
+    func isPositive(): bool {
+        return self.value > 0;
+    }
+
+    func isNegative(): bool {
+        return self.value < 0;
+    }
+
+    func isEven(): bool {
+        return self.value % 2 == 0;
+    }
+
+    func isOdd(): bool {
+        return self.value % 2 != 0;
+    }
+
+    func isPrime(): bool {
+        n = self.value;
+        if (n < 2) { return false; }
+        if (n == 2) { return true; }
+        if (n % 2 == 0) { return false; }
+        i = 3;
+        while (i * i <= n) {
+            if (n % i == 0) { return false; }
+            i = i + 2;
+        }
+        return true;
+    }
+
+    func abs(): Long {
+        if (self.value < 0) {
+            return Long(-self.value);
+        }
+        return self;
+    }
+
+    func negate(): Long {
+        return Long(-self.value);
+    }
+
+    // 二进制表示（正数）
+    func toBinary(): string {
+        n = self.value;
+        if (n == 0) { return "0"; }
+        if (n < 0) { return "-" + Long(-n).toBinary(); }
+        result = "";
+        while (n > 0) {
+            if (n % 2 == 0) { result = "0" + result; }
+            else { result = "1" + result; }
+            n = n / 2;
+        }
+        return result;
+    }
+
+    // 十六进制表示（正数）
+    func toHex(): string {
+        hexChars = ["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"];
+        n = self.value;
+        if (n == 0) { return "0"; }
+        if (n < 0) { return "-" + Long(-n).toHex(); }
+        result = "";
+        while (n > 0) {
+            digit = n % 16;
+            result = hexChars[digit] + result;
+            n = n / 16;
+        }
+        return result;
+    }
+}

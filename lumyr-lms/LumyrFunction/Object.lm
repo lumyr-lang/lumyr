@@ -1,0 +1,57 @@
+// ============================================================
+// lumyr-Object：Object 基类
+// 所有类的根基，提供通用契约：相等、哈希、类型名、字符串表示、空值判断、克隆
+// 子类按需重写 equals / hashCode / toString 即可获得值语义
+//
+// 用法（三模式）：
+//   1. alias：import <Function/Object> as obj; → extends obj.Object
+//   2. no-alias：import <Function/Object>; → extends Object
+//   3. rename：import <Function/Object> {Object as XXXObject}; → extends XXXObject
+// ============================================================
+
+public interface ObjectInterface {
+    func equals(other): bool;
+    func hashCode(): int;
+    func className(): string;
+    func toString(): string;
+    func isNull(): bool;
+    func isInstanceOf(name: string): bool;
+    func copy();
+}
+
+public class Object implements ObjectInterface{
+    // 相等判断：默认引用相等（== 语义）；子类按值重写
+    func equals(other): bool {
+        return self == other;
+    }
+
+    // 哈希码：默认 0；子类按字段重写以支持容器去重与查找
+    func hashCode(): int {
+        return 0;
+    }
+
+    // 类型名（委托内置 type()，返回如 "Person"）
+    func className(): string {
+        return type(self);
+    }
+
+    // 字符串表示（委托内置 toJSONString，含全部字段；子类可重写为更友好格式）
+    func toString(): string {
+        return self.toJSONString();
+    }
+
+    // 是否为 null
+    func isNull(): bool {
+        return self == null;
+    }
+
+    // 是否某类型实例（按类型名比较；不支持继承链向上判断）
+    func isInstanceOf(name: string): bool {
+        return type(self) == name;
+    }
+
+    // 深拷贝（委托内置 copy()，容器字段递归独立）
+    func copy() {
+        return copy(self);
+    }
+}

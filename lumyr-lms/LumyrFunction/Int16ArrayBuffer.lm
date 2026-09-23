@@ -1,0 +1,43 @@
+// ============================================================
+// lumyr-Int16ArrayBuffer：Int16ArrayBuffer 数组缓冲区封装类
+// 内部使用 <int16> 类型化数组存储，元素写入由运行时按元素类型原生截断到 int16 范围 (-32768..32767)
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/Int16ArrayBuffer>;
+//   buf = Int16ArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class Int16ArrayBuffer extends AbstractBuffer {
+    value: <int16>array;
+
+    func Int16ArrayBuffer(arr) {
+        self.value = <int16>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): Int16ArrayBuffer {
+        r = Int16ArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): Int16ArrayBuffer {
+        r = Int16ArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): Int16ArrayBuffer {
+        r = Int16ArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

@@ -184,7 +184,7 @@ int static_sym_is_const(const char* name)
 
 int static_sym_get(const char* name, ValueType* out_ty)
 {
-    if(strcmp(name, "log") == 0) { *out_ty = VAL_MAP; return 1; }  // 预定义全局对象 log
+    if(strcmp(name, "logging") == 0) { *out_ty = VAL_MAP; return 1; }  // 预定义全局对象 logging（日志）
     if(!static_sym_tree) return 0;
     SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
     if(entry && !entry->deleted) {

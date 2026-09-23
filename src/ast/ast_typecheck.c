@@ -538,7 +538,7 @@ static int cap_pop_record(const char* lambda_name) {
 }
 
 static int is_global_var(const char* n) {
-    if(strcmp(n, "log") == 0) return 1;  // 预定义全局对象：log.debug/info/warn/error/fatal
+    if(strcmp(n, "logging") == 0) return 1;  // 预定义全局对象：logging.debug/info/warn/error/fatal
     for(int i = 0; i < g_global_vars_cnt; i++)
         if(strcmp(g_global_vars[i], n) == 0) return 1;
     return 0;
@@ -944,12 +944,19 @@ static int typecheck_call(AstNode* node)
                     {"len", 1, 1}, {"type", 1, 1}, {"input", 0, 0}, {"range", 1, 3}, {"substr", 3, 3},
                     {"toupper", 1, 1}, {"tolower", 1, 1}, {"split", 2, 2}, {"del", 2, 2}, {"insert", 3, 3},
                     {"floor", 1, 1}, {"ceil", 1, 1}, {"abs", 1, 1}, {"sqrt", 1, 1},
+                    {"sin", 1, 1}, {"cos", 1, 1}, {"tan", 1, 1},
+                    {"asin", 1, 1}, {"acos", 1, 1}, {"atan", 1, 1}, {"atan2", 2, 2},
+                    {"log", 1, 1}, {"log10", 1, 1}, {"log2", 1, 1},
+                    {"exp", 1, 1}, {"pow", 2, 2},
+                    {"round", 1, 1}, {"cbrt", 1, 1}, {"hypot", 2, 2},
+                    {"sign", 1, 1}, {"degrees", 1, 1}, {"radians", 1, 1}, {"trunc", 1, 1},
+                    {"random", 0, 0},
                     {"max", 1, -1}, {"min", 1, -1}, {"join", 2, 2}, {"contains", 2, 2},
                     {"repeat", 2, 2}, {"replace", 3, 3}, {"sum", 1, 1}, {"avg", 1, 1},
                     {"format", 1, -1}, {"sort", 1, 1}, {"reverse", 1, 1},
                     {"map", 2, 2}, {"filter", 2, 2}, {"reduce", 3, 3},
                     {"strip", 1, 1}, {"startswith", 2, 2}, {"endswith", 2, 2},
-                    {"read_file", 1, 1}, {"write_file", 2, 2}, {"file_exists", 1, 1},
+                    {"readFile", 1, 1}, {"writeFile", 2, 2}, {"fileExists", 1, 1},
                     {"keys", 1, 1}, {"values", 1, 1},
                     {"thread", 1, -1}, {"thread_join", 1, 1},
                     {"mutex", 0, 0}, {"rmutex", 0, 0}, {"rwlock", 0, 0}, {"spinlock", 0, 0},
@@ -969,14 +976,14 @@ static int typecheck_call(AstNode* node)
                     {"encode", 1, 2}, {"decode", 1, 2},
                     {"encodeURL", 1, 1}, {"decodeURL", 1, 1},
                     {"md5", 1, 1}, {"encodeBase64", 1, 1}, {"decodeBase64", 1, 1},
-                    {"regex_match", 2, 2}, {"regex_search", 2, 2}, {"regex_replace", 3, 3},
+                    {"regexMatch", 2, 2}, {"regexSearch", 2, 2}, {"regexReplace", 3, 3},
                     {"now", 0, 0}, {"timestamp", 0, 0}, {"timestamp_ms", 0, 0},
                     {"sleep", 1, 1}, {"date", 1, 4}, {"time", 1, 6}, {"datetime", 1, 8}, {"timedelta", 1, 2},
                     {"today", 0, 0},
                     {"year", 1, 1}, {"month", 1, 1}, {"day", 1, 1}, {"hour", 1, 1},
                     {"minute", 1, 1}, {"second", 1, 1}, {"weekday", 1, 1}, {"yearday", 1, 1},
                     {"days", 1, 1}, {"seconds", 1, 1}, {"totalSeconds", 1, 1},
-                    {"format_date", 2, 2}, {"diff", 2, 2},
+                    {"formatDate", 2, 2}, {"diff", 2, 2},
                     {"tuple", 0, 32}, {"complex", 1, 2},
                     {"calendar", 1, 3},
                     {"firstDate", 1, 1}, {"lastDate", 1, 1},
@@ -995,7 +1002,7 @@ static int typecheck_call(AstNode* node)
                     {"list", 1, 1}, {"files", 1, 1}, {"dirs", 1, 1},
                     {"create", 1, 1}, {"remove", 1, 1}, {"walk", 1, 1},
                     {"copyTo", 2, 2}, {"moveTo", 2, 2}, {"glob", 2, 2},
-                    {"from_hex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"to_str", 1, 1},
+                    {"fromHex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"toStr", 1, 1},
                     {"format_time", 1, 2},
                     {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
                     {"gc_count", 0, 0}, {"gc_bytes", 0, 0}, {"gc_collect", 0, 0}, {"gc_stw_ns", 0, 0}, {"next", 1, 1}, {"send", 2, 2}, {"receive", 0, 0}, {"close", 1, 1}, {"GenThrow", 2, 2}, {"chain", 2, 2}, {"zip", 2, 2}, {"skip", 2, 2}, {"take", 2, 2}, {"enumerate", 1, 1}, {"next", 1, 1},
@@ -1170,6 +1177,9 @@ int typecheck_expr(AstNode* node)
                         node->val_type = VAL_DOUBLE;
                     else
                         node->val_type = VAL_INT;
+                } else if(tl == VAL_ARRAY && tr == VAL_ARRAY) {
+                    /* 数组拼接：[a] + [b] → 新数组 */
+                    node->val_type = VAL_ARRAY;
                 } else {
                     LOG_ERROR("语义错误：不支持 %s + %s\n", valtype_to_cstr(tl), valtype_to_cstr(tr));
                     err = 1;

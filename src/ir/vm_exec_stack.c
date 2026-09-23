@@ -413,10 +413,15 @@ int vm_exec_typed_array_lit(VMExecCtx* ctx, Instruction* in) {
     ta->stack_alloc = 0;
     ta->len = n;
     ta->cap = n > 0 ? n : 8;
-    if(n > 0) {
+    /* 根因修复：空数组此前 items=NULL 却声明 cap=8（容量承诺与实际分配不符），
+     * 后续 add/typed 写路径按 cap 判定无需扩容 → 写 NULL 指针 SIGSEGV。
+     * 空数组同样分配缓冲区，兑现 cap 承诺。 */
+    {
         size_t isz = lumyr_etype_itemsz(et);
         ta->items = gc_alloc_old(isz * (size_t)ta->cap, VAL_TYPED_ARRAY);
         gc_mark_internal_buf(ta->items);
+    }
+    if(n > 0) {
         int cls = lumyr_etype_stackcls(et);
         for(int i = n - 1; i >= 0; --i) {
             if(cls == 1) {
@@ -440,8 +445,6 @@ int vm_exec_typed_array_lit(VMExecCtx* ctx, Instruction* in) {
                 ((void**)ta->items)[i] = p;
             }
         }
-    } else {
-        ta->items = NULL;
     }
     r.v.typed_array = ta;
     gc_enable();

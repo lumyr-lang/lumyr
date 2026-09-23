@@ -207,7 +207,9 @@ FieldInfo* lumyr_type_find_field(RuntimeTypeInfo* info, const char* field_name)
     return NULL;
 }
 
-/* 查找方法实现：方法表在注册时已扁平化包含父类方法（覆盖在原位置），直接查表 */
+/* 查找方法实现：方法表在注册时已扁平化包含父类方法（覆盖在原位置），直接查表。
+ * 完整性由 lumyr_type_set_method 的后代传播保证（见下），任何注册顺序下
+ * "后代方法表 ⊇ 祖先方法表" 恒成立，故此处无需沿 parent 链兜底。 */
 RuntimeFunc* lumyr_type_find_method(RuntimeTypeInfo* info, const char* method_name)
 {
     if(!info || !method_name) return NULL;
@@ -216,6 +218,28 @@ RuntimeFunc* lumyr_type_find_method(RuntimeTypeInfo* info, const char* method_na
             return info->methods[i];
     }
     return NULL;
+}
+
+/* ============ 方法表后代传播辅助 ============ */
+
+/* 中序收集注册表全部类型（红黑树遍历） */
+static void type_rb_collect(TypeRBNode* n, TypeRBNode* nil,
+                            RuntimeTypeInfo*** arr, int* cnt, int* cap) {
+    if(!n || n == nil) return;
+    type_rb_collect(n->left, nil, arr, cnt, cap);
+    if(*cnt >= *cap) {
+        *cap = *cap ? *cap * 2 : 16;
+        *arr = (RuntimeTypeInfo**)realloc(*arr, (size_t)*cap * sizeof(RuntimeTypeInfo*));
+    }
+    (*arr)[(*cnt)++] = n->value;
+    type_rb_collect(n->right, nil, arr, cnt, cap);
+}
+
+/* t 是否为 info 的后代（沿 parent 链上溯命中 info） */
+static int type_is_descendant(const RuntimeTypeInfo* t, const RuntimeTypeInfo* info) {
+    for(const RuntimeTypeInfo* p = t ? t->parent : NULL; p; p = p->parent)
+        if(p == info) return 1;
+    return 0;
 }
 
 /* 设置方法：同名覆盖（重写），新名追加到方法表 */
@@ -234,6 +258,33 @@ void lumyr_type_set_method(RuntimeTypeInfo* info, const char* method_name, Runti
     info->methods[info->nmethods] = rf;
     info->method_names[info->nmethods] = strdup(method_name);
     info->nmethods = n;
+
+    /* 根因修复：新增方法传播到全部已注册后代。
+     * 子类注册时仅深拷贝父类"当时"的方法表（flatten-at-register），
+     * 父类此后新增的方法对子类不可见 → 多态分派缺失（子类实例调父类方法报"没有方法"）。
+     * 传播使 "后代方法表 ⊇ 祖先方法表" 在任何注册顺序下恒成立。
+     * 后代已有同名方法（重写）→ 保留后代实现，不覆盖（多态语义）。 */
+    if(g_type_tree) {
+        RuntimeTypeInfo** all = NULL;
+        int cnt = 0, cap = 0;
+        type_rb_collect(g_type_tree->root, g_type_tree->nil, &all, &cnt, &cap);
+        for(int i = 0; i < cnt; i++) {
+            RuntimeTypeInfo* t = all[i];
+            if(t == info || !type_is_descendant(t, info)) continue;
+            int has = 0;
+            for(int k = 0; k < t->nmethods; k++) {
+                if(t->method_names[k] && strcmp(t->method_names[k], method_name) == 0) { has = 1; break; }
+            }
+            if(has) continue;
+            int tn = t->nmethods + 1;
+            t->methods = (RuntimeFunc**)realloc(t->methods, (size_t)tn * sizeof(RuntimeFunc*));
+            t->method_names = (const char**)realloc(t->method_names, (size_t)tn * sizeof(const char*));
+            t->methods[t->nmethods] = rf;
+            t->method_names[t->nmethods] = strdup(method_name);
+            t->nmethods = tn;
+        }
+        free(all);
+    }
 }
 
 /* ==================== 实例创建 ==================== */

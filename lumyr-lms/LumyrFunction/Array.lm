@@ -1,0 +1,61 @@
+// ============================================================
+// lumyr-Array：Array 动态数组封装类
+// 封装 lumin 内置数组，提供 push/pop/shift/unshift/splice 等方法
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/Array>;
+//   arr = Array();
+//   arr.push(1).push(2).push(3);
+//   print(arr.size());          // 3
+//   print(arr.pop());           // 3
+//   print(arr.toString());      // [1, 2]
+// ============================================================
+
+import <Function/Buffer>;
+
+public class Array extends AbstractBuffer {
+    value: array;
+
+    func Array(arr) {
+        self.value = [];
+        if (arr != null) { self.value = copy(arr); }
+    }
+
+    
+    func push(v) { self.value.add(v); return self; }
+    func pop() {
+        if (self.value.len == 0) { return; }
+        last = self.value.last();
+        self.value.remove(self.value.len - 1);
+        return last;
+    }
+    func shift() {
+        if (self.value.len == 0) { return; }
+        first = self.value.first();
+        self.value.remove(0);
+        return first;
+    }
+    func unshift(v) { self.value.insert(0, v); return self; }
+    func removeAt(idx: int) {
+        removed = self.value.get(idx);
+        self.value.remove(idx);
+        return removed;
+    }
+    func splice(start: int, count: int) {
+        removed = self.value.slice(start, start + count);
+        i = start + count - 1;
+        while (i >= start) { self.value.remove(i); i = i - 1; }
+        return Array(removed);
+    }
+    func addAll(other) { self.value.addAll(other.value); return self; }
+
+    // override 返回 Array 实例
+    func slice(start: int, end: int): Array { return Array(self.value.slice(start, end)); }
+    func concat(other): Array { return Array(self.value.concat(other.value)); }
+    func copy(): Array {
+        c = Array();
+        c.value = self.value.copy();
+        return c;
+    }
+}

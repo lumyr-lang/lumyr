@@ -6,6 +6,7 @@
 #include "stack_manager.h"
 #include "ir_types.h"
 #include "lm_value.h"
+#include "gc_runtime.h"
 #include <string.h>
 
 /* ===== 类型转换 ===== */
@@ -150,13 +151,26 @@ int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in) {
         v.type = VAL_STRUCT_PTR; v.v.struct_ptr = val; break;
     case CAST_CLASS_PTR:
         v.type = VAL_CLASS_PTR; v.v.struct_ptr = val; break;
-    /* 容器裸指针：装回对应容器 Value，后续动态 INDEX_GET/print 才能识别 */
+    /* 容器裸指针：装回对应容器 Value，后续动态 INDEX_GET/print 才能识别。
+     * 根因修复：装箱身份以 GC 头运行时 vtype 为准，声明 CastKind 仅是静态提示。
+     * 此前按声明 CastKind 打标——`value: array` 字段实际持有 TypedArray* 时
+     * 被打成 VAL_ARRAY，后续按 ValueArray* 解引用 → SIGSEGV/元素类型丢失。
+     * 容器类（array/map/typed_array）互相覆盖；GC 头不可读时回退声明类型。 */
     case CAST_ARRAY:
-        v.type = VAL_ARRAY;     v.v.array = val;      break;
     case CAST_MAP:
-        v.type = VAL_MAP;       v.v.map = val;        break;
-    case CAST_TYPED_ARRAY:
-        v.type = VAL_TYPED_ARRAY; v.v.typed_array = val; break;
+    case CAST_TYPED_ARRAY: {
+        int rt = gc_obj_vtype(val);
+        if(rt == VAL_ARRAY)       { v.type = VAL_ARRAY;       v.v.array = val;        break; }
+        if(rt == VAL_MAP)         { v.type = VAL_MAP;         v.v.map = val;          break; }
+        if(rt == VAL_TYPED_ARRAY) { v.type = VAL_TYPED_ARRAY; v.v.typed_array = val;  break; }
+        if((CastKind)in->a == CAST_ARRAY)
+            v.type = VAL_ARRAY,       v.v.array = val;
+        else if((CastKind)in->a == CAST_MAP)
+            v.type = VAL_MAP,         v.v.map = val;
+        else
+            v.type = VAL_TYPED_ARRAY, v.v.typed_array = val;
+        break;
+    }
     default:
         v.type = VAL_PTR;       v.v.struct_ptr = val;  break;
     }

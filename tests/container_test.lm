@@ -100,12 +100,12 @@ assert eb.len == 0;
 
 // ===== 9. bytes 方法 =====
 assert b1.hex() == "68656c6c6f";
-b3 = from_hex("68656c6c6f");
+b3 = fromHex("68656c6c6f");
 assert b3 == b1;
 assert b3.len == 5;
 
-// bytes to_str
-bs = b1.to_str();
+// bytes toStr
+bs = b1.toStr();
 assert bs.contains("hello");
 assert bs.len == 8;  // b"hello" = 8 chars
 

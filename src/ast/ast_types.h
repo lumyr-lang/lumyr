@@ -34,8 +34,9 @@ typedef struct {
     void** method_funcs;   // 方法 RuntimeFunc* 数组（编译后存储，避免重复编译）
     int nmethods;          // 方法数量
     /* class 构造函数（__init__ 方法，NULL=使用默认构造函数） */
-    struct AstNode* constructor;  // 构造函数 AST 节点
-    void* constructor_func;       // 构造函数 RuntimeFunc*
+    struct AstNode* constructor;  // 主构造函数 AST 节点（首个声明的重载）
+    void* constructor_func;       // 主构造函数 RuntimeFunc*
+    int nctor_overloads;          // 构造函数重载总数（0=无构造函数）
     /* 统一运行时类型信息指针（struct/class 注册时由 lumyr_type_register 返回） */
     struct RuntimeTypeInfo* runtime_info;
 } TypeDef;
@@ -56,8 +57,13 @@ void* class_find_method_func(const char* class_name, const char* method_name);
 struct AstNode* type_find_method_ast(const char* type_name, const char* method_name);
 /* 设置 class 构造函数（__init__ 方法） */
 void class_set_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func);
+/* 添加 class 构造函数重载（首个成为主构造，后续重载按 <Cls>___init__N 命名） */
+void class_add_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func);
 /* 获取 class 构造函数的 RuntimeFunc（支持继承链查找） */
 void* class_get_constructor_func(const char* class_name);
+
+/* 外部声明：yacc.y 中定义，供 class_add_method 前置设置构造函数 */
+extern struct AstNode* g_class_constructor;
 
 /* 前向声明 AstNode */
 struct AstNode;

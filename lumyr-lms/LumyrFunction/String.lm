@@ -1,0 +1,121 @@
+// ============================================================
+// lumyr-String：String 字符串封装类
+// 包装 string 值，提供值语义方法：相等、比较、拼接、查找、转换
+// 委托 lumin 内置字符串方法实现，保证正确性与性能
+//
+// 用法：
+//   import <Function/String> as Str;
+//   s = Str.String("hello");
+//   print(s.length());              // 5
+//   print(s.concat(Str.String(" world")).value);
+//   print(s.toUpper().value);       // HELLO
+//   print(s.contains("ell"));       // true
+// ============================================================
+
+import <Function/Object>;
+
+public class String extends Object {
+    value: string;
+
+    func String(v: string) {
+        self.value = v;
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        return self.value.len;
+    }
+
+    // 比较：-1 <, 0 ==, 1 >
+    func compareTo(other): int {
+        if (type(other) != type(self)) { return -2; }
+        a = self.value;
+        b = other.value;
+        if (a == b) { return 0; }
+        if (a < b) { return -1; }
+        return 1;
+    }
+
+    func toString(): string {
+        return self.value;
+    }
+
+    func length(): int {
+        return self.value.len;
+    }
+
+    func isEmpty(): bool {
+        return self.value.len == 0;
+    }
+
+    func concat(other): String {
+        return String(self.value + other.value);
+    }
+
+    // 委托内置 startswith
+    func startsWith(prefix: string): bool {
+        return self.value.startswith(prefix);
+    }
+
+    // 委托内置 endswith
+    func endsWith(suffix: string): bool {
+        return self.value.endswith(suffix);
+    }
+
+    // 委托内置 contains
+    func contains(sub: string): bool {
+        return self.value.contains(sub);
+    }
+
+    // 子串：start 起，取 n 个字符
+    func substring(start: int, n: int): String {
+        return String(self.value.substr(start, n));
+    }
+
+    // 转大写
+    func toUpper(): String {
+        return String(self.value.toupper());
+    }
+
+    // 转小写
+    func toLower(): String {
+        return String(self.value.tolower());
+    }
+
+    // 去除首尾空白
+    func trim(): String {
+        return String(self.value.strip());
+    }
+
+    // 重复 n 次
+    func repeat(n: int): String {
+        return String(self.value.repeat(n));
+    }
+
+    // 替换子串
+    func replace(from: string, to: string): String {
+        return String(self.value.replace(from, to));
+    }
+
+    // 分割，返回 String 数组
+    func split(sep: string) {
+        return self.value.split(sep);
+    }
+
+    // 返回第 idx 个字节值（-1 越界）
+    func charAt(idx: int): int {
+        slen = self.value.len;
+        if (idx < 0 || idx >= slen) { return -1; }
+        sb = bytes(self.value);
+        return sb[idx];
+    }
+
+    // 格式化字符串
+    func format(args) {
+        return self.value.format(args);
+    }
+}

@@ -160,12 +160,12 @@ d3.remove();
 assert d3.exists == false;
 print("13. folder remove 递归删除 OK");
 
-// ===== 14. to_str 字符串化 =====
+// ===== 14. toStr 字符串化 =====
 f4 = file("/tmp/lm_file_test_4.txt");
 assert f"{f4}" == "<file /tmp/lm_file_test_4.txt>";
 d5 = folder("/tmp/lm_folder_test_5");
 assert f"{d5}" == "<folder /tmp/lm_folder_test_5>";
-print("14. file/folder to_str OK");
+print("14. file/folder toStr OK");
 
 // ===== 15. len() 与字段访问 =====
 file("/tmp/lm_file_test_5.txt").writeLines(["a", "b", "c", "d"]);

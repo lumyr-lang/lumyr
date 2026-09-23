@@ -165,7 +165,7 @@ if(netOk == 0) {
 
     /* ========== 五、文件流 ========== */
 
-    write_file(upPath, "hello-file-stream");
+    writeFile(upPath, "hello-file-stream");
 
     /* 5.1 body=磁盘 file：流式上传（curl 边 fread 边发） */
     u = requests.put(base + "/put", {"body": file(upPath), "timeout": 10});

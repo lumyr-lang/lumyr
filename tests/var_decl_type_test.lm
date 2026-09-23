@@ -202,7 +202,7 @@ print("var_decl_type_test PART5 (array/map) PASS");
 
 // 6.1 typed array 元素类型转换
 a_tint: array = <int>[1.9, 2.1, 3.99];
-check(type(a_tint) == "array" && len(a_tint) == 3, "typed array: 声明");
+check(type(a_tint) == "typed_array" && len(a_tint) == 3, "typed array: 声明");
 check(a_tint[0] == 1 && a_tint[1] == 2 && a_tint[2] == 3, "typed array: float→int 转换");
 
 // 6.2 typed string array

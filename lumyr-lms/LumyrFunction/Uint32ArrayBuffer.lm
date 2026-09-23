@@ -1,0 +1,44 @@
+// ============================================================
+// lumyr-Uint32ArrayBuffer：Uint32ArrayBuffer 数组缓冲区封装类
+// 内部使用常规数组 [] 存储（uint32 范围过大，set 不做截断）
+// 避免类型化数组存入类字段后丢失元素类型的 VM bug
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/Uint32ArrayBuffer>;
+//   buf = Uint32ArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class Uint32ArrayBuffer extends AbstractBuffer {
+    value: array;
+
+    func Uint32ArrayBuffer(arr) {
+        self.value = [];
+        if (arr != null) { self.value = copy(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): Uint32ArrayBuffer {
+        r = Uint32ArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): Uint32ArrayBuffer {
+        r = Uint32ArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): Uint32ArrayBuffer {
+        r = Uint32ArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

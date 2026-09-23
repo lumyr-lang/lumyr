@@ -16,7 +16,7 @@ print("A9", s.replace("World", "LM"));  // Hello LM
 print("A10", "a,b,c".split(",").len);   // 3
 print("A11", "  x  ".strip());          // x
 print("A12", "ab".repeat(3));           // ababab
-print("A13", "abc".char_at(1));         // b
+print("A13", "abc".charAt(1));         // b
 print("A14", ["a", "b"].join("-"));     // a-b
 
 // ===== B. 数组方法（原地修改返回 self vs 返回新数组） =====
@@ -26,7 +26,7 @@ a.add(4);
 print("B2", a);                         // [3, 1, 2, 4]
 a.insert(0, 0);
 print("B3", a);                         // [0, 3, 1, 2, 4]
-print("B4", a.index_of(3));             // 1
+print("B4", a.indexOf(3));             // 1
 inner = [9, 9];
 a2 = [3, inner, 2];
 print("B5", a2.objectIndex(inner), a2.objectIndex(a2)); // 1 -1（引用身份）
@@ -97,8 +97,8 @@ print("G2", "hi".encodeBase64());       // aGk=
 print("G3", "aGk=".decodeBase64());     // hi
 print("G4", "a b".encodeURL());         // a%20b
 print("G5", "a%20b".decodeURL());       // a b
-print("G6", "abc".regex_match("a.c"));  // true
-print("G7", "abc".regex_search("b."));  // [bc]
+print("G6", "abc".regexMatch("a.c"));  // true
+print("G7", "abc".regexSearch("b."));  // [bc]
 
 // ===== H. 属性形式与全局形式 =====
 print("H1", "xyz".len, [1, 2, 3].len, {"a": 1}.len); // 3 3 1

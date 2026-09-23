@@ -1,0 +1,98 @@
+// ============================================================
+// lumyr-Character：Character 字符封装类
+// 包装 char 值，提供值语义方法：相等、比较、字符判断、大小写转换
+//
+// 用法：
+//   import <Function/Character> as Ch;
+//   c = Ch.Character(<char>'A');
+//   print(c.isUpper());       // true
+//   print(c.toLower().value); // 'a'
+// ============================================================
+
+import <Function/Object>;
+
+public class Character extends Object {
+    value: char;
+
+    func Character(v: char) {
+        self.value = v;
+    }
+
+    // 静态辅助：char → string（绕过方法内 ""+char 退化为 int 的 VM bug）
+    static func charStr(c) { return "" + c; }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        return (int)self.value;
+    }
+
+    // 比较：-1 <, 0 ==, 1 >
+    func compareTo(other): int {
+        if (type(other) != type(self)) { return -2; }
+        if (self.value < other.value) { return -1; }
+        if (self.value > other.value) { return 1; }
+        return 0;
+    }
+
+    func toString(): string {
+        return Character_charStr(self.value);
+    }
+
+    func toInt(): int {
+        return (int)self.value;
+    }
+
+    // 是否数字字符（ASCII 48-57）
+    func isDigit(): bool {
+        c = (int)self.value;
+        return c >= 48 && c <= 57;
+    }
+
+    // 是否字母字符
+    func isLetter(): bool {
+        c = (int)self.value;
+        return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    }
+
+    // 是否大写字母
+    func isUpper(): bool {
+        c = (int)self.value;
+        return c >= 65 && c <= 90;
+    }
+
+    // 是否小写字母
+    func isLower(): bool {
+        c = (int)self.value;
+        return c >= 97 && c <= 122;
+    }
+
+    // 是否空白字符（空格=32, tab=9, 换行=10, 回车=13）
+    func isWhitespace(): bool {
+        c = (int)self.value;
+        return c == 32 || c == 9 || c == 10 || c == 13;
+    }
+
+    // 转大写
+    func toUpper() {
+        c = (int)self.value;
+        result = self;
+        if (c >= 97 && c <= 122) {
+            result = Character(c - 32);
+        }
+        return result;
+    }
+
+    // 转小写
+    func toLower() {
+        c = (int)self.value;
+        result = self;
+        if (c >= 65 && c <= 90) {
+            result = Character(c + 32);
+        }
+        return result;
+    }
+}

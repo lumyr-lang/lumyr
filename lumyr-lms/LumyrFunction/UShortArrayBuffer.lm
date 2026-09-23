@@ -1,0 +1,44 @@
+// ============================================================
+// lumyr-UShortArrayBuffer：UShortArrayBuffer 数组缓冲区封装类
+// 内部使用 <ushort> 类型化数组存储，元素写入由运行时按元素类型原生截断到
+// unsigned short 范围 (0..65535)
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/UShortArrayBuffer>;
+//   buf = UShortArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class UShortArrayBuffer extends AbstractBuffer {
+    value: <ushort>array;
+
+    func UShortArrayBuffer(arr) {
+        self.value = <ushort>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): UShortArrayBuffer {
+        r = UShortArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): UShortArrayBuffer {
+        r = UShortArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): UShortArrayBuffer {
+        r = UShortArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}

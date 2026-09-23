@@ -61,9 +61,9 @@ static int builtin_id_by_name(const char* name) {
         {"range", BUILTIN_RANGE},
         {"format", BUILTIN_FORMAT},
         /* 文件 I/O 简写函数（read "path" / write "path" value 语法糖映射到此） */
-        {"read_file", BUILTIN_READ_FILE},
-        {"write_file", BUILTIN_WRITE_FILE},
-        {"file_exists", BUILTIN_FILE_EXISTS},
+        {"readFile", BUILTIN_READ_FILE},
+        {"writeFile", BUILTIN_WRITE_FILE},
+        {"fileExists", BUILTIN_FILE_EXISTS},
         /* 字符串组 */
         {"substr", BUILTIN_SUBSTR}, {"substring", BUILTIN_SUBSTR},
         {"toupper", BUILTIN_TOUPPER}, {"toUpperCase", BUILTIN_TOUPPER}, {"upper", BUILTIN_TOUPPER},
@@ -74,19 +74,19 @@ static int builtin_id_by_name(const char* name) {
         {"replace", BUILTIN_REPLACE},
         {"startswith", BUILTIN_STARTSWITH}, {"startsWith", BUILTIN_STARTSWITH},
         {"endswith", BUILTIN_ENDSWITH}, {"endsWith", BUILTIN_ENDSWITH},
-        {"char_at", BUILTIN_CHAR_AT}, {"charAt", BUILTIN_CHAR_AT},
+        {"charAt", BUILTIN_CHAR_AT},
         /* 加密/编码/正则（kit/runtime 现成封装） */
         {"md5", BUILTIN_MD5},
-        {"encodeBase64", BUILTIN_ENCODE_BASE64}, {"base64_encode", BUILTIN_ENCODE_BASE64},
-        {"decodeBase64", BUILTIN_DECODE_BASE64}, {"base64_decode", BUILTIN_DECODE_BASE64},
-        {"encodeURL", BUILTIN_ENCODE_URL}, {"url_encode", BUILTIN_ENCODE_URL},
-        {"decodeURL", BUILTIN_DECODE_URL}, {"url_decode", BUILTIN_DECODE_URL},
-        {"regex_match", BUILTIN_REGEX_MATCH},
-        {"regex_search", BUILTIN_REGEX_SEARCH},
-        {"regex_replace", BUILTIN_REGEX_REPLACE},
+        {"encodeBase64", BUILTIN_ENCODE_BASE64},
+        {"decodeBase64", BUILTIN_DECODE_BASE64},
+        {"encodeURL", BUILTIN_ENCODE_URL},
+        {"decodeURL", BUILTIN_DECODE_URL},
+        {"regexMatch", BUILTIN_REGEX_MATCH},
+        {"regexSearch", BUILTIN_REGEX_SEARCH},
+        {"regexReplace", BUILTIN_REGEX_REPLACE},
         /* contains / 查找 */
         {"contains", BUILTIN_CONTAINS},
-        {"indexOf", BUILTIN_ARRAY_INDEXOF}, {"index_of", BUILTIN_ARRAY_INDEXOF},
+        {"indexOf", BUILTIN_ARRAY_INDEXOF},
         {"objectIndex", BUILTIN_OBJECT_INDEX},
         /* 数组/字典修改类（原地 + 返回 self） */
         {"add", BUILTIN_ARRAY_ADD},
@@ -117,7 +117,7 @@ static int builtin_id_by_name(const char* name) {
         {"normalize", BUILTIN_NORMALIZE},
         {"softmax", BUILTIN_SOFTMAX},
         /* enum 增强 */
-        {"fromValue", BUILTIN_FROM_VALUE}, {"from_value", BUILTIN_FROM_VALUE},
+        {"fromValue", BUILTIN_FROM_VALUE},
         {"flat", BUILTIN_ARRAY_FLAT},
         {"join", BUILTIN_JOIN},
         /* 高阶函数 */
@@ -130,10 +130,10 @@ static int builtin_id_by_name(const char* name) {
         {"has", BUILTIN_MAP_HAS},
         /* 迭代/转换通用（keys/values/has/delete 见上；delete 映射见文件组） */
         {"forEach", BUILTIN_FOREACH}, {"each", BUILTIN_FOREACH},
-        {"getAll", BUILTIN_GETALL}, {"get_all", BUILTIN_GETALL},
-        {"toMap", BUILTIN_TOMAP}, {"to_map", BUILTIN_TOMAP},
-        {"toArray", BUILTIN_TOARRAY}, {"to_array", BUILTIN_TOARRAY},
-        {"toJSONString", BUILTIN_TOJSON}, {"to_json_string", BUILTIN_TOJSON},
+        {"getAll", BUILTIN_GETALL},
+        {"toMap", BUILTIN_TOMAP},
+        {"toArray", BUILTIN_TOARRAY},
+        {"toJSONString", BUILTIN_TOJSON},
         {"copy", BUILTIN_COPY},
         /* AI / 线性代数 */
         {"shape", BUILTIN_SHAPE},
@@ -148,6 +148,14 @@ static int builtin_id_by_name(const char* name) {
         /* 数学（全局形式） */
         {"floor", BUILTIN_FLOOR}, {"ceil", BUILTIN_CEIL},
         {"abs", BUILTIN_ABS}, {"sqrt", BUILTIN_SQRT},
+        {"sin", BUILTIN_SIN}, {"cos", BUILTIN_COS}, {"tan", BUILTIN_TAN},
+        {"asin", BUILTIN_ASIN}, {"acos", BUILTIN_ACOS}, {"atan", BUILTIN_ATAN},
+        {"atan2", BUILTIN_ATAN2}, {"log", BUILTIN_LOG}, {"log10", BUILTIN_LOG10},
+        {"log2", BUILTIN_LOG2}, {"exp", BUILTIN_EXP}, {"pow", BUILTIN_POW},
+        {"round", BUILTIN_ROUND}, {"cbrt", BUILTIN_CBRT}, {"hypot", BUILTIN_HYPOT},
+        {"sign", BUILTIN_SIGN}, {"degrees", BUILTIN_DEGREES},
+        {"radians", BUILTIN_RADIANS}, {"trunc", BUILTIN_TRUNC},
+        {"random", BUILTIN_RANDOM},
         {"del", BUILTIN_DEL},
         /* 生成器 */
         {"next", BUILTIN_NEXT}, {"send", BUILTIN_SEND},
@@ -165,7 +173,7 @@ static int builtin_id_by_name(const char* name) {
         {"hour", BUILTIN_HOUR}, {"minute", BUILTIN_MINUTE}, {"second", BUILTIN_SECOND},
         {"weekday", BUILTIN_WEEKDAY}, {"yearday", BUILTIN_YEARDAY},
         {"days", BUILTIN_DAYS}, {"seconds", BUILTIN_SECONDS}, {"totalSeconds", BUILTIN_TOTAL_SECONDS},
-        {"format_date", BUILTIN_FORMAT_DATE},
+        {"formatDate", BUILTIN_FORMAT_DATE},
         {"diff", BUILTIN_DATE_DIFF},
         /* tuple/bytes/complex 构造（全局形式） */
         {"tuple", BUILTIN_TUPLE_MAKE},
@@ -176,8 +184,8 @@ static int builtin_id_by_name(const char* name) {
         {"intersect", BUILTIN_SET_INTERSECT},
         /* bytes 方法 */
         {"hex", BUILTIN_BYTES_HEX},
-        {"to_str", BUILTIN_BYTES_TO_STR},
-        {"from_hex", BUILTIN_BYTES_FROM_HEX},
+        {"toStr", BUILTIN_BYTES_TO_STR},
+        {"fromHex", BUILTIN_BYTES_FROM_HEX},
         /* complex 方法 */
         {"conjugate", BUILTIN_COMPLEX_CONJUGATE},
         /* calendar 综合日历 */
@@ -209,20 +217,20 @@ static int builtin_id_by_name(const char* name) {
         {"copyTo", BUILTIN_FOLDER_COPY_TO},
         {"moveTo", BUILTIN_FOLDER_MOVE_TO},
         {"glob", BUILTIN_FOLDER_GLOB},
-        /* socket 网络套接字（构造全局形式 + 方法）：大写为主用名，小写为别名 */
-        {"TcpSocket", BUILTIN_TCP_SOCKET}, {"tcpSocket", BUILTIN_TCP_SOCKET}, {"tcp_socket", BUILTIN_TCP_SOCKET},
-        {"UdpSocket", BUILTIN_UDP_SOCKET}, {"udpSocket", BUILTIN_UDP_SOCKET}, {"udp_socket", BUILTIN_UDP_SOCKET},
-        {"UnixSocket", BUILTIN_UNIX_SOCKET}, {"unixSocket", BUILTIN_UNIX_SOCKET}, {"unix_socket", BUILTIN_UNIX_SOCKET},
-        {"UnixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET}, {"unixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET}, {"unix_dgram_socket", BUILTIN_UNIX_DGRAM_SOCKET},
+        /* socket 网络套接字（构造全局形式 + 方法）：大写为主用名，小写驼峰为别名 */
+        {"TcpSocket", BUILTIN_TCP_SOCKET}, {"tcpSocket", BUILTIN_TCP_SOCKET},
+        {"UdpSocket", BUILTIN_UDP_SOCKET}, {"udpSocket", BUILTIN_UDP_SOCKET},
+        {"UnixSocket", BUILTIN_UNIX_SOCKET}, {"unixSocket", BUILTIN_UNIX_SOCKET},
+        {"UnixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET}, {"unixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET},
         {"connect", BUILTIN_SOCKET_CONNECT},
         {"bind", BUILTIN_SOCKET_BIND},
         {"listen", BUILTIN_SOCKET_LISTEN},
         {"accept", BUILTIN_SOCKET_ACCEPT},
         {"recv", BUILTIN_SOCKET_RECV},
-        {"sendTo", BUILTIN_SOCKET_SENDTO}, {"send_to", BUILTIN_SOCKET_SENDTO},
-        {"recvFrom", BUILTIN_SOCKET_RECVFROM}, {"recv_from", BUILTIN_SOCKET_RECVFROM},
-        {"setOption", BUILTIN_SOCKET_SETOPT}, {"set_option", BUILTIN_SOCKET_SETOPT},
-        {"getOption", BUILTIN_SOCKET_GETOPT}, {"get_option", BUILTIN_SOCKET_GETOPT},
+        {"sendTo", BUILTIN_SOCKET_SENDTO},
+        {"recvFrom", BUILTIN_SOCKET_RECVFROM},
+        {"setOption", BUILTIN_SOCKET_SETOPT},
+        {"getOption", BUILTIN_SOCKET_GETOPT},
         {"fileno", BUILTIN_SOCKET_FILENO},
         {NULL, (BuiltinId)-1}
     };
@@ -1029,12 +1037,6 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         {
             BytecodeFunc* callee = ir_func_table_lookup(func_name);
             AstNode* def_ast = func_ast_lookup(func_name);
-            /* 方法内裸名自递归：扁平名查不到时匹配当前方法自身 */
-            AstNode self_tmp;
-            BytecodeFunc* self_fn = resolve_self_recursive(c, func_name, &self_tmp);
-            if(!callee && self_fn) {
-                return compile_user_call(c, self_fn, &self_tmp, args, 1, NULL);
-            }
             if(callee && def_ast) {
                 return compile_user_call(c, callee, def_ast, args, 1, NULL);
             }
@@ -1057,6 +1059,19 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             free(argv);
             emit(c, OPC_BUILTIN, bid, argc);
             return EXPR_TYPE_NONE;
+        }
+
+        /* 方法内裸名自递归：仅非内置名且未被局部变量遮蔽。
+         * 根因修复（解析顺序）：裸名解析 = 局部变量 → 重载 → 用户函数 → 内置 → 自递归 → 动态。
+         * 此前自递归排在内置之前，方法体内与当前方法同名的内置调用
+         * （如 Object.copy() 方法体内 copy(self)）被误编译为调用自身 → 无限递归 SIGSEGV。
+         * 规则：裸名 = 全局作用域（用户函数/内置），方法递归须显式 self.method() */
+        {
+            AstNode self_tmp;
+            BytecodeFunc* self_fn = resolve_self_recursive(c, func_name, &self_tmp);
+            if(self_fn && !is_local_var) {
+                return compile_user_call(c, self_fn, &self_tmp, args, 1, NULL);
+            }
         }
 
         /* 动态调用：func_name 是持有函数值的变量 */
@@ -1189,26 +1204,66 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             int tmp_bf = bf_sym(c->fn, tmp_name);
             c->fn->var_type_tags[tmp_bf] = (int)CAST_CLASS_PTR;
             emit(c, OPC_STORE_PTR_VAR, tmp_idx, 0);
-            /* 构造函数名：<ctor_owner>___init__（ctor_owner 可能是本类或父类） */
-            char ctor_name[256];
-            snprintf(ctor_name, sizeof(ctor_name), "%s___init__", ctor_owner);
-            BytecodeFunc* ctor_fn = ir_func_table_lookup(ctor_name);
-            AstNode* ctor_ast = func_ast_lookup(ctor_name);
+            /* 构造函数名：<ctor_owner>___init__（ctor_owner 可能是本类或父类）。
+             * 重载选择：枚举 <owner>___init__ / <owner>___init__2/3...，
+             * 按用户实参数选重载——精确 arity 优先，其次可变参数（...args），
+             * 最后回退主构造（与单构造时代行为一致） */
+            AstNode** argv2 = NULL;
+            int argc2 = 0, acap2 = 0;
+            collect_call_args(node->u.class_new.args, &argv2, &argc2, &acap2);
+            char ctor_base[256];
+            snprintf(ctor_base, sizeof(ctor_base), "%s___init__", ctor_owner);
+            BytecodeFunc* ctor_fn = NULL;
+            AstNode* ctor_ast = NULL;
+            /* 选中的重载名：OPC_CALL 运行时按 callsite.callee 名字解析被调函数，
+             * 必须注册选中的重载名（否则 VM 永远调用主构造） */
+            char sel_name[sizeof(ctor_base) + 8];
+            snprintf(sel_name, sizeof(sel_name), "%s", ctor_base);
+            {
+                BytecodeFunc* var_fn = NULL; AstNode* var_ast = NULL; int var_min = -1;
+                BytecodeFunc* prim_fn = ir_func_table_lookup(ctor_base);
+                AstNode* prim_ast = func_ast_lookup(ctor_base);
+                for(int ord = 1; ord <= 64; ord++) {
+                    char nm[(int)sizeof(ctor_base) + 8];
+                    if(ord == 1) snprintf(nm, sizeof(nm), "%s", ctor_base);
+                    else snprintf(nm, sizeof(nm), "%s%d", ctor_base, ord);
+                    BytecodeFunc* fn = ir_func_table_lookup(nm);
+                    AstNode* ast = func_ast_lookup(nm);
+                    if(!fn || !ast) break;
+                    /* 形参数（不含 self 首参；ellipsis 记为可变，不计入） */
+                    int np = 0, ell = 0;
+                    for(AstNode* p = ast->u.func_def.params; p; p = p->u.param.next) {
+                        if(p->u.param.name && strcmp(p->u.param.name, "self") == 0 && np == 0) continue;
+                        if(p->u.param.is_ellipsis) { ell = 1; break; }
+                        np++;
+                    }
+                    if(ell) {
+                        if(!var_fn) { var_fn = fn; var_ast = ast; var_min = np; }
+                        continue;
+                    }
+                    if(np == argc2) { ctor_fn = fn; ctor_ast = ast; snprintf(sel_name, sizeof(sel_name), "%s", nm); break; }
+                }
+                if(!ctor_ast && var_fn && argc2 >= var_min) {
+                    ctor_fn = var_fn; ctor_ast = var_ast;
+                    /* 可变重载名：var_fn 的实际注册名（首个可变按声明序可能带 N 后缀） */
+                    const char* vn = var_fn->name ? var_fn->name : ctor_base;
+                    snprintf(sel_name, sizeof(sel_name), "%s", vn);
+                }
+                if(!ctor_ast) { ctor_fn = prim_fn; ctor_ast = prim_ast; snprintf(sel_name, sizeof(sel_name), "%s", ctor_base); }
+            }
             if(ctor_fn && ctor_ast) {
                 /* 加载 self（临时变量）到 PTR 栈 */
                 emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
                 /* 按形参类型编译实参（slot 0 = self，已加载；slot 1+ = 用户实参） */
-                AstNode** argv2 = NULL;
-                int argc2 = 0, acap2 = 0;
-                collect_call_args(node->u.class_new.args, &argv2, &argc2, &acap2);
                 int slot = 1;
                 AstNode* p = ctor_ast->u.func_def.params;
                 if(p && p->u.param.name && strcmp(p->u.param.name, "self") == 0) {
                     p = p->u.param.next;
                 }
                 int ai = 0;
+                int has_ellipsis = 0;
                 while(p && ai < argc2) {
-                    if(p->u.param.is_ellipsis) break;
+                    if(p->u.param.is_ellipsis) { has_ellipsis = 1; break; }
                     CastKind pck = (slot < ctor_fn->sym_cnt) ? (CastKind)ctor_fn->var_type_tags[slot] : CAST_NONE;
                     ExprType param_et = castkind_to_exprtype(pck);
                     if(param_et != EXPR_TYPE_NONE) {
@@ -1221,12 +1276,27 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     ai++;
                     p = p->u.param.next;
                 }
+                /* 可变参数（...args）：与自由函数路径（compile_user_call）语义一致——
+                 * 可变构造函数的数组槽总是绑定（实参耗尽时为空数组），否则缺省实参场景
+                 * args 槽未被绑定为 none，函数体内 len(args) 直接运行时错误 */
+                if(!has_ellipsis && p) {
+                    for(AstNode* q = p; q; q = q->u.param.next)
+                        if(q->u.param.is_ellipsis) { has_ellipsis = 1; break; }
+                }
+                if(has_ellipsis) {
+                    int extra = argc2 - ai;
+                    if(extra < 0) extra = 0;
+                    for(int k = ai; k < argc2; k++) c_expr_to_value(c, argv2[k]);
+                    emit(c, OPC_ARRAY_LIT, 0, extra);
+                }
                 free(argv2);
-                /* emit CALL（ctor 为 void：keep_result=0，CALL 不压返回值） */
-                int total = 1 + argc2;
-                int cs = bf_add_callsite(c->fn, ctor_name, total, 0, (int)EXPR_TYPE_NONE);
+                /* emit CALL（ctor 为 void：keep_result=0，CALL 不压返回值）；
+                 * total = self + 已绑定实参 +（可变槽数组算 1 个） */
+                int total = 1 + ai + (has_ellipsis ? 1 : 0);
+                int cs = bf_add_callsite(c->fn, sel_name, total, 0, (int)EXPR_TYPE_NONE);
                 emit(c, OPC_CALL, cs, total);
             } else {
+                free(argv2);
                 fprintf(stderr, "IR: 警告 - class %s 的 __init__ 未注册\n", tname);
             }
             /* 加载临时变量（实例）到 PTR 栈作为表达式结果 */
@@ -2244,6 +2314,43 @@ char* c_expr_owner_type(Ctx* c, AstNode* node) {
         if(fi && fi->type_name) return strdup(fi->type_name);
     }
 
+    /* 函数调用：查返回类型标注，若为 class/struct 则返回类型名
+     * 使 b = makeIt()（makeIt 返回 : ClassName）能走静态方法分派，避免动态分派找不到 override */
+    if(node->type == AST_CALL) {
+        BytecodeFunc* fn = ir_func_table_lookup(node->u.call.name);
+        if(fn && fn->ret_type_name) {
+            CastKind ck = ir_type_name_to_castkind(fn->ret_type_name);
+            if(ck == CAST_CLASS_PTR || ck == CAST_STRUCT_PTR)
+                return strdup(fn->ret_type_name);
+        }
+        return NULL;
+    }
+
+    /* 方法调用 recv.method(args)：查方法返回类型标注，若为 class/struct 则返回类型名
+     * 使 sl = a.slice(0,2)（slice 返回 : ClassName）能走静态方法分派 */
+    if(node->type == AST_METHOD_CALL) {
+        char* recv_owner = c_expr_owner_type(c, node->u.method_call.recv);
+        if(recv_owner) {
+            TypeDef* td = type_lookup(recv_owner);
+            if(td && td->runtime_info) {
+                RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, node->u.method_call.method);
+                if(rf && interp_func_is_payload(rf)) {
+                    InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+                    BytecodeFunc* def_fn = pl ? pl->bytecode : NULL;
+                    if(def_fn && def_fn->ret_type_name) {
+                        CastKind ck = ir_type_name_to_castkind(def_fn->ret_type_name);
+                        if(ck == CAST_CLASS_PTR || ck == CAST_STRUCT_PTR) {
+                            free(recv_owner);
+                            return strdup(def_fn->ret_type_name);
+                        }
+                    }
+                }
+            }
+            free(recv_owner);
+        }
+        return NULL;
+    }
+
     return NULL;
 }
 
@@ -2353,8 +2460,12 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
             if(rf && interp_func_is_payload(rf)) {
                 InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
                 BytecodeFunc* def_fn = pl->bytecode;
-                if(def_fn && def_fn->ret_type_name)
+                if(def_fn && def_fn->ret_type_name) {
                     ck = ir_type_name_to_castkind(def_fn->ret_type_name);
+                    /* class/struct 返回类型：走 VALUE 栈，不走 PTR 栈 */
+                    if(ck == CAST_CLASS_PTR || ck == CAST_STRUCT_PTR)
+                        ck = CAST_NONE;
+                }
             }
         }
         free(owner);
@@ -2763,6 +2874,10 @@ static BytecodeFunc* resolve_self_recursive(Ctx* c, const char* func_name, AstNo
     if(!c->fn->class_name || !c->fn->name) return NULL;
     const char* msep = strstr(c->fn->name, "__m__");
     if(!msep || strcmp(msep + 5, func_name) != 0) return NULL;
+    /* 内置名不走自递归（解析顺序见 c_expr AST_CALL 注释）：此处兜住
+     * "内置名被局部变量遮蔽"（内置分支因 is_local_var 跳过后落到本函数）的场景，
+     * 保证遮蔽时走动态调用局部函数值而非递归自身。方法递归用 self.method() */
+    if(builtin_id_by_name(func_name) >= 0) return NULL;
     memset(tmp_def, 0, sizeof(AstNode));
     tmp_def->type = AST_FUNC_DEF;
     tmp_def->u.func_def.params = c->cur_params;
@@ -2855,8 +2970,9 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     if(is_method) {
         ExprType rt0 = c_expr(c, method_recv);
         if(rt0 != EXPR_TYPE_PTR) {
-            fprintf(stderr, "IR: %s 方法调用的接收者不是实例引用（receiver 类型=%d）\n",
-                    callee->name ? callee->name : "?", (int)rt0);
+            /* receiver 在 VALUE 栈（从函数/方法返回的类实例），
+             * 拆箱到 PTR 栈使 OPC_CALL_METHOD 的 POP_PTR 能正确取到实例指针 */
+            emit(c, OPC_UNBOX_PTR, (int)CAST_CLASS_PTR, 0);
         }
         total = 1;
     }
@@ -2946,7 +3062,9 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     ExprType ret_et = EXPR_TYPE_NONE;
     if(callee->ret_type_name && !callee->is_generator) {
         CastKind rck = ir_type_name_to_castkind(callee->ret_type_name);
-        ret_et = castkind_to_exprtype(rck);
+        /* class/struct 返回类型走 VALUE 栈，不走 PTR 栈 */
+        if(rck != CAST_CLASS_PTR && rck != CAST_STRUCT_PTR)
+            ret_et = castkind_to_exprtype(rck);
     }
 
     /* 5. 登记调用点并发 CALL / CALL_METHOD。
@@ -2987,8 +3105,9 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
     TypeDef* td = owner ? type_lookup(owner) : NULL;
 
     /* 2. 用户类型方法（同名覆盖内置：用户方法优先，沿继承链解析 → 多态） */
+    int method_deferred = 0;  /* 方法 AST 已知但 RuntimeFunc 尚未编译（递归自调用） */
+    AstNode* mdef_ast = td ? type_find_method_ast(owner, mname) : NULL;
     if(td) {
-        AstNode* mdef_ast = type_find_method_ast(owner, mname);
         BytecodeFunc* def_fn = NULL;
         if(td->runtime_info) {
             RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
@@ -2997,6 +3116,7 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
                 def_fn = pl->bytecode;
             }
         }
+        if(mdef_ast && !def_fn) method_deferred = 1;  /* 方法在编译中，RuntimeFunc 未就绪 */
         if(mdef_ast && def_fn) {
             /* super.method()：静态分派到父类方法（不走多态，避免重写方法无限递归）
              * 栈布局同普通方法：slot0=self（super 加载 self 指针），slot1+=实参；
@@ -3042,7 +3162,8 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
                 ExprType ret_et = EXPR_TYPE_NONE;
                 if(def_fn->ret_type_name) {
                     CastKind rck = ir_type_name_to_castkind(def_fn->ret_type_name);
-                    ret_et = castkind_to_exprtype(rck);
+                    if(rck != CAST_CLASS_PTR && rck != CAST_STRUCT_PTR)
+                        ret_et = castkind_to_exprtype(rck);
                 }
                 /* 静态调用：callee=父类方法内部名（如 S1__m__who），VM 直接查表 */
                 int cs = bf_add_callsite(c->fn, def_fn->name ? def_fn->name : "?",
@@ -3077,8 +3198,10 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
 
     /* 4. 无法确定类型：先动态取属性 recv[mname]（runtime 解析 map 值/实例字段/bound method），
      * 再 CALLV。不能直接把 recv 当函数——方法名会丢失。
-     * 正常全类型标注路径不会进入；覆盖动态 map 函数值、动态取出实例的方法调用 */
-    if(!owner || !td) {
+     * 正常全类型标注路径不会进入；覆盖动态 map 函数值、动态取出实例的方法调用
+     * method_deferred：方法 AST 已知但 RuntimeFunc 尚未编译（类内递归自调用），走动态分派兜底
+     * !mdef_ast：类型已知但方法表无此方法（如继承的方法未在编译期解析），走动态分派兜底 */
+    if(!owner || !td || method_deferred || !mdef_ast) {
         AstNode* prop = ast_index(recv, ast_string((char*)mname));
         c_expr_to_value(c, prop);
         AstNode** av = NULL; int ac = 0, acp = 0;
@@ -3329,15 +3452,37 @@ void c_stmt(Ctx* c, AstNode* node) {
         }
         BytecodeFunc* callee = ir_func_table_lookup(call_name);
         AstNode* def_ast = func_ast_lookup(call_name);
-        /* 方法内裸名自递归 fallback */
-        AstNode self_tmp;
-        BytecodeFunc* self_fn = resolve_self_recursive(c, call_name, &self_tmp);
-        if(!callee && self_fn) {
-            compile_user_call(c, self_fn, &self_tmp, node->u.call.args, 0, NULL);
-        } else if(callee && def_ast) {
+        if(callee && def_ast) {
             compile_user_call(c, callee, def_ast, node->u.call.args, 0, NULL);
-        } else {
-            /* 非用户函数：走 c_expr 处理内置 / 动态调用，并丢弃返回值 */
+            break;
+        }
+        /* 内置函数：全局函数视角，先于方法自递归（解析顺序根因修复，
+         * 详见 c_expr AST_CALL 注释）。语句语境：压返回值后 POP 丢弃 */
+        int bid = builtin_id_by_name(call_name);
+        int is_local_var = (c_find_var(c, call_name) >= 0);
+        if(bid >= 0 && !is_local_var) {
+            int argc = 0, acap = 0;
+            AstNode** argv = NULL;
+            collect_call_args(node->u.call.args, &argv, &argc, &acap);
+            for(int i = 0; i < argc; i++) {
+                c_expr_to_value(c, argv[i]);
+            }
+            free(argv);
+            emit(c, OPC_BUILTIN, bid, argc);
+            emit(c, OPC_POP, 0, 0);
+            break;
+        }
+        /* 方法内裸名自递归（排在内置之后；is_local_var 遮蔽时跳过走动态） */
+        {
+            AstNode self_tmp;
+            BytecodeFunc* self_fn = resolve_self_recursive(c, call_name, &self_tmp);
+            if(self_fn && !is_local_var) {
+                compile_user_call(c, self_fn, &self_tmp, node->u.call.args, 0, NULL);
+                break;
+            }
+        }
+        {
+            /* 非用户函数：走 c_expr 处理动态调用，并丢弃返回值 */
             ExprType et = c_expr(c, node);
             int pop_sel = 0;
             if(et == EXPR_TYPE_INT) pop_sel = 1;
@@ -3559,7 +3704,7 @@ void c_stmt(Ctx* c, AstNode* node) {
                 if(c->fn->ret_type_name) {
                     CastKind tck = ir_type_name_to_castkind(c->fn->ret_type_name);
                     ExprType declared = castkind_to_exprtype(tck);
-                    if(declared != EXPR_TYPE_NONE) {
+                    if(declared != EXPR_TYPE_NONE && tck != CAST_CLASS_PTR && tck != CAST_STRUCT_PTR) {
                         emit_value_cast(c, vt, declared);
                         target = declared;
                         ret_ck = tck;
@@ -3589,7 +3734,7 @@ void c_stmt(Ctx* c, AstNode* node) {
         if(c->fn->ret_type_name) {
             CastKind tck = ir_type_name_to_castkind(c->fn->ret_type_name);
             ExprType declared = castkind_to_exprtype(tck);
-            if(declared != EXPR_TYPE_NONE) {
+            if(declared != EXPR_TYPE_NONE && tck != CAST_CLASS_PTR && tck != CAST_STRUCT_PTR) {
                 /* 标量类型：按标注类型 cast，发 typed RETURN（INT64/DOUBLE/PTR 栈） */
                 emit_value_cast(c, vt, declared);
                 target = declared;

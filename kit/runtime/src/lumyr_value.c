@@ -240,7 +240,7 @@ Value val_int_array(int len) {
     if(arr) {
         arr->elem_type = VAL_INT;
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (int*)gc_alloc_old(sizeof(int) * arr->cap, VAL_TYPED_ARRAY);
@@ -267,7 +267,7 @@ Value val_double_array(int len) {
     if(arr) {
         arr->elem_type = VAL_DOUBLE;
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (double*)gc_alloc_old(sizeof(double) * arr->cap, VAL_TYPED_ARRAY);
@@ -294,7 +294,7 @@ Value val_float_array(int len) {
     if(arr) {
         arr->elem_type = VAL_FLOAT;  // float 类型化数组，与 double 区分
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (float*)gc_alloc_old(sizeof(float) * arr->cap, VAL_TYPED_ARRAY);
@@ -321,7 +321,7 @@ Value val_uint_array(int len) {
     if(arr) {
         arr->elem_type = VAL_UINT32;  // uint 类型化数组，与 int 区分
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (unsigned int*)gc_alloc_old(sizeof(unsigned int) * arr->cap, VAL_TYPED_ARRAY);
@@ -346,7 +346,7 @@ Value val_bool_array(int len) {
     if(arr) {
         arr->elem_type = VAL_BOOL;  // bool 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (_Bool*)gc_alloc_old(sizeof(_Bool) * arr->cap, VAL_TYPED_ARRAY);
@@ -371,7 +371,7 @@ Value val_char_array(int len) {
     if(arr) {
         arr->elem_type = VAL_CHAR;  // char 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (char*)gc_alloc_old(sizeof(char) * arr->cap, VAL_TYPED_ARRAY);
@@ -396,7 +396,7 @@ Value val_byte_array(int len) {
     if(arr) {
         arr->elem_type = VAL_BYTE;  // byte 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (unsigned char*)gc_alloc_old(sizeof(unsigned char) * arr->cap, VAL_TYPED_ARRAY);
@@ -421,7 +421,7 @@ Value val_int8_array(int len) {
     if(arr) {
         arr->elem_type = VAL_INT8;  // int8 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (int8_t*)gc_alloc_old(sizeof(int8_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -446,7 +446,7 @@ Value val_int16_array(int len) {
     if(arr) {
         arr->elem_type = VAL_INT16;  // int16 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (int16_t*)gc_alloc_old(sizeof(int16_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -471,7 +471,7 @@ Value val_int32_array(int len) {
     if(arr) {
         arr->elem_type = VAL_INT32;  // int32 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (int32_t*)gc_alloc_old(sizeof(int32_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -496,7 +496,7 @@ Value val_int64_array(int len) {
     if(arr) {
         arr->elem_type = VAL_INT64;  // int64 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (int64_t*)gc_alloc_old(sizeof(int64_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -521,7 +521,7 @@ Value val_uint8_array(int len) {
     if(arr) {
         arr->elem_type = VAL_UINT8;  // uint8 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (uint8_t*)gc_alloc_old(sizeof(uint8_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -546,7 +546,7 @@ Value val_uint16_array(int len) {
     if(arr) {
         arr->elem_type = VAL_UINT16;  // uint16 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (uint16_t*)gc_alloc_old(sizeof(uint16_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -571,7 +571,7 @@ Value val_uint64_array(int len) {
     if(arr) {
         arr->elem_type = VAL_UINT64;  // uint64 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (uint64_t*)gc_alloc_old(sizeof(uint64_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -596,7 +596,7 @@ Value val_long_array(int len) {
     if(arr) {
         arr->elem_type = VAL_LONG;  // long 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (long*)gc_alloc_old(sizeof(long) * arr->cap, VAL_TYPED_ARRAY);
@@ -621,7 +621,7 @@ Value val_ulong_array(int len) {
     if(arr) {
         arr->elem_type = VAL_ULONG;  // unsigned long 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (unsigned long*)gc_alloc_old(sizeof(unsigned long) * arr->cap, VAL_TYPED_ARRAY);
@@ -646,7 +646,7 @@ Value val_size_t_array(int len) {
     if(arr) {
         arr->elem_type = VAL_SIZE_T;  // size_t 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (size_t*)gc_alloc_old(sizeof(size_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -671,7 +671,7 @@ Value val_ssize_t_array(int len) {
     if(arr) {
         arr->elem_type = VAL_SSIZE_T;  // ssize_t 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (ssize_t*)gc_alloc_old(sizeof(ssize_t) * arr->cap, VAL_TYPED_ARRAY);
@@ -696,7 +696,7 @@ Value val_long_double_array(int len) {
     if(arr) {
         arr->elem_type = VAL_LONG_DOUBLE;  // long double 类型化数组，与其他类型彻底隔离
         arr->len = len > 0 ? len : 0;
-        arr->cap = len > 0 ? len : 8;
+        arr->cap = len > 0 ? len : 0;  /* 根因修复：空数组 cap=0（与 val_array 惯例一致，不虚报容量） */
         arr->stack_alloc = 0;
         if(len > 0) {
             arr->items = (long double*)gc_alloc_old(sizeof(long double) * arr->cap, VAL_TYPED_ARRAY);

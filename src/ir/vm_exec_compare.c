@@ -99,3 +99,33 @@ int vm_exec_compare_double_lt(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_INT64, &result);
     return 1;
 }
+
+/* DOUBLE 栈大于等于 */
+int vm_exec_compare_double_ge(VMExecCtx* ctx, Instruction* in) {
+    double a, b;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &b);
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &a);
+    int64_t result = (a >= b) ? 1 : 0;
+    stack_vm_push(g_stack_mgr, STACK_INT64, &result);
+    return 1;
+}
+
+/* DOUBLE 栈小于等于 */
+int vm_exec_compare_double_le(VMExecCtx* ctx, Instruction* in) {
+    double a, b;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &b);
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &a);
+    int64_t result = (a <= b) ? 1 : 0;
+    stack_vm_push(g_stack_mgr, STACK_INT64, &result);
+    return 1;
+}
+
+/* DOUBLE 栈不等于 */
+int vm_exec_compare_double_ne(VMExecCtx* ctx, Instruction* in) {
+    double a, b;
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &b);
+    stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &a);
+    int64_t result = (a != b) ? 1 : 0;
+    stack_vm_push(g_stack_mgr, STACK_INT64, &result);
+    return 1;
+}

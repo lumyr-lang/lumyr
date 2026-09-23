@@ -319,6 +319,17 @@ static inline void* obj_to_ptr(GCObject* obj) {
     return (void*)((char*)obj + sizeof(GCObject));
 }
 
+/* 读 GC 对象头的运行时 vtype（ptr 须为 gc_alloc 返回的用户指针）。
+ * 供 BOX_PTR 装箱恢复运行时类型：字段/槽位声明的静态 CastKind 只是提示，
+ * 真实身份以 GC 头为准（如 `value: array` 字段实际持有 TypedArray*）。
+ * 指针无效或不在 GC 合法地址区间返回 -1，调用方回退声明类型。 */
+int gc_obj_vtype(void* ptr) {
+    if(!ptr) return -1;
+    unsigned long long a = (unsigned long long)ptr;
+    if(a < 4096 || a > 0x00007fffffffffffULL) return -1;
+    return (int)ptr_to_obj(ptr)->vtype;
+}
+
 /* TLA 实际分配大小：用户数据至少 16 字节（确保小对象也能存下未来的内部指针等） */
 static inline size_t tla_real_size(size_t size) {
     return (size < 16) ? 16 : size;

@@ -12,6 +12,7 @@
 // 数组字面量/一元/二元/比较/逻辑/三元/调用/下标/括号/强转。
 
 #include "ast/ast.h"
+#include "parse/import.h"   // lm_is_module_alias：f-string 内模块别名方法调用
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -362,24 +363,45 @@ static AstNode* tp_postfix(TpParser* tp)
             tp_expect(tp, TT_RPAREN, "缺少 ')'");
             e = ast_call(nm, args);
         } else if(t.type == TT_DOT) {
-            // 方法链 a.b(x) → b(a, x)（与主语法一致）
+            /* 成员访问与方法调用：与主语法（yacc postfix_expr DOT ID[LPAREN...]）一致——
+             *   a.b        → ast_index(a, "b")   （属性/字段访问，此前误构造成 ast_call("b", a)，
+             *                 f-string 内 {self.field} 被当成函数调用 field(self) —— r7 根因）
+             *   a.b(x)     → ast_method_call（运行时按接收者实际类型分派，此前是裸 ast_call
+             *                 "b"(a,x)，类方法在 f-string 内无法分派）
+             *   requests.* → http_* 内置命名空间（接收者不进参数）
+             *   模块别名 m.f(x) → m["f"] 动态调用 */
             tp_take(tp);
             TpTok m = tp_take(tp);
             if(m.type != TT_ID) tp_err("方法名必须是标识符");
             char* nm = strdup(m.text);
-            AstNode* margs = NULL;
-            if(tp_peek(tp).type == TT_LPAREN) {
-                tp_take(tp);
-                if(tp_peek(tp).type != TT_RPAREN) {
-                    margs = tp_expr(tp);
-                    while(tp_peek(tp).type == TT_COMMA) {
-                        tp_take(tp);
-                        margs = ast_seq(margs, tp_expr(tp));
-                    }
-                }
-                tp_expect(tp, TT_RPAREN, "缺少 ')'");
+            if(tp_peek(tp).type != TT_LPAREN) {
+                e = ast_index(e, ast_string(nm));
+                continue;
             }
-            e = ast_call(nm, margs ? ast_seq_front(margs, e) : e);
+            tp_take(tp);
+            AstNode* margs = NULL;
+            if(tp_peek(tp).type != TT_RPAREN) {
+                margs = tp_expr(tp);
+                while(tp_peek(tp).type == TT_COMMA) {
+                    tp_take(tp);
+                    margs = ast_seq(margs, tp_expr(tp));
+                }
+            }
+            tp_expect(tp, TT_RPAREN, "缺少 ')'");
+            if(e->type == AST_VAR && strcmp(e->u.varname, "requests") == 0 &&
+               (strcmp(nm, "get") == 0 || strcmp(nm, "post") == 0 || strcmp(nm, "put") == 0 ||
+                strcmp(nm, "delete") == 0 || strcmp(nm, "head") == 0 || strcmp(nm, "patch") == 0)) {
+                char httpName[32];
+                snprintf(httpName, sizeof(httpName), "http_%s", nm);
+                free(nm);
+                e = ast_call(strdup(httpName), margs);
+            } else if(e->type == AST_VAR && lm_is_module_alias(e->u.varname)) {
+                AstNode* fn = ast_index(e, ast_string(nm));
+                free(nm);
+                e = ast_dyn_call(fn, margs);
+            } else {
+                e = ast_method_call(e, nm, margs);
+            }
         } else break;
     }
     return e;

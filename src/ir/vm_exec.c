@@ -115,6 +115,9 @@ int vm_exec_compare_int64_le(VMExecCtx* ctx, Instruction* in);
 int vm_exec_compare_double_eq(VMExecCtx* ctx, Instruction* in);
 int vm_exec_compare_double_gt(VMExecCtx* ctx, Instruction* in);
 int vm_exec_compare_double_lt(VMExecCtx* ctx, Instruction* in);
+int vm_exec_compare_double_ge(VMExecCtx* ctx, Instruction* in);
+int vm_exec_compare_double_le(VMExecCtx* ctx, Instruction* in);
+int vm_exec_compare_double_ne(VMExecCtx* ctx, Instruction* in);
 
 /* 控制流 */
 int vm_exec_control_jmp(VMExecCtx* ctx, Instruction* in);
@@ -363,6 +366,9 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DOUBLE_EQ: handled = vm_exec_compare_double_eq(ctx, &in); break;
         case OPC_DOUBLE_GT: handled = vm_exec_compare_double_gt(ctx, &in); break;
         case OPC_DOUBLE_LT: handled = vm_exec_compare_double_lt(ctx, &in); break;
+        case OPC_DOUBLE_GE: handled = vm_exec_compare_double_ge(ctx, &in); break;
+        case OPC_DOUBLE_LE: handled = vm_exec_compare_double_le(ctx, &in); break;
+        case OPC_DOUBLE_NE: handled = vm_exec_compare_double_ne(ctx, &in); break;
 
         /* ===== 控制流 ===== */
         case OPC_JMP: handled = vm_exec_control_jmp(ctx, &in); break;

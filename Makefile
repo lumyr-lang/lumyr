@@ -235,6 +235,13 @@ src/main.o: src/main.c
 	  -DLUMYR_GEN_LDLIBS='"$(LDLIBS)"' \
 	  -c -o $@ $<
 
+# ========== import.o 特殊编译规则（注入框架路径） ==========
+LUMYR_FRAMEWORK_PATH ?=
+src/parse/import.o: src/parse/import.c src/parse/import.h
+	$(CC) $(CFLAGS) \
+	  $(if $(LUMYR_FRAMEWORK_PATH),-DLUMYR_FRAMEWORK_PATH='"$(LUMYR_FRAMEWORK_PATH)"') \
+	  -c -o $@ $<
+
 # ========== 编译器本体链接 ==========
 $(BIN_LOCAL): $(OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)

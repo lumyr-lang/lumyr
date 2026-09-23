@@ -1,0 +1,82 @@
+// ============================================================
+// lumyr-Short：Short 有符号16位整数封装类
+// 包装 short 值（-32768~32767），提供值语义方法：相等、比较、数学判断
+//
+// 用法：
+//   import <Function/Short> as Shrt;
+//   s = Shrt.Short(-100);
+//   print(s.toString());      // "-100"
+//   print(s.abs().value);     // 100
+// ============================================================
+
+import <Function/Number>;
+
+public class Short extends Number {
+    value: short;
+
+    func Short(v: short) {
+        self.value = v;
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.value == other.value;
+    }
+
+    func hashCode(): int {
+        return (int)self.value;
+    }
+
+    // 比较：-1 <, 0 ==, 1 >
+    func compareTo(other): int {
+        if (type(other) != type(self)) { return -2; }
+        if (self.value < other.value) { return -1; }
+        if (self.value > other.value) { return 1; }
+        return 0;
+    }
+
+    func toString(): string {
+        v = self.value;
+        return "" + v;
+    }
+
+    func toInt(): int {
+        return (int)self.value;
+    }
+
+    func toDouble(): double {
+        v = self.value;
+        return v + 0.0;
+    }
+
+    func isEven(): bool {
+        return self.value % 2 == 0;
+    }
+
+    func isOdd(): bool {
+        return self.value % 2 != 0;
+    }
+
+    func isNegative(): bool {
+        return self.value < 0;
+    }
+
+    func isZero(): bool {
+        return self.value == 0;
+    }
+
+    func isPositive(): bool {
+        return self.value > 0;
+    }
+
+    func abs(): Short {
+        if (self.value < 0) {
+            return Short(-self.value);
+        }
+        return self;
+    }
+
+    func negate(): Short {
+        return Short(-self.value);
+    }
+}

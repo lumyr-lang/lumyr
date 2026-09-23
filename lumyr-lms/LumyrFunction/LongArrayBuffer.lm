@@ -1,0 +1,44 @@
+// ============================================================
+// lumyr-LongArrayBuffer：LongArrayBuffer 数组缓冲区封装类
+// 内部使用 <long> 类型化数组存储，元素写入由运行时按元素类型原生截断到
+// long 范围（8 字节有符号）
+// 所有修改操作 in-place，返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/LongArrayBuffer>;
+//   buf = LongArrayBuffer();
+//   buf.append(1).append(2).append(3);
+//   print(buf.size());        // 3
+//   print(buf.sum());         // 6
+// ============================================================
+
+import <Function/Buffer>;
+
+public class LongArrayBuffer extends AbstractBuffer {
+    value: <long>array;
+
+    func LongArrayBuffer(arr) {
+        self.value = <long>[];
+        if (arr != null) { self.value.addAll(arr); }
+    }
+
+    func indexOf(val): int { return self.value.indexOf(val); }
+    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+
+    // override 返回同类型实例
+    func slice(start: int, end: int): LongArrayBuffer {
+        r = LongArrayBuffer();
+        r.value = self.value.slice(start, end);
+        return r;
+    }
+    func concat(other): LongArrayBuffer {
+        r = LongArrayBuffer();
+        r.value = self.value.concat(other.value);
+        return r;
+    }
+    func copy(): LongArrayBuffer {
+        r = LongArrayBuffer();
+        r.value = self.value.copy();
+        return r;
+    }
+}
