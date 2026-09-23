@@ -959,6 +959,8 @@ static int typecheck_call(AstNode* node)
                     {"condvar", 0, 0}, {"cond_wait", 2, 2}, {"cond_wait_timeout", 3, 3}, {"cond_signal", 1, 1}, {"cond_broadcast", 1, 1},
                     {"threadlocal_get", 1, 1}, {"threadlocal_set", 2, 2},
                     {"get", 1, 3}, {"post", 1, 3}, {"put", 1, 3}, {"delete", 1, 3}, {"head", 1, 3}, {"patch", 1, 3},
+                    {"http_get", 1, 2}, {"http_post", 1, 2}, {"http_put", 1, 2},
+                    {"http_delete", 1, 2}, {"http_head", 1, 2}, {"http_patch", 1, 2},
 
                     {"add", 2, 3}, {"remove", 2, 2}, {"clear", 1, 1},
                     {"arr_get", 2, 2}, {"indexOf", 2, 2}, {"set", 0, 32}, {"first", 1, 1}, {"last", 1, 1}, {"has", 0, 32},
@@ -979,6 +981,11 @@ static int typecheck_call(AstNode* node)
                     {"calendar", 1, 3},
                     {"firstDate", 1, 1}, {"lastDate", 1, 1},
                     {"file", 1, 2}, {"folder", 1, 1},
+                    /* socket 构造：大写为主用名（可收可选 config map），小写为别名 */
+                    {"TcpSocket", 0, 1}, {"tcpSocket", 0, 1},
+                    {"UdpSocket", 0, 1}, {"udpSocket", 0, 1},
+                    {"UnixSocket", 0, 1}, {"unixSocket", 0, 1},
+                    {"UnixDgramSocket", 0, 1}, {"unixDgramSocket", 0, 1},
                     {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
                     {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
                     {"append", 2, 2}, {"appendLine", 2, 2},
@@ -1294,6 +1301,7 @@ int typecheck_expr(AstNode* node)
             if(node->u.index.arr->val_type != VAL_ARRAY &&
                node->u.index.arr->val_type != VAL_STRING &&
                node->u.index.arr->val_type != VAL_MAP &&
+               node->u.index.arr->val_type != VAL_FORMDATA &&
                node->u.index.arr->val_type != VAL_NONE) {
                 LOG_ERROR("语义错误(第%d行)：下标访问的对象不是数组、字符串或字典\n", node->line);
                 err = 1;
@@ -1535,6 +1543,11 @@ int typecheck_expr(AstNode* node)
             /* 类型标注 <type>expr：必须检查子表达式，否则未定义变量等错误逃过语义检查，
                编译出跨栈不平衡字节码（VALUE 压栈 / INT64 弹出 → 栈下溢） */
             err |= typecheck_expr(node->u.type_annotation.expr);
+            /* formdata 字面量：<formdata>{...} / <formdata>[[k,v],...] */
+            if(node->u.type_annotation.cast_type == CAST_FORMDATA) {
+                node->val_type = VAL_FORMDATA;
+                break;
+            }
             /* 容器泛型：<T>[..] 逐元素转型，仍是容器 */
             if(node->u.type_annotation.expr->val_type == VAL_ARRAY ||
                node->u.type_annotation.expr->val_type == VAL_MAP) {

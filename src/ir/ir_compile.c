@@ -96,6 +96,14 @@ static int builtin_id_by_name(const char* name) {
         {"addAll", BUILTIN_ARRAY_ADDALL},
         {"set", BUILTIN_SET},
         {"get", BUILTIN_GET},
+        /* HTTP 命名空间（yacc 将 requests.get/post/... 转为此内部名，
+         * 避免裸 get 与数组/字典 .get 撞名） */
+        {"http_get", BUILTIN_HTTP_GET}, {"http_post", BUILTIN_HTTP_POST},
+        {"http_put", BUILTIN_HTTP_PUT}, {"http_delete", BUILTIN_HTTP_DELETE},
+        {"http_head", BUILTIN_HTTP_HEAD}, {"http_patch", BUILTIN_HTTP_PATCH},
+        /* formdata 字面量内部构造名（<formdata>{...} / <formdata>[[k,v],...]） */
+        {"__formdata_new", BUILTIN_FORMDATA_NEW},
+        {"__formdata_append", BUILTIN_FORMDATA_APPEND},
         {"first", BUILTIN_ARRAY_FIRST}, {"last", BUILTIN_ARRAY_LAST},
         /* 排序/聚合 */
         {"sort", BUILTIN_SORT},
@@ -120,6 +128,13 @@ static int builtin_id_by_name(const char* name) {
         {"keys", BUILTIN_KEYS},
         {"values", BUILTIN_VALUES},
         {"has", BUILTIN_MAP_HAS},
+        /* 迭代/转换通用（keys/values/has/delete 见上；delete 映射见文件组） */
+        {"forEach", BUILTIN_FOREACH}, {"each", BUILTIN_FOREACH},
+        {"getAll", BUILTIN_GETALL}, {"get_all", BUILTIN_GETALL},
+        {"toMap", BUILTIN_TOMAP}, {"to_map", BUILTIN_TOMAP},
+        {"toArray", BUILTIN_TOARRAY}, {"to_array", BUILTIN_TOARRAY},
+        {"toJSONString", BUILTIN_TOJSON}, {"to_json_string", BUILTIN_TOJSON},
+        {"copy", BUILTIN_COPY},
         /* AI / 线性代数 */
         {"shape", BUILTIN_SHAPE},
         {"reshape", BUILTIN_RESHAPE},
@@ -194,6 +209,21 @@ static int builtin_id_by_name(const char* name) {
         {"copyTo", BUILTIN_FOLDER_COPY_TO},
         {"moveTo", BUILTIN_FOLDER_MOVE_TO},
         {"glob", BUILTIN_FOLDER_GLOB},
+        /* socket 网络套接字（构造全局形式 + 方法）：大写为主用名，小写为别名 */
+        {"TcpSocket", BUILTIN_TCP_SOCKET}, {"tcpSocket", BUILTIN_TCP_SOCKET}, {"tcp_socket", BUILTIN_TCP_SOCKET},
+        {"UdpSocket", BUILTIN_UDP_SOCKET}, {"udpSocket", BUILTIN_UDP_SOCKET}, {"udp_socket", BUILTIN_UDP_SOCKET},
+        {"UnixSocket", BUILTIN_UNIX_SOCKET}, {"unixSocket", BUILTIN_UNIX_SOCKET}, {"unix_socket", BUILTIN_UNIX_SOCKET},
+        {"UnixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET}, {"unixDgramSocket", BUILTIN_UNIX_DGRAM_SOCKET}, {"unix_dgram_socket", BUILTIN_UNIX_DGRAM_SOCKET},
+        {"connect", BUILTIN_SOCKET_CONNECT},
+        {"bind", BUILTIN_SOCKET_BIND},
+        {"listen", BUILTIN_SOCKET_LISTEN},
+        {"accept", BUILTIN_SOCKET_ACCEPT},
+        {"recv", BUILTIN_SOCKET_RECV},
+        {"sendTo", BUILTIN_SOCKET_SENDTO}, {"send_to", BUILTIN_SOCKET_SENDTO},
+        {"recvFrom", BUILTIN_SOCKET_RECVFROM}, {"recv_from", BUILTIN_SOCKET_RECVFROM},
+        {"setOption", BUILTIN_SOCKET_SETOPT}, {"set_option", BUILTIN_SOCKET_SETOPT},
+        {"getOption", BUILTIN_SOCKET_GETOPT}, {"get_option", BUILTIN_SOCKET_GETOPT},
+        {"fileno", BUILTIN_SOCKET_FILENO},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {
@@ -415,10 +445,56 @@ static void compile_typed_array_lit(Ctx* c, CastKind ct, AstNode* elems, int via
     free(argv);
 }
 
+/* formdata 字面量：<formdata>{k:v,...}（map 形式）或 <formdata>[[k,v],...]（pair 数组形式，允许同名重复）
+ * 生成 __formdata_new()（结果留在 VALUE 栈）；逐字段压 name/value，
+ * __formdata_append(fd,name,value) 弹三个参数并把 fd 压回，栈顶始终是 fd */
+static void compile_formdata_lit(Ctx* c, AstNode* src) {
+    emit(c, OPC_BUILTIN, BUILTIN_FORMDATA_NEW, 0);
+
+    if(src->type == AST_MAP_LIT) {
+        AstNode** ev = NULL;
+        int ecnt = 0, ecap = 0;
+        collect_call_args(src->u.map_lit.entries, &ev, &ecnt, &ecap);
+        for(int i = 0; i < ecnt; i++) {
+            AstNode* e = ev[i];
+            if(e && e->type == AST_MAP_ENTRY) {
+                c_expr_to_value(c, e->u.map_entry.key);
+                c_expr_to_value(c, e->u.map_entry.value);
+                emit(c, OPC_BUILTIN, BUILTIN_FORMDATA_APPEND, 3);
+            }
+        }
+        free(ev);
+    } else {
+        /* pair 数组：每个元素必须是长度 2 的数组字面量 [key, value] */
+        AstNode** av = NULL;
+        int acnt = 0, acap = 0;
+        collect_call_args(src->u.array_lit.elems, &av, &acnt, &acap);
+        for(int i = 0; i < acnt; i++) {
+            AstNode* pair = av[i];
+            AstNode** pv = NULL;
+            int pcnt = 0, pcap = 0;
+            /* 非长度 2 的数组元素视为非法 pair（typecheck 阶段已报错），跳过 */
+            if(!pair || pair->type != AST_ARRAY_LIT) {
+                continue;
+            }
+            collect_call_args(pair->u.array_lit.elems, &pv, &pcnt, &pcap);
+            if(pcnt != 2) {
+                free(pv);
+                continue;
+            }
+            c_expr_to_value(c, pv[0]);
+            c_expr_to_value(c, pv[1]);
+            emit(c, OPC_BUILTIN, BUILTIN_FORMDATA_APPEND, 3);
+            free(pv);
+        }
+        free(av);
+    }
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
-    
+
     switch(node->type) {
     case AST_INT: {
         /* 整数字面量：小常量内嵌，大常量走常量池 */
@@ -668,11 +744,17 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
+        /* formdata 字面量：<formdata>{...} 或 <formdata>[[k,v],...] */
+        if(ct == CAST_FORMDATA && ann_child &&
+           (ann_child->type == AST_MAP_LIT || ann_child->type == AST_ARRAY_LIT)) {
+            compile_formdata_lit(c, ann_child);
+            return EXPR_TYPE_NONE;
+        }
         /* 标注目标是数组字面量（<T>[e1,e2]）：逐元素转型构造类型化数组。
          * CAST_ARRAY/容器类标注语义为透传，不应构造 typed_array */
         if(ann_child && ann_child->type == AST_ARRAY_LIT &&
            ct != CAST_ARRAY && ct != CAST_MAP && ct != CAST_TYPED_ARRAY &&
-           ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR) {
+           ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR && ct != CAST_FORMDATA) {
             compile_typed_array_lit(c, ct, ann_child->u.array_lit.elems, 0);
             return EXPR_TYPE_NONE;
         }

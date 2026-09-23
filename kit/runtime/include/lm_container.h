@@ -43,6 +43,8 @@ _Bool lumyr_set_eq(Value a, Value b);
 // ===== bytes（VAL_BYTES）：不可变字节串 =====
 // 构造：bytes("hello") / bytes([0x48,0x65]) → 新 bytes
 Value lumyr_bytes_make(int argc, const Value* args);
+// 从原始字节缓冲构造（二进制安全，可含 NUL）：socket recv bytes 路径用
+Value lumyr_bytes_from_buf(const uint8_t* data, int len);
 // 从十六进制字符串构造（"48656c6c6f" → bytes）
 Value lumyr_bytes_from_hex(const char* hex);
 // 长度

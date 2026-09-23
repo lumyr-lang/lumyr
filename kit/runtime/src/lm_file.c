@@ -61,6 +61,19 @@ static char* read_whole_file(const char* path, long* out_len) {
     return buf;
 }
 
+// 统一获取文件内容（磁盘 fopen 或内存文件拷贝）到 malloc 缓冲（调用方 free）
+static char* file_get_content(FileObj* o, long* out_len) {
+    if (o->content) {
+        char* buf = (char*)malloc((size_t)o->contentLen + 1);
+        if (!buf) return NULL;
+        memcpy(buf, o->content, o->contentLen);
+        buf[o->contentLen] = '\0';
+        if (out_len) *out_len = (long)o->contentLen;
+        return buf;
+    }
+    return read_whole_file(o->path, out_len);
+}
+
 // 计算字符串中的行数（与 split_lines 一致：末尾 \n 不增加空行）
 static int count_lines(const char* s) {
     if (!s || !*s) return 0;
@@ -286,6 +299,42 @@ Value lumyr_file_make(const char* path, const char* mode) {
     return r;
 }
 
+// 内存文件：file(name, bytes(...))
+Value lumyr_file_from_bytes(const char* name, Value b) {
+    FileObj* o = (FileObj*)gc_alloc(sizeof(FileObj), VAL_FILE);
+    if (!o) { Value z; z.type = VAL_NONE; z.str_inline = 0; return z; }
+
+    size_t nlen = name ? strlen(name) : 0;
+    o->path = (char*)gc_alloc(nlen + 1, VAL_STRING);
+    if (o->path) memcpy(o->path, name ? name : "", nlen + 1);
+
+    o->mode = (char*)gc_alloc(2, VAL_STRING);
+    if (o->mode) { o->mode[0] = 'r'; o->mode[1] = '\0'; }
+
+    int blen = 0;
+    const uint8_t* bdata = NULL;
+    if (b.type == VAL_BYTES && b.v.bytes_obj) {
+        BytesObj* bo = (BytesObj*)b.v.bytes_obj;
+        blen = bo->len;
+        bdata = bo->data;
+    }
+    o->contentLen = blen;
+    if (blen > 0) {
+        o->content = (uint8_t*)gc_alloc(sizeof(uint8_t) * blen, VAL_FILE);
+        if (o->content) memcpy(o->content, bdata, blen);
+        else o->contentLen = 0;
+    } else {
+        o->content = NULL;
+    }
+    o->stack_alloc = 0;
+
+    Value r;
+    r.type = VAL_FILE;
+    r.str_inline = 0;
+    r.v.file_obj = o;
+    return r;
+}
+
 Value lumyr_file_field(Value v, const char* name) {
     if (!name) return lumyr_make_int(0);
     if (v.type != VAL_FILE) return lumyr_make_int(0);
@@ -294,12 +343,14 @@ Value lumyr_file_field(Value v, const char* name) {
 
     if (strcmp(name, "path") == 0)   return lumyr_make_string(o->path);
     if (strcmp(name, "mode") == 0)  return lumyr_make_string(o->mode ? o->mode : "r");
-    if (strcmp(name, "exists") == 0) return lumyr_make_bool(path_exists(o->path));
-    if (strcmp(name, "size") == 0)  return lumyr_make_int(file_size(o->path));
+    if (strcmp(name, "exists") == 0)
+        return lumyr_make_bool(o->content ? 1 : path_exists(o->path));
+    if (strcmp(name, "size") == 0)
+        return lumyr_make_int(o->content ? o->contentLen : file_size(o->path));
     if (strcmp(name, "isOpen") == 0) return lumyr_make_bool(0);  // 无持久句柄
     if (strcmp(name, "lines") == 0) {
         long sz = 0;
-        char* content = read_whole_file(o->path, &sz);
+        char* content = file_get_content(o, &sz);
         int n = content ? count_lines(content) : 0;
         free(content);
         return lumyr_make_int(n);
@@ -406,7 +457,7 @@ Value lumyr_file_read_lines_range(Value v, int64_t from, int64_t to) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("readLines(from,to) 文件对象无效"); return val_array(0); }
     long sz = 0;
-    char* content = read_whole_file(o->path, &sz);
+    char* content = file_get_content(o, &sz);
     if (!content) {
         char buf[512];
         snprintf(buf, sizeof(buf), "readLines(from,to) 无法读取文件: %s", o->path);

@@ -10,6 +10,9 @@
 // mode 字符串："r" 只读（默认）/ "w" 覆盖写 / "a" 追加
 Value lumyr_file_make(const char* path, const char* mode);
 
+// 内存文件：file(name, bytes(...))。path 仅作文件名，内容驻留内存（HTTP 上传不落盘）
+Value lumyr_file_from_bytes(const char* name, Value b);
+
 // 字段访问（统一入口）
 Value lumyr_file_field(Value v, const char* name);
 

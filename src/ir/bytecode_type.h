@@ -325,6 +325,8 @@ typedef enum {
     BUILTIN_HTTP_DELETE,  // requests.delete(url, params?, config?)
     BUILTIN_HTTP_HEAD,    // requests.head(url, params?, config?)
     BUILTIN_HTTP_PATCH,   // requests.patch(url, params?, config?)
+    BUILTIN_FORMDATA_NEW,     // formdata 字面量构造：空 formdata
+    BUILTIN_FORMDATA_APPEND,  // formdata 追加字段（同名追加=多值/多文件）
     BUILTIN_JSON,         // json(s)：解析 JSON 文本 → 值
     BUILTIN_STRINGIFY,    // stringify(v)：值 → JSON 文本
     BUILTIN_ARRAY_ADD,    // add(arr, x)：末尾追加，原地修改并返回 self（arr.add(x) 链式）
@@ -490,6 +492,31 @@ typedef enum {
     BUILTIN_FOLDER_MOVE_TO,     // d.moveTo(dest)：移动
     BUILTIN_FOLDER_RENAME_TO,   // d.renameTo(newPath)：重命名
     BUILTIN_FOLDER_GLOB,        // d.glob(pattern)：通配符匹配
+    /* ===== 迭代/转换通用（keys/values/has/delete 复用既有枚举并扩展接收者） ===== */
+    BUILTIN_FOREACH,         // forEach(cb)：array→cb(v,i)；map→cb(k,v)；formdata→cb(name,v)
+    BUILTIN_GETALL,          // fd.getAll(name)：同名全部值 → 数组
+    BUILTIN_TOMAP,           // fd.toMap() / obj.toMap()：转 map（同名聚合为数组；实例转字段 map）
+    BUILTIN_TOARRAY,         // fd.toArray() / obj.toArray()：转 [[k,v],...]（与 pair 字面量互转）
+    BUILTIN_TOJSON,          // fd.toJSONString() / obj.toJSONString()：JSON 文本（file/bytes 清洗）
+    BUILTIN_COPY,            // x.copy()：所有数据类型深拷贝（含 struct/class 嵌套容器字段）
+    /* ===== socket 网络套接字（TCP/UDP/Unix 域） =====
+     * 构造（全局形式）：tcpSocket() / udpSocket() / unixSocket() / unixDgramSocket()
+     * 方法（接收者形式）：s.connect / s.bind / s.listen / s.accept / s.send / s.recv /
+     *   s.sendTo / s.recvFrom / s.close / s.setOption / s.getOption / s.fileno */
+    BUILTIN_TCP_SOCKET,         // tcpSocket()：构造 TCP 套接字
+    BUILTIN_UDP_SOCKET,         // udpSocket()：构造 UDP 套接字
+    BUILTIN_UNIX_SOCKET,        // unixSocket()：构造 Unix 域流套接字
+    BUILTIN_UNIX_DGRAM_SOCKET,  // unixDgramSocket()：构造 Unix 域数据报套接字
+    BUILTIN_SOCKET_CONNECT,     // s.connect(host, port) / s.connect(path)
+    BUILTIN_SOCKET_BIND,        // s.bind(host, port) / s.bind(path)
+    BUILTIN_SOCKET_LISTEN,      // s.listen([backlog])
+    BUILTIN_SOCKET_ACCEPT,      // s.accept() → 新连接 socket（或 null）
+    BUILTIN_SOCKET_RECV,        // s.recv([len [, flags]]) → 字符串
+    BUILTIN_SOCKET_SENDTO,      // s.sendTo(data, host, port) / s.sendTo(data, path)
+    BUILTIN_SOCKET_RECVFROM,    // s.recvFrom([len]) → [data, addr]
+    BUILTIN_SOCKET_SETOPT,      // s.setOption(name, val)
+    BUILTIN_SOCKET_GETOPT,      // s.getOption(name)
+    BUILTIN_SOCKET_FILENO,      // s.fileno() → int
     BUILTIN_COUNT
 } BuiltinId;
 

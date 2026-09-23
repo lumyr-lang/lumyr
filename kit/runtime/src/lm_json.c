@@ -3,6 +3,13 @@
 // 双通道共享（VM 与 C 编译通道都调用本模块）
 #include "lm_value.h"
 #include "lm_charset.h"
+#include "lm_container.h"
+#include "lm_bigint.h"
+#include "lm_decimal.h"
+#include "lm_bitdecimal.h"
+#include "lm_time.h"
+#include "lm_calendar.h"
+#include "lumyr_typed_arrays.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +22,15 @@ typedef struct {
     const char* p;
     const char* end;
 } JP;
+
+/* 静默模式（try_parse 用）：解析失败不调 runtime_error（HTTP 场景下那会直接退出），
+ * 只置 jp_error；正常 json() 调用行为不变 */
+static _Thread_local int jp_silent = 0;
+static _Thread_local int jp_error = 0;
+static void jp_fail(const char* msg) {
+    jp_error = 1;
+    if(!jp_silent) runtime_error(msg);
+}
 
 static void jp_ws(JP* j) { while(j->p < j->end && isspace((unsigned char)*j->p)) j->p++; }
 
@@ -158,7 +174,7 @@ static Value jp_parse_value(JP* j)
         if(j->p < j->end && *j->p == '}') { j->p++; return m; }
         for(;;) {
             jp_ws(j);
-            if(j->p >= j->end || *j->p != '"') { runtime_error("json parse error: expect string key"); return m; }
+            if(j->p >= j->end || *j->p != '"') { jp_fail("json parse error: expect string key"); return m; }
             Value k = jp_parse_string(j);
             jp_ws(j);
             if(j->p >= j->end || *j->p != ':') { runtime_error("json parse error: expect ':'"); return m; }
@@ -195,32 +211,52 @@ static Value jp_parse_value(JP* j)
         return r;
     }
     if(c == '"') return jp_parse_string(j);
-    if(c == 't') { if(j->end - j->p >= 4 && strncmp(j->p, "true", 4) == 0) { j->p += 4; return lumyr_make_bool(1); } runtime_error("json parse error: bad literal"); return val_none(); }
-    if(c == 'f') { if(j->end - j->p >= 5 && strncmp(j->p, "false", 5) == 0) { j->p += 5; return lumyr_make_bool(0); } runtime_error("json parse error: bad literal"); return val_none(); }
-    if(c == 'n') { if(j->end - j->p >= 4 && strncmp(j->p, "null", 4) == 0) { j->p += 4; return val_none(); } runtime_error("json parse error: bad literal"); return val_none(); }
+    if(c == 't') { if(j->end - j->p >= 4 && strncmp(j->p, "true", 4) == 0) { j->p += 4; return lumyr_make_bool(1); } jp_fail("json parse error: bad literal"); return val_none(); }
+    if(c == 'f') { if(j->end - j->p >= 5 && strncmp(j->p, "false", 5) == 0) { j->p += 5; return lumyr_make_bool(0); } jp_fail("json parse error: bad literal"); return val_none(); }
+    if(c == 'n') { if(j->end - j->p >= 4 && strncmp(j->p, "null", 4) == 0) { j->p += 4; return val_none(); } jp_fail("json parse error: bad literal"); return val_none(); }
     if(c == '-' || isdigit((unsigned char)c)) return jp_parse_number(j);
-    runtime_error("json parse error: unexpected character");
+    jp_fail("json parse error: unexpected character");
     return val_none();
 }
 
-Value lumyr_json_parse_enc(const char* s, Value enc)
+/* 解析核心：silent 状态由调用方设置。成功 *out=v 返回 1；失败返回 0 */
+static int json_core(const char* s, Value enc, Value* out)
 {
-    if(!s) { runtime_error("json(): input is null"); return val_none(); }
+    if(!s) { jp_fail("json(): input is null"); return 0; }
     char* conv = lumyr_text_to_utf8(s, strlen(s), enc);
-    if(!conv) { runtime_error("json() 字符编码转换失败"); return val_none(); }
+    if(!conv) { jp_fail("json() 字符编码转换失败"); return 0; }
     JP j;
     j.p = conv;
     j.end = conv + strlen(conv);
     Value v = jp_parse_value(&j);
     jp_ws(&j);
-    if(j.p != j.end) { runtime_error("json parse error: trailing data"); return val_none(); }
+    if(j.p != j.end) jp_fail("json parse error: trailing data");
     if(conv != s) free(conv);
+    if(jp_error) return 0;
+    *out = v;
+    return 1;
+}
+
+Value lumyr_json_parse_enc(const char* s, Value enc)
+{
+    jp_silent = 0; jp_error = 0;
+    Value v = val_none();
+    json_core(s, enc, &v);
     return v;
 }
 
 Value lumyr_json_parse(const char* s)
 {
     return lumyr_json_parse_enc(s, val_none());
+}
+
+/* 静默解析：失败返回 0（不打印、不退出），供 HTTP 按 Content-Type 自动识别 */
+int lumyr_json_try_parse(const char* s, Value* out)
+{
+    jp_silent = 1; jp_error = 0;
+    int ok = json_core(s, val_none(), out);
+    jp_silent = 0;
+    return ok;
 }
 
 /* ========== 序列化 ========== */
@@ -269,6 +305,39 @@ static void sb_json_string(SB* b, const char* s)
         }
     }
     sb_putc(b, '"');
+}
+
+// TypedArray 元素装箱：按 elem_type 从裸数据缓冲读取并构造对应类型 Value
+static Value jq_typed_elem(ValueType et, const void* items, int i)
+{
+    switch(et) {
+        case VAL_INT:        return lumyr_make_int(((const int*)items)[i]);
+        case VAL_INT8:       return lumyr_make_int8(((const int8_t*)items)[i]);
+        case VAL_INT16:      return lumyr_make_int16(((const int16_t*)items)[i]);
+        case VAL_SHORT:      return lumyr_make_short(((const int16_t*)items)[i]);
+        case VAL_INT32:      return lumyr_make_int32(((const int32_t*)items)[i]);
+        case VAL_INT64:      return lumyr_make_int64(((const int64_t*)items)[i]);
+        case VAL_LONG_LONG:  return lumyr_make_long_long(((const long long*)items)[i]);
+        case VAL_LONG:       return lumyr_make_long(((const long*)items)[i]);
+        case VAL_BYTE:       return lumyr_make_byte(((const uint8_t*)items)[i]);
+        case VAL_UINT8:      return lumyr_make_uint8(((const uint8_t*)items)[i]);
+        case VAL_UCHAR:      return lumyr_make_uchar(((const unsigned char*)items)[i]);
+        case VAL_UINT16:     return lumyr_make_uint16(((const uint16_t*)items)[i]);
+        case VAL_USHORT:     return lumyr_make_ushort(((const unsigned short*)items)[i]);
+        case VAL_UINT32:     return lumyr_make_uint32(((const uint32_t*)items)[i]);
+        case VAL_UINT:       return lumyr_make_uint(((const unsigned int*)items)[i]);
+        case VAL_UINT64:     return lumyr_make_uint64(((const uint64_t*)items)[i]);
+        case VAL_ULONG:      return lumyr_make_ulong(((const unsigned long*)items)[i]);
+        case VAL_SIZE_T:     return lumyr_make_size_t(((const size_t*)items)[i]);
+        case VAL_SSIZE_T:    return lumyr_make_ssize_t(((const ssize_t*)items)[i]);
+        case VAL_BOOL:       return lumyr_make_bool(((const _Bool*)items)[i]);
+        case VAL_CHAR:       return lumyr_make_char(((const char*)items)[i]);
+        case VAL_FLOAT:      return lumyr_make_float(((const float*)items)[i]);
+        case VAL_DOUBLE:     return lumyr_make_double(((const double*)items)[i]);
+        case VAL_LONG_DOUBLE: return lumyr_make_long_double(((const long double*)items)[i]);
+        case VAL_STRING:     return lumyr_make_string(((char* const*)items)[i]);
+        default:             return val_none();
+    }
 }
 
 static void jq_stringify(SB* b, Value v, Value enc)
@@ -383,6 +452,79 @@ static void jq_stringify(SB* b, Value v, Value enc)
                 jq_stringify(b, vv, enc);
             }
             sb_putc(b, '}');
+            break;
+        }
+        case VAL_TUPLE: {
+            int n = lumyr_tuple_len(v);
+            sb_putc(b, '[');
+            for(int i = 0; i < n; i++) {
+                if(i > 0) sb_putc(b, ',');
+                jq_stringify(b, lumyr_tuple_get(v, i), enc);
+            }
+            sb_putc(b, ']');
+            break;
+        }
+        case VAL_SET: {
+            Value a = lumyr_set_to_array(v);
+            int n = a.v.array ? a.v.array->len : 0;
+            sb_putc(b, '[');
+            for(int i = 0; i < n; i++) {
+                if(i > 0) sb_putc(b, ',');
+                jq_stringify(b, a.v.array->items[i], enc);
+            }
+            sb_putc(b, ']');
+            break;
+        }
+        /* 高精度数值：to_string 输出十进制文本，作为 JSON 数字字面量 */
+        case VAL_BIGINT: {
+            char* s = lumyr_bigint_to_string((BigInt*)v.v.bigint);
+            sb_puts(b, s ? s : "null");
+            free(s);
+            break;
+        }
+        case VAL_DECIMAL: {
+            char* s = lumyr_decimal_to_string((Decimal*)v.v.decimal);
+            sb_puts(b, s ? s : "null");
+            free(s);
+            break;
+        }
+        case VAL_BITDECIMAL: {
+            char* s = lumyr_bitdecimal_to_string((BitDecimal*)v.v.bitdecimal);
+            sb_puts(b, s ? s : "null");
+            free(s);
+            break;
+        }
+        /* date 族：统一 ISO 字符串 */
+        case VAL_DATE: case VAL_DATETIME: case VAL_TIME: case VAL_TIMEDELTA: {
+            char* s = lumyr_date_to_iso(v);
+            sb_json_string(b, s ? s : "");
+            free(s);
+            break;
+        }
+        /* complex：[real, imag] */
+        case VAL_COMPLEX: {
+            const ComplexObj* co = (const ComplexObj*)v.v.complex_obj;
+            char tmp[128];
+            snprintf(tmp, sizeof(tmp), "[%g,%g]", co->real, co->imag);
+            sb_puts(b, tmp);
+            break;
+        }
+        /* calendar：描述字符串 */
+        case VAL_CALENDAR: {
+            char* s = lumyr_calendar_to_str(v);
+            sb_json_string(b, s ? s : "");
+            free(s);
+            break;
+        }
+        /* 类型化数组：按 elem_type 展开为 JSON 数组 */
+        case VAL_TYPED_ARRAY: {
+            const TypedArray* ta = (const TypedArray*)v.v.typed_array;
+            sb_putc(b, '[');
+            for(int i = 0; i < ta->len; i++) {
+                if(i > 0) sb_putc(b, ',');
+                jq_stringify(b, jq_typed_elem(ta->elem_type, ta->items, i), enc);
+            }
+            sb_putc(b, ']');
             break;
         }
         default: sb_puts(b, "null"); break;

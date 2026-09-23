@@ -125,4 +125,8 @@ void class_static_member_register(const char* full_name, const char* owner, int 
 /* 查找静态成员：找到返回 1 并通过 owner_out/access_out 输出；未找到返回 0 */
 int class_static_member_lookup(const char* full_name, const char** owner_out, int* access_out);
 
+// 判断名称是否为 socket 构造函数名（TcpSocket/UdpSocket/UnixSocket/UnixDgramSocket，
+// 含小写别名 tcpSocket 等）。供 lexer/parser 把 Name{...} 简写反糖为 Name({map}) 调用。
+int is_socket_ctor_name(const char* name);
+
 #endif //AST_TYPES_H

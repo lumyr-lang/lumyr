@@ -1,0 +1,129 @@
+// socket 网络套接字测试（TCP/UDP/Unix 域流/Unix 域数据报）
+// 覆盖：大写构造函数 TcpSocket()、简写 TcpSocket{...} / <TcpSocket>{...}、bytes 二进制收发
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ===== 1. TCP 回环 echo（大写构造 + 简写客户端） =====
+tcpPort = 42817;
+srv = TcpSocket();
+check(type(srv) == "socket", "tcp type");
+check(srv.kind == "tcp", "tcp kind field");
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", tcpPort);
+srv.listen();
+check(srv.isServer == true, "tcp isServer after listen");
+
+// 简写客户端：<TcpSocket>{host, port} 反糖为 TcpSocket({host,port}) 自动 connect
+cli = <TcpSocket>{host: "127.0.0.1", port: tcpPort};
+check(cli.connected == true, "tcp client connected via shorthand");
+
+conn = srv.accept();
+check(conn != null, "tcp accept non-null");
+check(type(conn) == "socket", "tcp accept type");
+
+n = cli.send("hello");
+check(n == 5, "tcp send bytes=5, got " + n);
+r = conn.recv();
+check(r == "hello", "tcp echo hello, got: " + r);
+
+conn.send("world");
+r2 = cli.recv();
+check(r2 == "world", "tcp echo world, got: " + r2);
+
+// recv on closed peer returns ""
+conn.close();
+r3 = cli.recv();
+check(r3 == "", "tcp recv after peer close = empty");
+cli.close();
+srv.close();
+check(srv.closed == true, "tcp srv closed flag");
+check(srv.fd == -1, "tcp srv fd -1 after close");
+
+// ===== 2. TCP 简写服务端 + 简写客户端（双向字面量构造） =====
+shPort = 42819;
+// 简写服务端：TcpSocket{host,port,listen:true} 反糖为 bind+listen
+ssrv = TcpSocket{host: "127.0.0.1", port: shPort, listen: true};
+check(ssrv.isServer == true, "shorthand tcp server isServer");
+scli = TcpSocket{host: "127.0.0.1", port: shPort};
+check(scli.connected == true, "shorthand tcp client connected");
+sconn = ssrv.accept();
+scli.send("abc");
+sr = sconn.recv();
+check(sr == "abc", "shorthand tcp echo abc, got: " + sr);
+sconn.close(); scli.close(); ssrv.close();
+
+// ===== 3. Unix 域流 echo（简写服务端 + 简写客户端） =====
+upath = "/tmp/lumin_unix_stream.sock";
+us = UnixSocket{path: upath, listen: true};
+check(us.kind == "unix", "unix kind");
+check(us.isServer == true, "unix isServer via shorthand");
+
+uc = <UnixSocket>{path: upath};
+check(uc.connected == true, "unix client connected via shorthand");
+ucn = us.accept();
+uc.send("ping");
+ur = ucn.recv();
+check(ur == "ping", "unix stream echo ping, got: " + ur);
+ucn.send("pong");
+ur2 = uc.recv();
+check(ur2 == "pong", "unix stream echo pong, got: " + ur2);
+uc.close(); ucn.close(); us.close();
+
+// ===== 4. UDP 数据报（大写构造 + 简写服务端） =====
+uPort = 42818;
+ua = UdpSocket{host: "127.0.0.1", port: uPort, listen: true};
+check(ua.isServer == true, "udp server isServer via shorthand");
+ub = UdpSocket();
+ub.sendTo("yo", "127.0.0.1", uPort);
+ur = ua.recvFrom();
+check(ur[0] == "yo", "udp recvFrom data=yo, got: " + ur[0]);
+ub.sendTo("bar", "127.0.0.1", uPort);
+ur2 = ua.recvFrom();
+check(ur2[0] == "bar", "udp recvFrom data=bar, got: " + ur2[0]);
+ua.close(); ub.close();
+
+// ===== 5. Unix 域数据报（简写服务端 + 大写客户端） =====
+apath = "/tmp/lumin_unix_dgram_a.sock";
+bpath = "/tmp/lumin_unix_dgram_b.sock";
+da = UnixDgramSocket{path: apath, listen: true};
+db = UnixDgramSocket{path: bpath, listen: true};
+db.sendTo("hello-unix", apath);
+dr = da.recvFrom();
+check(dr[0] == "hello-unix", "unix dgram data, got: " + dr[0]);
+check(dr[1] == bpath, "unix dgram addr=path, got: " + dr[1]);
+da.close(); db.close();
+
+// ===== 6. 选项与字段 =====
+s = TcpSocket();
+check(s.fileno() > 0, "fileno > 0");
+s.setOption("sndBuf", 8192);
+check(s.getOption("sndBuf") == 8192, "sndBuf roundtrip, got: " + s.getOption("sndBuf"));
+s.setOption("rcvBuf", 4096);
+check(s.getOption("rcvBuf") == 4096, "rcvBuf roundtrip");
+s.close();
+
+// ===== 7. bytes 二进制收发（含 NUL，二进制安全） =====
+bPort = 42820;
+sb = TcpSocket{host: "127.0.0.1", port: bPort, listen: true};
+cb = <TcpSocket>{host: "127.0.0.1", port: bPort};
+cn = sb.accept();
+// 构造含 NUL 的 bytes：A \0 B
+payload = bytes([0x41, 0x00, 0x42]);
+check(type(payload) == "bytes", "bytes type");
+check(payload.len == 3, "bytes len=3, got " + payload.len);
+n = cb.send(payload);
+check(n == 3, "send bytes n=3, got " + n);
+// asBytes=true：保留 NUL，长度 3
+rb = cn.recv(16, 0, true);
+check(type(rb) == "bytes", "recv asBytes type");
+check(rb.len == 3, "recv bytes len=3, got " + rb.len);
+check(rb[0] == 0x41 && rb[1] == 0x00 && rb[2] == 0x42, "recv bytes content A\\0B");
+// 对照：默认字符串路径 strlen 截断于 NUL，仅得 "A"
+cn.send(payload);
+rs = cb.recv(16);
+check(type(rs) == "string", "recv default type=string");
+check(rs.len == 1, "string recv truncated at NUL, len=1, got " + rs.len);
+cn.close(); cb.close(); sb.close();
+
+print("socket test ALL PASS");

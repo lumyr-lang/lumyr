@@ -292,7 +292,7 @@ Value lumyr_instance_copy(Value obj)
     /* 偏移 0 的 info 指针随 memcpy 自动复制 */
 
     Value v;
-    v.type = VAL_STRUCT_PTR;
+    v.type = obj.type;   /* 保留原类型（class copy 必须仍是 VAL_CLASS_PTR，否则方法分派失败） */
     v.v.struct_ptr = mem;
     return v;
 }

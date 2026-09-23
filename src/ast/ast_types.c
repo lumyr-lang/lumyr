@@ -180,6 +180,7 @@ ValueType castkind_to_valtype(int ck)
         case CAST_CALENDAR: return VAL_CALENDAR;
         case CAST_FILE:     return VAL_FILE;
         case CAST_FOLDER:   return VAL_FOLDER;
+        case CAST_FORMDATA: return VAL_FORMDATA;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
         /* 容器引用：字段持堆指针（8 字节） */
         case CAST_MAP: return VAL_MAP;
@@ -236,6 +237,7 @@ int valuetype_to_castkind(int vt) {
         case VAL_CALENDAR: return CAST_CALENDAR;
         case VAL_FILE:     return CAST_FILE;
         case VAL_FOLDER:   return CAST_FOLDER;
+        case VAL_FORMDATA: return CAST_FORMDATA;
         /* 容器/引用类型：cast 语义为透传（保持容器不被标量化） */
         case VAL_MAP: return CAST_MAP;
         case VAL_ARRAY: return CAST_ARRAY;
@@ -289,6 +291,7 @@ char* castkind_to_name(int ck) {
         case CAST_CALENDAR: return strdup("calendar");
         case CAST_FILE:     return strdup("file");
         case CAST_FOLDER:   return strdup("folder");
+        case CAST_FORMDATA: return strdup("formdata");
         default: return strdup("int");
     }
 }
@@ -528,6 +531,17 @@ TypeDef* struct_lookup(const char* name)
     if(!td) return NULL;
     if(!td->is_struct) return NULL;
     return td;
+}
+
+// 判断名称是否为 socket 构造函数名（大写主用 + 小写别名）。
+// lexer 据此把 Name{ 识别为 MAP_OPEN，parser 据此把 Name{...} 反糖为 Name({map})。
+int is_socket_ctor_name(const char* name)
+{
+    if(!name) return 0;
+    return strcmp(name, "TcpSocket") == 0 || strcmp(name, "tcpSocket") == 0 ||
+           strcmp(name, "UdpSocket") == 0 || strcmp(name, "udpSocket") == 0 ||
+           strcmp(name, "UnixSocket") == 0 || strcmp(name, "unixSocket") == 0 ||
+           strcmp(name, "UnixDgramSocket") == 0 || strcmp(name, "unixDgramSocket") == 0;
 }
 
 /* ===== class 注册 ===== */

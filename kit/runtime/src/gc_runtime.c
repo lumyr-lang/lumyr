@@ -886,6 +886,30 @@ void gc_mark(Value v)
         }
         break;
     }
+    case VAL_FORMDATA: {
+        /* formdata：标记对象 + names 块及每个 name + vals 块及递归标记每个值 */
+        FormDataObj* o = (FormDataObj*)v.v.formdata_obj;
+        if (!GC_VALID_PTR(o)) break;
+        if (!gc_mark_ptr(o)) break;
+        if (o->names) {
+            gc_mark_ptr(o->names);
+            for (int i = 0; i < o->len; i++)
+                if (o->names[i] && GC_VALID_PTR(o->names[i])) gc_mark_ptr(o->names[i]);
+        }
+        if (o->vals) {
+            gc_mark_ptr(o->vals);
+            for (int i = 0; i < o->len; i++) gc_mark(o->vals[i]);
+        }
+        break;
+    }
+    case VAL_SOCKET: {
+        /* socket：持有 fd（系统资源，非 GC 对象），无内部 GC 指针，仅标记自身 */
+        SocketObj* o = (SocketObj*)v.v.socket_obj;
+        if (GC_VALID_PTR(o)) {
+            gc_mark_ptr(o);
+        }
+        break;
+    }
     default:
         break;
     }
@@ -1140,6 +1164,12 @@ void gc_mark_value_to_stack(Value v)
         if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
         break;
     }
+    case VAL_FORMDATA: {
+        /* formdata：容器变灰入栈，names/vals 由 gc_mark_one 扫描 */
+        FormDataObj* o = (FormDataObj*)v.v.formdata_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
     default:
         /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
         break;
@@ -1283,16 +1313,33 @@ void gc_mark_one(GCObject* obj)
         /* CalendarObj 仅含整数字段，无子对象 */
         break;
     case VAL_FILE: {
-        /* FileObj 弹栈：path/mode 内部字符串标记黑色 */
+        /* FileObj 弹栈：path/mode 内部字符串 + 内存文件内容标记黑色 */
         FileObj* o = (FileObj*)obj_to_ptr(obj);
         if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
         if (o->mode && GC_VALID_PTR(o->mode)) gc_mark_internal_black(o->mode);
+        if (o->content && GC_VALID_PTR(o->content)) gc_mark_internal_black(o->content);
         break;
     }
     case VAL_FOLDER: {
         /* FolderObj 弹栈：path 内部字符串标记黑色 */
         FolderObj* o = (FolderObj*)obj_to_ptr(obj);
         if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        break;
+    }
+    case VAL_FORMDATA: {
+        /* FormDataObj 弹栈：names 块标内部黑、每个 name 变灰入栈；
+         * vals 块标内部黑、每个值变灰入栈 */
+        FormDataObj* o = (FormDataObj*)obj_to_ptr(obj);
+        if (o->names && GC_VALID_PTR(o->names)) {
+            gc_mark_internal_black(o->names);
+            for (int i = 0; i < o->len; i++)
+                if (o->names[i] && GC_VALID_PTR(o->names[i]))
+                    gc_mark_ptr_to_stack(o->names[i]);
+        }
+        if (o->vals && GC_VALID_PTR(o->vals)) {
+            gc_mark_internal_black(o->vals);
+            for (int i = 0; i < o->len; i++) gc_mark_value_to_stack(o->vals[i]);
+        }
         break;
     }
     default:
@@ -1470,6 +1517,11 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
         break;
     }
+    case VAL_FORMDATA: {
+        FormDataObj* o = (FormDataObj*)v.v.formdata_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
     default:
         break;
     }
@@ -1588,11 +1640,33 @@ static void gc_mark_one_minor(GCObject* obj)
         FileObj* o = (FileObj*)obj_to_ptr(obj);
         if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
         if (o->mode && GC_VALID_PTR(o->mode)) gc_mark_internal_black(o->mode);
+        if (o->content && GC_VALID_PTR(o->content)) gc_mark_internal_black(o->content);
         break;
     }
     case VAL_FOLDER: {
         FolderObj* o = (FolderObj*)obj_to_ptr(obj);
         if (o->path && GC_VALID_PTR(o->path)) gc_mark_internal_black(o->path);
+        break;
+    }
+    case VAL_FORMDATA: {
+        /* FormDataObj（新生代）：names/vals 块标内部黑；新生代 name/值变灰入栈 */
+        FormDataObj* o = (FormDataObj*)obj_to_ptr(obj);
+        if (o->names && GC_VALID_PTR(o->names)) {
+            gc_mark_internal_black(o->names);
+            for (int i = 0; i < o->len; i++) {
+                if (!o->names[i] || !GC_VALID_PTR(o->names[i])) continue;
+                Value nv2;
+                memset(&nv2, 0, sizeof(nv2));
+                nv2.type = VAL_STRING;
+                nv2.str_inline = 0;
+                nv2.v.s = o->names[i];
+                gc_mark_value_to_stack_minor(nv2);
+            }
+        }
+        if (o->vals && GC_VALID_PTR(o->vals)) {
+            gc_mark_internal_black(o->vals);
+            for (int i = 0; i < o->len; i++) gc_mark_value_to_stack_minor(o->vals[i]);
+        }
         break;
     }
     default:

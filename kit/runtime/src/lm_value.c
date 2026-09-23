@@ -8,6 +8,8 @@
 #include "lm_container.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
+#include "lm_formdata.h"
+#include "lm_socket.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -371,6 +373,8 @@ char* value_to_str(Value v) {
         case VAL_CALENDAR: return lumyr_calendar_to_str(v);
         case VAL_FILE:     return lumyr_file_to_str(v);
         case VAL_FOLDER:   return lumyr_folder_to_str(v);
+        case VAL_FORMDATA: return lumyr_formdata_to_str(v);
+        case VAL_SOCKET:   return lumyr_socket_to_str(v);
         default:
             strcpy(buf, "");
             break;
@@ -638,6 +642,14 @@ Value lumyr_index_get(Value c, Value idx) {
         }
         return lumyr_folder_field(c, lumyr_str_cstr(&idx));
     }
+    /* socket 字段访问：fd/kind/closed/connected/isServer */
+    if(c.type == VAL_SOCKET) {
+        if(idx.type != VAL_STRING) {
+            runtime_error("socket 字段访问必须是字符串键");
+            return val_none();
+        }
+        return lumyr_socket_field(c, lumyr_str_cstr(&idx));
+    }
     if(c.type == VAL_MAP) {
         return lumyr_map_get(c, idx);
     }
@@ -810,6 +822,8 @@ Value lumyr_type(Value v) {
         case VAL_CALENDAR: return lumyr_make_string("calendar");
         case VAL_FILE:    return lumyr_make_string("file");
         case VAL_FOLDER:  return lumyr_make_string("folder");
+        case VAL_FORMDATA: return lumyr_make_string("formdata");
+        case VAL_SOCKET:  return lumyr_make_string("socket");
     }
     return lumyr_make_string("unknown");
 }
@@ -879,6 +893,7 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
     if(arr.type == VAL_CALENDAR) { runtime_error("calendar 不支持下标赋值"); return val; }
     if(arr.type == VAL_FILE) { runtime_error("file 不支持下标赋值"); return val; }
     if(arr.type == VAL_FOLDER) { runtime_error("folder 不支持下标赋值"); return val; }
+    if(arr.type == VAL_SOCKET) { runtime_error("socket 不支持下标赋值"); return val; }
     if(arr.type == VAL_MAP) { lumyr_check_mapname_ro(arr, idx, "赋值"); lumyr_map_set(&arr, idx, val); return val; }
     /* VAL_STRUCT_PTR（C 结构体实例，包括 class 和 struct）：
        自动判断是 class 还是 struct，调用对应的专门属性写入函数 */
@@ -1153,6 +1168,12 @@ Value lumyr_eq(Value a, Value b) {
         const char* pb = ob->path ? ob->path : "";
         return lumyr_make_bool(strcmp(pa, pb) == 0);
     }
+    /* socket 相等：fd 指针身份比较（fd 为唯一系统资源） */
+    if(a.type == VAL_SOCKET && b.type == VAL_SOCKET) {
+        SocketObj* oa = (SocketObj*)a.v.socket_obj;
+        SocketObj* ob = (SocketObj*)b.v.socket_obj;
+        return lumyr_make_bool(oa == ob);
+    }
     if (is_string(a,b)) {
         char *sa = value_to_str(a);
         char *sb = value_to_str(b);
@@ -1279,6 +1300,8 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_CALENDAR: return v.v.calendar_obj != NULL;
         case VAL_FILE:     return v.v.file_obj != NULL;
         case VAL_FOLDER:   return v.v.folder_obj != NULL;
+        case VAL_FORMDATA: return v.v.formdata_obj != NULL;
+        case VAL_SOCKET:   return v.v.socket_obj != NULL;
         default: return 1;  // 其他未知类型默认为 true
     }
 }
@@ -1698,6 +1721,18 @@ void lumyr_print(Value v) {
             free(s);
             break;
         }
+        case VAL_FORMDATA: {
+            char* s = lumyr_formdata_to_str(v);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_SOCKET: {
+            char* s = lumyr_socket_to_str(v);
+            printf("%s\n", s ? s : "(null)");
+            free(s);
+            break;
+        }
         default:              printf("<unknown>\n"); break;
     }
 }
@@ -1892,6 +1927,18 @@ void lumyr_print_inline(Value v) {
         }
         case VAL_FOLDER: {
             char* s = lumyr_folder_to_str(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_FORMDATA: {
+            char* s = lumyr_formdata_to_str(v);
+            printf("%s", s ? s : "(null)");
+            free(s);
+            break;
+        }
+        case VAL_SOCKET: {
+            char* s = lumyr_socket_to_str(v);
             printf("%s", s ? s : "(null)");
             free(s);
             break;

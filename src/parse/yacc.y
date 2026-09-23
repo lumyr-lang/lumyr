@@ -985,13 +985,16 @@ closed_stmt
     | ID COLON WHILE LPAREN expr RPAREN closed_stmt { $$ = ast_while($5, $7, $1); }
     | FOR LPAREN for_init SEMI expr_opt SEMI for_incr RPAREN closed_stmt { $$ = ast_for($3, $5, $7, $9, NULL); }
     | ID COLON FOR LPAREN for_init SEMI expr_opt SEMI for_incr RPAREN closed_stmt { $$ = ast_for($5, $7, $9, $11, $1); }
-    /* for-each 循环：for x in obj，同时支持数组和生成器（运行时判断类型） */
+    /* for-each 循环：for x in obj，同时支持数组/生成器/map/formdata（运行时判断类型）
+     * 数组 → x=元素；map → x=键；formdata → x=字段名（含重复名，值经 obj[x] 取）；生成器 → x=next() */
     | FOR ID TOK_IN expr closed_stmt {
         static int fe_counter = 0;
         int n = fe_counter++;
-        char oname[64], isarr_name[64], idx_name[64], len_name[64];
+        char oname[64], isarr_name[64], ismap_name[64], keys_name[64], idx_name[64], len_name[64];
         snprintf(oname, sizeof(oname), "__fe_obj_%d", n);
         snprintf(isarr_name, sizeof(isarr_name), "__fe_isarr_%d", n);
+        snprintf(ismap_name, sizeof(ismap_name), "__fe_ismap_%d", n);
+        snprintf(keys_name, sizeof(keys_name), "__fe_mkeys_%d", n); /* mkeys 前缀避开双变量 for-in 的 __fe_keys_N */
         snprintf(idx_name, sizeof(idx_name), "__fe_idx_%d", n);
         snprintf(len_name, sizeof(len_name), "__fe_len_%d", n);
         const char* lbl = NULL;   /* for-in 不支持标签（其内部 desugar 出 while 无外部标签） */
@@ -1002,13 +1005,27 @@ closed_stmt
         AstNode* type_call = ast_call(strdup("type"), ast_seq(ast_var(strdup(oname)), NULL));
         AstNode* isarr_cond = ast_binop(OP_EQ, type_call, ast_string(strdup("array")));
         AstNode* isarr_assign = ast_assign(strdup(isarr_name), isarr_cond);
-        /* __fe_idx = 0; __fe_len = 0; */
+        /* __fe_ismap = (type(__fe_obj) == "map" || type(__fe_obj) == "formdata"); */
+        AstNode* type_call_m1 = ast_call(strdup("type"), ast_seq(ast_var(strdup(oname)), NULL));
+        AstNode* type_call_m2 = ast_call(strdup("type"), ast_seq(ast_var(strdup(oname)), NULL));
+        AstNode* ismap_cond = ast_binop(OP_LOGIC_OR,
+            ast_binop(OP_EQ, type_call_m1, ast_string(strdup("map"))),
+            ast_binop(OP_EQ, type_call_m2, ast_string(strdup("formdata"))));
+        AstNode* ismap_assign = ast_assign(strdup(ismap_name), ismap_cond);
+        /* __fe_keys = null; __fe_idx = 0; __fe_len = 0; */
+        AstNode* keys_init = ast_assign(strdup(keys_name), ast_none());
         AstNode* idx_init = ast_assign(strdup(idx_name), ast_int(0));
         AstNode* len_init = ast_assign(strdup(len_name), ast_int(0));
         /* if (__fe_isarr) { __fe_len = len(__fe_obj); } */
         AstNode* len_call = ast_call(strdup("len"), ast_seq(ast_var(strdup(oname)), NULL));
         AstNode* len_assign = ast_assign(strdup(len_name), len_call);
         AstNode* if_len = ast_if(ast_var(strdup(isarr_name)), ast_block(len_assign), NULL, NULL);
+        /* if (__fe_ismap) { __fe_keys = keys(__fe_obj); __fe_len = len(__fe_keys); } */
+        AstNode* keys_call = ast_call(strdup("keys"), ast_seq(ast_var(strdup(oname)), NULL));
+        AstNode* keys_set = ast_assign(strdup(keys_name), keys_call);
+        AstNode* klen_call = ast_call(strdup("len"), ast_seq(ast_var(strdup(keys_name)), NULL));
+        AstNode* klen_assign = ast_assign(strdup(len_name), klen_call);
+        AstNode* if_keys = ast_if(ast_var(strdup(ismap_name)), ast_block(ast_seq(keys_set, klen_assign)), NULL, NULL);
 
         /* while (1) { ... } */
         /* 数组分支：if (__fe_idx >= __fe_len) break; x = __fe_obj[__fe_idx]; __fe_idx++; */
@@ -1018,6 +1035,13 @@ closed_stmt
         AstNode* arr_idx_inc = ast_unary(OP_POST_INC, ast_var(strdup(idx_name)));
         AstNode* arr_branch = ast_block(ast_seq(arr_break, ast_seq(arr_x_assign, arr_idx_inc)));
 
+        /* map/formdata 分支：if (__fe_idx >= __fe_len) break; x = __fe_keys[__fe_idx]; __fe_idx++; */
+        AstNode* map_break_cond = ast_binop(OP_GE, ast_var(strdup(idx_name)), ast_var(strdup(len_name)));
+        AstNode* map_break = ast_if(map_break_cond, ast_break(NULL), NULL, NULL);
+        AstNode* map_x_assign = ast_assign(strdup($2), ast_index(ast_var(strdup(keys_name)), ast_var(strdup(idx_name))));
+        AstNode* map_idx_inc = ast_unary(OP_POST_INC, ast_var(strdup(idx_name)));
+        AstNode* map_branch = ast_block(ast_seq(map_break, ast_seq(map_x_assign, map_idx_inc)));
+
         /* 生成器分支：x = next(__fe_obj); if (x == null) break; */
         AstNode* gen_next_call = ast_call(strdup("next"), ast_seq(ast_var(strdup(oname)), NULL));
         AstNode* gen_x_assign = ast_assign(strdup($2), gen_next_call);
@@ -1025,8 +1049,9 @@ closed_stmt
         AstNode* gen_break = ast_if(gen_break_cond, ast_break(NULL), NULL, NULL);
         AstNode* gen_branch = ast_block(ast_seq(gen_x_assign, gen_break));
 
-        /* if (__fe_isarr) { arr_branch } else { gen_branch } */
-        AstNode* if_type = ast_if(ast_var(strdup(isarr_name)), arr_branch, gen_branch, NULL);
+        /* if (__fe_isarr) { arr_branch } else { if (__fe_ismap) { map_branch } else { gen_branch } } */
+        AstNode* if_type = ast_if(ast_var(strdup(isarr_name)), arr_branch,
+                                  ast_if(ast_var(strdup(ismap_name)), map_branch, gen_branch, NULL), NULL);
 
         /* while 循环体：if_type + 原始循环体 */
         AstNode* while_body = ast_block(ast_seq(if_type, $5));
@@ -1034,8 +1059,8 @@ closed_stmt
         /* while (1) { while_body } */
         AstNode* while_loop = ast_while(ast_int(1), while_body, NULL);
 
-        /* 整体：obj_assign; isarr_assign; idx_init; len_init; if_len; while_loop */
-        AstNode* stmts = ast_seq(obj_assign, ast_seq(isarr_assign, ast_seq(idx_init, ast_seq(len_init, ast_seq(if_len, while_loop)))));
+        /* 整体：obj_assign; isarr_assign; ismap_assign; keys_init; idx_init; len_init; if_len; if_keys; while_loop */
+        AstNode* stmts = ast_seq(obj_assign, ast_seq(isarr_assign, ast_seq(ismap_assign, ast_seq(keys_init, ast_seq(idx_init, ast_seq(len_init, ast_seq(if_len, ast_seq(if_keys, while_loop))))))));
         $$ = ast_block(stmts);
     }
     | FOR ID COMMA ID TOK_IN expr closed_stmt {
@@ -2321,7 +2346,10 @@ primary
     /* 命名构造简写 ClassName{field: value, ...}：lexer 在类型名后的 { 识别为 MAP_OPEN
      * 等价于 <ClassName>{field: value}，复用 wrap_struct_named 按字段名映射位置参数 */
     | ID MAP_OPEN map_items RBRACE {
-          if(struct_lookup($1) || class_lookup($1) || type_lookup($1)) {
+          if(is_socket_ctor_name($1)) {
+              /* socket 简写：TcpSocket{host:..,port:..} 反糖为 TcpSocket({map}) 调用 */
+              $$ = L(ast_call($1, ast_map_lit($3)));
+          } else if(struct_lookup($1) || class_lookup($1) || type_lookup($1)) {
               AstNode* made = wrap_struct_named($1, $3);
               if(!made) YYERROR;   /* 字段校验失败：终止解析（yyparse 返回 1），勿把 NULL 塞进 AST */
               $$ = L(made);
@@ -2403,6 +2431,9 @@ primary
           /* 接口类型标注：<Printable>expr → 接口引用类型 */
           if(interface_lookup($2) != NULL) {
               $$ = ast_interface_annotation($2, $4);
+          } else if(is_socket_ctor_name($2) && $4 && $4->type == AST_MAP_LIT) {
+              /* socket 字面量简写：<TcpSocket>{host:..,port:..} 反糖为 TcpSocket({map}) */
+              $$ = L(ast_call($2, $4));
           } else if(type_lookup($2) != NULL && $4 && $4->type == AST_MAP_LIT) {
               /* 命名字段构造：<CustomType>{ name: v, ... } 展开为位置构造 */
               AstNode* made = wrap_struct_named($2, $4->u.map_lit.entries);
@@ -2573,7 +2604,11 @@ postfix_expr
           if(recv->type == AST_VAR && strcmp(recv->u.varname, "requests") == 0 &&
              (strcmp($3, "get") == 0 || strcmp($3, "post") == 0 || strcmp($3, "put") == 0 ||
               strcmp($3, "delete") == 0 || strcmp($3, "head") == 0 || strcmp($3, "patch") == 0)) {
-              $$ = L(ast_call($3, margs));
+              /* 内部名 http_<method>：ast_call 不保留 receiver，裸 "get" 会与
+                 数组/字典的 .get 内置撞名（url 被误当 receiver） */
+              char httpName[32];
+              snprintf(httpName, sizeof(httpName), "http_%s", $3);
+              $$ = L(ast_call(httpName, margs));
           } else if(strcmp($3, "get") == 0) {
               /* x.get(k)：统一走方法分派（内置 BUILTIN_GET：数组/字典安全取，越界/缺键 → null） */
               $$ = L(ast_method_call(recv, $3, margs));

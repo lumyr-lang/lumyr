@@ -135,6 +135,10 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_container.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_calendar.c
 # 文件与目录对象（file/folder）
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_file.c
+# formdata 多部分表单数据
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_formdata.c
+# socket 网络套接字（TCP/UDP/Unix 域）
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_socket.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 

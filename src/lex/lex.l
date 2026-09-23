@@ -451,6 +451,7 @@ f\"([^"\\]|\\.)*\"   {
 "<calendar>"       { LEX_RET(TOK_CALENDAR); }
 "<file>"           { LEX_RET(TOK_FILE); }
 "<folder>"         { LEX_RET(TOK_FOLDER); }
+"<formdata>"       { yylval.ll = CAST_FORMDATA; LEX_RET(TOK_TYPE_ANNOT); }
 "<"                { LEX_RET(LT); }
 "&&"        { LEX_RET(AND); }
 "||"        { LEX_RET(OR); }
@@ -503,7 +504,8 @@ f\"([^"\\]|\\.)*\"   {
                          prev_prev_token != TOK_EXTENDS && prev_prev_token != TOK_IMPLEMENTS &&
                          prev_prev_token != TOK_STRUCT && prev_prev_token != TOK_CLASS &&
                          prev_prev_token != TOK_TYPE && prev_prev_token != COLON &&
-                         (struct_lookup(g_last_id_text) || class_lookup(g_last_id_text) || type_lookup(g_last_id_text))) {
+                         (struct_lookup(g_last_id_text) || class_lookup(g_last_id_text) ||
+                          type_lookup(g_last_id_text) || is_socket_ctor_name(g_last_id_text))) {
                           prev_token = MAP_OPEN; return MAP_OPEN;
                       }
                       LEX_RET(LBRACE);

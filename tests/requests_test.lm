@@ -1,0 +1,592 @@
+/* HTTP 请求库 requests 完整测试：get/post/put/delete/head/patch
+ *
+ * 签名：requests.<method>(url [, config])
+ *
+ * 覆盖：
+ *   query 参数（config.params）：map / string / bytes / pair 数组 / 省略
+ *   请求体：JSON 自动序列化（map/array/数字/bool）、form 表单、bytes 原始字节、
+ *           file 文件流（磁盘路径 file / 内存文件 file(name, bytes(...))）
+ *   multipart：磁盘 file / 路径字符串 / bytes / 内存 file / 描述map，form 共存
+ *   formdata 字面量 <formdata>{...} / <formdata>[[k,v],...]：文本/文件混合，
+ *           数组值展开同名多 part（多文件上传），pair 数组允许同名键重复
+ *   响应：按 Content-Type 自动 JSON（map/array/string/int/double/bool/null）、
+ *         bytes 原始字节、output 文件流下载、responseType 切换
+ *   异常：连接错误 / 参数错误 / 强制 JSON 解析失败 均可被 try/catch
+ *
+ * 依赖外网（httpbin.org）：先做网络探针，不可达时自动 SKIP（不算失败） */
+
+base = "https://httpbin.org";
+upPath = "tests/tmp_http_up.txt";
+downPath = "tests/tmp_http_down.bin";
+
+/* forEach 回调副作用收集：闭包捕获为值复制，回调经共享数组（引用语义）把遍历结果传出 */
+func fd14_collect(fd) {
+    box = [""];
+    fd.forEach((k, v) => { box[0] = box[0] + k + "=" + v + ";"; });
+    return box[0];
+}
+func fd14_map_collect(m) {
+    box = [""];
+    m.forEach((k, v) => { box[0] = box[0] + k + v + ";"; });
+    return box[0];
+}
+func fd14_arr_collect(a) {
+    box = [""];
+    a.forEach((v, i) => { box[0] = box[0] + v + i + ";"; });
+    return box[0];
+}
+
+/* 网络探针：不可达 / 非 200 → 跳过全部用例 */
+netOk = 1;
+try {
+    probe = requests.get(base + "/get", {"timeout": 8});
+    if(probe["status"] != 200) { netOk = 0; }
+} catch (e) {
+    netOk = 0;
+}
+
+if(netOk == 0) {
+    print("requests_test SKIP: network unreachable");
+} else {
+    /* ========== 一、GET 与 query 参数（config.params） ========== */
+
+    /* 1. params 字典拼查询串；响应自动 JSON，body 为 map */
+    r = requests.get(base + "/get", {"params": {"q": "1", "n": 2}, "timeout": 10});
+    assert r["status"] == 200;
+    assert type(r["body"]) == "map";
+    assert type(r["headers"]) == "map";
+    assert r["body"]["args"]["q"] == "1";
+    assert r["body"]["args"]["n"] == "2";
+
+    /* 2. params 字符串原样拼接 */
+    r2 = requests.get(base + "/get", {"params": "raw=abc", "timeout": 10});
+    assert r2["status"] == 200;
+    assert r2["body"]["args"]["raw"] == "abc";
+
+    /* 3. params pair 数组：[[key, value], ...] */
+    r3 = requests.get(base + "/get", {"params": [["a", "1"], ["b", 2]], "timeout": 10});
+    assert r3["body"]["args"]["a"] == "1";
+    assert r3["body"]["args"]["b"] == "2";
+
+    /* 4. config 全省略 */
+    r4 = requests.get(base + "/get");
+    assert r4["status"] == 200;
+
+    /* 5. query 参数与 POST body 共存 */
+    r5 = requests.post(base + "/post", {
+        "params": {"tag": "z"},
+        "body": {"k": "v"},
+        "timeout": 10
+    });
+    assert r5["body"]["args"]["tag"] == "z";
+    assert r5["body"]["json"]["k"] == "v";
+
+    /* ========== 二、JSON 请求体（自动序列化）与响应类型回显 ========== */
+
+    payload = {"name": "lumin", "v": 42, "ratio": 3.5, "ok": true, "no": null, "arr": [1, 2, 3]};
+    p = requests.post(base + "/post", {"body": payload, "timeout": 10});
+    assert p["status"] == 200;
+    echo = p["body"]["json"];
+    assert type(echo) == "map";
+    assert echo["name"] == "lumin";   /* string */
+    assert echo["v"] == 42;           /* int */
+    assert echo["ratio"] == 3.5;      /* double */
+    assert echo["ok"] == true;        /* bool */
+    assert echo["no"] == null;        /* null */
+    assert echo["arr"][0] == 1;       /* array */
+    assert echo["arr"][2] == 3;
+    /* r.json 字段同样可取解析值 */
+    assert p["json"]["json"]["v"] == 42;
+
+    /* 顶层数组 / 数字 / bool 作为 JSON body */
+    pa = requests.post(base + "/post", {"body": [10, 20], "timeout": 10});
+    assert type(pa["body"]["json"]) == "array";
+    assert pa["body"]["json"][1] == 20;
+    pn = requests.post(base + "/post", {"body": 7, "timeout": 10});
+    assert pn["body"]["json"] == 7;
+    pbool = requests.post(base + "/post", {"body": false, "timeout": 10});
+    assert pbool["body"]["json"] == false;
+
+    /* ---- 补充类型：char / null / 高精度数值 / date 族 / complex / typed array ---- */
+
+    /* char：序列化为单字符字符串 */
+    pc = requests.post(base + "/post", {"body": 'Z', "timeout": 10});
+    assert pc["body"]["json"] == "Z";
+
+    /* null 作为顶层 body */
+    pnone = requests.post(base + "/post", {"body": null, "timeout": 10});
+    assert pnone["body"]["json"] == null;
+
+    /* bigint：JSON 数字字面量，原文 data 精确断言 */
+    pv = requests.post(base + "/post", {"body": {"huge": <bigint>"123456789012345678901234567890"}, "timeout": 10});
+    assert contains(pv["body"]["data"], "123456789012345678901234567890");
+
+    /* decimal / bitdecimal：高精度数字文本 */
+    pde = requests.post(base + "/post", {"body": {"d": <decimal>"3.14159265358979323846"}, "timeout": 10});
+    assert contains(pde["body"]["data"], "3.14159265358979323846");
+    pbd = requests.post(base + "/post", {"body": {"d": <bitdecimal>"2.5"}, "timeout": 10});
+    assert contains(pbd["body"]["data"], "2.5");
+
+    /* date 族：ISO 字符串回显 */
+    pdt1 = requests.post(base + "/post", {"body": {"d": date(2026, 9, 22)}, "timeout": 10});
+    assert pdt1["body"]["json"]["d"] == "2026-09-22";
+    pdt2 = requests.post(base + "/post", {"body": {"d": datetime(2026, 9, 22, 10, 30, 45)}, "timeout": 10});
+    assert contains(pdt2["body"]["json"]["d"], "2026-09-22T10:30:45");
+    pdt3 = requests.post(base + "/post", {"body": {"d": time(10, 30, 45)}, "timeout": 10});
+    assert pdt3["body"]["json"]["d"] == "10:30:45";
+    pdt4 = requests.post(base + "/post", {"body": {"d": timedelta(86400)}, "timeout": 10});
+    assert type(pdt4["body"]["json"]["d"]) == "string";
+
+    /* complex：[real, imag] 数组 */
+    pcx = requests.post(base + "/post", {"body": complex(3.0, 4.0), "timeout": 10});
+    assert type(pcx["body"]["json"]) == "array";
+    assert pcx["body"]["json"][0] == 3.0;
+    assert pcx["body"]["json"][1] == 4.0;
+
+    /* typed array：<int>[...] / <double>[...] / <string>[...] */
+    pta1 = requests.post(base + "/post", {"body": <int>[1, 2, 3], "timeout": 10});
+    assert type(pta1["body"]["json"]) == "array";
+    assert pta1["body"]["json"][2] == 3;
+    pta2 = requests.post(base + "/post", {"body": <double>[1.5, 2.5], "timeout": 10});
+    assert pta2["body"]["json"][1] == 2.5;
+    pta3 = requests.post(base + "/post", {"body": <string>["a", "b"], "timeout": 10});
+    assert pta3["body"]["json"][0] == "a";
+
+    /* ========== 三、form 表单（application/x-www-form-urlencoded） ========== */
+
+    f = requests.post(base + "/post", {"form": {"x": "y"}, "timeout": 10});
+    assert f["body"]["form"]["x"] == "y";
+
+    /* ========== 四、bytes 请求体（原始字节） ========== */
+
+    b = requests.post(base + "/post", {"body": bytes([0x41, 0x42, 0x43]), "timeout": 10});
+    assert b["body"]["data"] == "ABC";
+    assert type(b["bytes"]) == "bytes";   /* 响应原始字节 */
+
+    /* ========== 五、文件流 ========== */
+
+    write_file(upPath, "hello-file-stream");
+
+    /* 5.1 body=磁盘 file：流式上传（curl 边 fread 边发） */
+    u = requests.put(base + "/put", {"body": file(upPath), "timeout": 10});
+    assert u["status"] == 200;
+    assert u["body"]["data"] == "hello-file-stream";
+
+    /* 5.2 body=内存文件：file(name, bytes(...))，内容驻留内存、不落盘 */
+    memFile = file("mem.bin", bytes([0x68, 0x69, 0x21]));
+    assert memFile["size"] == 3;
+    um = requests.put(base + "/put", {"body": memFile, "timeout": 10});
+    assert um["body"]["data"] == "hi!";
+
+    /* 5.3 multipart：磁盘 file 对象 */
+    m = requests.post(base + "/post", {"files": {"up": file(upPath)}, "timeout": 10});
+    assert m["body"]["files"]["up"] == "hello-file-stream";
+
+    /* 5.4 multipart：路径字符串 + 与 form 字段共存 */
+    m2 = requests.post(base + "/post", {"files": {"up": upPath}, "form": {"k": "v"}, "timeout": 10});
+    assert m2["body"]["files"]["up"] == "hello-file-stream";
+    assert m2["body"]["form"]["k"] == "v";
+
+    /* 5.5 multipart：bytes 内容 */
+    m3 = requests.post(base + "/post", {"files": {"b": bytes([0x5a])}, "timeout": 10});
+    assert m3["body"]["files"]["b"] == "Z";
+
+    /* 5.6 multipart：内存文件 file(name, bytes(...)) */
+    m4 = requests.post(base + "/post", {"files": {"mf": memFile}, "timeout": 10});
+    assert m4["body"]["files"]["mf"] == "hi!";
+
+    /* 5.7 multipart：描述 map（bytes + filename） */
+    m5 = requests.post(base + "/post", {
+        "files": {"f": {"bytes": bytes([0x31]), "filename": "x.txt"}},
+        "timeout": 10
+    });
+    assert m5["body"]["files"]["f"] == "1";
+
+    /* 5.8 下载文件流：output 直接写文件，响应体不进内存 */
+    d = requests.get(base + "/bytes/32", {"output": downPath, "timeout": 10});
+    assert d["status"] == 200;
+    assert len(file(downPath).readBytes()) == 32;
+    assert len(d["bytes"]) == 0;
+    assert d["body"] == "";
+
+    /* ========== 5.9 FormData 字面量（multipart/form-data） ========== */
+
+    /* map 形式：文本字段（string/int/bool/char），httpbin 回显到 form */
+    fd1 = <formdata>{"name": "lumin", "n": 42, "ok": true, "c": 'Z'};
+    assert type(fd1) == "formdata";
+    assert len(fd1) == 4;
+    q1 = requests.post(base + "/post", {"body": fd1, "timeout": 10});
+    assert q1["status"] == 200;
+    assert q1["body"]["form"]["name"] == "lumin";
+    assert q1["body"]["form"]["n"] == "42";
+    assert q1["body"]["form"]["ok"] == "true";
+    assert q1["body"]["form"]["c"] == "Z";
+
+    /* 5.10 文本字段与文件字段混合：磁盘 file / 内存 file / bytes / 描述 map */
+    fd2 = <formdata>{
+        "desc": "upload",
+        "f": file(upPath),
+        "mf": memFile,
+        "b": bytes([0x41]),
+        "d": {"bytes": bytes([0x57]), "filename": "w.txt"}
+    };
+    q2 = requests.post(base + "/post", {"body": fd2, "timeout": 10});
+    assert q2["body"]["form"]["desc"] == "upload";
+    assert q2["body"]["files"]["f"] == "hello-file-stream";
+    assert q2["body"]["files"]["mf"] == "hi!";
+    assert q2["body"]["files"]["b"] == "A";
+    assert q2["body"]["files"]["d"] == "W";
+
+    /* 5.11 多文件上传：一个字面量携带多个文件，httpbin 逐字段回显 */
+    fd3 = <formdata>{"f1": file(upPath), "f2": memFile, "f3": bytes([0x58])};
+    q3 = requests.post(base + "/post", {"body": fd3, "timeout": 10});
+    assert q3["body"]["files"]["f1"] == "hello-file-stream";
+    assert q3["body"]["files"]["f2"] == "hi!";
+    assert q3["body"]["files"]["f3"] == "X";
+
+    /* 同名字段多文件：数组值展开为同名多个 part（多 part 全部发出；
+     * httpbin 的 files 回显对同名键只取第一个） */
+    fd3b = <formdata>{"files": [file(upPath), memFile, bytes([0x58])]};
+    q3b = requests.post(base + "/post", {"body": fd3b, "timeout": 10});
+    assert q3b["body"]["files"]["files"] == "hello-file-stream";
+
+    /* 5.12 pair 数组形式：允许同名文本多值 + 文件字段 */
+    fd4 = <formdata>[["name", "x"], ["tag", "a"], ["tag", "b"], ["f", file(upPath)]];
+    q4 = requests.post(base + "/post", {"body": fd4, "timeout": 10});
+    assert q4["body"]["form"]["name"] == "x";
+    tagList = q4["body"]["form"]["tag"];
+    assert type(tagList) == "array";
+    assert tagList[0] == "a";
+    assert tagList[1] == "b";
+    assert q4["body"]["files"]["f"] == "hello-file-stream";
+
+    /* 5.13 formdata 方法：.append 追加 / .set 覆盖 / .get 读取（设置参数场景） */
+
+    /* append：在字面量基础上逐个追加，同名 append 即多值（发送时同名多 part） */
+    fd5 = <formdata>{"name": "a"};
+    fd5.append("age", 18);
+    fd5.append("tag", "x1");
+    fd5.append("tag", "x2");
+    assert len(fd5) == 4;
+    assert fd5.get("name") == "a";
+    assert fd5.get("age") == 18;
+    assert fd5.get("tag") == "x1";      /* 同名多值：get 取第一个 */
+    assert type(fd5.get("missing")) == "none";  /* 无匹配返回 none（打印为 null） */
+    q5 = requests.post(base + "/post", {"body": fd5, "timeout": 10});
+    assert q5["body"]["form"]["name"] == "a";
+    assert q5["body"]["form"]["age"] == "18";
+    tagList2 = q5["body"]["form"]["tag"];
+    assert type(tagList2) == "array";
+    assert tagList2[0] == "x1";
+    assert tagList2[1] == "x2";
+
+    /* set：同名全覆盖（JS FormData.set 语义，其余字段不受影响） */
+    fd6 = <formdata>{"k": "v1", "keep": "yes"};
+    fd6.append("k", "v2");              /* k 现有 v1,v2 两个值 */
+    fd6.set("k", "over");               /* 覆盖后仅剩 1 个 k */
+    assert len(fd6) == 2;
+    assert fd6.get("k") == "over";
+    q6 = requests.post(base + "/post", {"body": fd6, "timeout": 10});
+    assert q6["body"]["form"]["k"] == "over";
+    assert q6["body"]["form"]["keep"] == "yes";
+
+    /* set 文件字段：替换磁盘文件为内存文件；set 数组值 = 多文件覆盖 */
+    fd7 = <formdata>{"f": file(upPath)};
+    fd7.set("f", memFile);
+    fd7.set("fs", [memFile, bytes([0x59])]);
+    assert fd7.get("f") == memFile;
+    q7 = requests.post(base + "/post", {"body": fd7, "timeout": 10});
+    assert q7["body"]["files"]["f"] == "hi!";
+    assert q7["body"]["files"]["fs"] == "hi!";
+
+    /* ========== 5.14 formdata 迭代与转换：forEach / for in / keys/values/getAll/has/delete / toMap/toArray/toJSONString ========== */
+
+    /* forEach(cb)：cb(name, value)，含重复名，顺序与插入一致 */
+    fd8 = <formdata>[["tag", "a"], ["tag", "b"], ["name", "lumin"]];
+    assert fd14_collect(fd8) == "tag=a;tag=b;name=lumin;";
+
+    /* keys/values：含重复名，与插入顺序一一对应 */
+    ks8 = fd8.keys();
+    vs8 = fd8.values();
+    assert type(ks8) == "array";
+    assert len(ks8) == 3;
+    assert ks8[0] == "tag";
+    assert ks8[1] == "tag";
+    assert ks8[2] == "name";
+    assert vs8[0] == "a";
+    assert vs8[1] == "b";
+    assert vs8[2] == "lumin";
+
+    /* getAll：同名全部值；has：存在性；delete：删同名返回 self（链式） */
+    g8 = fd8.getAll("tag");
+    assert type(g8) == "array";
+    assert len(g8) == 2;
+    assert g8[0] == "a";
+    assert g8[1] == "b";
+    assert len(fd8.getAll("missing")) == 0;
+    assert fd8.has("name") == true;
+    assert fd8.has("nope") == false;
+    fd8.delete("tag");
+    assert len(fd8) == 1;
+    assert fd8.get("name") == "lumin";
+    assert fd8.has("tag") == false;
+    /* delete 后链式继续追加（返回 self） */
+    fd8.delete("name").append("new", "v");
+    assert len(fd8) == 1 && fd8.get("new") == "v";
+
+    /* for x in formdata：产出字段名；值经 fd[k] 取（get 语义） */
+    fd9 = <formdata>{"a": 1, "b": 2};
+    names9 = "";
+    for fk in fd9 {
+        names9 = names9 + fk + fd9[fk];
+    }
+    assert names9 == "a1b2";
+
+    /* for k, v in formdata：keys 反糖（同名取第一个值） */
+    kv9 = "";
+    for fk2, fv2 in fd9 {
+        kv9 = kv9 + fk2 + ":" + fv2 + ",";
+    }
+    assert kv9 == "a:1,b:2,";
+
+    /* for x in map：产出键（新扩展分支，数组/生成器行为不变；map 键序为哈希序） */
+    m9 = {"x": 10, "y": 20};
+    acc9 = 0;
+    for mk in m9 {
+        acc9 = acc9 + m9[mk];
+    }
+    assert acc9 == 30;
+    sum10 = 0;
+    for mk2, mv2 in m9 {
+        sum10 = sum10 + mv2;
+    }
+    assert sum10 == 30;
+    /* map.forEach(k, v)：键序哈希序，两种序均合法 */
+    mcol = fd14_map_collect(m9);
+    assert mcol == "x10;y20;" || mcol == "y20;x10;";
+
+    /* array.forEach(v, i)：按下标顺序（既有能力回归） */
+    assert fd14_arr_collect([7, 8, 9]) == "70;81;92;";
+
+    /* toMap：同名聚合（单个=值，多个=数组，保序）；toArray：[[name,v],...] 与 pair 字面量互转 */
+    fd10 = <formdata>[["tag", "a"], ["tag", "b"], ["n", 1]];
+    mm10 = fd10.toMap();
+    assert mm10["n"] == 1;
+    assert type(mm10["tag"]) == "array";
+    assert mm10["tag"][0] == "a";
+    assert mm10["tag"][1] == "b";
+    aa10 = fd10.toArray();
+    assert type(aa10) == "array";
+    assert len(aa10) == 3;
+    assert aa10[0][0] == "tag" && aa10[0][1] == "a";
+    assert aa10[1][0] == "tag" && aa10[1][1] == "b";
+    assert aa10[2][0] == "n" && aa10[2][1] == 1;
+    /* toArray 结果重建 formdata（pair 形式互转，重复名保留） */
+    fd10b = <formdata>{};
+    for pr in fd10.toArray() {
+        fd10b.append(pr[0], pr[1]);
+    }
+    assert len(fd10b) == 3;
+    g10 = fd10b.getAll("tag");
+    assert g10[0] == "a" && g10[1] == "b";
+
+    /* toJSONString：重复名聚合数组，文本可解析（格式 {"n":1,"tag":["a","b"]}） */
+    js10 = fd10.toJSONString();
+    assert type(js10) == "string";
+    assert js10.contains(":1");
+    assert js10.contains("tag");
+    assert js10.contains("[");
+    assert js10.contains("a");
+
+    /* ========== 六、responseType 显式切换 ========== */
+
+    t1 = requests.get(base + "/get", {"responseType": "text", "timeout": 10});
+    assert type(t1["body"]) == "string";
+    t2 = requests.get(base + "/get", {"responseType": "json", "timeout": 10});
+    assert type(t2["body"]) == "map";
+    t3 = requests.get(base + "/get", {"responseType": "bytes", "timeout": 10});
+    assert type(t3["body"]) == "bytes";
+
+    /* ========== 七、DELETE / HEAD / PATCH ========== */
+
+    dl = requests.delete(base + "/delete", {"params": {"x": "y"}, "timeout": 10});
+    assert dl["status"] == 200;
+    assert dl["body"]["args"]["x"] == "y";
+    hd = requests.head(base + "/get", {"timeout": 10});
+    assert hd["status"] == 200;
+    pt = requests.patch(base + "/patch", {"form": {"z": "9"}, "timeout": 10});
+    assert pt["status"] == 200;
+    assert pt["body"]["form"]["z"] == "9";
+
+    /* ========== 八、异常可被 try/catch 捕获 ========== */
+
+    /* 8.1 连接错误（非法主机名） */
+    badCaught = 0;
+    try {
+        requests.get("http://this-host-does-not-exist-99999.invalid", {"timeout": 5});
+    } catch (e) {
+        badCaught = 1;
+    }
+    assert badCaught == 1;
+
+    /* 8.2 参数错误（url 非字符串） */
+    argCaught = 0;
+    try {
+        requests.get(123);
+    } catch (e) {
+        argCaught = 1;
+    }
+    assert argCaught == 1;
+
+    /* 8.3 responseType="json" 遇到 HTML：解析失败抛错 */
+    htmlCaught = 0;
+    try {
+        requests.get(base + "/html", {"responseType": "json", "timeout": 10});
+    } catch (e) {
+        htmlCaught = 1;
+    }
+    assert htmlCaught == 1;
+
+    /* 清理临时文件 */
+    file(upPath).delete();
+    file(downPath).delete();
+
+    print("requests_test ALL PASS");
+}
+
+/* ========== 九、struct/class/type 实例自带 toMap/toArray/toJSONString（不依赖网络） ========== */
+
+struct FdPoint {
+    x: int;
+    y: int;
+    tag: string;
+    func sum() { return self.x + self.y; }
+}
+
+class FdRec {
+    private name: string;
+    public score: double;
+    meta: map;
+    func FdRec() {
+        self.name = "an";
+        self.score = 9.5;
+        self.meta = {"ok": true, "n": 2};
+    }
+    func name_len(): int { return len(self.name); }
+}
+
+type FdLabel {
+    text: string,
+    weight: int
+}
+
+/* struct：toMap 全字段 map / toArray [[field,v],...] / toJSONString 含全部字段 */
+fp = FdPoint(3, 4, "pt");
+fpm = fp.toMap();
+assert fpm["x"] == 3;
+assert fpm["y"] == 4;
+assert fpm["tag"] == "pt";
+fpa = fp.toArray();
+assert len(fpa) == 3;
+assert fpa[0][0] == "x" && fpa[0][1] == 3;
+assert fpa[2][0] == "tag" && fpa[2][1] == "pt";
+fpj = fp.toJSONString();
+assert type(fpj) == "string";
+assert fpj.contains("3") && fpj.contains("pt");
+
+/* class：含 private 字段全量导出；嵌套 map 递归序列化 */
+fr = FdRec();
+frm = fr.toMap();
+assert frm["name"] == "an";
+assert frm["score"] == 9.5;
+assert frm["meta"]["ok"] == true;
+assert frm["meta"]["n"] == 2;
+fra = fr.toArray();
+assert len(fra) == 3;
+assert fra[1][0] == "score" && fra[1][1] == 9.5;
+frj = fr.toJSONString();
+assert type(frj) == "string";
+assert frj.contains("an");
+assert frj.contains("9.5");
+assert frj.contains("{") && frj.contains("}");
+
+/* type 形状声明：同 API */
+fl = <FdLabel>{text: "tri", weight: 9};
+flm = fl.toMap();
+assert flm["text"] == "tri" && flm["weight"] == 9;
+flj = fl.toJSONString();
+assert type(flj) == "string";
+assert flj.contains("tri") && flj.contains("9");
+
+print("formdata/struct/class iter+convert ALL PASS");
+
+/* ========== 十、所有数据类型 .copy() 深拷贝（不依赖网络） ========== */
+
+/* 标量 */
+assert (5).copy() == 5;
+assert (3.5).copy() == 3.5;
+assert ("hi").copy() == "hi";
+
+/* array/map 含嵌套：副本改，原不变 */
+ca = [1, [2, 3], {"k": 4}];
+cac = ca.copy();
+assert cac == ca;
+cac[0] = 99; cac[1][0] = 99; cac[2]["k"] = 99;
+assert ca[0] == 1 && ca[1][0] == 2 && ca[2]["k"] == 4;
+cm = {"x": [1, 2], "y": 3};
+cmc = cm.copy();
+cmc["x"][0] = 99; cmc["y"] = 99;
+assert cm["x"][0] == 1 && cm["y"] == 3;
+/* <int>/<string> 转换产出的动态 array 同样独立 */
+cta = <int>[1, 2, 3]; ctac = cta.copy(); ctac[1] = 99;
+assert cta[1] == 2;
+
+/* formdata：重复名、嵌套值、追加均与原独立 */
+cfd = <formdata>[["t", "a"], ["t", "b"], ["n", [1, 2]]];
+cfdc = cfd.copy();
+assert len(cfdc.getAll("t")) == 2 && cfdc.get("n") == [1, 2];
+cfdc.append("x", "y");
+cfdn = cfdc.get("n"); cfdn[0] = 99;
+assert len(cfd) == 3 && cfd.get("n")[0] == 1;
+
+/* tuple / set / bytes / date / file */
+ctp = tuple(1, [2, 3]); ctpc = ctp.copy();
+assert ctpc[0] == 1 && ctpc[1][0] == 2;
+cst = set(1, 2, 3); assert len(cst.copy()) == 3;
+assert bytes("abc").copy() == bytes("abc");
+assert type(date(2026, 9, 23).copy()) == "date";
+assert type(file("tests/requests_test.lm").copy()) == "file";
+
+/* struct：嵌套 array/map/string/struct 字段，copy 后全部独立 */
+struct CopyInner { z: int; arr: array; }
+struct CopyOuter {
+    name: string;
+    nums: array;
+    mp: map;
+    inner: CopyInner;
+}
+coi = CopyOuter("orig", [1, 2], {"a": 1}, CopyInner(7, [9]));
+coc = coi.copy();
+assert coc.name == "orig" && coc.nums == [1, 2];
+assert coc.mp["a"] == 1 && coc.inner.z == 7 && coc.inner.arr == [9];
+coc.name = "changed"; coc.nums[0] = 99; coc.mp["a"] = 99;
+coc.inner.z = 99; coc.inner.arr[0] = 99;
+assert coi.name == "orig" && coi.nums[0] == 1 && coi.mp["a"] == 1;
+assert coi.inner.z == 7 && coi.inner.arr[0] == 9;
+
+/* class：含 private + 嵌套容器，copy 后独立（copy 保留 class 类型） */
+class CopyBox {
+    private title: string;
+    public items: array;
+    func CopyBox() { self.title = "T"; self.items = [1, [2]]; }
+    func getTitle(): string { return self.title; }
+}
+cbi = CopyBox();
+cbic = cbi.copy();
+assert type(cbic) == "CopyBox";   /* copy 保留 class 类型与类名 */
+assert cbic.getTitle() == "T";   /* copy 后方法分派仍正常 */
+cbic.items[0] = 99; cbic.items[1][0] = 99;
+assert cbi.items[0] == 1 && cbi.items[1][0] == 2;
+assert len(cbic.items) == 2;
+
+print("all-types copy ALL PASS");

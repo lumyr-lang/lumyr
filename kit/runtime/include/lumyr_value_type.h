@@ -91,6 +91,8 @@ typedef enum {
     CAST_FILE,       // file：文件对象（路径+模式，按需 fopen/fclose，GC 安全）
     CAST_FOLDER,     // folder：目录对象（路径，目录操作）
     CAST_INT_INFER,  // 推断 int（无后缀小整数字面量）：溢出 int32 时弹性升级 int64；区别于显式 CAST_INT（严格截断）
+    CAST_FORMDATA,   // formdata：多部分表单数据（有序字段，文本/文件混合，multipart/form-data）
+    CAST_SOCKET      // socket：网络套接字（TCP/UDP/Unix 域，堆分配对象）
 } CastKind;
 
 // 值类型：语言支持的数据类型（包含原 FFI 的所有 C 类型，从 100 开始编号）
@@ -122,6 +124,7 @@ typedef enum {
     VAL_CALENDAR,    // calendar：综合日历对象（堆分配，月视图+农历+算术）
     VAL_FILE,        // file：文件对象（堆分配，路径+模式字符串，按需 IO）
     VAL_FOLDER,      // folder：目录对象（堆分配，路径，目录操作）
+    VAL_SOCKET,      // socket：网络套接字（TCP/UDP/Unix 域，堆分配，持有 fd）
 
     // C 类型（原 FFI 类型，从 100 开始编号，用于类型化数组和 FFI）
     VAL_VOID = 100,
@@ -148,7 +151,8 @@ typedef enum {
     VAL_CALLBACK,     // 回调函数
     VAL_BIGINT,       // bigint：任意精度整数（堆分配对象，PTR 栈存储指针）
     VAL_DECIMAL,      // decimal：高精度十进制浮点（堆分配对象，PTR 栈存储指针）
-    VAL_BITDECIMAL    // bitdecimal：基于 GMP mpf_t 的高精度十进制浮点（堆分配对象，PTR 栈存储指针）
+    VAL_BITDECIMAL,   // bitdecimal：基于 GMP mpf_t 的高精度十进制浮点（堆分配对象，PTR 栈存储指针）
+    VAL_FORMDATA      // formdata：多部分表单数据（堆分配，有序字段名+值，值可为文件）
 } ValueType;
 
 // 数组运行时对象，VAL_ARRAY 使用（原地修改语义，cap 预分配容量）
@@ -251,6 +255,8 @@ struct Value {
         void* calendar_obj;     // VAL_CALENDAR：CalendarObj* 指针（堆分配对象）
         void* file_obj;         // VAL_FILE：FileObj* 指针（堆分配对象）
         void* folder_obj;       // VAL_FOLDER：FolderObj* 指针（堆分配对象）
+        void* formdata_obj;     // VAL_FORMDATA：FormDataObj* 指针（堆分配对象）
+        void* socket_obj;       // VAL_SOCKET：SocketObj* 指针（堆分配对象）
     } v;
 };
 
@@ -408,20 +414,57 @@ typedef struct {
 } CalendarObj;
 
 // file 对象，VAL_FILE 使用（文件对象，堆分配，GC 管理）
-// 持有路径和模式字符串（gc_alloc 管理，gc_mark 递归标记字符串）
-// 不持有 FILE* 句柄：每次方法调用 fopen/fclose，避免 GC 回收时的资源泄漏
+// 两种场景：
+//   1) 磁盘文件：content==NULL，path 为真实路径，每次方法调用 fopen/fclose
+//   2) 内存文件：content!=NULL（由 file(name, bytes(...)) 构造），path 仅作文件名，
+//      内容驻留内存；HTTP 上传时直接发送，不落盘
 // mode：1="r" 只读（默认），2="w" 覆盖写，3="a" 追加
 typedef struct {
-    char* path;     // 文件路径（gc_alloc 管理）
+    char* path;     // 文件路径（内存文件时为文件名）
     char* mode;     // 打开模式字符串（"r"/"w"/"a"，gc_alloc 管理）
+    uint8_t* content;   // 非 NULL=内存文件内容（gc_alloc 管理）
+    int contentLen;     // 内容字节数
     uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
 } FileObj;
 
 // folder 对象，VAL_FOLDER 使用（目录对象，堆分配，GC 管理）
 // 持有路径字符串（gc_alloc 管理，gc_mark 递归标记字符串）
 typedef struct {
-    char* path;     // 目录路径（gc_alloc 管理）
+    char* path;     // 目录路径（gc_alloc 管理，gc_mark 递归标记）
     uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
 } FolderObj;
+
+// formdata 对象，VAL_FORMDATA 使用（多部分表单数据，堆分配，GC 管理）
+// 字段有序、允许同名（多文件上传）；vals[i] 为 VAL_FILE/VAL_BYTES 时作为文件 part，其余转文本
+// GC 管理：FormDataObj* 由 gc_alloc 分配；names 指针块与每个 name 字符串、vals 块均由 gc_alloc 管理，
+//          gc_mark 递归标记 vals[i]
+typedef struct {
+    char** names;    // 字段名指针数组（gc_alloc 块；每个 name 为 gc_alloc 字符串）
+    Value* vals;     // 字段值数组（gc_alloc 块，含内部 Value 引用）
+    int len;
+    int cap;
+    uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
+} FormDataObj;
+
+// socket 套接字类型枚举（区分 TCP/UDP/Unix 流/Unix 数据报）
+typedef enum {
+    SOCK_KIND_TCP = 0,          // TCP（AF_INET / AF_INET6，流套接字）
+    SOCK_KIND_UDP = 1,          // UDP（AF_INET / AF_INET6，数据报套接字）
+    SOCK_KIND_UNIX_STREAM = 2, // Unix 域流套接字（AF_UNIX，SOCK_STREAM）
+    SOCK_KIND_UNIX_DGRAM = 3   // Unix 域数据报套接字（AF_UNIX，SOCK_DGRAM）
+} SocketKind;
+
+// socket 对象，VAL_SOCKET 使用（网络套接字，堆分配，GC 管理）
+// 持有 fd 描述符；close() 后置 closed=1 并 close(fd)。
+// 注意：GC 无终结器，fd 为系统资源需显式 close()；未关闭则随进程退出由 OS 回收
+// （gc_mark 只标记自身 SocketObj，不递归）
+typedef struct {
+    int fd;                // 套接字描述符（-1=未创建/已关闭）
+    SocketKind kind;       // 套接字类型
+    uint8_t is_server;     // 1=服务端（已 bind+listen），0=客户端/未指定
+    uint8_t is_connected;  // 1=已连接（TCP/Unix 流，或 UDP 已设默认对端）
+    uint8_t closed;        // 1=已关闭（close() 调用后）
+    uint8_t stack_alloc;   // 0=堆分配，1=编译通道栈分配
+} SocketObj;
 
 #endif //LUMYR_VALUE_TYPE_H

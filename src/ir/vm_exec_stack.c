@@ -8,10 +8,12 @@
 #include "gc_runtime.h"
 #include "lm_map.h"
 #include "lm_type.h"
+#include "lm_formdata.h"
 #include "lm_time.h"
 #include "lm_container.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
+#include "lm_socket.h"
 #include "vm_exec.h"
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
@@ -260,6 +262,14 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             r = arr.v.array->items[i];
     } else if(arr.type == VAL_MAP) {
         r = lumyr_map_get(arr, idx);
+    } else if(arr.type == VAL_FORMDATA) {
+        /* fd["name"] 取第一个同名值；fd[整数] 按序号取值 */
+        if(idx.type == VAL_STRING) {
+            r = lumyr_formdata_get_by_name(arr, idx);
+        } else {
+            int64_t i = value_to_index(idx);
+            r = lumyr_formdata_get(arr, (int)i);
+        }
     } else if(arr.type == VAL_DATE || arr.type == VAL_DATETIME ||
               arr.type == VAL_TIME || arr.type == VAL_TIMEDELTA) {
         /* date 族字段访问：d.year / td.days 等（统一委托 lumyr_date_field） */
@@ -318,6 +328,11 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
         /* folder 字段访问：path/exists/count */
         if(idx.type == VAL_STRING) {
             r = lumyr_folder_field(arr, lumyr_str_cstr(&idx));
+        }
+    } else if(arr.type == VAL_SOCKET) {
+        /* socket 字段访问：fd/kind/closed/connected/isServer */
+        if(idx.type == VAL_STRING) {
+            r = lumyr_socket_field(arr, lumyr_str_cstr(&idx));
         }
     } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
         /* 动态属性访问：先按字段查；字段不存在再按方法构造 bound method；

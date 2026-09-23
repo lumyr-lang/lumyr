@@ -27,7 +27,12 @@
 #include "lm_container.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
+#include "lm_formdata.h"
+#include "lm_socket.h"
+#include "lm_type.h"
+#include "lm_json.h"
 #include "lm_io.h"
+#include "lm_http.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,6 +142,7 @@ static int bi_len_of(Value v) {
     case VAL_TUPLE:       return lumyr_tuple_len(v);
     case VAL_SET:         return lumyr_set_len(v);
     case VAL_BYTES:       return lumyr_bytes_len(v);
+    case VAL_FORMDATA:    return lumyr_formdata_len(v);
     default:              return 0;
     }
 }
@@ -264,6 +270,7 @@ static int bi_same_ref(Value a, Value b) {
     case VAL_BIGINT:      return a.v.bigint == b.v.bigint;
     case VAL_DECIMAL:     return a.v.decimal == b.v.decimal;
     case VAL_BITDECIMAL:  return a.v.bitdecimal == b.v.bitdecimal;
+    case VAL_FORMDATA:    return a.v.formdata_obj == b.v.formdata_obj;
     case VAL_GENERATOR:   return a.v.generator == b.v.generator;
     case VAL_FUNC:        return a.v.func.func_obj == b.v.func.func_obj;
     case VAL_STRING:      return strcmp(lumyr_str_cstr(&a), lumyr_str_cstr(&b)) == 0;
@@ -488,7 +495,390 @@ static int bi_need_args(const char* name, int argc, int need) {
     return 1;
 }
 
+/* formdata → map：同名聚合（单个=值，多个=数组，保序），file/bytes 值保留原样 */
+static Value bi_formdata_to_map(Value fd) {
+    FormDataObj* o = fd.v.formdata_obj;
+    Value m = val_map();
+    int n = o ? o->len : 0;
+    for(int i = 0; i < n; i++) {
+        Value k = lumyr_make_string(o->names[i] ? o->names[i] : "");
+        Value v = o->vals[i];
+        if(lumyr_map_has(m, k)) {
+            Value ex = lumyr_map_get(m, k);
+            if(ex.type == VAL_ARRAY) {
+                ValueArray* a = ex.v.array;
+                int old = a ? a->len : 0;
+                Value nr = val_array(old + 1);
+                for(int j = 0; j < old; j++) nr.v.array->items[j] = a->items[j];
+                nr.v.array->items[old] = v;
+                lumyr_map_set(&m, k, nr);
+            } else {
+                Value nr = val_array(2);
+                nr.v.array->items[0] = ex;
+                nr.v.array->items[1] = v;
+                lumyr_map_set(&m, k, nr);
+            }
+        } else {
+            lumyr_map_set(&m, k, v);
+        }
+    }
+    return m;
+}
+
+/* struct/class 实例 → map：全字段（含 private），保声明顺序 */
+static Value bi_instance_to_map(Value obj) {
+    Value m = val_map();
+    RuntimeTypeInfo* info = lumyr_instance_get_info(obj);
+    if(info) {
+        for(int i = 0; i < info->nfields; i++) {
+            Value fv = lumyr_field_get(obj, info->fields[i].name);
+            lumyr_map_set(&m, lumyr_make_string(info->fields[i].name), fv);
+        }
+    }
+    return m;
+}
+
+/* struct/class 实例 → [[field, v], ...]：保声明顺序 */
+static Value bi_instance_to_array(Value obj) {
+    RuntimeTypeInfo* info = lumyr_instance_get_info(obj);
+    int n = info ? info->nfields : 0;
+    Value r = val_array(n);
+    if(info) {
+        for(int i = 0; i < n; i++) {
+            Value pair = val_array(2);
+            pair.v.array->items[0] = lumyr_make_string(info->fields[i].name);
+            pair.v.array->items[1] = lumyr_field_get(obj, info->fields[i].name);
+            r.v.array->items[i] = pair;
+        }
+    }
+    return r;
+}
+
+/* JSON 清洗：递归把不可序列化类型转为等价值
+ * file → 路径字符串；bytes → 原始内容字符串；formdata/实例 → map；容器深拷贝递归 */
+static Value bi_json_clean(Value v) {
+    switch(v.type) {
+    case VAL_FILE: {
+        FileObj* f = (FileObj*)v.v.file_obj;
+        return lumyr_make_string((f && f->path) ? f->path : "");
+    }
+    case VAL_BYTES: {
+        BytesObj* b = (BytesObj*)v.v.bytes_obj;
+        if(!b || b->len <= 0 || !b->data) return lumyr_make_string("");
+        char* tmp = (char*)malloc((size_t)b->len + 1);
+        if(!tmp) return lumyr_make_string("");
+        memcpy(tmp, b->data, (size_t)b->len);
+        tmp[b->len] = '\0';
+        Value r = lumyr_make_string(tmp);
+        free(tmp);
+        return r;
+    }
+    case VAL_FORMDATA:
+        return bi_json_clean(bi_formdata_to_map(v));
+    case VAL_SOCKET: {
+        /* socket → 描述字符串（不可序列化为 JSON 结构） */
+        char* s = lumyr_socket_to_str(v);
+        Value r = lumyr_make_string(s ? s : "");
+        free(s);
+        return r;
+    }
+    case VAL_STRUCT_PTR:
+    case VAL_CLASS_PTR:
+        return bi_json_clean(bi_instance_to_map(v));
+    case VAL_ARRAY: {
+        ValueArray* a = v.v.array;
+        int n = a ? a->len : 0;
+        Value r = val_array(n);
+        for(int i = 0; i < n; i++) r.v.array->items[i] = bi_json_clean(a->items[i]);
+        return r;
+    }
+    case VAL_MAP: {
+        Value ks = lumyr_map_keys(v);
+        ValueArray* ka = ks.v.array;
+        int n = ka ? ka->len : 0;
+        Value r = val_map();
+        for(int i = 0; i < n; i++) {
+            Value nv = bi_json_clean(lumyr_map_get(v, ka->items[i]));
+            lumyr_map_set(&r, ka->items[i], nv);
+        }
+        return r;
+    }
+    default:
+        return v;
+    }
+}
+
+/* ============================================================
+ * 通用深拷贝：所有数据类型 .copy()
+ *   标量/不可变数值（int/double/bool/char/bigint/decimal/bytes/complex/calendar）→ 原值
+ *   string/容器（array/map/formdata/tuple/set/typed array）→ 独立副本并递归
+ *   struct/class 实例 → 新实例裸拷贝后，对引用字段递归（绕过 private 访问检查）
+ *   file/date/folder/error → 复制对象及其字符串
+ * ============================================================ */
+static Value bi_copy(Value v) {
+    switch(v.type) {
+    /* ---- 标量与不可变类型：直接返回（共享安全） ---- */
+    case VAL_NONE:
+    /* int 族 */
+    case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_INT32: case VAL_INT64:
+    case VAL_LONG: case VAL_LONG_LONG: case VAL_SHORT:
+    case VAL_UINT: case VAL_UINT8: case VAL_UINT16: case VAL_UINT32: case VAL_UINT64:
+    case VAL_ULONG: case VAL_UCHAR: case VAL_USHORT: case VAL_SIZE_T: case VAL_SSIZE_T:
+    /* double 族 */
+    case VAL_DOUBLE: case VAL_FLOAT: case VAL_LONG_DOUBLE:
+    case VAL_BOOL: case VAL_CHAR: case VAL_BYTE:
+    /* 不可变堆对象/纯值 */
+    case VAL_BIGINT: case VAL_DECIMAL: case VAL_BITDECIMAL:
+    case VAL_BYTES: case VAL_COMPLEX: case VAL_CALENDAR:
+    case VAL_FUNC: case VAL_GENERATOR:
+    case VAL_SOCKET:   /* socket：fd 为唯一系统资源，拷贝共享引用（不复制 fd，避免双重关闭） */
+        return v;
+
+    /* ---- 字符串：独立副本（make_string 内部按长度 SSO/GC 堆） ---- */
+    case VAL_STRING: {
+        const char* cs = lumyr_str_cstr(&v);
+        return lumyr_make_string(cs ? cs : "");
+    }
+
+    /* ---- 动态数组：逐项递归 ---- */
+    case VAL_ARRAY: {
+        ValueArray* a = v.v.array;
+        int n = a ? a->len : 0;
+        Value r = val_array(n);
+        for(int i = 0; i < n; i++)
+            r.v.array->items[i] = bi_copy(a->items[i]);
+        return r;
+    }
+
+    /* ---- map：键值均递归 ---- */
+    case VAL_MAP: {
+        Value ks = lumyr_map_keys(v);
+        ValueArray* ka = ks.v.array;
+        int n = ka ? ka->len : 0;
+        Value r = val_map();
+        for(int i = 0; i < n; i++) {
+            Value nk = bi_copy(ka->items[i]);
+            Value nv = bi_copy(lumyr_map_get(v, ka->items[i]));
+            lumyr_map_set(&r, nk, nv);
+        }
+        return r;
+    }
+
+    /* ---- typed array：缓冲复制；字符串元素逐个独立 ---- */
+    case VAL_TYPED_ARRAY: {
+        TypedArray* ta = v.v.typed_array;
+        int n = ta ? ta->len : 0;
+        ValueType et = ta ? ta->elem_type : VAL_INT;
+        Value rv; memset(&rv, 0, sizeof(rv));
+        rv.type = VAL_TYPED_ARRAY;
+        gc_disable();
+        TypedArray* nta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+        nta->elem_type = et;
+        nta->stack_alloc = 0;
+        nta->len = n;
+        nta->cap = ta ? ta->cap : (n > 0 ? n : 8);
+        if(n > 0 && ta->items) {
+            size_t isz = lumyr_etype_itemsz(et);
+            nta->items = gc_alloc_old(isz * (size_t)nta->cap, VAL_TYPED_ARRAY);
+            gc_mark_internal_buf(nta->items);
+            memcpy(nta->items, ta->items, isz * (size_t)n);
+            /* 字符串元素：逐个深拷贝（bigint/decimal 等不可变对象保持共享） */
+            if(et == VAL_STRING) {
+                for(int i = 0; i < n; i++) {
+                    char* p = ((char**)nta->items)[i];
+                    if(p) {
+                        size_t l = strlen(p);
+                        char* np = (char*)gc_alloc(l + 1, VAL_STRING);
+                        memcpy(np, p, l + 1);
+                        ((char**)nta->items)[i] = np;
+                    }
+                }
+            }
+        } else {
+            nta->items = NULL;
+        }
+        rv.v.typed_array = nta;
+        gc_enable();
+        return rv;
+    }
+
+    /* ---- tuple：逐项递归 ---- */
+    case VAL_TUPLE: {
+        TupleObj* t = (TupleObj*)v.v.tuple_obj;
+        int n = t ? t->len : 0;
+        Value* tmp = n > 0 ? (Value*)malloc(sizeof(Value) * (size_t)n) : NULL;
+        for(int i = 0; i < n; i++) tmp[i] = bi_copy(t->items[i]);
+        Value r = lumyr_tuple_make(n, tmp);
+        free(tmp);
+        return r;
+    }
+
+    /* ---- set：元素递归（经数组快照重建） ---- */
+    case VAL_SET: {
+        Value r = lumyr_set_make(0, NULL);
+        Value elems = lumyr_set_to_array(v);
+        ValueArray* ea = elems.v.array;
+        int n = ea ? ea->len : 0;
+        for(int i = 0; i < n; i++)
+            lumyr_set_add(&r, bi_copy(ea->items[i]));
+        return r;
+    }
+
+    /* ---- formdata：名/值逐项递归（保留重复名与顺序） ---- */
+    case VAL_FORMDATA: {
+        FormDataObj* o = (FormDataObj*)v.v.formdata_obj;
+        int n = o ? o->len : 0;
+        Value r = lumyr_formdata_make(n > 0 ? n : 4);
+        for(int i = 0; i < n; i++)
+            lumyr_formdata_add(r, lumyr_make_string(o->names[i] ? o->names[i] : ""),
+                               bi_copy(o->vals[i]));
+        return r;
+    }
+
+    /* ---- struct/class：浅拷贝实例后，对引用字段裸递归（绕过访问检查） ---- */
+    case VAL_STRUCT_PTR:
+    case VAL_CLASS_PTR: {
+        Value r = lumyr_instance_copy(v); /* gc 新实例 + memcpy */
+        RuntimeTypeInfo* info = lumyr_instance_get_info(v);
+        if(!info || r.type != v.type) return r;
+        char* base = (char*)r.v.struct_ptr;
+        for(int i = 0; i < info->nfields; i++) {
+            FieldInfo* fi = &info->fields[i];
+            int cls = lumyr_etype_stackcls(fi->valtype);
+            if(cls == 1 || cls == 2) continue; /* int/double 裸值已随 memcpy 复制 */
+            char* fp = base + fi->offset;
+            if(fi->valtype == VAL_STRING) {
+                char* p = *(char**)fp;
+                if(p) {
+                    size_t l = strlen(p);
+                    char* np = (char*)gc_alloc(l + 1, VAL_STRING);
+                    memcpy(np, p, l + 1);
+                    *(char**)fp = np;
+                }
+                continue;
+            }
+            void* p = *(void**)fp;
+            if(!p) continue; /* 可空字段未指向对象 */
+            Value fv; memset(&fv, 0, sizeof(fv));
+            fv.type = fi->valtype;
+            fv.v.struct_ptr = p;
+            Value cv = bi_copy(fv);
+            *(void**)fp = cv.v.struct_ptr; /* union 内各指针字段同偏移 */
+        }
+        return r;
+    }
+
+    /* ---- date/time：无内部引用，复制对象 ---- */
+    case VAL_DATE: case VAL_DATETIME: case VAL_TIME: case VAL_TIMEDELTA: {
+        DateObj* o = (DateObj*)v.v.date_obj;
+        if(!o) return v;
+        DateObj* no = (DateObj*)gc_alloc(sizeof(DateObj), v.type);
+        memcpy(no, o, sizeof(DateObj));
+        Value r = v; r.v.date_obj = no;
+        return r;
+    }
+
+    /* ---- folder：复制对象 + 路径串 ---- */
+    case VAL_FOLDER: {
+        FolderObj* o = (FolderObj*)v.v.folder_obj;
+        if(!o) return v;
+        FolderObj* no = (FolderObj*)gc_alloc(sizeof(FolderObj), VAL_FOLDER);
+        no->stack_alloc = 0;
+        if(o->path) {
+            size_t l = strlen(o->path);
+            no->path = (char*)gc_alloc(l + 1, VAL_STRING);
+            memcpy(no->path, o->path, l + 1);
+        } else no->path = NULL;
+        Value r = v; r.v.folder_obj = no;
+        return r;
+    }
+
+    /* ---- file：复制对象 + path/mode/content（内存文件内容独立） ---- */
+    case VAL_FILE: {
+        FileObj* o = (FileObj*)v.v.file_obj;
+        if(!o) return v;
+        FileObj* no = (FileObj*)gc_alloc(sizeof(FileObj), VAL_FILE);
+        no->stack_alloc = 0;
+        if(o->path) {
+            size_t l = strlen(o->path);
+            no->path = (char*)gc_alloc(l + 1, VAL_STRING);
+            memcpy(no->path, o->path, l + 1);
+        } else no->path = NULL;
+        if(o->mode) {
+            size_t l = strlen(o->mode);
+            no->mode = (char*)gc_alloc(l + 1, VAL_STRING);
+            memcpy(no->mode, o->mode, l + 1);
+        } else no->mode = NULL;
+        if(o->content && o->contentLen > 0) {
+            no->content = (uint8_t*)gc_alloc((size_t)o->contentLen + 1, VAL_BYTES);
+            memcpy(no->content, o->content, (size_t)o->contentLen);
+            no->content[o->contentLen] = 0;
+            no->contentLen = o->contentLen;
+        } else { no->content = NULL; no->contentLen = 0; }
+        Value r = v; r.v.file_obj = no;
+        return r;
+    }
+
+    /* ---- error：复制三个字符串 ---- */
+    case VAL_ERROR: {
+        Value r = v;
+        ValueError* ne = (ValueError*)malloc(sizeof(ValueError));
+        const char* t = v.v.err.type; const char* m = v.v.err.message; const char* s = v.v.err.stack;
+        ne->type = t ? strdup(t) : NULL;
+        ne->message = m ? strdup(m) : NULL;
+        ne->stack = s ? strdup(s) : NULL;
+        r.v.err = *ne;
+        free(ne);
+        return r;
+    }
+
+    default:
+        return v;
+    }
+}
+
 /* ===== 分发核心 ===== */
+
+/* socket 构造简写：按 config map 字段自动构造并 connect/bind+listen。
+ * config 字段（可选）：
+ *   TCP/UDP：host(string, 默认 127.0.0.1)、port(int)、listen(bool)、backlog(int)
+ *   Unix 流/数据报：path(string)、listen(bool)、backlog(int)
+ * listen=true → 服务端（TCP/Unix流：bind+listen；UDP/Unix数据报：bind）
+ * listen=false/缺省 → 客户端（TCP/Unix流：connect；UDP：connect 设默认对端） */
+static Value socket_ctor_from_config(int kind, Value config) {
+    Value v = lumyr_socket_make(kind);
+    if(v.type != VAL_SOCKET) return v;
+    int is_unix = (kind == SOCK_KIND_UNIX_STREAM || kind == SOCK_KIND_UNIX_DGRAM);
+    Value vListen = lumyr_map_get(config, lumyr_make_string("listen"));
+    int listen = lumyr_to_bool(vListen) ? 1 : 0;
+    int backlog = 128;
+    Value vBack = lumyr_map_get(config, lumyr_make_string("backlog"));
+    if(vBack.type != VAL_NONE) backlog = (int)bi_num_i64(vBack);
+    if(is_unix) {
+        Value vPath = lumyr_map_get(config, lumyr_make_string("path"));
+        if(vPath.type == VAL_STRING) {
+            const char* path = lumyr_str_cstr(&vPath);
+            if(listen) {
+                lumyr_socket_bind(v, path, 0);
+                if(kind == SOCK_KIND_UNIX_STREAM) lumyr_socket_listen(v, backlog);
+            } else {
+                lumyr_socket_connect(v, path, 0);
+            }
+        }
+    } else {
+        Value vHost = lumyr_map_get(config, lumyr_make_string("host"));
+        const char* host = (vHost.type == VAL_STRING) ? lumyr_str_cstr(&vHost) : "127.0.0.1";
+        Value vPort = lumyr_map_get(config, lumyr_make_string("port"));
+        int port = (vPort.type != VAL_NONE) ? (int)bi_num_i64(vPort) : 0;
+        if(listen) {
+            lumyr_socket_bind(v, host, port);
+            if(kind == SOCK_KIND_TCP) lumyr_socket_listen(v, backlog);
+        } else {
+            lumyr_socket_connect(v, host, port);
+        }
+    }
+    return v;
+}
 
 /* builtin_dispatch：id=BuiltinId；argv[0]=receiver；
  * is_method=1（OPC_CALL_BUILTIN_METHOD）argc 不含 receiver；
@@ -526,13 +916,109 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_STRING && recv.type != VAL_ARRAY &&
            recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP &&
            recv.type != VAL_TUPLE && recv.type != VAL_SET &&
-           recv.type != VAL_BYTES)
+           recv.type != VAL_BYTES && recv.type != VAL_FORMDATA)
             return bi_type_err("len", recv);
         *out = lumyr_make_int64(bi_len_of(recv));
         return 1;
     }
     case BUILTIN_TYPE:
         *out = lumyr_type(recv);
+        return 1;
+    /* ===== HTTP 请求（requests 内置模块；全局形式 argv[0]=url） ===== */
+    case BUILTIN_HTTP_GET: case BUILTIN_HTTP_POST: case BUILTIN_HTTP_PUT:
+    case BUILTIN_HTTP_DELETE: case BUILTIN_HTTP_HEAD: case BUILTIN_HTTP_PATCH: {
+        const char* method;
+        switch(id) {
+            case BUILTIN_HTTP_GET:    method = "GET"; break;
+            case BUILTIN_HTTP_POST:   method = "POST"; break;
+            case BUILTIN_HTTP_PUT:    method = "PUT"; break;
+            case BUILTIN_HTTP_DELETE: method = "DELETE"; break;
+            case BUILTIN_HTTP_HEAD:   method = "HEAD"; break;
+            default:                  method = "PATCH"; break;
+        }
+        if(!bi_need_args(method, argc, 1)) return 0;
+        Value config = argc >= 2 ? argv[1] : val_none();
+        Value result = lumyr_http_request(method, argv[0], config);
+        /* C 运行时错误以 VAL_ERROR 返回：走协作式 throw（同层跳 catch，
+         * 否则启动跨帧展开），随后返回 VM_LOOP_UNWIND 停止当前分派 */
+        if(result.type == VAL_ERROR) {
+            vm_except_throw_value(ctx, result);
+            return VM_LOOP_UNWIND;
+        }
+        *out = result;
+        return 1;
+    }
+    /* ===== FormData 字面量构造（内部 builtin） ===== */
+    case BUILTIN_FORMDATA_NEW:
+        *out = lumyr_formdata_make(4);
+        return 1;
+    case BUILTIN_FORMDATA_APPEND: {
+        if(!bi_need_args("formdata", argc, 3)) return 0;
+        if(argv[0].type != VAL_FORMDATA)
+            return bi_type_err("formdata.append", argv[0]);
+        if(!lumyr_formdata_add(argv[0], argv[1], argv[2])) return 0;
+        /* 返回 fd 本身：调用方逐字段复用（fd,name,value 弹 3 压 1，栈顶始终是 fd） */
+        *out = argv[0];
+        return 1;
+    }
+    /* ===== toMap/toArray/toJSONString：formdata + struct/class/type 实例 ===== */
+    case BUILTIN_TOMAP:
+        if(recv.type == VAL_FORMDATA) { *out = bi_formdata_to_map(recv); return 1; }
+        if(recv.type == VAL_STRUCT_PTR || recv.type == VAL_CLASS_PTR) {
+            *out = bi_instance_to_map(recv);
+            return 1;
+        }
+        if(recv.type == VAL_MAP) { *out = recv; return 1; } /* type 形状实例本质是 map */
+        return bi_type_err("toMap", recv);
+    case BUILTIN_TOARRAY:
+        if(recv.type == VAL_FORMDATA) {
+            /* [[name, v], ...]：与 <formdata>[[k,v],...] 字面量互转，保留重复名 */
+            FormDataObj* o = recv.v.formdata_obj;
+            int n = o ? o->len : 0;
+            Value r = val_array(n);
+            for(int i = 0; i < n; i++) {
+                Value pair = val_array(2);
+                pair.v.array->items[0] = lumyr_make_string(o->names[i] ? o->names[i] : "");
+                pair.v.array->items[1] = o->vals[i];
+                r.v.array->items[i] = pair;
+            }
+            *out = r;
+            return 1;
+        }
+        if(recv.type == VAL_STRUCT_PTR || recv.type == VAL_CLASS_PTR) {
+            *out = bi_instance_to_array(recv);
+            return 1;
+        }
+        if(recv.type == VAL_MAP) {
+            /* map → [[k, v], ...]（type 形状实例同 map；键序哈希序） */
+            Value ks = lumyr_map_keys(recv);
+            ValueArray* ka = ks.v.array;
+            int n = ka ? ka->len : 0;
+            Value r = val_array(n);
+            for(int i = 0; i < n; i++) {
+                Value pair = val_array(2);
+                pair.v.array->items[0] = ka->items[i];
+                pair.v.array->items[1] = lumyr_map_get(recv, ka->items[i]);
+                r.v.array->items[i] = pair;
+            }
+            *out = r;
+            return 1;
+        }
+        return bi_type_err("toArray", recv);
+    case BUILTIN_TOJSON: {
+        if(recv.type == VAL_FORMDATA || recv.type == VAL_STRUCT_PTR ||
+           recv.type == VAL_CLASS_PTR || recv.type == VAL_MAP || recv.type == VAL_ARRAY) {
+            Value cleaned = bi_json_clean(recv);
+            char* s = lumyr_json_stringify(cleaned);
+            *out = s ? lumyr_make_string(s) : val_none();
+            free(s);
+            return 1;
+        }
+        return bi_type_err("toJSONString", recv);
+    }
+    /* copy：所有数据类型深拷贝（无额外参数） */
+    case BUILTIN_COPY:
+        *out = bi_copy(recv);
         return 1;
     case BUILTIN_RANGE:
         *out = lumyr_range_n(argv, argc);
@@ -810,6 +1296,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_map_get(recv, argv[1]);
             return 1;
         }
+        if(recv.type == VAL_FORMDATA) {
+            /* formdata.get(name)：取第一个同名字段值（无匹配 none） */
+            if(!bi_need_args("get", argc, 1)) return 0;
+            *out = lumyr_formdata_get_by_name(recv, argv[1]);
+            return 1;
+        }
         /* tuple/bytes.get(i)：下标访问 */
         if(recv.type == VAL_TUPLE || recv.type == VAL_BYTES) {
             if(!bi_need_args("get", argc, 1)) return 0;
@@ -833,6 +1325,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type == VAL_MAP) {
             if(!bi_need_args("set", argc, 2)) return 0;
             lumyr_map_set(&recv, argv[1], argv[2]);
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_FORMDATA) {
+            /* formdata.set(name, value)：删除全部同名后写入（覆盖语义），返回 self */
+            if(!bi_need_args("set", argc, 2)) return 0;
+            if(!lumyr_formdata_set(recv, argv[1], argv[2])) return 0;
             *out = recv;
             return 1;
         }
@@ -1080,10 +1579,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
 
     /* ===== 字典组 ===== */
     case BUILTIN_KEYS:
+        if(recv.type == VAL_FORMDATA) { *out = lumyr_formdata_keys(recv); return 1; }
         if(recv.type != VAL_MAP) return bi_type_err("keys", recv);
         *out = lumyr_map_keys(recv);
         return 1;
     case BUILTIN_VALUES:
+        if(recv.type == VAL_FORMDATA) { *out = lumyr_formdata_values(recv); return 1; }
         if(recv.type != VAL_MAP) return bi_type_err("values", recv);
         *out = lumyr_map_values(recv);
         return 1;
@@ -1091,6 +1592,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type == VAL_SET) {
             if(!bi_need_args("has", argc, 1)) return 0;
             *out = lumyr_make_bool(lumyr_set_has(recv, argv[1]));
+            return 1;
+        }
+        if(recv.type == VAL_FORMDATA) {
+            if(!bi_need_args("has", argc, 1)) return 0;
+            *out = lumyr_make_bool(lumyr_formdata_has(recv, argv[1]));
             return 1;
         }
         if(recv.type != VAL_MAP) return bi_type_err("has", recv);
@@ -1116,6 +1622,64 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
 
     /* ===== 高阶函数（仅 VAL_ARRAY；回调跨边界装箱一次） ===== */
+    case BUILTIN_FOREACH: {
+        /* forEach(cb)：array→cb(v,i)；map→cb(k,v)；formdata→cb(name,v)（含重复名）
+         * map/formdata 先取键快照，避免回调内修改容器导致指针失效 */
+        if(recv.type == VAL_ARRAY) {
+            ValueArray* a = recv.v.array;
+            int n = a ? a->len : 0;
+            for(int i = 0; i < n; i++) {
+                Value fargs[2];
+                Value rv;
+                fargs[0] = a->items[i];
+                fargs[1] = lumyr_make_int64(i);
+                int rc = vm_call_func_value(ctx, argv[1], 2, fargs, &rv);
+                if(rc != 1) return rc; /* 0=错误 / VM_LOOP_UNWIND 传播 */
+            }
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_MAP) {
+            Value ks = lumyr_map_keys(recv);
+            ValueArray* ka = ks.v.array;
+            int n = ka ? ka->len : 0;
+            for(int i = 0; i < n; i++) {
+                Value fargs[2];
+                Value rv;
+                fargs[0] = ka->items[i];
+                fargs[1] = lumyr_map_get(recv, ka->items[i]);
+                int rc = vm_call_func_value(ctx, argv[1], 2, fargs, &rv);
+                if(rc != 1) return rc;
+            }
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_FORMDATA) {
+            Value ks = lumyr_formdata_keys(recv);
+            Value vs = lumyr_formdata_values(recv);
+            ValueArray* ka = ks.v.array;
+            ValueArray* va = vs.v.array;
+            int n = (ka && va) ? ka->len : 0;
+            for(int i = 0; i < n; i++) {
+                Value fargs[2];
+                Value rv;
+                fargs[0] = ka->items[i];
+                fargs[1] = va->items[i];
+                int rc = vm_call_func_value(ctx, argv[1], 2, fargs, &rv);
+                if(rc != 1) return rc;
+            }
+            *out = recv;
+            return 1;
+        }
+        return bi_type_err("forEach", recv);
+    }
+    case BUILTIN_GETALL:
+        if(recv.type == VAL_FORMDATA) {
+            if(!bi_need_args("getAll", argc, 1)) return 0;
+            *out = lumyr_formdata_get_all(recv, argv[1]);
+            return 1;
+        }
+        return bi_type_err("getAll", recv);
     case BUILTIN_MAP: {
         if(recv.type != VAL_ARRAY) return bi_type_err("map", recv);
         if(!bi_need_args("map", argc, 1)) return 0;
@@ -1528,6 +2092,25 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_SEND: {
+        /* socket 分支：s.send(data [, flags]) → 实际发送字节数
+         * data 为 bytes 时按原始字节发送（二进制安全，可含 NUL）；否则 value_to_str */
+        if(recv.type == VAL_SOCKET) {
+            int nuser = is_method ? argc : argc - 1;
+            if(nuser < 1) { runtime_error("send(data [, flags]) 至少需要 1 个参数"); return 0; }
+            int flags = (nuser >= 2) ? (int)bi_num_i64(argv[2]) : 0;
+            Value dataArg = argv[1];
+            if(dataArg.type == VAL_BYTES) {
+                BytesObj* b = (BytesObj*)dataArg.v.bytes_obj;
+                const char* d = b ? (const char*)b->data : "";
+                int dlen = b ? b->len : 0;
+                *out = lumyr_socket_send(recv, d, dlen, flags);
+            } else {
+                char* s = value_to_str(dataArg);
+                *out = lumyr_socket_send(recv, s, -1, flags);
+                free(s);
+            }
+            return 1;
+        }
         /* send(gen, val)：向生成器发送值，返回下一个 yield 值 */
         if(!bi_need_args("send", argc, 2)) return 0;
         if(recv.type != VAL_GENERATOR || !recv.v.generator)
@@ -1550,6 +2133,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_CLOSE: {
+        /* socket 分支：s.close() → 关闭套接字 */
+        if(recv.type == VAL_SOCKET) {
+            *out = lumyr_socket_close(recv);
+            return 1;
+        }
         /* close(gen)：关闭生成器，释放资源 */
         if(!bi_need_args("close", argc, 1)) return 0;
         if(recv.type != VAL_GENERATOR || !recv.v.generator)
@@ -1922,10 +2510,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     }
     /* ===== file 文件对象 ===== */
     case BUILTIN_FILE_MAKE: {
-        /* file(path [, mode])：全局形式 argv[0]=path */
+        /* file(path [, mode])：磁盘文件；file(name, bytes(...))：内存文件 */
         if(argc < 1 || argv[0].type != VAL_STRING) {
             runtime_error("file() 至少需要 1 个路径字符串参数");
             return 0;
+        }
+        if(argc >= 2 && argv[1].type == VAL_BYTES) {
+            *out = lumyr_file_from_bytes(lumyr_str_cstr(&argv[0]), argv[1]);
+            return 1;
         }
         const char* mode = (argc >= 2 && argv[1].type == VAL_STRING) ? lumyr_str_cstr(&argv[1]) : "r";
         *out = lumyr_file_make(lumyr_str_cstr(&argv[0]), mode);
@@ -1991,6 +2583,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_FILE_APPEND: {
+        if(recv.type == VAL_FORMDATA) {
+            /* formdata.append(name, value)：追加（同名允许多次，多值/多文件语义），返回 self */
+            if(!bi_need_args("append", argc, 2)) return 0;
+            if(!lumyr_formdata_add(recv, argv[1], argv[2])) return 0;
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_FILE) return bi_type_err("append", recv);
         if(argc < 1) { runtime_error("append(s) 需要 1 个参数"); return 0; }
         char* s = value_to_str(argv[1]);
@@ -2012,6 +2611,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_FILE_DELETE: {
+        if(recv.type == VAL_FORMDATA) {
+            /* fd.delete(name)：删除全部同名字段（原地），返回 self（与 set 链式语义一致） */
+            if(!bi_need_args("delete", argc, 1)) return 0;
+            lumyr_formdata_delete(recv, argv[1]);
+            *out = recv;
+            return 1;
+        }
         if(recv.type != VAL_FILE) return bi_type_err("delete", recv);
         *out = lumyr_file_delete(recv);
         return 1;
@@ -2116,6 +2722,150 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_FOLDER) return bi_type_err("glob", recv);
         if(argc < 1 || argv[1].type != VAL_STRING) { runtime_error("glob(pattern) 需要 1 个字符串参数"); return 0; }
         *out = lumyr_folder_glob(recv, lumyr_str_cstr(&argv[1]));
+        return 1;
+    }
+
+    /* ===== socket 网络套接字 ===== */
+    /* 构造：无参→裸 socket；1 个 map 参→按 config 自动 connect/bind+listen */
+    case BUILTIN_TCP_SOCKET: {
+        int ci = is_method ? 1 : 0;
+        if(argc > ci && argv[ci].type == VAL_MAP)
+            *out = socket_ctor_from_config(SOCK_KIND_TCP, argv[ci]);
+        else
+            *out = lumyr_socket_make(SOCK_KIND_TCP);
+        return 1;
+    }
+    case BUILTIN_UDP_SOCKET: {
+        int ci = is_method ? 1 : 0;
+        if(argc > ci && argv[ci].type == VAL_MAP)
+            *out = socket_ctor_from_config(SOCK_KIND_UDP, argv[ci]);
+        else
+            *out = lumyr_socket_make(SOCK_KIND_UDP);
+        return 1;
+    }
+    case BUILTIN_UNIX_SOCKET: {
+        int ci = is_method ? 1 : 0;
+        if(argc > ci && argv[ci].type == VAL_MAP)
+            *out = socket_ctor_from_config(SOCK_KIND_UNIX_STREAM, argv[ci]);
+        else
+            *out = lumyr_socket_make(SOCK_KIND_UNIX_STREAM);
+        return 1;
+    }
+    case BUILTIN_UNIX_DGRAM_SOCKET: {
+        int ci = is_method ? 1 : 0;
+        if(argc > ci && argv[ci].type == VAL_MAP)
+            *out = socket_ctor_from_config(SOCK_KIND_UNIX_DGRAM, argv[ci]);
+        else
+            *out = lumyr_socket_make(SOCK_KIND_UNIX_DGRAM);
+        return 1;
+    }
+    case BUILTIN_SOCKET_CONNECT: {
+        /* s.connect(host, port) / s.connect(path)（Unix） */
+        if(recv.type != VAL_SOCKET) return bi_type_err("connect", recv);
+        SocketObj* o = (SocketObj*)recv.v.socket_obj;
+        int nuser = is_method ? argc : argc - 1;
+        if(!o) { runtime_error("connect() 套接字对象无效"); return 0; }
+        if(o->kind == SOCK_KIND_UNIX_STREAM || o->kind == SOCK_KIND_UNIX_DGRAM) {
+            /* Unix：1 个路径参数 */
+            if(nuser < 1 || argv[1].type != VAL_STRING) { runtime_error("connect(path) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_socket_connect(recv, lumyr_str_cstr(&argv[1]), 0);
+        } else {
+            /* TCP/UDP：host + port */
+            if(nuser < 2 || argv[1].type != VAL_STRING) { runtime_error("connect(host, port) 需要 2 个参数"); return 0; }
+            *out = lumyr_socket_connect(recv, lumyr_str_cstr(&argv[1]), (int)bi_num_i64(argv[2]));
+        }
+        return 1;
+    }
+    case BUILTIN_SOCKET_BIND: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("bind", recv);
+        SocketObj* o = (SocketObj*)recv.v.socket_obj;
+        int nuser = is_method ? argc : argc - 1;
+        if(!o) { runtime_error("bind() 套接字对象无效"); return 0; }
+        if(o->kind == SOCK_KIND_UNIX_STREAM || o->kind == SOCK_KIND_UNIX_DGRAM) {
+            if(nuser < 1 || argv[1].type != VAL_STRING) { runtime_error("bind(path) 需要 1 个字符串参数"); return 0; }
+            *out = lumyr_socket_bind(recv, lumyr_str_cstr(&argv[1]), 0);
+        } else {
+            if(nuser < 2 || argv[1].type != VAL_STRING) { runtime_error("bind(host, port) 需要 2 个参数"); return 0; }
+            *out = lumyr_socket_bind(recv, lumyr_str_cstr(&argv[1]), (int)bi_num_i64(argv[2]));
+        }
+        return 1;
+    }
+    case BUILTIN_SOCKET_LISTEN: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("listen", recv);
+        int nuser = is_method ? argc : argc - 1;
+        int backlog = (nuser >= 1) ? (int)bi_num_i64(argv[1]) : 128;
+        *out = lumyr_socket_listen(recv, backlog);
+        return 1;
+    }
+    case BUILTIN_SOCKET_ACCEPT: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("accept", recv);
+        *out = lumyr_socket_accept(recv);
+        return 1;
+    }
+    case BUILTIN_SOCKET_RECV: {
+        /* s.recv([len [, flags [, asBytes]]) → 字符串（默认）或 bytes（asBytes=true，二进制安全） */
+        if(recv.type != VAL_SOCKET) return bi_type_err("recv", recv);
+        int nuser = is_method ? argc : argc - 1;
+        int maxLen = (nuser >= 1) ? (int)bi_num_i64(argv[1]) : 4096;
+        int flags = (nuser >= 2) ? (int)bi_num_i64(argv[2]) : 0;
+        int asBytes = (nuser >= 3) ? (lumyr_to_bool(argv[3]) ? 1 : 0) : 0;
+        *out = lumyr_socket_recv(recv, maxLen, flags, asBytes);
+        return 1;
+    }
+    case BUILTIN_SOCKET_SENDTO: {
+        /* s.sendTo(data, host, port) / s.sendTo(data, path) → 字节数
+         * data 为 bytes 时按原始字节发送（二进制安全） */
+        if(recv.type != VAL_SOCKET) return bi_type_err("sendTo", recv);
+        SocketObj* o = (SocketObj*)recv.v.socket_obj;
+        int nuser = is_method ? argc : argc - 1;
+        if(!o) { runtime_error("sendTo() 套接字对象无效"); return 0; }
+        Value dataArg = argv[1];
+        const char* d = NULL; int dlen = -1; char* dalloc = NULL;
+        if(dataArg.type == VAL_BYTES) {
+            BytesObj* b = (BytesObj*)dataArg.v.bytes_obj;
+            d = b ? (const char*)b->data : "";
+            dlen = b ? b->len : 0;
+        } else {
+            dalloc = value_to_str(dataArg);
+            d = dalloc;
+        }
+        if(o->kind == SOCK_KIND_UNIX_STREAM || o->kind == SOCK_KIND_UNIX_DGRAM) {
+            /* Unix 数据报：data + path */
+            if(nuser < 2 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, path) 需要 2 个参数"); free(dalloc); return 0; }
+            *out = lumyr_socket_sendto(recv, d, dlen, lumyr_str_cstr(&argv[2]), 0, 0);
+        } else {
+            /* UDP：data + host + port */
+            if(nuser < 3 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, host, port) 需要 3 个参数"); free(dalloc); return 0; }
+            *out = lumyr_socket_sendto(recv, d, dlen, lumyr_str_cstr(&argv[2]), (int)bi_num_i64(argv[3]), 0);
+        }
+        free(dalloc);
+        return 1;
+    }
+    case BUILTIN_SOCKET_RECVFROM: {
+        /* s.recvFrom([len]) → [data, addr] */
+        if(recv.type != VAL_SOCKET) return bi_type_err("recvFrom", recv);
+        int nuser = is_method ? argc : argc - 1;
+        int maxLen = (nuser >= 1) ? (int)bi_num_i64(argv[1]) : 4096;
+        *out = lumyr_socket_recvfrom(recv, maxLen, 0);
+        return 1;
+    }
+    case BUILTIN_SOCKET_SETOPT: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("setOption", recv);
+        int nuser = is_method ? argc : argc - 1;
+        if(nuser < 2 || argv[1].type != VAL_STRING) { runtime_error("setOption(name, val) 需要 2 个参数"); return 0; }
+        *out = lumyr_socket_set_option(recv, lumyr_str_cstr(&argv[1]), argv[2]);
+        return 1;
+    }
+    case BUILTIN_SOCKET_GETOPT: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("getOption", recv);
+        int nuser = is_method ? argc : argc - 1;
+        if(nuser < 1 || argv[1].type != VAL_STRING) { runtime_error("getOption(name) 需要 1 个参数"); return 0; }
+        *out = lumyr_socket_get_option(recv, lumyr_str_cstr(&argv[1]));
+        return 1;
+    }
+    case BUILTIN_SOCKET_FILENO: {
+        if(recv.type != VAL_SOCKET) return bi_type_err("fileno", recv);
+        *out = lumyr_socket_fileno(recv);
         return 1;
     }
 
@@ -2288,6 +3038,34 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FOLDER_MOVE_TO: return "moveTo";
     case BUILTIN_FOLDER_RENAME_TO: return "renameTo";
     case BUILTIN_FOLDER_GLOB: return "glob";
+    case BUILTIN_HTTP_GET: return "http_get";
+    case BUILTIN_HTTP_POST: return "http_post";
+    case BUILTIN_HTTP_PUT: return "http_put";
+    case BUILTIN_HTTP_DELETE: return "http_delete";
+    case BUILTIN_HTTP_HEAD: return "http_head";
+    case BUILTIN_HTTP_PATCH: return "http_patch";
+    case BUILTIN_FORMDATA_NEW: return "__formdata_new";
+    case BUILTIN_FORMDATA_APPEND: return "__formdata_append";
+    case BUILTIN_FOREACH: return "forEach";
+    case BUILTIN_GETALL: return "getAll";
+    case BUILTIN_TOMAP: return "toMap";
+    case BUILTIN_TOARRAY: return "toArray";
+    case BUILTIN_TOJSON: return "toJSONString";
+    case BUILTIN_COPY: return "copy";
+    case BUILTIN_TCP_SOCKET: return "tcpSocket";
+    case BUILTIN_UDP_SOCKET: return "udpSocket";
+    case BUILTIN_UNIX_SOCKET: return "unixSocket";
+    case BUILTIN_UNIX_DGRAM_SOCKET: return "unixDgramSocket";
+    case BUILTIN_SOCKET_CONNECT: return "connect";
+    case BUILTIN_SOCKET_BIND: return "bind";
+    case BUILTIN_SOCKET_LISTEN: return "listen";
+    case BUILTIN_SOCKET_ACCEPT: return "accept";
+    case BUILTIN_SOCKET_RECV: return "recv";
+    case BUILTIN_SOCKET_SENDTO: return "sendTo";
+    case BUILTIN_SOCKET_RECVFROM: return "recvFrom";
+    case BUILTIN_SOCKET_SETOPT: return "setOption";
+    case BUILTIN_SOCKET_GETOPT: return "getOption";
+    case BUILTIN_SOCKET_FILENO: return "fileno";
     default: return "?";
     }
 }

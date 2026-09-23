@@ -287,6 +287,10 @@ static Value bytes_alloc(const uint8_t* data, int len) {
     return r;
 }
 
+Value lumyr_bytes_from_buf(const uint8_t* data, int len) {
+    return bytes_alloc(data, len);
+}
+
 Value lumyr_bytes_make(int argc, const Value* args) {
     if(argc == 0) return bytes_alloc(NULL, 0);
     // 单参数：字符串 或 数组
