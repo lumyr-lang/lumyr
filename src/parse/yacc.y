@@ -33,6 +33,9 @@ static char** g_prop_struct_names = NULL;
 /* 字段级访问器策略：-1=无字段注解（默认，随类级 @Data 决策）；0=@Xxx(false)；1=@Xxx(true)/无参 */
 static int* g_prop_getter_policy = NULL;
 static int* g_prop_setter_policy = NULL;
+/* 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
+ * 声明收敛语义依赖：赋值 []/字面量给该字段时按元素类型构造 TypedArray */
+static int* g_prop_elem_kinds = NULL;
 static int g_prop_n = 0, g_prop_cap = 0;
 static void type_prop_push(char* name, ValueType vt, int access_modifier, int is_const, char* struct_name)
 {
@@ -45,6 +48,7 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
         g_prop_struct_names = (char**)realloc(g_prop_struct_names, (size_t)nc * sizeof(char*));
         g_prop_getter_policy = (int*)realloc(g_prop_getter_policy, (size_t)nc * sizeof(int));
         g_prop_setter_policy = (int*)realloc(g_prop_setter_policy, (size_t)nc * sizeof(int));
+        g_prop_elem_kinds = (int*)realloc(g_prop_elem_kinds, (size_t)nc * sizeof(int));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
@@ -54,7 +58,13 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
     g_prop_struct_names[g_prop_n] = struct_name;  /* 不复制：归约动作的 $3 所有权转移 */
     g_prop_getter_policy[g_prop_n] = -1;
     g_prop_setter_policy[g_prop_n] = -1;
+    g_prop_elem_kinds[g_prop_n] = CAST_NONE;
     g_prop_n++;
+}
+/* 紧跟 type_prop_push 调用：设置刚收集字段的类型化数组元素 CastKind */
+static void type_prop_set_elem(int elem_ck)
+{
+    if(g_prop_n > 0) g_prop_elem_kinds[g_prop_n - 1] = elem_ck;
 }
 static void type_prop_clear(void)
 {
@@ -65,9 +75,11 @@ static void type_prop_clear(void)
     free(g_prop_names); free(g_prop_types); free(g_prop_access_modifiers);
     free(g_prop_const_flags); free(g_prop_struct_names);
     free(g_prop_getter_policy); free(g_prop_setter_policy);
+    free(g_prop_elem_kinds);
     g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
     g_prop_const_flags = NULL; g_prop_struct_names = NULL;
     g_prop_getter_policy = NULL; g_prop_setter_policy = NULL;
+    g_prop_elem_kinds = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -75,6 +87,7 @@ static void type_prop_clear(void)
 static char** g_struct_prop_names = NULL;
 static CastKind* g_struct_cast_kinds = NULL;
 static char** g_struct_prop_struct_names = NULL;
+static int* g_struct_elem_kinds = NULL; /* 类型化数组字段元素 CastKind（同 g_prop_elem_kinds） */
 static int g_struct_prop_n = 0, g_struct_prop_cap = 0;
 static char* g_current_struct_name = NULL; /* 当前正在解析的 struct 名，用于方法注册 */
 
@@ -508,12 +521,19 @@ static void struct_prop_push(char* name, CastKind ck, char* struct_name)
         g_struct_prop_names = (char**)realloc(g_struct_prop_names, (size_t)nc * sizeof(char*));
         g_struct_cast_kinds = (CastKind*)realloc(g_struct_cast_kinds, (size_t)nc * sizeof(CastKind));
         g_struct_prop_struct_names = (char**)realloc(g_struct_prop_struct_names, (size_t)nc * sizeof(char*));
+        g_struct_elem_kinds = (int*)realloc(g_struct_elem_kinds, (size_t)nc * sizeof(int));
         g_struct_prop_cap = nc;
     }
     g_struct_prop_names[g_struct_prop_n] = name;
     g_struct_cast_kinds[g_struct_prop_n] = ck;
     g_struct_prop_struct_names[g_struct_prop_n] = struct_name;
+    g_struct_elem_kinds[g_struct_prop_n] = CAST_NONE;
     g_struct_prop_n++;
+}
+/* 紧跟 struct_prop_push 调用：设置刚收集字段的类型化数组元素 CastKind */
+static void struct_prop_set_elem(int elem_ck)
+{
+    if(g_struct_prop_n > 0) g_struct_elem_kinds[g_struct_prop_n - 1] = elem_ck;
 }
 static void struct_prop_clear(void)
 {
@@ -522,7 +542,9 @@ static void struct_prop_clear(void)
         if(g_struct_prop_struct_names[i]) free(g_struct_prop_struct_names[i]);
     }
     free(g_struct_prop_names); free(g_struct_cast_kinds); free(g_struct_prop_struct_names);
+    free(g_struct_elem_kinds);
     g_struct_prop_names = NULL; g_struct_cast_kinds = NULL; g_struct_prop_struct_names = NULL;
+    g_struct_elem_kinds = NULL;
     g_struct_prop_n = 0; g_struct_prop_cap = 0;
 }
 
@@ -1223,7 +1245,7 @@ closed_stmt
     | struct_header struct_prop_list RBRACE {
           /* struct Point { x: int, y: int, func dist(): int {...} }：编译期注册 struct 类型 */
           /* g_current_struct_name 已在 struct_header 中设置 */
-          struct_register(g_current_struct_name, g_struct_prop_names, g_struct_cast_kinds, g_struct_prop_struct_names, g_struct_prop_n);
+          struct_register(g_current_struct_name, g_struct_prop_names, g_struct_cast_kinds, g_struct_prop_struct_names, g_struct_prop_n, g_struct_elem_kinds);
           /* struct_register 已完成，struct_lookup 现在可用；
            * struct_add_method 内部统一完成：self 约束、字节码编译（唯一内部名）、
            * TypeDef + RuntimeTypeInfo 方法表登记 */
@@ -1242,7 +1264,7 @@ closed_stmt
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -1290,7 +1312,7 @@ closed_stmt
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
@@ -1342,7 +1364,7 @@ closed_stmt
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1385,7 +1407,7 @@ closed_stmt
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -1433,7 +1455,7 @@ closed_stmt
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1484,7 +1506,7 @@ closed_stmt
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -1539,7 +1561,7 @@ closed_stmt
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
@@ -1588,7 +1610,7 @@ closed_stmt
     | abstract_class_header_inherit class_prop_list RBRACE {
           /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1631,7 +1653,7 @@ closed_stmt
     | abstract_class_header_inherit_implements class_prop_list RBRACE {
           /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1686,7 +1708,7 @@ closed_stmt
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1737,7 +1759,7 @@ closed_stmt
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -2851,9 +2873,11 @@ type_prop
           type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
-    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
+    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT）
+     * 元素 CastKind 一并收集（$3）：声明收敛赋值依赖（[] → TypedArray(elem)） */
     | ID COLON TOK_TYPE_ANNOT {
         type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+        type_prop_set_elem((int)$3);
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID {
@@ -2861,6 +2885,7 @@ type_prop
             yyerror("泛型数组字段后缀须为 'array'");
         }
         type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+        type_prop_set_elem((int)$3);
         free($4);
         $$ = ast_none();
     }
@@ -2920,9 +2945,11 @@ struct_prop
             $$ = ast_none();
         }
       }
-    /* 泛型数组字段：<int> 或 <int>array（词法器把 <int> 整体识别为 TOK_TYPE_ANNOT） */
+    /* 泛型数组字段：<int> 或 <int>array（词法器把 <int> 整体识别为 TOK_TYPE_ANNOT）
+     * 元素 CastKind 一并收集（$3）：声明收敛赋值依赖 */
     | ID COLON TOK_TYPE_ANNOT SEMI {
         struct_prop_push($1, CAST_TYPED_ARRAY, NULL);
+        struct_prop_set_elem((int)$3);
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID SEMI {
@@ -2930,6 +2957,7 @@ struct_prop
             yyerror("泛型数组字段后缀须为 'array'");
         }
         struct_prop_push($1, CAST_TYPED_ARRAY, NULL);
+        struct_prop_set_elem((int)$3);
         free($4);
         $$ = ast_none();
     }
@@ -2994,7 +3022,7 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
@@ -3053,7 +3081,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -3113,7 +3141,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -3167,7 +3195,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -3195,7 +3223,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -3325,9 +3353,11 @@ class_prop
           type_prop_push($3, vt, $1, 1, sn);
           $$ = ast_none();
       }
-    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT） */
+    /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT，带分号变体）
+     * 元素 CastKind 一并收集：声明收敛赋值依赖 */
     | ID COLON TOK_TYPE_ANNOT SEMI {
         type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+        type_prop_set_elem((int)$3);
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID SEMI {
@@ -3335,6 +3365,7 @@ class_prop
             yyerror("泛型数组字段后缀须为 'array'");
         }
         type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+        type_prop_set_elem((int)$3);
         free($4);
         $$ = ast_none();
     }
@@ -3354,6 +3385,7 @@ class_prop
     /* 带访问修饰符的泛型数组字段：private items: <int> */
     | access_modifier ID COLON TOK_TYPE_ANNOT SEMI {
         type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+        type_prop_set_elem((int)$4);
         $$ = ast_none();
     }
     | access_modifier ID COLON TOK_TYPE_ANNOT ID SEMI {
@@ -3361,6 +3393,7 @@ class_prop
             yyerror("泛型数组字段后缀须为 'array'");
         }
         type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+        type_prop_set_elem((int)$4);
         free($5);
         $$ = ast_none();
     }

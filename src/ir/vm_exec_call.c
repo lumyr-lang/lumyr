@@ -16,6 +16,8 @@
 #include "lumyr_value_type.h"
 #include "lm_value.h"
 #include "lm_type.h"
+#include "vm_exec.h"
+#include "lm_formdata.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -265,6 +267,99 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
     /* 5. 按 callsite 静态返回类型压栈 */
     push_call_result(cs, ret);
     return 1;
+}
+
+/* ========== 动态方法调用 CALL_METHODV ==========
+ * owner 类型未知的方法调用统一入口（编译期无法区分 receiver 是用户实例还是
+ * 原生容器）。此前经 INDEX+CALLV 兜底：实例走 bound method 尚可，但原生容器的
+ * 内置方法名（map.get/arr.len 等）在 INDEX 阶段被当键查询而丢失方法语义。
+ * 运行时按 receiver 实际类型分派：
+ *   用户实例（VAL_STRUCT_PTR/VAL_CLASS_PTR）→ 方法表 bound 分派（用户方法优先）；
+ *   map/formdata → 先查键（支持 map 存函数值的动态调用），miss 再按内置方法名
+ *   经 builtin_dispatch 兜底（原生容器 len/get/... 的方法形式）；
+ *   其余 → 标准类型错误。
+ * a=callsite 下标（callee=方法名，argc 含 receiver）；VALUE 栈顶 argc 个 */
+int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
+    int cs_idx = in->a;
+    CallSite* cs = &ctx->fn->callsites[cs_idx];
+    int argc = cs->argc;              /* 含 receiver */
+    const char* mname = cs->callee;
+    if (argc < 1 || !mname) {
+        fprintf(stderr, "VM: CALL_METHODV 缺少 receiver 或方法名\n");
+        return 0;
+    }
+
+    Value* argv = (Value*)malloc(sizeof(Value) * (size_t)argc);
+    if (!argv) { perror("vm_exec_call_method_dyn"); return 0; }
+    for (int i = argc - 1; i >= 0; --i)
+        stack_vm_pop(g_stack_mgr, STACK_VALUE, &argv[i]);
+    Value recv = argv[0];
+
+    /* 1. 用户实例：方法表分派（bound method，self 自动占 slot0） */
+    if ((recv.type == VAL_STRUCT_PTR || recv.type == VAL_CLASS_PTR) &&
+        recv.v.struct_ptr) {
+        Value fv;
+        if (!vm_make_bound_method(recv, mname, &fv)) {
+            Value tn = lumyr_type(recv);
+            fprintf(stderr, "运行时错误: 类型 %s 没有方法 \"%s\" 的可执行实现\n",
+                    lumyr_str_cstr(&tn), mname);
+            free(argv);
+            return 0;
+        }
+        Value outv;
+        int status = vm_call_func_value(ctx, fv, argc - 1, &argv[1], &outv);
+        free(argv);
+        /* 与 vm_exec_callv 同构：rc==1（成功）压结果；
+         * 不可用 VM_LOOP_UNWIND(1) 特判——它与成功值 1 冲突，
+         * 误判会跳过压栈导致调用方拿到空栈（.size 返回 null 的根因） */
+        if (status == 1 && cs->keep_result)
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &outv);
+        return status;
+    }
+
+    /* 2. map/formdata：先查键（容器可存函数值，字段调用优先于内置） */
+    if (recv.type == VAL_MAP || recv.type == VAL_FORMDATA) {
+        Value fv;
+        memset(&fv, 0, sizeof(fv));
+        if (recv.type == VAL_MAP) {
+            Value key = lumyr_make_string(mname);
+            fv = lumyr_map_get(recv, key);
+        } else {
+            fv = lumyr_formdata_get_by_name(recv, lumyr_make_string(mname));
+        }
+        if (fv.type == VAL_FUNC && fv.v.func.func_obj) {
+            Value outv;
+            int status = vm_call_func_value(ctx, fv, argc - 1, &argv[1], &outv);
+            free(argv);
+            /* 与 vm_exec_callv 同构：rc==1（成功）压结果；
+             * vm_call_func_value 的 UNWIND 也返回 1，无法区分，统一按成功压栈 */
+            if (status == 1 && cs->keep_result)
+                stack_vm_push(g_stack_mgr, STACK_VALUE, &outv);
+            return status;
+        }
+    }
+
+    /* 3. 内置方法兜底：数组/字符串/类型化数组/map 等所有内置类型的动态方法调用
+     * （编译期"用户方法优先"豁免内置截胡后落到本指令的内置名统一在此分派）
+     * is_method=1：argv[0]=receiver，argc-1 个实参。
+     * 返回 1=成功（压结果）、0=失败；与 vm_exec_callv 同构，
+     * 不可用 VM_LOOP_UNWIND(1) 特判（与成功值 1 冲突） */
+    int bid = builtin_id_by_name(mname);
+    if (bid >= 0) {
+        Value outv;
+        int status = builtin_dispatch(ctx, bid, argv, argc - 1, &outv, 1);
+        free(argv);
+        if (status == 1 && cs->keep_result)
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &outv);
+        return status;
+    }
+
+    /* 4. 其余：标准类型错误 */
+    Value tn = lumyr_type(recv);
+    fprintf(stderr, "运行时错误: 类型 %s 不支持方法 .%s\n",
+            lumyr_str_cstr(&tn), mname);
+    free(argv);
+    return 0;
 }
 
 /* ========== 获取函数值（裸函数名引用） ========== */

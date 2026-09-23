@@ -1,0 +1,76 @@
+// ============================================================
+// lumyr-Map：MapInterface 接口 + AbstractMap 抽象基类
+// 所有映射（Map）封装类的统一契约与通用实现
+//
+// 用法：
+//   import <Function/Map>;
+//   public class HashMap extends AbstractMap { ... }
+// ============================================================
+
+import <Function/Object>;
+
+// 统一映射契约
+interface MapInterface {
+    func size(): int;
+    func isEmpty(): bool;
+    func get(key);
+    func put(key, val);
+    func remove(key);
+    func has(key): bool;
+    func containsKey(key): bool;
+    func containsValue(val): bool;
+    func clear();
+    func keys();
+    func values();
+    func forEach(cb);
+    func copy();
+    func toMap();
+    func toArray();
+    func toString(): string;
+    func className(): string;
+    func equals(other): bool;
+    func hashCode(): int;
+}
+
+// 抽象基类：所有通用方法委托 self.value 上的内置 map 方法
+// 子类只需声明 value 字段并实现构造函数
+public abstract class AbstractMap extends Object implements MapInterface {
+    func size(): int { return self.value.len; }
+    func isEmpty(): bool { return self.value.len == 0; }
+
+    func get(key) { return self.value.get(key); }
+    func put(key, val) { self.value[key] = val; return self; }
+    func remove(key) { self.value.remove(key); return self; }
+    func clear() { self.value.clear(); return self; }
+
+    func has(key): bool { return self.value.has(key); }
+    func containsKey(key): bool { return self.value.has(key); }
+    func containsValue(val): bool {
+        vs = self.value.values();
+        i = 0;
+        while (i < vs.len) {
+            if (vs[i] == val) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    func keys() { return self.value.keys(); }
+    func values() { return self.value.values(); }
+    func forEach(cb) { self.value.forEach(cb); return self; }
+
+    func copy() {
+        c = copy(self);
+        return c;
+    }
+    func toMap() { return self.value.copy(); }
+    func toArray() { return self.value.toArray(); }
+
+    func className(): string { return type(self); }
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        return self.toJSONString() == other.toJSONString();
+    }
+    func hashCode(): int { return self.value.len; }
+    func toString(): string { return self.toJSONString(); }
+}

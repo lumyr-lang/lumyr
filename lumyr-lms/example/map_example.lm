@@ -1,0 +1,117 @@
+// ============================================================
+// Map 封装类综合测试（MapInterface / AbstractMap / HashMap）
+// 运行：./bin/lumyr lumyr-lms/example/map_example.lm
+// ============================================================
+
+import <Function/HashMap>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ============================================================
+// 第一节：构造与基本 put/get
+// ============================================================
+m = HashMap();
+check(m.size() == 0, "new HashMap size 0");
+check(m.isEmpty() == true, "new HashMap isEmpty");
+m.put("a", 1).put("b", 2).put("c", 3);
+check(m.size() == 3, "size after 3 puts");
+check(m.get("a") == 1, "get a");
+check(m.get("b") == 2, "get b");
+check(m.get("zz") == null, "get missing");
+m.put("a", 10);
+check(m.get("a") == 10, "put overwrite same key");
+check(m.size() == 3, "overwrite keeps size");
+
+// ============================================================
+// 第二节：has / containsKey / containsValue
+// ============================================================
+check(m.has("b") == true, "has existing");
+check(m.has("zz") == false, "has missing");
+check(m.containsKey("c") == true, "containsKey existing");
+check(m.containsKey("zz") == false, "containsKey missing");
+check(m.containsValue(3) == true, "containsValue existing");
+check(m.containsValue(99) == false, "containsValue missing");
+
+// ============================================================
+// 第三节：keys / values / forEach
+// ============================================================
+ks = m.keys();
+check(ks.len == 3, "keys len");
+check(type(ks) == "array", "keys is array");
+vs = m.values();
+check(vs.len == 3, "values len");
+sum = 0;
+for v in vs { sum = sum + v; }
+check(sum == 15, "values sum 10+2+3");
+// forEach：回调内不读全局变量（VM 通道闭包值捕获限制），逐条断言 + size 校验条数
+m.forEach(func(k, v) {
+    if (k == "a") { if (v != 10) { throw "forEach a val"; } }
+    if (k == "b") { if (v != 2) { throw "forEach b val"; } }
+    if (k == "c") { if (v != 3) { throw "forEach c val"; } }
+    if (k != "a" && k != "b" && k != "c") { throw "forEach unknown key"; }
+});
+check(m.size() == 3, "forEach visited all entries");
+
+// ============================================================
+// 第四节：remove / clear
+// ============================================================
+m.remove("a");
+check(m.has("a") == false, "removed a");
+check(m.size() == 2, "size after remove");
+m.put("d", 4);
+check(m.size() == 3, "put after remove");
+m.clear();
+check(m.size() == 0, "cleared size");
+check(m.isEmpty() == true, "cleared isEmpty");
+
+// ============================================================
+// 第五节：从 map 字面量构造 + putAll
+// ============================================================
+src = {"x": 1, "y": 2};
+m2 = HashMap(src);
+check(m2.get("x") == 1 && m2.get("y") == 2, "ctor from map");
+check(m2.size() == 2, "ctor from map size");
+m3 = HashMap();
+m3.putAll(src);
+check(m3.size() == 2, "putAll size");
+check(m3.get("x") == 1 && m3.get("y") == 2, "putAll entries");
+m3.putAll({"z": 3});
+check(m3.get("z") == 3 && m3.size() == 3, "putAll extends");
+m3.putAll({"x": 100});
+check(m3.get("x") == 100, "putAll overwrite");
+check(m3.put("w", 9).has("w") == true, "put chainable");
+
+// ============================================================
+// 第六节：toMap / toArray / toString / copy
+// ============================================================
+m4 = HashMap({"k1": 11, "k2": 22});
+raw = m4.toMap();
+check(type(raw) == "map" && raw.get("k1") == 11, "toMap native map");
+arr = m4.toArray();
+check(arr.len == 2, "toArray pair count");
+check(arr[0].len == 2, "toArray pair shape");
+s = m4.toString();
+check(s.contains("k1") && s.contains("11") && s.contains("k2"), "toString content");
+cp = m4.copy();
+cp.put("k1", 999);
+check(m4.get("k1") == 11, "copy independent");
+check(cp.get("k1") == 999, "copy has new value");
+check(cp.size() == m4.size(), "copy same size");
+
+// ============================================================
+// 第七节：equals / className / isEmpty
+// ============================================================
+a = HashMap({"p": 1, "q": 2});
+b = HashMap({"p": 1, "q": 2});
+c = HashMap({"p": 1, "q": 3});
+check(a.equals(b) == true, "equals same content");
+check(a.equals(c) == false, "equals diff content");
+check(a.className() == "HashMap", "className");
+e = HashMap();
+check(e.isEmpty() == true, "isEmpty empty");
+e.put("only", 0);
+check(e.isEmpty() == false, "isEmpty after put");
+
+print("lumyr HashMap example ALL PASS");

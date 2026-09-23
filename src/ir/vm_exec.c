@@ -411,6 +411,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_STORE_FIELD: handled = vm_exec_store_field(ctx, &in); break;
         case OPC_CLASS_NEW: handled = vm_exec_class_new(ctx, &in); break;
         case OPC_CALL_METHOD: handled = vm_exec_call_method(ctx, &in); break;
+        case OPC_CALL_METHODV: handled = vm_exec_call_method_dyn(ctx, &in); break;
 
         /* ===== 打印 ===== */
         case OPC_PRINT: handled = vm_exec_io_print(ctx, &in); break;

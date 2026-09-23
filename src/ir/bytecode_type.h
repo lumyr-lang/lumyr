@@ -245,6 +245,13 @@ typedef enum {
     // PTR 栈字符串 -> 数值解析（三元分支统一/显式转型路径）
     OPC_STR_TO_INT64,   // PTR 栈弹 char* -> strtoll -> INT64 栈（不 free，同 FROM_STRING 惯例）
     OPC_STR_TO_DOUBLE,  // PTR 栈弹 char* -> strtod  -> DOUBLE 栈
+
+    // 动态方法调用（owner 类型未知：receiver 运行时可能是用户实例或原生容器）。
+    // a=callsite 下标（callee=方法名，argc 含 receiver）；VALUE 栈顶 b 个=receiver+实参。
+    // 运行时按 receiver 实际类型分派：用户实例→方法表（bound）；
+    // map/formdata→先查键（字段函数值）miss 再内置方法表兜底——统一
+    // "用户方法优先于内置"语义的两端。
+    OPC_CALL_METHODV,
 } OpCode;
 
 /* ============================================================

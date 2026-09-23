@@ -53,7 +53,38 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
  * 无运行时字符串查表：编译期一次解析为枚举编码进指令。
  * 返回 -1 表示不是内置。
  * ============================================================ */
-static int builtin_id_by_name(const char* name) {
+/* ============================================================
+ * 用户方法优先于内置（编译期判定）：
+ * 方法名被任何已注册用户类型（class/struct）声明时，owner 类型未知的
+ * receiver 调用该方法不得被内置名表截胡（如 HashMap.size 撞内置 len
+ * 别名 "size"，receiver 无类型标注时 size() 被编译成 LEN(实例) 直接报错），
+ * 须落动态分派路径，运行时按 receiver 实际类型解析。
+ * ============================================================ */
+typedef struct { const char* mname; int found; } UtdmCtx;
+
+static void utdm_scan_cb(const char* name, TypeDef* td, void* ud)
+{
+    (void)name;
+    UtdmCtx* cx = (UtdmCtx*)ud;
+    if(cx->found || !td || !td->method_names) return;
+    for(int i = 0; i < td->nmethods; i++) {
+        if(td->method_names[i] && strcmp(td->method_names[i], cx->mname) == 0) {
+            cx->found = 1;
+            return;
+        }
+    }
+}
+
+static int user_type_declares_method(const char* mname)
+{
+    if(!mname) return 0;
+    UtdmCtx cx = { mname, 0 };
+    type_foreach(utdm_scan_cb, &cx);
+    return cx.found;
+}
+
+/* 非 static：动态方法调用（OPC_CALL_METHODV）运行时按名分派内置方法复用同一映射表 */
+int builtin_id_by_name(const char* name) {
     static const struct { const char* n; BuiltinId id; } TBL[] = {
         /* 通用 */
         {"len", BUILTIN_LEN}, {"size", BUILTIN_LEN},
@@ -1556,6 +1587,28 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 FieldInfo* fi = lumyr_type_find_field(td->runtime_info, field_name);
                 if(fi) {
                     int fi_idx = (int)(fi - td->runtime_info->fields);
+                    /* 声明收敛语义：类型化数组字段 + 数组字面量赋值 →
+                     * 按声明元素 CastKind 构造 TypedArray（与 <T>[...] 字面量同构）。
+                     * 根因：否则 ValueArray* 直接进 typed 字段槽，读侧按 TypedArray*
+                     * 解释（布局错位：len 对、items 垃圾、元素读 null）。
+                     * 表达式赋值（运行时才有值）保持动态宽容，field_get 按 GC 头恢复。 */
+                    if(fi->valtype == VAL_TYPED_ARRAY &&
+                       node->u.index_assign.value->type == AST_ARRAY_LIT &&
+                       td->field_elem_kinds &&
+                       td->field_elem_kinds[fi_idx] != CAST_NONE &&
+                       td->field_elem_kinds[fi_idx] != CAST_TYPED_ARRAY) {
+                        CastKind eck = td->field_elem_kinds[fi_idx];
+                        compile_typed_array_lit(c, eck, node->u.index_assign.value->u.array_lit.elems, 1);
+                        emit(c, OPC_UNBOX_PTR, 0, 0); /* VALUE 栈动态 Value → PTR 栈裸指针（同 matched 动态路径） */
+                        /* self 压 PTR 栈（同下方 matched 路径） */
+                        ExprType arr_et = c_expr(c, node->u.index_assign.arr);
+                        if(arr_et != EXPR_TYPE_PTR) {
+                            emit_to_dynamic(c, arr_et, c_expr_cast_type(c, node->u.index_assign.arr));
+                            emit(c, OPC_BOX_PTR, (int)CAST_PTR, 0);
+                        }
+                        emit(c, OPC_STORE_FIELD, lumyr_etype_stackcls(fi->valtype), fi_idx);
+                        return EXPR_TYPE_PTR;
+                    }
                     int cls = lumyr_etype_stackcls(fi->valtype);
                     /* 编译 val 到对应 typed 栈，不匹配则走动态路径 */
                     ExprType val_et = c_expr(c, node->u.index_assign.value);
@@ -3184,7 +3237,9 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
      * 编译期静态表解析 BuiltinId（无运行时字符串查表），receiver 与实参全部转 VALUE，
      * OPC_CALL_BUILTIN_METHOD 弹 argc 个实参再弹 receiver，按运行时类型分派 */
     int bid = builtin_id_by_name(mname);
-    if(bid >= 0) {
+    /* 用户方法优先：方法名被任何已注册用户类型声明时不得内置化截胡
+     * （receiver 无类型标注时运行时可能是用户实例），落下方动态分派路径 */
+    if(bid >= 0 && !user_type_declares_method(mname)) {
         c_expr_to_value(c, recv);
         AstNode** av = NULL; int ac = 0, acp = 0;
         collect_call_args(margs, &av, &ac, &acp);
@@ -3196,20 +3251,23 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
         return EXPR_TYPE_NONE;
     }
 
-    /* 4. 无法确定类型：先动态取属性 recv[mname]（runtime 解析 map 值/实例字段/bound method），
-     * 再 CALLV。不能直接把 recv 当函数——方法名会丢失。
-     * 正常全类型标注路径不会进入；覆盖动态 map 函数值、动态取出实例的方法调用
-     * method_deferred：方法 AST 已知但 RuntimeFunc 尚未编译（类内递归自调用），走动态分派兜底
-     * !mdef_ast：类型已知但方法表无此方法（如继承的方法未在编译期解析），走动态分派兜底 */
+    /* 4. 无法确定类型：动态方法调用 CALL_METHODV（运行时按 receiver 实际类型分派：
+     * 用户实例→方法表 bound；map/formdata→先查键 miss 再内置方法表兜底）。
+     * 不能直接把 recv 当函数——方法名会丢失；也不能经 INDEX+CALLV 兜底——
+     * 原生容器的内置方法名（map.get 等）在 INDEX 阶段被当键查询而丢失方法语义。
+     * method_deferred：方法 AST 已知但 RuntimeFunc 尚未编译（类内递归自调用）；
+     * !mdef_ast：类型已知但方法表无此方法（如继承的方法未在编译期解析） */
     if(!owner || !td || method_deferred || !mdef_ast) {
-        AstNode* prop = ast_index(recv, ast_string((char*)mname));
-        c_expr_to_value(c, prop);
+        c_expr_to_value(c, recv);
         AstNode** av = NULL; int ac = 0, acp = 0;
         collect_call_args(margs, &av, &ac, &acp);
         for(int i = 0; i < ac; i++) c_expr_to_value(c, av[i]);
         free(av);
+        int total = ac + 1;   /* receiver + 实参 */
+        int dcs = bf_add_callsite(c->fn, mname, total, keep_result, (int)EXPR_TYPE_NONE);
+        emit(c, OPC_CALL_METHODV, dcs, total);
+        /* 结果压栈由运行时 cs->keep_result 控制（同 OPC_CALL_METHOD），编译端不 POP */
         free(owner);
-        emit(c, OPC_CALLV, 0, ac);
         return EXPR_TYPE_NONE;
     }
 

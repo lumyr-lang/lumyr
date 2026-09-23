@@ -489,6 +489,7 @@ const char* opc_name(OpCode op)
         case OPC_STR_TO_DOUBLE: return "STR_TO_DOUBLE";
         case OPC_PUSH_INT_VAL:   return "PUSH_INT_VAL";
         case OPC_PUSH_CONST_VAL: return "PUSH_CONST_VAL";
+        case OPC_CALL_METHODV:  return "CALL_METHODV";
         default: return "UNKNOWN";
     }
 }

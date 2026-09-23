@@ -21,6 +21,11 @@ int vm_exec_builtin(VMExecCtx* ctx, const Instruction* in);
 /* 执行内置方法调用指令（方法/属性形式：VALUE 栈顶 argc 个实参 + receiver） */
 int vm_exec_builtin_method(VMExecCtx* ctx, const Instruction* in);
 
+/* 动态方法调用（owner 类型未知）：a=callsite 下标（callee=方法名，argc 含 receiver），
+ * VALUE 栈顶 argc 个=receiver+实参。receiver 用户实例→方法表分派；
+ * map/formdata 等容器→先查键 miss 再内置方法表兜底 */
+int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in);
+
 /* 内置统一分发：switch(BuiltinId) → 内层按 receiver 运行时类型分派。
  * argv[0] 为 receiver。is_method=1（方法形式）argc 不含 receiver；
  * is_method=0（全局形式）argv[0]=首参即 receiver，argc 含它。

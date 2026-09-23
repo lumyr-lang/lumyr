@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
 #include <sys/stat.h>
 
 /* ===== 整型族元素读取/写入（与 vm_exec_stack.c 同语义，零装箱） ===== */
@@ -944,9 +945,15 @@ static Value bi_copy(Value v) {
     /* ---- struct/class：浅拷贝实例后，对引用字段裸递归（绕过访问检查） ---- */
     case VAL_STRUCT_PTR:
     case VAL_CLASS_PTR: {
+        /* 根因修复：实例创建 + 字段深拷贝（map/嵌套实例递归分配）全程 gc_disable，
+         * 否则字段拷贝的分配可能触发 GC——新实例仅存于 C 局部变量未生根，被回收
+         * 复用后字段写入腐败（症状：拷贝实例的方法内字段读返回错误对象，且
+         * 是否复现取决于分配时序）。与上方 typed array 分支同一保护模式；
+         * gc_disable/enable 为引用计数，嵌套递归安全。 */
+        gc_disable();
         Value r = lumyr_instance_copy(v); /* gc 新实例 + memcpy */
         RuntimeTypeInfo* info = lumyr_instance_get_info(v);
-        if(!info || r.type != v.type) return r;
+        if(!info || r.type != v.type) { gc_enable(); return r; }
         char* base = (char*)r.v.struct_ptr;
         for(int i = 0; i < info->nfields; i++) {
             FieldInfo* fi = &info->fields[i];
@@ -971,6 +978,7 @@ static Value bi_copy(Value v) {
             Value cv = bi_copy(fv);
             *(void**)fp = cv.v.struct_ptr; /* union 内各指针字段同偏移 */
         }
+        gc_enable();
         return r;
     }
 

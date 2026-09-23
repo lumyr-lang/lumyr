@@ -48,4 +48,8 @@ void string_cache_reset(void);
  * 供 arith_get_expr_type / c_expr_cast_type 统一识别 self.field 类型 */
 CastKind lumyr_self_field_castkind(Ctx* c, AstNode* node);
 
+/* 方法名/函数名 → BuiltinId（编译期静态映射，运行时动态方法分派复用）
+ * 返回 -1 表示不是内置 */
+int builtin_id_by_name(const char* name);
+
 #endif // LUMYR_IR_COMPILE_H

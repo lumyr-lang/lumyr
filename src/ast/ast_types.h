@@ -27,6 +27,7 @@ typedef struct {
     char* parent;        // 父类名（NULL=无父类，仅 class 使用）
     CastKind* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）
+    CastKind* field_elem_kinds; // 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
     int* field_offsets;    // struct 字段偏移量（编译通道用，NULL=未计算）
     /* struct/class 方法 */
     char** method_names;   // 方法名列表（NULL=无方法）
@@ -41,8 +42,9 @@ typedef struct {
     struct RuntimeTypeInfo* runtime_info;
 } TypeDef;
 
-/* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL） */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces);
+/* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL；
+ * elem_kinds 为类型化数组字段的元素 CastKind，与 props 平行，可为 NULL） */
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -109,7 +111,7 @@ InterfaceDef* interface_get(int idx);
 void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, void* user_data), void* user_data);
 
 // struct 注册（字段用精确 CastKind 类型）
-TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops);
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds);
 // 查找是否是 struct（返回 TypeDef* 或 NULL）
 TypeDef* struct_lookup(const char* name);
 // 添加 struct 方法

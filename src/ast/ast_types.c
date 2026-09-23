@@ -39,6 +39,7 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
         free(td->interfaces);
     }
     if(td->field_cast_kinds) free(td->field_cast_kinds);
+    if(td->field_elem_kinds) free(td->field_elem_kinds);
     if(td->field_offsets) free(td->field_offsets);
     td->props = (char**)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(char*));
     td->ptypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
@@ -407,7 +408,7 @@ void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, vo
 }
 
 /* ===== struct 注册 ===== */
-TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops)
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds)
 {
     // 先注册为普通 type（用 ValueType，从 CastKind 转换）
     ValueType* vtypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
@@ -421,8 +422,10 @@ TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, c
     td->is_struct = 1;
     td->field_cast_kinds = (CastKind*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(char*));
+    td->field_elem_kinds = (CastKind*)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(CastKind));
     for(int k = 0; k < nprops; k++) {
         td->field_cast_kinds[k] = cast_kinds[k];
+        if(elem_kinds) td->field_elem_kinds[k] = elem_kinds[k];
         if(struct_names && struct_names[k]) {
             td->field_struct_names[k] = strdup(struct_names[k]);
         }
@@ -545,7 +548,7 @@ int is_socket_ctor_name(const char* name)
 }
 
 /* ===== class 注册 ===== */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
@@ -553,6 +556,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     int* merged_access_modifiers = prop_access_modifiers;
     int* merged_const_flags = prop_const_flags;
     char** merged_struct_names = struct_names;
+    CastKind* merged_elem_kinds = elem_kinds;
     int merged_nprops = nprops;
 
     if(parent) {
@@ -567,6 +571,15 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 merged_access_modifiers = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 merged_const_flags = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 merged_struct_names = (char**)calloc((size_t)merged_nprops, sizeof(char*));
+                {
+                    /* 类型化数组元素 CastKind：父类字段继承，子类字段用自有（声明收敛赋值依赖） */
+                    CastKind* pe = parent_td->field_elem_kinds;
+                    merged_elem_kinds = (CastKind*)calloc((size_t)merged_nprops, sizeof(CastKind));
+                    for(int i = 0; i < parent_nprops; i++)
+                        merged_elem_kinds[i] = pe ? pe[i] : CAST_NONE;
+                    for(int i = 0; i < nprops; i++)
+                        merged_elem_kinds[parent_nprops + i] = elem_kinds ? elem_kinds[i] : CAST_NONE;
+                }
                 // 父类属性在前
                 for(int i = 0; i < parent_nprops; i++) {
                     merged_props[i] = strdup(parent_td->props[i]);
@@ -602,8 +615,15 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     /* 设置 field_cast_kinds：根据 ValueType 转换成 CastKind，用于 C 代码生成时生成精确的字段类型 */
     td->field_cast_kinds = (CastKind*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
+    td->field_elem_kinds = (CastKind*)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(CastKind));
     for(int k = 0; k < merged_nprops; k++) {
         td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);
+        /* 类型化数组字段元素 CastKind：无继承信息时按声明 valtype 反推兜底 */
+        if(merged_elem_kinds) {
+            td->field_elem_kinds[k] = merged_elem_kinds[k];
+        } else if(merged_ptypes[k] == VAL_TYPED_ARRAY) {
+            td->field_elem_kinds[k] = CAST_NONE; /* 动态类型化数组：无元素类型约束 */
+        }
         /* strdup：merged_struct_names 归解析期收集器所有（clear 时释放），td 需长期存活 */
         if(merged_struct_names && merged_struct_names[k])
             td->field_struct_names[k] = strdup(merged_struct_names[k]);
