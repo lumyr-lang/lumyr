@@ -15,7 +15,7 @@
 import <Function/Buffer>;
 
 public class ShortArrayBuffer extends AbstractBuffer {
-    value: array;
+    value: <short>array;
 
     func ShortArrayBuffer(arr) {
         self.value = [];

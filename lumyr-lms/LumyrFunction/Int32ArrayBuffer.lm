@@ -15,7 +15,7 @@
 import <Function/Buffer>;
 
 public class Int32ArrayBuffer extends AbstractBuffer {
-    value: array;
+    value: <int32>array;
 
     func Int32ArrayBuffer(arr) {
         self.value = [];

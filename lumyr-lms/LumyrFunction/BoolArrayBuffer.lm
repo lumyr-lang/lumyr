@@ -14,7 +14,7 @@
 import <Function/Buffer>;
 
 public class BoolArrayBuffer extends AbstractBuffer {
-    value: array;
+    value: <bool>array;
 
     func BoolArrayBuffer(arr) {
         self.value = [];

@@ -15,7 +15,7 @@
 import <Function/Buffer>;
 
 public class Uint64ArrayBuffer extends AbstractBuffer {
-    value: array;
+    value: <uint64>array;
 
     func Uint64ArrayBuffer(arr) {
         self.value = [];

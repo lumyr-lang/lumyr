@@ -320,8 +320,10 @@ static int      g_fw_config_cap = 0;
 static int      g_fw_config_loaded = 0;
 
 /* 简易 JSON 解析：从 json 文本中提取 frameworks 对象的 key→value 对。
- * 只处理 {"frameworks": {"k": "v", ...}} 格式。 */
-static void parse_frameworks_json(const char* json) {
+ * 只处理 {"frameworks": {"k": "v", ...}} 格式。
+ * base_dir：配置文件所在目录——相对路径 root 以它为基准解析
+ * （而非调用时 CWD），否则换目录运行编译器后配置路径失效。 */
+static void parse_frameworks_json(const char* json, const char* base_dir) {
     const char* p = json;
     /* 找 "frameworks" */
     while(*p) {
@@ -354,18 +356,22 @@ static void parse_frameworks_json(const char* json) {
                     while(*p && *p != '"') { if(*p == '\\') p++; p++; }
                     int vlen = (int)(p - vstart);
                     if(*p == '"') p++;
-                    /* 登记到 g_fw_config */
+                    /* 登记到 g_fw_config（相对路径以 base_dir 为基准） */
                     if(g_fw_config_n >= g_fw_config_cap) {
                         int nc = g_fw_config_cap ? g_fw_config_cap * 2 : 8;
                         g_fw_config = (FwEntry*)realloc(g_fw_config, (size_t)nc * sizeof(FwEntry));
                         g_fw_config_cap = nc;
                     }
+                    char resolved[PATH_MAX];
+                    if(vlen > 0 && vstart[0] == '/') {
+                        snprintf(resolved, sizeof resolved, "%.*s", vlen, vstart);
+                    } else {
+                        snprintf(resolved, sizeof resolved, "%s/%.*s", base_dir, vlen, vstart);
+                    }
                     g_fw_config[g_fw_config_n].name = (char*)malloc((size_t)klen2 + 1);
                     memcpy(g_fw_config[g_fw_config_n].name, kstart, (size_t)klen2);
                     g_fw_config[g_fw_config_n].name[klen2] = '\0';
-                    g_fw_config[g_fw_config_n].root = (char*)malloc((size_t)vlen + 1);
-                    memcpy(g_fw_config[g_fw_config_n].root, vstart, (size_t)vlen);
-                    g_fw_config[g_fw_config_n].root[vlen] = '\0';
+                    g_fw_config[g_fw_config_n].root = strdup(resolved);
                     g_fw_config_n++;
                 }
                 return;
@@ -381,12 +387,12 @@ static void parse_frameworks_json(const char* json) {
 static void load_framework_config(void) {
     if(g_fw_config_loaded) return;
     g_fw_config_loaded = 1;
-    /* 1. ./lumyr.json */
+    /* 1. ./lumyr.json（相对 root 以配置文件目录为基准） */
     char* json = slurp_file("lumyr.json");
-    if(json) { parse_frameworks_json(json); free(json); return; }
+    if(json) { parse_frameworks_json(json, "."); free(json); return; }
     /* 2. ./lumyr-lms/lumyr.json */
     json = slurp_file("lumyr-lms/lumyr.json");
-    if(json) { parse_frameworks_json(json); free(json); return; }
+    if(json) { parse_frameworks_json(json, "lumyr-lms"); free(json); return; }
     /* 3. ~/.lumyr/frameworks.json */
     const char* home = getenv("HOME");
 #ifdef _WIN32
@@ -394,9 +400,11 @@ static void load_framework_config(void) {
 #endif
     if(home) {
         char path[PATH_MAX];
+        char basedir[PATH_MAX];
         snprintf(path, sizeof path, "%s/.lumyr/frameworks.json", home);
+        snprintf(basedir, sizeof basedir, "%s/.lumyr", home);
         json = slurp_file(path);
-        if(json) { parse_frameworks_json(json); free(json); return; }
+        if(json) { parse_frameworks_json(json, basedir); free(json); return; }
     }
 }
 
