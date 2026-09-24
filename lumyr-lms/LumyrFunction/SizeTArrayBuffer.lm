@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class SizeTArrayBuffer extends AbstractBuffer {
+public class SizeTArrayBuffer extends AbstractBuffer<size_t> {
     value: <size_t>array;
 
     func SizeTArrayBuffer(arr) {

@@ -1,36 +1,37 @@
 // ============================================================
-// lumyr-Buffer：BufferInterface 接口 + AbstractBuffer 抽象基类
+// lumyr-Buffer：BufferInterface<E> 接口 + AbstractBuffer<E> 抽象基类
 // 所有缓冲区/集合封装类的统一契约与通用实现
+// E = Element（集合元素类型）
 //
 // 用法：
 //   import <Function/Buffer>;
-//   public class Array extends AbstractBuffer { ... }
+//   public class Array<E> extends AbstractBuffer<E> implements BufferInterface<E> { ... }
 // ============================================================
 
 import <Function/Object>;
 
-// 统一缓冲区契约
-interface BufferInterface {
+// 统一缓冲区契约：E = 集合元素类型
+public interface BufferInterface<E> {
     func size(): int;
     func isEmpty(): bool;
-    func get(idx: int);
-    func set(idx: int, val);
-    func append(val);
-    func insert(idx: int, val);
-    func remove(idx: int);
-    func clear();
-    func sort();
-    func reverse();
+    func get(idx: int): E;
+    func set(idx: int, val: E): BufferInterface<E>;
+    func append(val: E): BufferInterface<E>;
+    func insert(idx: int, val: E): BufferInterface<E>;
+    func remove(idx: int): BufferInterface<E>;
+    func clear(): BufferInterface<E>;
+    func sort(): BufferInterface<E>;
+    func reverse(): BufferInterface<E>;
     func slice(start: int, end: int);
-    func concat(other);
+    func concat(other): BufferInterface<E>;
     func sum();
     func avg(): double;
-    func min();
-    func max();
-    func indexOf(val): int;
-    func contains(val): bool;
-    func first();
-    func last();
+    func min(): E;
+    func max(): E;
+    func indexOf(val: E): int;
+    func contains(val: E): bool;
+    func first(): E;
+    func last(): E;
     func copy();
     func toArray();
     func toString(): string;
@@ -41,16 +42,16 @@ interface BufferInterface {
 
 // 抽象基类：所有通用方法委托 self.value 上的内置数组方法
 // 子类只需声明 value 字段并实现构造函数
-public abstract class AbstractBuffer extends Object implements BufferInterface {
+public abstract class AbstractBuffer<E> extends Object implements BufferInterface<E> {
     func size(): int { return self.value.len; }
     func isEmpty(): bool { return self.value.len == 0; }
 
-    func get(idx: int) { return self.value.get(idx); }
-    func set(idx: int, val) { self.value.set(idx, val); return self; }
+    func get(idx: int): E { return self.value.get(idx); }
+    func set(idx: int, val: E) { self.value.set(idx, val); return self; }
 
     // 动态增删默认实现（适用于 VAL_ARRAY 内部存储）
-    func append(val) { self.value.add(val); return self; }
-    func insert(idx: int, val) { self.value.insert(idx, val); return self; }
+    func append(val: E) { self.value.add(val); return self; }
+    func insert(idx: int, val: E) { self.value.insert(idx, val); return self; }
     func remove(idx: int) { self.value.remove(idx); return self; }
     func clear() { self.value.clear(); return self; }
 
@@ -62,14 +63,14 @@ public abstract class AbstractBuffer extends Object implements BufferInterface {
 
     func sum() { return self.value.sum(); }
     func avg(): double { return self.value.avg(); }
-    func min() { return self.value.min(); }
-    func max() { return self.value.max(); }
+    func min(): E { return self.value.min(); }
+    func max(): E { return self.value.max(); }
 
-    func indexOf(val): int { return self.value.indexOf(val); }
-    func contains(val): bool { return self.value.indexOf(val) >= 0; }
+    func indexOf(val: E): int { return self.value.indexOf(val); }
+    func contains(val: E): bool { return self.value.indexOf(val) >= 0; }
 
-    func first() { return self.value.first(); }
-    func last() { return self.value.last(); }
+    func first(): E { return self.value.first(); }
+    func last(): E { return self.value.last(); }
 
     func copy() {
         c = copy(self);

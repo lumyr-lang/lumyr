@@ -57,6 +57,7 @@ static int is_expr_end(int t)
         case TOK_DATE: case TOK_DATETIME: case TOK_TIME_KW: case TOK_TIMEDELTA:
         case TOK_TUPLE: case TOK_BYTES: case TOK_COMPLEX:
         case TOK_FILE: case TOK_FOLDER:
+        case TOK_TYPE_ANNOT:      /* <int> 后的 { 可能是类体（extends C<int> {）或命名构造（C<int>{...}） */
         case ARROW:                 /* => { → 函数体块 */
             return 1;
         default:
@@ -543,11 +544,28 @@ f\"([^"\\]|\\.)*\"   {
                           type_lookup(g_last_id_text) || is_socket_ctor_name(g_last_id_text))) {
                           prev_token = MAP_OPEN; return MAP_OPEN;
                       }
+                      /* TOK_TYPE_ANNOT 后的 {：extends C<int> { → LBRACE；C<int>{...} → MAP_OPEN */
+                      if(prev_token == TOK_TYPE_ANNOT &&
+                         prev_prev_token == ID && g_last_id_text[0] &&
+                         prev_prev_prev_token != TOK_EXTENDS && prev_prev_prev_token != TOK_IMPLEMENTS &&
+                         prev_prev_prev_token != TOK_STRUCT && prev_prev_prev_token != TOK_CLASS &&
+                         (struct_lookup(g_last_id_text) || class_lookup(g_last_id_text) ||
+                          type_lookup(g_last_id_text) || is_socket_ctor_name(g_last_id_text))) {
+                          prev_token = MAP_OPEN; return MAP_OPEN;
+                      }
+                      /* 裸类型标注 <formdata>{...} / <int>{...} → MAP_OPEN
+                       * （prev_prev 非 ID，排除 C<int>{...} 命名构造与 extends C<int> { 声明头） */
+                      if(prev_token == TOK_TYPE_ANNOT && prev_prev_token != ID) {
+                          prev_token = MAP_OPEN; return MAP_OPEN;
+                      }
                       LEX_RET(LBRACE);
                   }
                   else { prev_token = MAP_OPEN; return MAP_OPEN; } }
 "}"             { LEX_RET(RBRACE); }
 "["             {
+                  /* TOK_TYPE_ANNOT 后的 [：类型化数组字面量 <int>[] / <int>[1,2,3] → ARRAY_OPEN
+                   * （不能下标类型标注，必须按数组字面量处理） */
+                  if(prev_token == TOK_TYPE_ANNOT) { prev_token = ARRAY_OPEN; return ARRAY_OPEN; }
                   if(is_expr_end(prev_token)) LEX_RET(LBRACKET);
                   else { prev_token = ARRAY_OPEN; return ARRAY_OPEN; } }
 "]"             { LEX_RET(RBRACKET); }

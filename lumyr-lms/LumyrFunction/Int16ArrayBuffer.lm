@@ -13,7 +13,7 @@
 
 import <Function/Buffer>;
 
-public class Int16ArrayBuffer extends AbstractBuffer {
+public class Int16ArrayBuffer extends AbstractBuffer<int16> {
     value: <int16>array;
 
     func Int16ArrayBuffer(arr) {

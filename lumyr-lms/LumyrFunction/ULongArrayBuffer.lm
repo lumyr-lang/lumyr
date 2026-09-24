@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class ULongArrayBuffer extends AbstractBuffer {
+public class ULongArrayBuffer extends AbstractBuffer<ulong> {
     value: <ulong>array;
 
     func ULongArrayBuffer(arr) {

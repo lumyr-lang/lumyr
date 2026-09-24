@@ -13,7 +13,7 @@
 
 import <Function/Buffer>;
 
-public class CharArrayBuffer extends AbstractBuffer {
+public class CharArrayBuffer extends AbstractBuffer<char> {
     value: <char>array;
 
     func CharArrayBuffer(arr) {

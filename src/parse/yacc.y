@@ -2508,6 +2508,7 @@ param
      * 直接用 builtin_type_name / ID 而非 type_name_str，避免与返回类型/三元/map 上下文冲突 */
     | ID COLON builtin_type_name { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型 n: int */
     | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
+    | ID COLON ID LBRACKET RBRACKET { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*数组类型 n: E[]（擦除为动态数组） */
     | ID COLON ID TOK_GENERIC   { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*泛型类型 n: Map<K,V>（擦除为 Map） */
     | ID COLON ID TOK_TYPE_ANNOT { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
     | ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型+默认值 n: int = 5 */
@@ -3305,8 +3306,14 @@ type_prop
         $$ = ast_none();
     }
     | ID COLON TOK_GENERIC ID {
-        if(strcmp($4, "map") != 0) yyerror("泛型字段后缀须为 'map'");
-        type_prop_push($1, VAL_MAP, 0, 0, NULL);
+        if(strcmp($4, "map") != 0 && strcmp($4, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
+        if(strcmp($4, "map") == 0) {
+            type_prop_push($1, VAL_MAP, 0, 0, NULL);
+        } else {
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem(CAST_NONE);
+        }
         free($3); free($4);
         $$ = ast_none();
     }
@@ -3764,8 +3771,14 @@ class_prop
         $$ = ast_none();
     }
     | ID COLON TOK_GENERIC ID SEMI {
-        if(strcmp($4, "map") != 0) yyerror("泛型字段后缀须为 'map'");
-        type_prop_push($1, VAL_MAP, 0, 0, NULL);
+        if(strcmp($4, "map") != 0 && strcmp($4, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
+        if(strcmp($4, "map") == 0) {
+            type_prop_push($1, VAL_MAP, 0, 0, NULL);
+        } else {
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem(CAST_NONE);
+        }
         free($3); free($4);
         $$ = ast_none();
     }
@@ -3791,8 +3804,14 @@ class_prop
         $$ = ast_none();
     }
     | access_modifier ID COLON TOK_GENERIC ID SEMI {
-        if(strcmp($5, "map") != 0) yyerror("泛型字段后缀须为 'map'");
-        type_prop_push($2, VAL_MAP, $1, 0, NULL);
+        if(strcmp($5, "map") != 0 && strcmp($5, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
+        if(strcmp($5, "map") == 0) {
+            type_prop_push($2, VAL_MAP, $1, 0, NULL);
+        } else {
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+            type_prop_set_elem(CAST_NONE);
+        }
         free($4); free($5);
         $$ = ast_none();
     }

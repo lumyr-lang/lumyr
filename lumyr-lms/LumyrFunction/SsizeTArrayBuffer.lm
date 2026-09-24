@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class SsizeTArrayBuffer extends AbstractBuffer {
+public class SsizeTArrayBuffer extends AbstractBuffer<ssize_t> {
     value: <ssize_t>array;
 
     func SsizeTArrayBuffer(arr) {

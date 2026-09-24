@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class DoubleArrayBuffer extends AbstractBuffer {
+public class DoubleArrayBuffer extends AbstractBuffer<double> {
     value: <double>array;
 
     func DoubleArrayBuffer(arr) {

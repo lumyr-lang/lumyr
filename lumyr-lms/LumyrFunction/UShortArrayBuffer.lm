@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class UShortArrayBuffer extends AbstractBuffer {
+public class UShortArrayBuffer extends AbstractBuffer<ushort> {
     value: <ushort>array;
 
     func UShortArrayBuffer(arr) {

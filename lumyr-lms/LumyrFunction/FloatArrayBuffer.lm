@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class FloatArrayBuffer extends AbstractBuffer {
+public class FloatArrayBuffer extends AbstractBuffer<float> {
     value: <float>array;
 
     func FloatArrayBuffer(arr) {

@@ -13,7 +13,7 @@
 
 import <Function/Buffer>;
 
-public class ByteArrayBuffer extends AbstractBuffer {
+public class ByteArrayBuffer extends AbstractBuffer<byte> {
     value: <byte>array;
 
     func ByteArrayBuffer(arr) {

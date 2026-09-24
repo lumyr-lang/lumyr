@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class LongLongArrayBuffer extends AbstractBuffer {
+public class LongLongArrayBuffer extends AbstractBuffer<long long> {
     value: <long long>array;
 
     func LongLongArrayBuffer(arr) {

@@ -40,7 +40,7 @@ func check(cond, msg) {
 // ============================================================
 print("=== Array ===");
 
-arr = Array();
+arr = Array<>();
 arr.push(1).push(2).push(3);
 check(arr.size() == 3, "Array.size after push 3");
 check(arr.sum() == 6, "Array.sum");
@@ -55,7 +55,7 @@ check(arr.size() == 1, "Array.size after shift");
 arr.unshift(10);
 check(arr.first() == 10, "Array.unshift");
 
-arr2 = Array();
+arr2 = Array<>();
 arr2.push(1).push(2).push(3);
 arr2.set(0, 99);
 check(arr2.get(0) == 99, "Array.set/get");
@@ -66,7 +66,7 @@ check(arr2.get(1) == 50, "Array.insert");
 arr2.remove(0);
 check(arr2.get(0) == 50, "Array.remove");
 
-arr3 = Array();
+arr3 = Array<>();
 arr3.push(3).push(1).push(2);
 arr3.sort();
 check(arr3.get(0) == 1, "Array.sort[0]");
@@ -75,9 +75,9 @@ check(arr3.get(2) == 3, "Array.sort[2]");
 arr3.reverse();
 check(arr3.get(0) == 3, "Array.reverse[0]");
 
-arr4 = Array();
+arr4 = Array<>();
 arr4.push(1).push(2);
-arr5 = Array();
+arr5 = Array<>();
 arr5.push(3).push(4);
 cc = arr4.concat(arr5);
 check(cc.size() == 4, "Array.concat returns Array");
@@ -86,7 +86,7 @@ cp = arr4.copy();
 arr4.push(99);
 check(cp.size() == 2, "Array.copy independence");
 
-arr6 = Array();
+arr6 = Array<>();
 arr6.push(5).push(10).push(15);
 check(arr6.avg() == 10.0, "Array.avg");
 check(arr6.min() == 5, "Array.min");
@@ -328,7 +328,7 @@ check(result == chain, "chain returns self");
 check(chain.size() == 3, "chain in-place size");
 check(chain.get(0) == 3, "chain in-place content");
 
-arrChain = Array();
+arrChain = Array<>();
 r2 = arrChain.push(1).push(2).push(3);
 check(r2 == arrChain, "Array chain returns self");
 check(arrChain.size() == 3, "Array chain in-place");

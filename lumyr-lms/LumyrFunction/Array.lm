@@ -14,16 +14,16 @@
 
 import <Function/Buffer>;
 
-public class Array extends AbstractBuffer {
-    value: array;
+public class Array<E> extends AbstractBuffer<E> {
+    value: <E>array;
 
-    func Array(arr) {
+    func Array(arr: E[]) {
         self.value = [];
         if (arr != null) { self.value = copy(arr); }
     }
 
     
-    func push(v) { self.value.add(v); return self; }
+    func push(v: E) { self.value.add(v); return self; }
     func pop() {
         if (self.value.len == 0) { return; }
         last = self.value.last();
@@ -36,7 +36,7 @@ public class Array extends AbstractBuffer {
         self.value.remove(0);
         return first;
     }
-    func unshift(v) { self.value.insert(0, v); return self; }
+    func unshift(v: E) { self.value.insert(0, v); return self; }
     func removeAt(idx: int) {
         removed = self.value.get(idx);
         self.value.remove(idx);
@@ -46,15 +46,15 @@ public class Array extends AbstractBuffer {
         removed = self.value.slice(start, start + count);
         i = start + count - 1;
         while (i >= start) { self.value.remove(i); i = i - 1; }
-        return Array(removed);
+        return Array<>(removed);
     }
-    func addAll(other) { self.value.addAll(other.value); return self; }
+    func addAll(other: E[]) { self.value.addAll(other.value); return self; }
 
     // override 返回 Array 实例
-    func slice(start: int, end: int): Array { return Array(self.value.slice(start, end)); }
-    func concat(other): Array { return Array(self.value.concat(other.value)); }
+    func slice(start: int, end: int): Array { return Array<>(self.value.slice(start, end)); }
+    func concat(other: E[]): Array { return Array<>(self.value.concat(other.value)); }
     func copy(): Array {
-        c = Array();
+        c = Array<E>();
         c.value = self.value.copy();
         return c;
     }

@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class UCharArrayBuffer extends AbstractBuffer {
+public class UCharArrayBuffer extends AbstractBuffer<uchar> {
     value: <uchar>array;
 
     func UCharArrayBuffer(arr) {

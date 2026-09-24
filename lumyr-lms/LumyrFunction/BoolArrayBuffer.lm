@@ -13,7 +13,7 @@
 
 import <Function/Buffer>;
 
-public class BoolArrayBuffer extends AbstractBuffer {
+public class BoolArrayBuffer extends AbstractBuffer<bool> {
     value: <bool>array;
 
     func BoolArrayBuffer(arr) {

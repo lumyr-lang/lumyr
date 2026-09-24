@@ -63,7 +63,7 @@ public abstract class AbstractMap<K, V> extends Object implements Map<K, V> {
 
     func keys() { return self.value.keys(); }
     func values() { return self.value.values(); }
-    func forEach(cb) { self.value.forEach(cb); return self; }
+    func forEach(cb: MapCallback<K, V>) { self.value.forEach(cb); return self; }
 
     func copy() {
         c = copy(self);

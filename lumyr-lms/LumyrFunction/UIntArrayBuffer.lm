@@ -14,7 +14,7 @@
 
 import <Function/Buffer>;
 
-public class UIntArrayBuffer extends AbstractBuffer {
+public class UIntArrayBuffer extends AbstractBuffer<uint> {
     value: <uint>array;
 
     func UIntArrayBuffer(arr) {

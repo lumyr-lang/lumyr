@@ -12,7 +12,7 @@
 
 import <Function/Buffer>;
 
-public class StringBuffer extends AbstractBuffer {
+public class StringBuffer extends AbstractBuffer<string> {
     value: array;
 
     func StringBuffer(s) {
