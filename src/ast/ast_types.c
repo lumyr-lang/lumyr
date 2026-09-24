@@ -127,6 +127,27 @@ ValueType type_name_to_valtype(const char* tname)
     if(strcmp(tname, "char") == 0)    return VAL_CHAR;
     if(strcmp(tname, "ascii") == 0)   return VAL_INT;  /* ASCII 码值按 int 处理 */
     if(strcmp(tname, "byte") == 0)    return VAL_BYTE;
+    /* 扩展整型：与 builtin_type_name (lexer TOK_*) 对齐 */
+    if(strcmp(tname, "int8") == 0)    return VAL_INT8;
+    if(strcmp(tname, "int16") == 0)   return VAL_INT16;
+    if(strcmp(tname, "int32") == 0)   return VAL_INT32;
+    if(strcmp(tname, "int64") == 0)   return VAL_INT64;
+    if(strcmp(tname, "uint8") == 0)   return VAL_UINT8;
+    if(strcmp(tname, "uint16") == 0)  return VAL_UINT16;
+    if(strcmp(tname, "uint32") == 0)  return VAL_UINT32;
+    if(strcmp(tname, "uint") == 0)    return VAL_UINT64;  /* 与 TOK_UINT → CAST_UINT64 对齐 */
+    if(strcmp(tname, "uint64") == 0)  return VAL_UINT64;
+    if(strcmp(tname, "long") == 0)    return VAL_LONG;
+    if(strcmp(tname, "long long") == 0) return VAL_LONG_LONG;
+    if(strcmp(tname, "float") == 0)   return VAL_FLOAT;
+    if(strcmp(tname, "ulong") == 0)   return VAL_ULONG;
+    if(strcmp(tname, "uchar") == 0)   return VAL_UCHAR;
+    if(strcmp(tname, "short") == 0)   return VAL_SHORT;
+    if(strcmp(tname, "ushort") == 0)  return VAL_USHORT;
+    if(strcmp(tname, "size_t") == 0)   return VAL_SIZE_T;
+    if(strcmp(tname, "ssize_t") == 0)  return VAL_SSIZE_T;
+    if(strcmp(tname, "long double") == 0) return VAL_LONG_DOUBLE;
+    if(strcmp(tname, "ptr") == 0)     return VAL_PTR;
     /* 高精度类型：lexer 将其作为普通标识符返回，在类型位置（含泛型 <K,V>）需正确识别，
        此前落到 VAL_NONE 导致 <string,bigint> 的值被 cast 成 long long */
     if(strcmp(tname, "bigint") == 0)     return VAL_BIGINT;
@@ -316,7 +337,8 @@ char* valtype_to_name(ValueType vt) {
 /* 接口表用红黑树存储，键为接口名，class_name 为 NULL */
 static RBTree* g_interfaces_tree = NULL;
 
-InterfaceDef* interface_register(const char* name, void* methods, const char* parent) {
+InterfaceDef* interface_register(const char* name, void* methods, const char* parent,
+                                 char** generic_params, int generic_param_count) {
     if(!g_interfaces_tree) g_interfaces_tree = rbtree_create();
     /* 检查是否已存在 */
     InterfaceDef* existing = (InterfaceDef*)rbtree_find(g_interfaces_tree, NS_CLASS, NULL, name);
@@ -408,14 +430,15 @@ void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, vo
 }
 
 /* ===== struct 注册 ===== */
-TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds)
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds,
+                         char** generic_params, int generic_param_count)
 {
     // 先注册为普通 type（用 ValueType，从 CastKind 转换）
     ValueType* vtypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
     for(int k = 0; k < nprops; k++) {
         vtypes[k] = castkind_to_valtype(cast_kinds[k]);
     }
-    TypeDef* td = type_register(name, props, vtypes, nprops, NULL, 0, NULL, 0);
+    TypeDef* td = type_register(name, props, vtypes, nprops, generic_params, generic_param_count, NULL, 0);
     free(vtypes);
 
     // 标记为 struct 并保存精确 CastKind 类型
@@ -448,7 +471,8 @@ TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, c
             fields = (FieldInfo*)calloc(nfields, sizeof(FieldInfo));
             for(int i = 0; i < nfields; i++) {
                 ValueType vt = castkind_to_valtype(cast_kinds[i]);
-                size_t sz = lumyr_etype_itemsz(vt);
+                /* VAL_NONE：泛型形参（类型擦除），运行时占一个动态指针槽 */
+                size_t sz = (vt == VAL_NONE) ? sizeof(void*) : lumyr_etype_itemsz(vt);
                 int align = (sz <= 2) ? (int)sz : ((sz <= 4) ? 4 : ((sz >= 16) ? 16 : 8));
                 instance_size = (instance_size + align - 1) & ~(align - 1);
                 fields[i].name = strdup(props[i]);
@@ -548,7 +572,8 @@ int is_socket_ctor_name(const char* name)
 }
 
 /* ===== class 注册 ===== */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds)
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
+                        char** generic_params, int generic_param_count)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
@@ -607,7 +632,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     if(interfaces) {
         while(interfaces[nifaces]) nifaces++;
     }
-    TypeDef* td = type_register(name, merged_props, merged_ptypes, merged_nprops, NULL, 0, interfaces, nifaces);
+    TypeDef* td = type_register(name, merged_props, merged_ptypes, merged_nprops,
+                                generic_params, generic_param_count, interfaces, nifaces);
 
     // 标记为 class 并保存父类
     td->is_class = 1;
@@ -655,7 +681,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
             fields = (FieldInfo*)calloc(nfields, sizeof(FieldInfo));
             for(int i = 0; i < nfields; i++) {
                 ValueType vt = merged_ptypes[i];
-                size_t sz = lumyr_etype_itemsz(vt);
+                /* VAL_NONE：泛型形参（类型擦除），运行时占一个动态指针槽 */
+                size_t sz = (vt == VAL_NONE) ? sizeof(void*) : lumyr_etype_itemsz(vt);
                 /* 自然对齐 */
                 int align = (sz <= 2) ? (int)sz : ((sz <= 4) ? 4 : ((sz >= 16) ? 16 : 8));
                 instance_size = (instance_size + align - 1) & ~(align - 1);
@@ -952,6 +979,9 @@ int class_check_interface_implementation(const char* class_name, const char* int
 
     TypeDef* td = class_lookup(class_name);
     if(!td) return -1; /* class不存在 */
+
+    /* 抽象类豁免：未实现的接口方法由具体子类承担（同 Java 语义） */
+    if(td->is_abstract) return 1;
 
     /* 检查 class 是否有接口要求的所有方法（包括继承的方法） */
     for(int i = 0; i < idef->nmethods; i++) {

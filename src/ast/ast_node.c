@@ -743,11 +743,12 @@ AstNode* ast_comp_map(AstNode* key, AstNode* value, AstNode* var, AstNode* iter,
     return n;
 }
 
-AstNode* ast_class_new(char* class_name, int argc, AstNode* args) {
+AstNode* ast_class_new(char* class_name, int argc, AstNode* args, char* type_args) {
     AstNode* n = ast_new(AST_CLASS_NEW);
     n->u.class_new.class_name = class_name;
     n->u.class_new.argc = argc;
     n->u.class_new.args = args;
+    n->u.class_new.type_args = type_args;
     return n;
 }
 
@@ -995,6 +996,7 @@ void ast_free(AstNode* node) {
             break;
         case AST_CLASS_NEW:
             free(node->u.class_new.class_name);
+            free(node->u.class_new.type_args);
             ast_free(node->u.class_new.args);
             break;
         case AST_METHOD_CALL:

@@ -13,6 +13,13 @@
 static int prev_token = 0;
 // 前前一个 token：用于判断 `{` 前的 ID 是否处于声明上下文（extends/implements/struct/class/type）
 static int prev_prev_token = 0;
+// 前第三个 token：泛型头 `class Box<T> {` 中 { 前是 TOK_GENERIC，
+// 需再向前看一个 token 区分声明头（其前为 class/struct/interface/extends）与
+// 表达式中的命名构造/泛型 map 字面量（其前为 = / ( / , / : 等）
+static int prev_prev_prev_token = 0;
+// 前第四个 token：区分方法返回类型后的函数体 `): Pair<K,V> {`（prev4=RPAREN）
+// 与 map 值位置的泛型命名构造 `: Box<int>{...}`（prev4 非 RPAREN）
+static int prev4_token = 0;
 
 // 上一个 ID 文本：用于判断 `{` 前的 ID 是否为已注册类型名（ClassName{field: value} 命名构造）
 static char g_last_id_text[256] = {0};
@@ -57,7 +64,7 @@ static int is_expr_end(int t)
     }
 }
 
-#define LEX_RET(t) do { prev_prev_token = prev_token; prev_token = (t); return (t); } while(0)
+#define LEX_RET(t) do { prev4_token = prev_prev_prev_token; prev_prev_prev_token = prev_prev_token; prev_prev_token = prev_token; prev_token = (t); return (t); } while(0)
 
 /* ===== 字面量后缀类型推断（数字字面量规则共用，yacc 动作读取） =====
  * 无后缀 = CAST_NONE：编译期按值推断（int32 范围内=int，否则=int64/double）
@@ -452,6 +459,18 @@ f\"([^"\\]|\\.)*\"   {
 "<file>"           { LEX_RET(TOK_FILE); }
 "<folder>"         { LEX_RET(TOK_FOLDER); }
 "<formdata>"       { yylval.ll = CAST_FORMDATA; LEX_RET(TOK_TYPE_ANNOT); }
+    /* ===== 泛型标记（Java 风格泛型形参/实参）=====
+     * 值为尖括号内原文，语法层解析；整体匹配以避免 < 与比较运算符歧义。
+     * 约定：泛型尖括号内侧不留空格（a <b,c> 才是泛型；a < b, c > 是比较） */
+    /* 多项列表：<K,V> / <string,int> / <K extends Number,V?>（首字符必须非空格） */
+"<"[A-Za-z_?][A-Za-z0-9_? ,]*","[A-Za-z0-9_? ,]*">" {
+                    yylval.s = strndup(yytext + 1, (size_t)(yyleng - 2)); LEX_RET(TOK_GENERIC); }
+"<?>"               { yylval.s = strdup("?"); LEX_RET(TOK_GENERIC); } /* 通配符类型引用 */
+"<>"                { yylval.s = strdup(""); LEX_RET(TOK_GENERIC); }  /* diamond：类型推断占位 */
+    /* 单标识符泛型引用：<T>/<Printable>/<map>
+     * （已知基本类型 <int>/<string> 等由上方 TOK_TYPE_ANNOT 规则等长优先匹配） */
+"<"[A-Za-z_][A-Za-z0-9_]*">" {
+                    yylval.s = strndup(yytext + 1, (size_t)(yyleng - 2)); LEX_RET(TOK_GENERIC); }
 "<"                { LEX_RET(LT); }
 "&&"        { LEX_RET(AND); }
 "||"        { LEX_RET(OR); }
@@ -494,6 +513,22 @@ f\"([^"\\]|\\.)*\"   {
 "("             { LEX_RET(LPAREN); }
 ")"             { LEX_RET(RPAREN); }
 "{"             {
+                  if(prev_token == TOK_GENERIC) {
+                      /* 泛型标记后的 {：
+                       * 声明头 class Box<T> { / class D extends P<K> { / implements I<K> { → LBRACE；
+                       * 表达式中的泛型命名构造 Box<int>{...}、泛型 map 字面量 <K,V>{...} → MAP_OPEN。
+                       * 声明头形态：紧邻为类型名 ID，再前一个是 class/struct/interface/
+                       * extends/implements 关键字（implements 列表末项再前一个可能是逗号） */
+                      if(prev_prev_token == ID &&
+                         (prev_prev_prev_token == TOK_CLASS || prev_prev_prev_token == TOK_STRUCT ||
+                          prev_prev_prev_token == TOK_INTERFACE || prev_prev_prev_token == TOK_EXTENDS ||
+                          prev_prev_prev_token == TOK_IMPLEMENTS || prev_prev_prev_token == COMMA ||
+                          /* 方法返回类型后的函数体：): Pair<K,V> { */
+                          (prev_prev_prev_token == COLON && prev4_token == RPAREN))) {
+                          LEX_RET(LBRACE);
+                      }
+                      prev_token = MAP_OPEN; return MAP_OPEN;
+                  }
                   if(is_expr_end(prev_token)) {
                       /* 类型名后跟 { → 命名构造 ClassName{field: value}，按 MAP_OPEN 处理
                        * 排除声明上下文（extends/implements/struct/class/type 关键字后的类型名，

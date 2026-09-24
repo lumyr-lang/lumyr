@@ -8,6 +8,7 @@
 #include "ast/func_compile.h"
 #include "ast/ast_types.h"
 #include "parse/macro.h"
+#include "ir/ir_arith.h"
 #include "annotation/lm_annotation.h"
 #include <stdio.h>
 #include <string.h>
@@ -98,6 +99,180 @@ static int g_class_prop_n = 0, g_class_prop_cap = 0;
 static char* g_current_class_name = NULL; /* 当前正在解析的 class 名，用于方法注册 */
 static char* g_current_class_parent = NULL; /* 当前 class 的父类名 */
 static int g_current_class_is_abstract = 0; /* 当前 class 是否是抽象类 */
+
+/* ===== Java 风格泛型形参（声明时未知，实例化时绑定；lumin 采用擦除语义）===== */
+static char** g_cur_generic_names = NULL;   /* 当前 class/interface/struct 的泛型形参名 */
+static char** g_cur_generic_bounds = NULL;  /* 平行的上界名（CAST 语义扩展点），NULL 项=无界 */
+static int g_cur_generic_count = 0;
+static char* g_parent_gargs_text = NULL;    /* 父类/父接口后的泛型实参原文（擦除：消费记录） */
+
+/* trim 首尾空白（返回新指针区间，不修改原文） */
+static const char* str_trim(const char* s, int* out_len) {
+    while(*s == ' ' || *s == '\t') s++;
+    const char* e = s + strlen(s);
+    while(e > s && (*(e-1) == ' ' || *(e-1) == '\t')) e--;
+    *out_len = (int)(e - s);
+    return s;
+}
+
+/* 同上，但调用方显式给出有效长度（用于非 NUL 结尾子串） */
+static const char* str_trim2(const char* s, int len, int* out_len) {
+    const char* e = s + len;
+    while(s < e && (*s == ' ' || *s == '\t')) s++;
+    while(e > s && (*(e-1) == ' ' || *(e-1) == '\t')) e--;
+    *out_len = (int)(e - s);
+    return s;
+}
+
+static int is_ident_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/* 解析泛型形参列表原文（如 "K,V" / "T extends Number"）：
+ * 每项首 token 必须是标识符形参名，其后可接 extends/冒号 + 上界类型。
+ * 成功 0 并填充 g_cur_generic_*；失败返回 1。 */
+static int parse_formal_generics(const char* text) {
+    g_cur_generic_count = 0;
+    /* 先按逗号粗拆（泛型声明内逗号仅用于分隔形参） */
+    int cap = 4;
+    g_cur_generic_names = (char**)calloc((size_t)cap, sizeof(char*));
+    g_cur_generic_bounds = (char**)calloc((size_t)cap, sizeof(char*));
+    const char* p = text;
+    while(*p) {
+        const char* comma = strchr(p, ',');
+        int item_len = comma ? (int)(comma - p) : (int)strlen(p);
+        int tlen;
+        const char* item = str_trim(p, &tlen);
+        (void)item_len;
+        /* 形参名：连续标识符 */
+        int i = 0;
+        while(i < tlen && is_ident_char(item[i])) i++;
+        if(i == 0) return 1;
+        if(g_cur_generic_count >= cap) {
+            cap *= 2;
+            g_cur_generic_names = (char**)realloc(g_cur_generic_names, (size_t)cap * sizeof(char*));
+            g_cur_generic_bounds = (char**)realloc(g_cur_generic_bounds, (size_t)cap * sizeof(char*));
+        }
+        char* pname = (char*)malloc((size_t)i + 1);
+        memcpy(pname, item, (size_t)i);
+        pname[i] = '\0';
+        g_cur_generic_names[g_cur_generic_count] = pname;
+        /* 上界：跳过空白，识别 extends 或 ':' */
+        int j = i;
+        char* bound = NULL;
+        while(j < tlen && (item[j] == ' ' || item[j] == '\t')) j++;
+        if(j < tlen) {
+            if(item[j] == ':') j++;
+            else if(j + 7 <= tlen && strncmp(item + j, "extends", 7) == 0) j += 7;
+            int blen;
+            const char* b = str_trim2(item + j, tlen - j, &blen);
+            if(blen > 0) { bound = (char*)malloc((size_t)blen + 1); memcpy(bound, b, (size_t)blen); bound[blen] = '\0'; }
+        }
+        g_cur_generic_bounds[g_cur_generic_count] = bound;
+        g_cur_generic_count++;
+        if(!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
+/* 清理当前类型的泛型形参（类/接口/struct 体结束时调用） */
+static void clear_formal_generics(void) {
+    for(int i = 0; i < g_cur_generic_count; i++) {
+        free(g_cur_generic_names[i]);
+        free(g_cur_generic_bounds[i]);
+    }
+    free(g_cur_generic_names);
+    free(g_cur_generic_bounds);
+    g_cur_generic_names = NULL;
+    g_cur_generic_bounds = NULL;
+    g_cur_generic_count = 0;
+    free(g_parent_gargs_text);
+    g_parent_gargs_text = NULL;
+}
+
+/* name 是否为当前类/接口/struct 的泛型形参 */
+static int is_current_generic_param(const char* name) {
+    if(!name) return 0;
+    for(int i = 0; i < g_cur_generic_count; i++)
+        if(g_cur_generic_names[i] && strcmp(g_cur_generic_names[i], name) == 0) return 1;
+    return 0;
+}
+
+/* 字段自定义类型名解析：泛型形参→动态槽（VAL_NONE，名字释放）；
+ * struct/class/type→对应指针 valtype。仅在 vt==VAL_NONE 时处理 */
+static void resolve_field_custom(char** snp, ValueType* vtp) {
+    char* sn = snp ? *snp : NULL;
+    if(!sn || !vtp || *vtp != VAL_NONE) return;
+    if(is_current_generic_param(sn)) {
+        free(sn);
+        *snp = NULL;
+        return;
+    }
+    if(struct_lookup(sn)) *vtp = VAL_STRUCT_PTR;
+    else if(class_lookup(sn)) *vtp = VAL_CLASS_PTR;
+    else if(type_lookup(sn)) *vtp = VAL_MAP;
+}
+
+/* 把泛型原文直接解析为 AST_PARAM 链（独立于当前类作用域全局，用于泛型函数 func<T>）。
+ * 返回 NULL=非法 */
+static AstNode* parse_text_to_generic_params(const char* text) {
+    AstNode* chain = NULL;
+    const char* p = text;
+    while(*p) {
+        const char* comma = strchr(p, ',');
+        int item_len = comma ? (int)(comma - p) : (int)strlen(p);
+        int tlen;
+        const char* item = str_trim(p, &tlen);
+        int i = 0;
+        while(i < tlen && is_ident_char(item[i])) i++;
+        if(i == 0) { /* 失败：释放已建链 */
+            AstNode* q = chain;
+            while(q) { AstNode* nx = q->u.param.next; ast_free(q); q = nx; }
+            return NULL;
+        }
+        char* pname = (char*)malloc((size_t)i + 1);
+        memcpy(pname, item, (size_t)i);
+        pname[i] = '\0';
+        AstNode* par = ast_param(pname, 0, NULL);
+        int j = i;
+        while(j < tlen && (item[j] == ' ' || item[j] == '\t')) j++;
+        if(j < tlen) {
+            if(item[j] == ':') j++;
+            else if(j + 7 <= tlen && strncmp(item + j, "extends", 7) == 0) j += 7;
+            int blen;
+            const char* b = str_trim2(item + j, tlen - j, &blen);
+            if(blen > 0) {
+                char* bound = (char*)malloc((size_t)blen + 1);
+                memcpy(bound, b, (size_t)blen);
+                bound[blen] = '\0';
+                par->u.param.constraint = bound;
+            }
+        }
+        chain = chain ? ast_param_append(chain, par) : par;
+        if(!comma) break;
+        p = comma + 1;
+    }
+    return chain;
+}
+
+/* 从类型实参原文项提取基础类型名（"?"→"?"；"? extends Number"→忽略上界返回"?"；
+ * "HashMap<string,int>" 嵌套泛型→取外名）。返回 strdup 名字 */
+static char* type_arg_base_name(const char* item, int len) {
+    int i = 0;
+    while(i < len && (item[i] == ' ' || item[i] == '\t')) i++;
+    int s0 = i;
+    if(i < len && item[i] == '?') {
+        char* r = strdup("?");
+        return r;
+    }
+    while(i < len && is_ident_char(item[i])) i++;
+    char* r = (char*)malloc((size_t)(i - s0) + 1);
+    memcpy(r, item + s0, (size_t)(i - s0));
+    r[i - s0] = '\0';
+    return r;
+}
 static AstNode** g_class_methods = NULL; /* 当前 class 的方法定义临时列表 */
 AstNode* g_class_constructor = NULL; /* 当前 class 的构造函数（__init__ 方法，非 static 供 class_add_method 前置设置） */
 
@@ -560,10 +735,50 @@ static AstNode* wrap_type_list(const char* tname, AstNode* chain)
     /* 与语法动作一致：struct/class 名走 ast_class_new，否则普通调用。
        此前一律 ast_call，"Pt(1)" 被当普通函数，落回动态路径变成 int64 */
     if(struct_lookup(tname) || class_lookup(tname)) {
-        return ast_class_new(strdup(tname), 1, chain);
+        return ast_class_new(strdup(tname), 1, chain, NULL);
     }
     return ast_call(strdup(tname), chain);
 }
+/* 泛型字面量实参项 → CastKind（K/V/形参/?通配符/未知名→CAST_NONE 动态；
+ * 内建/容器/注册表类型按既有规则解析）。len=项在原文中的长度 */
+static CastKind generic_arg_to_cast(const char* item, int len)
+{
+    int tlen;
+    const char* t = str_trim2(item, len, &tlen);
+    if(tlen == 0) return CAST_NONE;
+    if(t[0] == '?') return CAST_NONE;   /* 通配符（? / ? extends X / ? super X）擦除为动态 */
+    /* 提取类型名（支持多词名如 "long long" / "long double"） */
+    char* name = (char*)malloc((size_t)tlen + 1);
+    memcpy(name, t, (size_t)tlen);
+    name[tlen] = '\0';
+    CastKind ck;
+    if(is_current_generic_param(name)) ck = CAST_NONE;
+    else {
+        ValueType vt = type_name_to_valtype(name);
+        if(vt != VAL_NONE) ck = (CastKind)valuetype_to_castkind(vt);
+        else if(struct_lookup(name)) ck = CAST_STRUCT_PTR;
+        else if(class_lookup(name)) ck = CAST_CLASS_PTR;
+        else if(type_lookup(name)) ck = CAST_MAP;
+        else ck = CAST_NONE;
+    }
+    free(name);
+    return ck;
+}
+
+/* 解析双类型实参原文（"K,V" / "string,int"）→ kck/vck。
+ * 逗号缺失时第二项按动态处理 */
+static void parse_two_generic_args(const char* text, CastKind* kck, CastKind* vck)
+{
+    const char* comma = strchr(text, ',');
+    if(comma) {
+        *kck = generic_arg_to_cast(text, (int)(comma - text));
+        *vck = generic_arg_to_cast(comma + 1, (int)strlen(comma + 1));
+    } else {
+        *kck = generic_arg_to_cast(text, (int)strlen(text));
+        *vck = CAST_NONE;
+    }
+}
+
 /* 泛型 map 字面量 <K,V>{k1:v1,...}：沿 SEQ 链给每个 entry 的键包 K cast、值包 V cast，
    再生成普通 map_lit。编译器按 entry 目标 VALUE 编译，CAST 负责把键/值转到 K/V，
    存储仍为 ValueMap（运行时键支持任意类型）。 */
@@ -721,7 +936,7 @@ static AstNode* wrap_struct_named(const char* tname, AstNode* items)
         for(int i = 0; i < td->nprops; i++)
             args = ast_arg_append(args, values[i] ? values[i] : ast_none());
         free(values);
-        return ast_class_new(strdup(tname), td->nprops, args);
+        return ast_class_new(strdup(tname), td->nprops, args, NULL);
     }
     /* type 形状：构造带类型 cast 的 map literal，每个值 cast 到字段声明类型 */
     AstNode* out = NULL;
@@ -936,6 +1151,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token TOK_DATE TOK_DATETIME TOK_TIME_KW TOK_TIMEDELTA
 %token TOK_TUPLE TOK_BYTES TOK_COMPLEX TOK_CALENDAR TOK_FILE TOK_FOLDER
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
+%token<s> TOK_GENERIC      /* Java 风格泛型 <K,V>/<string,int>/<?>：值为尖括号内原文 */
 %token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
@@ -973,7 +1189,9 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %type<node> switch_stmt case_list case_item break_stmt continue_stmt assert_stmt defer_stmt const_expr return_stmt yield_stmt expr_list
 %type<node> catch_clause_list catch_clause
 %type<s> opt_catch_type
-%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_start class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header abstract_class_header_inherit abstract_class_header_inherit_implements enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
+%type<node> gdecl gdecl_opt abstract_prefix
+%type<s> extends_name iface_ret_type
+%type<node> func_def func_def_list param_list param arg_list arg destruct_lhs type_prop_list type_prop struct_prop_list struct_prop class_prop_list class_prop class_start class_header class_header_inherit class_header_implements class_header_inherit_implements abstract_class_header abstract_class_header_inherit abstract_class_header_implements abstract_class_header_inherit_implements enum_members enum_member annotation annotation_list macro_def generic_param_list generic_param_items opt_generic_param_list interface_methods interface_method interface_list unpack_obj_pattern unpack_arr_pattern unpack_name_list struct_header annotated_decl
 %type<ll> type_name builtin_type_name type_keyword access_modifier map_generic_type
 %type<s> type_name_str
 %type <ch> char_lit
@@ -1245,7 +1463,8 @@ closed_stmt
     | struct_header struct_prop_list RBRACE {
           /* struct Point { x: int, y: int, func dist(): int {...} }：编译期注册 struct 类型 */
           /* g_current_struct_name 已在 struct_header 中设置 */
-          struct_register(g_current_struct_name, g_struct_prop_names, g_struct_cast_kinds, g_struct_prop_struct_names, g_struct_prop_n, g_struct_elem_kinds);
+          struct_register(g_current_struct_name, g_struct_prop_names, g_struct_cast_kinds, g_struct_prop_struct_names, g_struct_prop_n, g_struct_elem_kinds,
+                          g_cur_generic_names, g_cur_generic_count);
           /* struct_register 已完成，struct_lookup 现在可用；
            * struct_add_method 内部统一完成：self 约束、字节码编译（唯一内部名）、
            * TypeDef + RuntimeTypeInfo 方法表登记 */
@@ -1258,13 +1477,14 @@ closed_stmt
           g_struct_method_clear();
           struct_prop_clear();
           g_current_struct_name = NULL;
+          clear_formal_generics();
           $$ = L(ast_none());
       }
     | annotation_list class_header class_prop_list RBRACE {
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -1307,12 +1527,13 @@ closed_stmt
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
+          clear_formal_generics();
           $$ = method_list ? L(method_list) : L(ast_none());
       }
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
@@ -1359,12 +1580,13 @@ closed_stmt
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
+          clear_formal_generics();
           $$ = method_list ? L(method_list) : L(ast_none());
       }
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1402,12 +1624,13 @@ closed_stmt
           g_class_method_clear();
           type_prop_clear();
           g_current_class_name = NULL;
+          clear_formal_generics();
           $$ = method_list ? L(method_list) : L(ast_none());
       }
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -1450,12 +1673,13 @@ closed_stmt
           type_prop_clear();
           g_current_class_name = NULL;
           g_current_class_parent = NULL;
+          clear_formal_generics();
           $$ = method_list ? L(method_list) : L(ast_none());
       }
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1501,12 +1725,13 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = method_list2 ? L(method_list2) : L(ast_none());
       }
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -1556,12 +1781,13 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = method_list2 ? L(method_list2) : L(ast_none());
       }
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
@@ -1605,12 +1831,13 @@ closed_stmt
           type_prop_clear();
           g_current_class_name = NULL;
           g_current_class_is_abstract = 0;
+          clear_formal_generics();
           $$ = abs_method_list ? L(abs_method_list) : L(ast_none());
       }
     | abstract_class_header_inherit class_prop_list RBRACE {
           /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1650,10 +1877,59 @@ closed_stmt
           g_current_class_is_abstract = 0;
           $$ = abs_method_list2 ? L(abs_method_list2) : L(ast_none());
       }
+    | abstract_class_header_implements class_prop_list RBRACE {
+          /* abstract class C<T> implements I<T> { ... }：抽象类 + 接口（无继承） */
+          char* saved_class_name = g_current_class_name;
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
+          apply_accessors(0);
+          TypeDef* td = type_lookup(g_current_class_name);
+          if(td) td->is_abstract = 1;
+          if(apply_field_initializers()) YYABORT;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_FUNC_DEF && !mnode->u.func_def.is_static_method) {
+                  class_add_method(g_current_class_name, mnode->u.func_def.name, mnode);
+              }
+          }
+          compile_class_ctors(g_current_class_name);
+          AstNode* abs_method_list_impl = NULL;
+          for(int mi = 0; mi < g_class_method_n; mi++) {
+              AstNode* mnode = g_class_methods[mi];
+              if(mnode && mnode->type == AST_ASSIGN) {
+                  abs_method_list_impl = abs_method_list_impl ? ast_seq(abs_method_list_impl, mnode) : mnode;
+              } else if(mnode && mnode->type == AST_FUNC_DEF && mnode->u.func_def.is_static_method) {
+                  g_current_class_name = NULL;
+                  RuntimeFunc* rf = compile_func_from_ast(mnode);
+                  if(rf) {
+                      Value fv;
+                      fv.type = VAL_FUNC;
+                      fv.v.func.ffi_func = NULL;
+                      fv.v.func.is_ffi = 0;
+                      fv.v.func.func_obj = (void*)rf;
+                      sym_set(mnode->u.func_def.name, fv);
+                      static_sym_put(mnode->u.func_def.name, VAL_FUNC);
+                  }
+                  g_current_class_name = saved_class_name;
+              }
+          }
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) {
+              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+          }
+          g_class_method_clear();
+          type_prop_clear();
+          g_current_class_name = NULL;
+          g_current_class_parent = NULL;
+          g_current_class_is_abstract = 0;
+          for(int ii = 0; ii < g_class_ninterfaces; ii++) free(g_class_interfaces[ii]);
+          free(g_class_interfaces);
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          $$ = abs_method_list_impl ? L(abs_method_list_impl) : L(ast_none());
+      }
     | abstract_class_header_inherit_implements class_prop_list RBRACE {
           /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -1708,7 +1984,7 @@ closed_stmt
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1754,12 +2030,13 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = method_list3 ? L(method_list3) : L(ast_none());
       }
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -1809,6 +2086,7 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = method_list3 ? L(method_list3) : L(ast_none());
       }
     | TOK_ENUM ID LBRACE {
@@ -1821,30 +2099,32 @@ closed_stmt
           enum_table_register($2, ml);
           $$ = L(ast_assign($2, ml));
       }
-    | TOK_INTERFACE ID LBRACE interface_methods RBRACE {
+    | TOK_INTERFACE ID gdecl_opt LBRACE interface_methods RBRACE {
           /* interface Printable { func to_string(): string }：注册接口到符号表 */
-          interface_register($2, $4, NULL);
+          interface_register($2, $5, NULL, g_cur_generic_names, g_cur_generic_count);
           free($2);
+          clear_formal_generics();
           $$ = L(ast_none());
       }
-    | TOK_INTERFACE ID TOK_EXTENDS ID LBRACE interface_methods RBRACE {
-          /* interface Colored extends Printable { ... }：注册接口到符号表（带父接口） */
-          interface_register($2, $6, $4);
+    | TOK_INTERFACE ID gdecl_opt TOK_EXTENDS extends_name LBRACE interface_methods RBRACE {
+          /* interface Colored extends Printable { ... }：注册接口（带父接口） */
+          interface_register($2, $7, $5, g_cur_generic_names, g_cur_generic_count);
           free($2);
-          free($4);
+          clear_formal_generics();
           $$ = L(ast_none());
       }
-    | TOK_PUBLIC TOK_INTERFACE ID LBRACE interface_methods RBRACE {
+    | TOK_PUBLIC TOK_INTERFACE ID gdecl_opt LBRACE interface_methods RBRACE {
           /* public interface X { ... }：public 仅为显式标注，interface 默认全局可见 */
-          interface_register($3, $5, NULL);
+          interface_register($3, $6, NULL, g_cur_generic_names, g_cur_generic_count);
           free($3);
+          clear_formal_generics();
           $$ = L(ast_none());
       }
-    | TOK_PUBLIC TOK_INTERFACE ID TOK_EXTENDS ID LBRACE interface_methods RBRACE {
+    | TOK_PUBLIC TOK_INTERFACE ID gdecl_opt TOK_EXTENDS extends_name LBRACE interface_methods RBRACE {
           /* public interface X extends Y { ... }：public 仅为显式标注 */
-          interface_register($3, $7, $5);
+          interface_register($3, $8, $6, g_cur_generic_names, g_cur_generic_count);
           free($3);
-          free($5);
+          clear_formal_generics();
           $$ = L(ast_none());
       }
     | TOK_EXTEND ID LBRACE func_def_list RBRACE {
@@ -1860,7 +2140,11 @@ closed_stmt
 
 /* 接口实现列表：Printable, Comparable */
 interface_list : ID { $$ = ast_param($1, 0, NULL); }
+               | ID TOK_GENERIC { free($2); $$ = ast_param($1, 0, NULL); }
+               | ID TOK_TYPE_ANNOT { free($2); $$ = ast_param($1, 0, NULL); }
                | interface_list COMMA ID { $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
+               | interface_list COMMA ID TOK_GENERIC { free($4); $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
+               | interface_list COMMA ID TOK_TYPE_ANNOT { free($4); $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
                ;
 
 /* 接口方法签名列表 */
@@ -1869,15 +2153,22 @@ interface_methods : interface_method { $$ = $1; }
                   ;
 
 /* 接口方法签名：func name(params): return_type */
-interface_method : FUNC ID LPAREN param_list RPAREN COLON type_name SEMI {
+interface_method : FUNC ID LPAREN param_list RPAREN COLON iface_ret_type SEMI {
                       $$ = ast_param($2, 0, NULL);
-                      /* 用 constraint 字段存储返回类型，简化实现 */
-                      $$->u.param.constraint = valtype_to_name($7);
+                      /* 用 constraint 字段存储返回类型原文（含泛型形参 K/V，擦除语义） */
+                      $$->u.param.constraint = $7;
                   }
                   | FUNC ID LPAREN param_list RPAREN SEMI {
                       $$ = ast_param($2, 0, NULL);
                   }
                   ;
+
+/* 接口方法返回类型：已知类型取规范名，自定义名/泛型形参直接保留原文 */
+iface_ret_type : builtin_type_name { $$ = strdup(castkind_to_name($1)); }
+               | ID                { $$ = $1; }
+               | ID TOK_GENERIC    { free($2); $$ = $1; }
+               | ID TOK_TYPE_ANNOT { free($2); $$ = $1; }
+               ;
 
 /* 运算符重载支持的运算符 */
 operator : PLUS  { $$ = strdup("+"); }
@@ -2126,8 +2417,14 @@ func_def_list
     ;
 
 /* 泛型参数列表：<T> / <T, U>（用 param.next 链接，与函数参数一致） */
-generic_param_list : LT generic_param_items GT { $$ = $2; }
-                   ;
+generic_param_list : TOK_GENERIC {
+          /* 泛型函数形参 <T>：解析为独立 AST_PARAM 链（不经过当前类作用域全局） */
+          AstNode* chain = parse_text_to_generic_params($1);
+          free($1);
+          if(!chain) { yyerror("泛型形参声明非法"); YYABORT; }
+          $$ = chain;
+      }
+    ;
 
 opt_generic_param_list : %empty { $$ = NULL; }
                        | generic_param_list { $$ = $1; }
@@ -2158,14 +2455,16 @@ param
     | ID ASSIGN expr         { $$ = ast_param($1, 0, $3); } /*带默认值的参数 */
     | ELLIPSIS ID            { $$ = ast_param($2, 1, NULL); } /* ...args 可变参数 is_ellipsis=1 */
     | TOK_TYPE_ANNOT ID      { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($1)); } /*带类型标注的参数 <int>a */
-    | LT ID GT ID            { $$ = ast_param($4, 0, NULL); $$->u.param.constraint = strdup($2); } /*自定义类型标注的参数 <Point>a */
+    | TOK_GENERIC ID        { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup($1); free($1); } /*泛型/自定义类型标注 <Point>a <K>a <?>a（擦除语义） */
     | TOK_REF ID             { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; } /*引用传递参数 ref p */
     | TOK_REF TOK_TYPE_ANNOT ID { $$ = ast_param($3, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($2)); } /*带基本类型标注的ref参数 ref <int> p */
-    | TOK_REF LT ID GT ID    { $$ = ast_param($5, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($3); } /*带自定义类型标注的ref参数 ref <Point> p */
+    | TOK_REF TOK_GENERIC ID    { $$ = ast_param($3, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($2); free($2); } /*带泛型/自定义标注的ref参数 ref <Point> p ref <K> p */
     /* 冒号后缀类型标注：n: string, m: map, p: Point（与 <type> name 等价，更友好）
      * 直接用 builtin_type_name / ID 而非 type_name_str，避免与返回类型/三元/map 上下文冲突 */
     | ID COLON builtin_type_name { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型 n: int */
     | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
+    | ID COLON ID TOK_GENERIC   { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*泛型类型 n: Map<K,V>（擦除为 Map） */
+    | ID COLON ID TOK_TYPE_ANNOT { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
     | ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型+默认值 n: int = 5 */
     | ID COLON ID ASSIGN expr   { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup($3); } /*自定义类型+默认值 n: Point = ... */
     | TOK_REF ID COLON builtin_type_name { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型 ref p: int */
@@ -2174,7 +2473,7 @@ param
     | TOK_REF ID COLON ID ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型+默认值 */
     /* ===== 可空形参 T?：constraint 记基础类型，is_nullable=1（绑定时跳过非空校验） ===== */
     | TOK_TYPE_ANNOT ID QMARK { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($1)); $$->u.param.is_nullable = 1; } /* <int>a? */
-    | LT ID GT ID QMARK      { $$ = ast_param($4, 0, NULL); $$->u.param.constraint = strdup($2); $$->u.param.is_nullable = 1; } /* <Point>a? */
+    | TOK_GENERIC ID QMARK   { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup($1); $$->u.param.is_nullable = 1; free($1); } /* <Point>a? <K>a? */
     | ID COLON builtin_type_name QMARK { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); $$->u.param.is_nullable = 1; } /* n: int? */
     | ID COLON ID QMARK               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.is_nullable = 1; } /* n: Point? */
     | ID COLON builtin_type_name QMARK ASSIGN expr { $$ = ast_param($1, 0, $6); $$->u.param.constraint = strdup(castkind_to_name($3)); $$->u.param.is_nullable = 1; } /* n: int? = 5 */
@@ -2466,6 +2765,37 @@ primary
     /* file/folder 角括号字面量：<file>"path" / <folder>"path" */
     | TOK_FILE STRING_LIT   { $$ = L(ast_call(strdup("file"), ast_string($2))); free($2); }
     | TOK_FOLDER STRING_LIT { $$ = L(ast_call(strdup("folder"), ast_string($2))); free($2); }
+    | ID TOK_GENERIC LPAREN arg_list RPAREN {
+          /* Java 风格泛型实例化：HashMap<string,int>() / Box<int>() / Map<>() / List<?>()
+           * 擦除语义：类型实参仅消费记录到 class_new.type_args，不生成特化代码；
+           * 尖括号内必须是已注册类型，否则显式报错，绝不静默当普通函数调用 */
+          if(!struct_lookup($1) && !class_lookup($1) &&
+             !(g_current_class_name && strcmp($1, g_current_class_name) == 0) &&
+             !(g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
+              fprintf(stderr, "parse: \"%s<%s>\" 不是已注册类型，无法泛型实例化 / not a registered type\n", $1, $2);
+              free($1); free($2);
+              YYABORT;
+          }
+          int argc = 0;
+          for(AstNode* p = $4; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
+          $$ = L(ast_class_new($1, argc, $4, $2));
+      }  /* 泛型实例化 generic instantiation */
+    | ID TOK_TYPE_ANNOT LPAREN arg_list RPAREN {
+          /* 单个已知类型实参的泛型实例化：Box<int>() 中 <int> 词法产出 TOK_TYPE_ANNOT
+           * （多实参 <string,int> 才整体走 TOK_GENERIC）；还原类型名记录到 type_args */
+          if(!struct_lookup($1) && !class_lookup($1) &&
+             !(g_current_class_name && strcmp($1, g_current_class_name) == 0) &&
+             !(g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
+              fprintf(stderr, "parse: \"%s<%s>\" 不是已注册类型，无法泛型实例化 / not a registered type\n",
+                      $1, castkind_to_name($2));
+              free($1);
+              YYABORT;
+          }
+          char* tname = strdup(castkind_to_name($2));
+          int argc = 0;
+          for(AstNode* p = $4; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
+          $$ = L(ast_class_new($1, argc, $4, tname));
+      }  /* 单已知类型实参泛型实例化 generic instantiation with known type arg */
     | ID LPAREN arg_list RPAREN {
           /* 宏调用：如果是已注册的宏，则展开；否则作为普通函数调用 */
           if(macro_is_defined($1)) {
@@ -2478,7 +2808,7 @@ primary
                * 含类体内自构造（class_register 尚未执行，g_current_class_name 兜底） */
               int argc = 0;
               for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
-              $$ = L(ast_class_new($1, argc, $3));
+              $$ = L(ast_class_new($1, argc, $3, NULL));
           } else if(type_lookup($1)) {
               /* type 形状位置构造 T(v0, v1)：组装成带字段 cast 的 map literal（与 T{...} 同路），
                * 否则退化为普通调用 T 不是函数，误发 INT64_INDEX_SET(142) */
@@ -2595,33 +2925,39 @@ primary
         {
             $$ = ast_type_annotation($1, $2);
         }
-    | LT ID GT unary_expr {
-          /* 接口类型标注：<Printable>expr → 接口引用类型 */
-          if(interface_lookup($2) != NULL) {
-              $$ = ast_interface_annotation($2, $4);
-          } else if(is_socket_ctor_name($2) && $4 && $4->type == AST_MAP_LIT) {
+    | TOK_GENERIC unary_expr {
+          /* 类型标注 <Printable>expr / 命名字段构造 <Person>{...} / 形状数组 <Person>[...]：
+           * TOK_GENERIC 承载尖括号原文（词法统一），逻辑与既有标注规则一致；
+           * 泛型形参名/通配符未注册时落到 else 透传（擦除=动态） */
+          char* gt = $1;
+          if(interface_lookup(gt) != NULL) {
+              $$ = ast_interface_annotation(gt, $2);
+          } else if(is_socket_ctor_name(gt) && $2 && $2->type == AST_MAP_LIT) {
               /* socket 字面量简写：<TcpSocket>{host:..,port:..} 反糖为 TcpSocket({map}) */
-              $$ = L(ast_call($2, $4));
-          } else if(type_lookup($2) != NULL && $4 && $4->type == AST_MAP_LIT) {
+              $$ = L(ast_call(gt, $2));
+          } else if(type_lookup(gt) != NULL && $2 && $2->type == AST_MAP_LIT) {
               /* 命名字段构造：<CustomType>{ name: v, ... } 展开为位置构造 */
-              AstNode* made = wrap_struct_named($2, $4->u.map_lit.entries);
-              free($2);
-              if(!made) YYERROR;   /* 字段校验失败：终止解析，避免 NULL 节点导致后续段错误 */
+              AstNode* made = wrap_struct_named(gt, $2->u.map_lit.entries);
+              free(gt);
+              if(!made) YYERROR;
               $$ = L(made);
-          } else if(type_lookup($2) != NULL && $4 && $4->type == AST_ARRAY_LIT) {
-              /* 泛型形状数组：<Person>[e1, e2] → [Person(e1), Person(e2)]
-                 （本规则是实际生效路径：[..] 先被归约为数组字面量；
-                  下方 LT ID GT ARRAY_OPEN 规则因移进冲突不可达） */
-              $$ = L(ast_array_lit(wrap_type_list($2, $4->u.array_lit.elems), -1));
-              free($2);
+          } else if(type_lookup(gt) != NULL && $2 && $2->type == AST_ARRAY_LIT) {
+              /* 泛型形状数组：<Person>[e1, e2] → [Person(e1), Person(e2)] */
+              $$ = L(ast_array_lit(wrap_type_list(gt, $2->u.array_lit.elems), -1));
+              free(gt);
           } else {
-              /* 非接口类型：暂时当作普通表达式处理（后续可扩展自定义类型标注） */
-              $$ = $4;
-              free($2);
+              /* 泛型形参/通配符/非接口类型：透传表达式
+               * 特例：<K,V>{...} / <string,int>{...} 泛型 map 字面量——逐 entry 包 K/V cast
+               * 仅当泛型参数含逗号（双参数 K,V）时才应用，避免 <map>{...} 被误 cast */
+              if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',')) {
+                  CastKind kck, vck;
+                  parse_two_generic_args(gt, &kck, &vck);
+                  $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
+              }
+              $$ = $2;
+              free(gt);
           }
       }
-    | LT map_generic_type COMMA map_generic_type GT MAP_OPEN map_items RBRACE
-        { $$ = ast_map_lit(wrap_map_kv($7, (CastKind)$2, (CastKind)$4)); }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
           /* 泛型自定义类型：<Person>[e1,e2] → [Person(e1), Person(e2)]（形状构造） */
           if(type_lookup($2) != NULL) {
@@ -2865,11 +3201,7 @@ type_prop
           /* 命名字段类型（type_name_to_valtype 对自定义名返回 VAL_NONE）：
              struct/class → 对应引用类型；type 形状运行时即 map → VAL_MAP。
              此前统一落 VAL_NONE 被 cast 成 long long，嵌套值被销毁 */
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
@@ -2889,17 +3221,17 @@ type_prop
         free($4);
         $$ = ast_none();
     }
-    /* 泛型 map 字段：<K,V> 或 <K,V>map */
-    | ID COLON LT map_generic_type COMMA map_generic_type GT {
-        type_prop_push($1, VAL_MAP, 0, 0, NULL);
+    /* 泛型容器字段：<K,V> / <string,int>（TOK_GENERIC，擦除语义）；
+     * 可带 map 后缀；单标识符 <T> 作为字段类型=动态 */
+    | ID COLON TOK_GENERIC {
+        type_prop_push($1, strchr($3, ',') ? VAL_MAP : VAL_NONE, 0, 0, NULL);
+        free($3);
         $$ = ast_none();
     }
-    | ID COLON LT map_generic_type COMMA map_generic_type GT ID {
-        if(strcmp($8, "map") != 0) {
-            yyerror("泛型 map 字段后缀须为 'map'");
-        }
+    | ID COLON TOK_GENERIC ID {
+        if(strcmp($4, "map") != 0) yyerror("泛型字段后缀须为 'map'");
         type_prop_push($1, VAL_MAP, 0, 0, NULL);
-        free($8);
+        free($3); free($4);
         $$ = ast_none();
     }
     ;
@@ -2922,6 +3254,12 @@ struct_prop_list
 struct_prop
     : ID COLON builtin_type_name SEMI { struct_prop_push($1, $3, NULL); $$ = ast_none(); }
     | ID COLON ID SEMI {
+        /* 泛型形参字段：struct 为 C 定长布局，无动态槽，显式拒绝（根因，不静默错转） */
+        if(is_current_generic_param($3)) {
+            fprintf(stderr, "parse: struct 字段 \"%s\" 不能使用泛型形参 \"%s\"（C 布局无动态槽）\n", $1, $3);
+            free($1); free($3);
+            YYABORT;
+        }
         /* 容器字段：map/array 引用语义（走 PTR 栈），此前被当未知 struct 引用致值丢失 */
         if(strcmp($3, "map") == 0) {
             struct_prop_push($1, CAST_MAP, NULL);
@@ -2961,17 +3299,22 @@ struct_prop
         free($4);
         $$ = ast_none();
     }
-    /* 泛型 map 字段：<K,V> 或 <K,V>map */
-    | ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
-        struct_prop_push($1, CAST_MAP, NULL);
-        $$ = ast_none();
-    }
-    | ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
-        if(strcmp($8, "map") != 0) {
-            yyerror("泛型 map 字段后缀须为 'map'");
+    /* 泛型容器字段：<K,V> / <string,int>（TOK_GENERIC，擦除语义=map 引用槽）；
+     * struct 为定长布局，单泛型 <T> 字段无对应 C 槽，显式拒绝 */
+    | ID COLON TOK_GENERIC SEMI {
+        if(!strchr($3, ',')) {
+            fprintf(stderr, "parse: struct 字段 \"%s\" 不能使用单泛型标记（C 布局无动态槽）\n", $1);
+            free($1); free($3);
+            YYABORT;
         }
         struct_prop_push($1, CAST_MAP, NULL);
-        free($8);
+        free($3);
+        $$ = ast_none();
+    }
+    | ID COLON TOK_GENERIC ID SEMI {
+        if(strcmp($4, "map") != 0) yyerror("泛型字段后缀须为 'map'");
+        struct_prop_push($1, CAST_MAP, NULL);
+        free($3); free($4);
         $$ = ast_none();
     }
     ;
@@ -3022,7 +3365,7 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
@@ -3081,7 +3424,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -3141,7 +3484,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -3195,7 +3538,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -3223,7 +3566,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count);
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -3259,22 +3602,14 @@ class_prop
           ValueType vt = $3;
           /* 自定义类型字段：type_name 对自定义名返回 VAL_NONE，须按注册表修正
              （与 type_prop 规则一致），否则 cls 走错栈、指针被当整数 */
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
     | access_modifier ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $4;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($2, vt, $1, 0, sn);
           $$ = ast_none();
       }
@@ -3282,11 +3617,7 @@ class_prop
     | ID COLON type_name ASSIGN expr SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $3;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($1, vt, 0, 0, sn);
           record_field_init($1, ast_unary(OP_NONNULL_ASSERT, $5));
           $$ = ast_none();
@@ -3294,11 +3625,7 @@ class_prop
     | access_modifier ID COLON type_name ASSIGN expr SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $4;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($2, vt, $1, 0, sn);
           record_field_init($2, ast_unary(OP_NONNULL_ASSERT, $6));
           $$ = ast_none();
@@ -3310,22 +3637,14 @@ class_prop
     | ID COLON type_name QMARK SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $3;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($1, vt, 0, 0, sn);
           $$ = ast_none();
       }
     | ID COLON type_name QMARK ASSIGN expr SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $3;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($1, vt, 0, 0, sn);
           record_field_init($1, $6);   /* 可空：不做断言；引用 null 落 NULL */
           $$ = ast_none();
@@ -3334,22 +3653,14 @@ class_prop
     | CONST ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $4;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($2, vt, 0, 1, sn);
           $$ = ast_none();
       }
     | access_modifier CONST ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $5;
-          if(vt == VAL_NONE && sn) {
-              if(struct_lookup(sn)) vt = VAL_STRUCT_PTR;
-              else if(class_lookup(sn)) vt = VAL_CLASS_PTR;
-              else if(type_lookup(sn)) vt = VAL_MAP;
-          }
+          resolve_field_custom(&sn, &vt);
           type_prop_push($3, vt, $1, 1, sn);
           $$ = ast_none();
       }
@@ -3369,17 +3680,17 @@ class_prop
         free($4);
         $$ = ast_none();
     }
-    /* 泛型 map 字段：<K,V> 或 <K,V>map */
-    | ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
-        type_prop_push($1, VAL_MAP, 0, 0, NULL);
+    /* 泛型容器字段：<K,V> / <string,int>（TOK_GENERIC，擦除语义）；
+     * 单标识符 <T> 作为字段类型=动态；可带 map 后缀 */
+    | ID COLON TOK_GENERIC SEMI {
+        type_prop_push($1, strchr($3, ',') ? VAL_MAP : VAL_NONE, 0, 0, NULL);
+        free($3);
         $$ = ast_none();
     }
-    | ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
-        if(strcmp($8, "map") != 0) {
-            yyerror("泛型 map 字段后缀须为 'map'");
-        }
+    | ID COLON TOK_GENERIC ID SEMI {
+        if(strcmp($4, "map") != 0) yyerror("泛型字段后缀须为 'map'");
         type_prop_push($1, VAL_MAP, 0, 0, NULL);
-        free($8);
+        free($3); free($4);
         $$ = ast_none();
     }
     /* 带访问修饰符的泛型数组字段：private items: <int> */
@@ -3397,17 +3708,16 @@ class_prop
         free($5);
         $$ = ast_none();
     }
-    /* 带访问修饰符的泛型 map 字段：private m: <string,int> */
-    | access_modifier ID COLON LT map_generic_type COMMA map_generic_type GT SEMI {
-        type_prop_push($2, VAL_MAP, $1, 0, NULL);
+    /* 带访问修饰符的泛型容器字段：private m: <string,int> / private items: <K,V> */
+    | access_modifier ID COLON TOK_GENERIC SEMI {
+        type_prop_push($2, strchr($4, ',') ? VAL_MAP : VAL_NONE, $1, 0, NULL);
+        free($4);
         $$ = ast_none();
     }
-    | access_modifier ID COLON LT map_generic_type COMMA map_generic_type GT ID SEMI {
-        if(strcmp($9, "map") != 0) {
-            yyerror("泛型 map 字段后缀须为 'map'");
-        }
+    | access_modifier ID COLON TOK_GENERIC ID SEMI {
+        if(strcmp($5, "map") != 0) yyerror("泛型字段后缀须为 'map'");
         type_prop_push($2, VAL_MAP, $1, 0, NULL);
-        free($9);
+        free($4); free($5);
         $$ = ast_none();
     }
     ;
@@ -3459,6 +3769,8 @@ type_name
 /* 类型名字符串（用于 FFI 参数类型标注，直接返回原始字符串，避免 ValueType 枚举冲突） */
 type_name_str
     : ID                         { $$ = $1; }
+    | ID TOK_GENERIC             { free($2); $$ = $1; }
+    | ID TOK_TYPE_ANNOT          { free($2); $$ = $1; }
     | builtin_type_name          { $$ = castkind_to_name($1); }
     ;
 
@@ -3654,7 +3966,7 @@ expr
     : assignment_expr
     ;
 
-struct_header: TOK_STRUCT ID LBRACE {
+struct_header: TOK_STRUCT ID gdecl_opt LBRACE {
           /* 在 LBRACE 时就设置 g_current_struct_name，这样方法定义时就能获取到 */
           g_current_struct_name = $2;
           $$ = NULL;
@@ -3665,7 +3977,34 @@ class_start
     : TOK_CLASS                 { $$ = NULL; }
     | TOK_PUBLIC TOK_CLASS      { $$ = NULL; }
     ;
-class_header: class_start ID LBRACE {
+
+/* 泛型形参声明 <K,V>（词法整体）：位置紧跟类型名；
+ * 解析为当前类/接口/struct 的泛型形参（擦除语义，实例化时绑定） */
+gdecl : TOK_GENERIC {
+          if(parse_formal_generics($1)) {
+              yyerror("泛型形参声明非法");
+              free($1);
+              YYABORT;
+          }
+          free($1);
+          $$ = NULL;
+      }
+    ;
+gdecl_opt : %empty { $$ = NULL; } | gdecl
+    ;
+
+/* 父类/父接口名，其后可跟泛型实参 <...>（擦除语义：仅消费记录原文） */
+extends_name : ID                 { $$ = $1; }
+             | ID TOK_GENERIC     { g_parent_gargs_text = $2; $$ = $1; }
+             | ID TOK_TYPE_ANNOT  { g_parent_gargs_text = strdup(castkind_to_name($2)); $$ = $1; }
+    ;
+
+/* 抽象类前缀：abstract class / abstract public class / public abstract class */
+abstract_prefix : TOK_ABSTRACT class_start            { $$ = NULL; }
+                | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS   { $$ = NULL; }
+    ;
+
+class_header: class_start ID gdecl_opt LBRACE {
           /* 在 LBRACE 时就设置 g_current_class_name，这样方法定义时就能获取到 */
           g_current_class_name = $2;
           g_current_class_is_abstract = 0;
@@ -3675,39 +4014,47 @@ class_header: class_start ID LBRACE {
           $$ = NULL;
       }
     ;
-abstract_class_header: TOK_ABSTRACT class_start ID LBRACE {
-          /* 抽象类定义：标记为抽象类，不能被实例化（abstract public class 顺序） */
-          g_current_class_name = $3;
-          g_current_class_is_abstract = 1;
-          g_current_class_parent = NULL;
-          $$ = NULL;
-      }
-    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID LBRACE {
-          /* public abstract class 顺序（等价写法） */
-          g_current_class_name = $4;
+abstract_class_header: abstract_prefix ID gdecl_opt LBRACE {
+          /* 抽象类定义：标记为抽象类，不能被实例化 */
+          g_current_class_name = $2;
           g_current_class_is_abstract = 1;
           g_current_class_parent = NULL;
           $$ = NULL;
       }
     ;
-abstract_class_header_inherit: TOK_ABSTRACT class_start ID TOK_EXTENDS ID LBRACE {
-          /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
-          g_current_class_name = $3;
+abstract_class_header_inherit: abstract_prefix ID gdecl_opt TOK_EXTENDS extends_name LBRACE {
+          /* 抽象类 + 继承 */
+          g_current_class_name = $2;
           g_current_class_parent = $5;
           g_current_class_is_abstract = 1;
           $$ = NULL;
       }
-    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID TOK_EXTENDS ID LBRACE {
-          /* public abstract class Number extends Object { ... }（等价写法） */
-          g_current_class_name = $4;
-          g_current_class_parent = $6;
+    ;
+abstract_class_header_implements: abstract_prefix ID gdecl_opt TOK_IMPLEMENTS interface_list LBRACE {
+          /* 抽象类 + 接口（无继承） */
+          g_current_class_name = $2;
+          g_current_class_parent = NULL;
           g_current_class_is_abstract = 1;
+          g_class_interfaces = NULL;
+          g_class_ninterfaces = 0;
+          AstNode* _iface = $5;
+          while(_iface) {
+              if(_iface->u.param.name) {
+                  g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+                  g_class_interfaces[g_class_ninterfaces++] = strdup(_iface->u.param.name);
+              }
+              _iface = _iface->u.param.next;
+          }
+          if(g_class_interfaces) {
+              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
+              g_class_interfaces[g_class_ninterfaces] = NULL;
+          }
           $$ = NULL;
       }
     ;
-abstract_class_header_inherit_implements: TOK_ABSTRACT class_start ID TOK_EXTENDS ID TOK_IMPLEMENTS interface_list LBRACE {
-          /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
-          g_current_class_name = $3;
+abstract_class_header_inherit_implements: abstract_prefix ID gdecl_opt TOK_EXTENDS extends_name TOK_IMPLEMENTS interface_list LBRACE {
+          /* 抽象类 + 继承 + 接口 */
+          g_current_class_name = $2;
           g_current_class_parent = $5;
           g_current_class_is_abstract = 1;
           g_class_interfaces = NULL;
@@ -3726,43 +4073,22 @@ abstract_class_header_inherit_implements: TOK_ABSTRACT class_start ID TOK_EXTEND
           }
           $$ = NULL;
       }
-    | TOK_PUBLIC TOK_ABSTRACT TOK_CLASS ID TOK_EXTENDS ID TOK_IMPLEMENTS interface_list LBRACE {
-          /* public abstract class Number extends Object implements IFoo { ... }（等价写法） */
-          g_current_class_name = $4;
-          g_current_class_parent = $6;
-          g_current_class_is_abstract = 1;
-          g_class_interfaces = NULL;
-          g_class_ninterfaces = 0;
-          AstNode* _iface = $8;
-          while(_iface) {
-              if(_iface->u.param.name) {
-                  g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
-                  g_class_interfaces[g_class_ninterfaces++] = strdup(_iface->u.param.name);
-              }
-              _iface = _iface->u.param.next;
-          }
-          if(g_class_interfaces) {
-              g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
-              g_class_interfaces[g_class_ninterfaces] = NULL;
-          }
-          $$ = NULL;
-      }
     ;
-class_header_inherit: class_start ID TOK_EXTENDS ID LBRACE {
-          /* 在 LBRACE 时就设置 g_current_class_name 和 g_current_class_parent */
+class_header_inherit: class_start ID gdecl_opt TOK_EXTENDS extends_name LBRACE {
+          /* LBRACE 时设置 g_current_class_name 和 g_current_class_parent */
           g_current_class_name = $2;
-          g_current_class_parent = $4;
+          g_current_class_parent = $5;
           $$ = NULL;
       }
     ;
-class_header_implements: class_start ID TOK_IMPLEMENTS interface_list LBRACE {
+class_header_implements: class_start ID gdecl_opt TOK_IMPLEMENTS interface_list LBRACE {
           /* class 实现接口：设置 g_current_class_name 和接口列表 */
           g_current_class_name = $2;
           g_current_class_parent = NULL;
           /* 从 interface_list 中提取接口名 */
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
-          AstNode* _iface = $4;
+          AstNode* _iface = $5;
           while(_iface) {
               if(_iface->u.param.name) {
                   g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));
@@ -3778,14 +4104,14 @@ class_header_implements: class_start ID TOK_IMPLEMENTS interface_list LBRACE {
           $$ = NULL;
       }
     ;
-class_header_inherit_implements: class_start ID TOK_EXTENDS ID TOK_IMPLEMENTS interface_list LBRACE {
+class_header_inherit_implements: class_start ID gdecl_opt TOK_EXTENDS extends_name TOK_IMPLEMENTS interface_list LBRACE {
           /* class 继承并实现接口：设置 g_current_class_name、g_current_class_parent 和接口列表 */
           g_current_class_name = $2;
-          g_current_class_parent = $4;
+          g_current_class_parent = $5;
           /* 从 interface_list 中提取接口名 */
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
-          AstNode* _iface = $6;
+          AstNode* _iface = $7;
           while(_iface) {
               if(_iface->u.param.name) {
                   g_class_interfaces = (char**)realloc(g_class_interfaces, (size_t)(g_class_ninterfaces + 1) * sizeof(char*));

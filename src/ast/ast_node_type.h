@@ -233,6 +233,7 @@ struct AstNode {
             char* class_name;    // class 名字符串
             int argc;            // 构造函数参数数量
             AstNode* args;       // 构造函数参数列表（AST_SEQ 树）
+            char* type_args;     // 泛型实参原文（如 "string,int"），NULL=非泛型构造；擦除语义下仅记录
         } class_new;
 
         struct {

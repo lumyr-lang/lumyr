@@ -44,7 +44,8 @@ typedef struct {
 
 /* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL；
  * elem_kinds 为类型化数组字段的元素 CastKind，与 props 平行，可为 NULL） */
-TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds);
+TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
+                        char** generic_params, int generic_param_count);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -100,10 +101,13 @@ typedef struct {
     InterfaceMethod* methods; // 方法签名列表（包含继承的方法）
     int nmethods;
     char* parent;            // 父接口名（NULL=无父接口）
+    char** generic_params;   // 泛型形参名（NULL=非泛型接口）
+    int generic_param_count; // 泛型形参数量
 } InterfaceDef;
 
 // 注册 / 查找（返回 InterfaceDef*，NULL 未找到）
-InterfaceDef* interface_register(const char* name, void* methods, const char* parent);
+InterfaceDef* interface_register(const char* name, void* methods, const char* parent,
+                                 char** generic_params, int generic_param_count);
 InterfaceDef* interface_lookup(const char* name);
 /* interface_get 已废弃，请使用 interface_lookup 按名称查找 */
 InterfaceDef* interface_get(int idx);
@@ -111,7 +115,8 @@ InterfaceDef* interface_get(int idx);
 void interface_foreach(void (*callback)(const char* name, InterfaceDef* idef, void* user_data), void* user_data);
 
 // struct 注册（字段用精确 CastKind 类型）
-TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds);
+TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, char** struct_names, int nprops, CastKind* elem_kinds,
+                         char** generic_params, int generic_param_count);
 // 查找是否是 struct（返回 TypeDef* 或 NULL）
 TypeDef* struct_lookup(const char* name);
 // 添加 struct 方法

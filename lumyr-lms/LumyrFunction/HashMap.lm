@@ -1,12 +1,12 @@
 // ============================================================
-// lumyr-HashMap：HashMap 哈希映射封装类
+// lumyr-HashMap：HashMap<K,V> 哈希映射封装类
 // 封装内置 map（键值对容器），提供 put/get/remove 等方法
 // 迭代顺序为哈希桶序（非插入序）；所有修改操作 in-place，
 // 返回 self 支持链式调用
 //
 // 用法：
 //   import <Function/HashMap>;
-//   m = HashMap();
+//   m = HashMap<string, int>();
 //   m.put("a", 1).put("b", 2);
 //   print(m.get("a"));          // 1
 //   print(m.size());            // 2
@@ -15,7 +15,7 @@
 
 import <Function/Map>;
 
-public class HashMap extends AbstractMap {
+public class HashMap<K, V> extends AbstractMap<K, V> {
     value: map;
 
     func HashMap(m) {
@@ -23,8 +23,8 @@ public class HashMap extends AbstractMap {
         if (m != null) { self.value = copy(m); }
     }
 
-    // 批量导入另一映射的全部键值对（同为 AbstractMap 家族实例或原生 map）
-    func putAll(other) {
+    // 批量导入另一映射的全部键值对（同为 Map<K,V> 家族实例或原生 map）
+    func putAll(other: Map<K, V>) {
         ks = other.keys();
         i = 0;
         while (i < ks.len) {
