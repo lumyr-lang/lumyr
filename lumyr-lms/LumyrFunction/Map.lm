@@ -10,6 +10,12 @@
 import <Function/Object>;
 
 // 统一映射契约：K = 键类型（Key），V = 值类型（Value）
+
+// forEach 回调函数接口
+public interface MapCallback<K, V> {
+    (key: K, val: V);
+}
+
 public interface Map<K, V> {
     func size(): int;
     func isEmpty(): bool;
@@ -22,9 +28,7 @@ public interface Map<K, V> {
     func clear(): Map<K, V>;
     func keys();
     func values();
-    /* 回调签名：(key: K, val: V) → void */
-    (key: K, val: V);
-    func forEach(cb);
+    func forEach(cb: MapCallback<K, V>);
     func copy();
     func toMap();
     func toArray();
