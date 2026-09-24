@@ -1,0 +1,87 @@
+// ============================================================
+// lumyr-HashSet：HashSet<E> 哈希集合封装类
+// 封装内置 map（键=元素，值=占位 true），O(1) 增删查
+// 迭代顺序为哈希桶序（非插入序）；所有修改操作 in-place，
+// 返回 self 支持链式调用
+//
+// 用法：
+//   import <Function/HashSet>;
+//   s = HashSet<int>();
+//   s.add(1).add(2).add(3);
+//   print(s.size());            // 3
+//   print(s.contains(2));      // true
+//   s.remove(2);
+//   print(s.toString());       // {1:true,3:true} 或 {3:true,1:true}
+// ============================================================
+
+import <Function/Set>;
+
+public class HashSet<E> extends AbstractSet<E> {
+    value: <E, bool>map;
+
+    // 构造：可选传入初始元素数组
+    func HashSet(arr: E[]) {
+        self.value = {};
+        if (arr != null) {
+            i = 0;
+            while (i < arr.len) { self.value[arr[i]] = true; i = i + 1; }
+        }
+    }
+
+    // 批量添加另一集合或数组的全部元素
+    // assign, update, merge
+    @FuncAlias(["assign", "update", "merge"])
+    func addAll(other) {
+        if (type(other) == "array") {
+            i = 0;
+            while (i < other.len) { self.add(other[i]); i = i + 1; }
+        } else {
+            ks = other.toArray();
+            i = 0;
+            while (i < ks.len) { self.add(ks[i]); i = i + 1; }
+        }
+        return self;
+    }
+
+    // 批量移除另一集合或数组的全部元素
+    @FuncAlias(["removeAllElements"])
+    func removeAll(other) {
+        if (type(other) == "array") {
+            i = 0;
+            while (i < other.len) { self.remove(other[i]); i = i + 1; }
+        } else {
+            ks = other.toArray();
+            i = 0;
+            while (i < ks.len) { self.remove(ks[i]); i = i + 1; }
+        }
+        return self;
+    }
+
+    // 保留同时存在于 other 的元素（交集 in-place）
+    @FuncAlias(["retain", "retainAllElements"])
+    func retainAll(other) {
+        isArr = (type(other) == "array");
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            drop = false;
+            if (isArr) {
+                if (other.indexOf(ks[i]) < 0) { drop = true; }
+            } else {
+                if (!other.has(ks[i])) { drop = true; }
+            }
+            if (drop) { self.value.remove(ks[i]); }
+            i = i + 1;
+        }
+        return self;
+    }
+
+    // override 返回同类型实例
+    // clone——override 必须重新声明别名，确保返回本类实例
+    @FuncAlias("clone")
+    func copy(): HashSet<E> {
+        c = HashSet<E>();
+        c.value = self.value.copy();
+        return c;
+    }
+}

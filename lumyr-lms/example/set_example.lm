@@ -1,0 +1,133 @@
+// ============================================================
+// HashSet 验证示例
+// 验证 E 泛型 + 增删查 + 集合运算 + 别名 + 复制
+// 运行：./bin/lumyr lumyr-lms/example/set_example.lm
+// ============================================================
+
+import <Function/HashSet>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ---------- 基础增删查 ----------
+print("=== basic ===");
+s = HashSet<int>();
+s.add(1).add(2).add(3);
+check(s.size() == 3, "size 3");
+check(s.contains(2) == true, "contains 2");
+check(s.has(4) == false, "not has 4");
+s.add(1);  // 去重
+check(s.size() == 3, "dedup size 3");
+s.remove(2);
+check(s.size() == 2, "after remove size 2");
+check(s.contains(2) == false, "removed 2");
+print("basic PASS");
+
+// ---------- 构造器初始元素 ----------
+print("=== ctor from array ===");
+s2 = HashSet<int>([10, 20, 30]);
+check(s2.size() == 3, "ctor size 3");
+check(s2.contains(30) == true, "ctor has 30");
+print("ctor PASS");
+
+// ---------- 别名验证 ----------
+print("=== alias ===");
+check(s2.includes(20) == true, "includes alias");
+s2.delete(10);
+check(s2.size() == 2, "delete alias");
+print("alias PASS");
+
+// ---------- 复制（深拷贝独立性）----------
+print("=== copy ===");
+s3 = s2.copy();
+s3.add(999);
+check(s2.size() == 2, "copy independence");
+check(s3.size() == 3, "copy has new elem");
+print("copy PASS");
+
+// ---------- 集合运算 ----------
+print("=== set ops ===");
+a = HashSet<int>([1, 2, 3, 4]);
+b = HashSet<int>([3, 4, 5, 6]);
+
+// 并集
+u = a.union(b);
+check(u.size() == 6, "union size 6");
+
+// 交集
+inter = a.intersection(b);
+check(inter.size() == 2, "intersection size 2");
+check(inter.contains(3) == true, "intersection has 3");
+check(inter.contains(4) == true, "intersection has 4");
+
+// 差集
+diff = a.difference(b);
+check(diff.size() == 2, "difference size 2");
+check(diff.contains(1) == true, "difference has 1");
+check(diff.contains(2) == true, "difference has 2");
+
+// 对称差
+sym = a.symmetricDifference(b);
+check(sym.size() == 4, "symmetric diff size 4");
+check(sym.contains(1) == true, "sym has 1");
+check(sym.contains(6) == true, "sym has 6");
+check(sym.contains(3) == false, "sym not has 3");
+
+print("set ops PASS");
+
+// ---------- 子集/超集/不相交 ----------
+print("=== subset/superset/disjoint ===");
+sub = HashSet<int>([1, 2]);
+check(sub.isSubsetOf(a) == true, "sub is subset of a");
+check(a.isSupersetOf(sub) == true, "a is superset of sub");
+check(a.isDisjointWith(b) == false, "a not disjoint with b");
+dis1 = HashSet<int>([100, 200]);
+check(a.isDisjointWith(dis1) == true, "a disjoint with dis1");
+print("subset/superset/disjoint PASS");
+
+// ---------- 批量操作 ----------
+print("=== bulk ===");
+bulk = HashSet<int>();
+bulk.addAll([1, 2, 3, 4, 5]);
+check(bulk.size() == 5, "addAll from array");
+bulk.retainAll(a);  // 保留 a 中的元素 [1,2,3,4]
+check(bulk.size() == 4, "retainAll -> 4");
+check(bulk.contains(5) == false, "5 removed by retain");
+bulk.removeAll([1, 2]);
+check(bulk.size() == 2, "removeAll -> 2");
+print("bulk PASS");
+
+// ---------- 字符串元素 ----------
+print("=== string elements ===");
+ss = HashSet<string>(["apple", "banana", "cherry"]);
+check(ss.size() == 3, "string set size 3");
+check(ss.contains("banana") == true, "has banana");
+ss.add("apple");
+check(ss.size() == 3, "string dedup");
+print("string PASS");
+
+// ---------- forEach 遍历 ----------
+print("=== forEach ===");
+// lambda 内经容器引用修改——VM 闭包捕获修复后生效
+seen = [];
+ss.forEach(func(e) { seen.add(e); });
+check(seen.len == 3, "forEach collected 3");
+// 校验收集到的元素均属原集合
+i = 0;
+while (i < seen.len) {
+    if (!ss.contains(seen[i])) { throw "forEach collected unknown elem"; }
+    i = i + 1;
+}
+print("forEach PASS");
+
+// ---------- 相等判定 ----------
+print("=== equals ===");
+e1 = HashSet<int>([1, 2, 3]);
+e2 = HashSet<int>([3, 2, 1]);
+check(e1.equals(e2) == true, "order-independent equals");
+e3 = HashSet<int>([1, 2]);
+check(e1.equals(e3) == false, "different size not equal");
+print("equals PASS");
+
+print("set_example ALL PASS");

@@ -468,6 +468,16 @@ f\"([^"\\]|\\.)*\"   {
                     yylval.s = strndup(yytext + 1, (size_t)(yyleng - 2)); LEX_RET(TOK_GENERIC); }
 "<?>"               { yylval.s = strdup("?"); LEX_RET(TOK_GENERIC); } /* 通配符类型引用 */
 "<>"                { yylval.s = strdup(""); LEX_RET(TOK_GENERIC); }  /* diamond：类型推断占位 */
+    /* 带上界（extends 语法）：支持单/多参数、bound 内任意 <> 嵌套、bound 后跟外层逗号参数
+     * 例：<E extends Acc> / <E extends Acc<K,V>> / <E extends TreeIdAccessor<E,I>, I>
+     *   / <K extends Number, V> / <E extends A<X>, F extends B<Y>>
+     * 语义层当前不强制约束（CAST 扩展点），bound 仅存储文本
+     * extends 关键字作为消歧标志——比较表达式不会出现 extends */
+"<"[A-Za-z_][A-Za-z0-9_]*[ \t]+"extends"[ \t]+[A-Za-z_?][A-Za-z0-9_? ,<>]*">" {
+                    yylval.s = strndup(yytext + 1, (size_t)(yyleng - 2)); LEX_RET(TOK_GENERIC); }
+    /* 带上界（冒号语法）：<E: Acc> / <E: Acc<K,V>> / <E: Bound<E,I>, I> */
+"<"[A-Za-z_][A-Za-z0-9_]*[ \t]*":"[ \t]*[A-Za-z_?][A-Za-z0-9_? ,<>]*">" {
+                    yylval.s = strndup(yytext + 1, (size_t)(yyleng - 2)); LEX_RET(TOK_GENERIC); }
     /* 单标识符泛型引用：<T>/<Printable>/<map>
      * （已知基本类型 <int>/<string> 等由上方 TOK_TYPE_ANNOT 规则等长优先匹配） */
 "<"[A-Za-z_][A-Za-z0-9_]*">" {

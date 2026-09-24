@@ -1,0 +1,54 @@
+// ============================================================
+// lumyr-Tree：树形数据处理工具（Utils 模块）
+
+public interface TreeIdAccessor<T, I> {
+    func getId(): I;
+    func getParentId(): I;
+}
+
+
+public class TreeUtils<E extends TreeIdAccessor<T, I>, I> {
+
+    @FuncAlias(["fromList", "fromArray", "listToTree", "arrayToTree"])
+    func build(nodes: E[]): array {
+        idMap = {};
+        pending = {};   // parentId -> 等待该父的子节点（栈占位）
+        roots = [];
+        n = nodes.len;
+        i = 0;
+        while (i < n) {
+            node = nodes[i];
+            id = node.getId();
+            idMap[id] = node;
+            // 之前等待本节点作为父的子节点，直接赋值上去
+            if (pending.has(id)) {
+                node.children = pending[id];
+                pending.remove(id);
+            }
+            pid = node.getParentId();
+            if (idMap.has(pid)) {
+                parent = idMap[pid];
+                if (parent.children == null) { parent.children = []; }
+                parent.children.add(node);
+            } else {
+                // 父未出现，栈占位
+                if (!pending.has(pid)) { pending[pid] = []; }
+                pending[pid].add(node);
+            }
+            i = i + 1;
+        }
+        // 残留 pending：父最终未出现 → 根
+        keys = pending.keys();
+        k = 0;
+        while (k < keys.len) {
+            waiters = pending[keys[k]];
+            j = 0;
+            while (j < waiters.len) {
+                roots.add(waiters[j]);
+                j = j + 1;
+            }
+            k = k + 1;
+        }
+        return roots;
+    }
+}

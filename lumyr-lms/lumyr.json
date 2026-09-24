@@ -1,5 +1,6 @@
 {
   "frameworks": {
-    "Function": "./LumyrFunction"
+    "Function": "./LumyrFunction",
+    "Utils": "./LumyrUtils"
   }
 }

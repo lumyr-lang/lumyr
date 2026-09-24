@@ -1,0 +1,98 @@
+// ============================================================
+// 树形组装工具验证示例
+// 验证 E 泛型 + 节点自实现 TreeIdAccessor + 单循环组装
+// 运行：./bin/lumyr lumyr-lms/example/tree_example.lm
+// ============================================================
+
+import <Utils/Tree>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ---------- 节点定义：自实现 TreeIdAccessor ----------
+public class TreeNode implements TreeIdAccessor<TreeNode, int> {
+    id: int;
+    parentId: int;
+    name: string;
+    children: array;
+    func TreeNode(id, parentId, name) {
+        self.id = id;
+        self.parentId = parentId;
+        self.name = name;
+        self.children = [];
+    }
+    func getId(): int { return self.id; }
+    func getParentId(): int { return self.parentId; }
+}
+
+// ---------- 单根树组装（输入有序：父在子前）----------
+print("=== Tree build (single root) ===");
+
+nodes = [
+    TreeNode(1, 0, "root"),
+    TreeNode(2, 1, "child1"),
+    TreeNode(3, 1, "child2"),
+    TreeNode(4, 2, "grandchild1"),
+    TreeNode(5, 2, "grandchild2"),
+    TreeNode(6, 3, "grandchild3")
+];
+
+tree = TreeUtils<TreeNode>();
+roots = tree.build(nodes);
+
+check(roots.len == 1, "single root");
+root = roots[0];
+check(root.name == "root", "root name");
+check(root.children.len == 2, "root has 2 children");
+
+c1 = root.children[0];
+c2 = root.children[1];
+check(c1.name == "child1", "child1 name");
+check(c2.name == "child2", "child2 name");
+check(c1.children.len == 2, "child1 has 2 grandchildren");
+check(c2.children.len == 1, "child2 has 1 grandchild");
+check(c1.children[0].name == "grandchild1", "grandchild1");
+check(c1.children[1].name == "grandchild2", "grandchild2");
+check(c2.children[0].name == "grandchild3", "grandchild3");
+
+print("single root build PASS");
+
+// ---------- 多根场景 ----------
+print("=== multi-root ===");
+nodes2 = [
+    TreeNode(10, 0, "rA"),
+    TreeNode(11, 0, "rB"),
+    TreeNode(12, 10, "a1"),
+    TreeNode(13, 11, "b1")
+];
+roots2 = tree.build(nodes2);
+check(roots2.len == 2, "two roots");
+check(roots2[0].children.len == 1, "rA has 1 child");
+check(roots2[1].children.len == 1, "rB has 1 child");
+print("multi-root PASS");
+
+// ---------- 乱序输入（父在子后）----------
+print("=== out-of-order ===");
+nodes3 = [
+    TreeNode(4, 2, "leaf"),
+    TreeNode(2, 1, "mid"),
+    TreeNode(1, 0, "root"),
+    TreeNode(3, 1, "mid2")
+];
+roots3 = tree.build(nodes3);
+check(roots3.len == 1, "out-of-order single root");
+r3 = roots3[0];
+check(r3.name == "root", "out-of-order root");
+check(r3.children.len == 2, "root has 2 children");
+print("out-of-order PASS");
+
+// ---------- 别名验证 ----------
+print("=== alias ===");
+roots4 = tree.fromList(nodes);
+check(roots4.len == 1, "fromList alias");
+roots5 = tree.listToTree(nodes);
+check(roots5.len == 1, "listToTree alias");
+print("alias PASS");
+
+print("tree_example ALL PASS");

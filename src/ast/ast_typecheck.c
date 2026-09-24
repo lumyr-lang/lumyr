@@ -526,7 +526,9 @@ static int cap_pop_record(const char* lambda_name) {
     if(g_cap_depth > 0) {
         for(int i = 0; i < L->cnt; i++) {
             const char* cn = L->names[i];
-            if(!is_lambda_param(cn) && !is_lambda_local(cn) && !is_global_var(cn)) {
+            if(!is_lambda_param(cn) && !is_lambda_local(cn)) {
+                /* 全局变量也传播：外层 lambda 同样需要捕获，
+                 * 否则外层无该槽位，内层捕获时 bf_find_slot 找不到 */
                 cap_add(cn);
             }
         }
@@ -1077,8 +1079,11 @@ int typecheck_expr(AstNode* node)
             break;
         case AST_VAR:{
             if(in_lambda && !is_lambda_param(node->u.varname) &&
-               !is_global_var(node->u.varname) && !is_lambda_local(node->u.varname)) {
-                // 引用外层函数局部变量 → 记录为当前 lambda 的捕获变量（运行时装箱）
+               !is_lambda_local(node->u.varname)) {
+                // 引用外层作用域变量 → 记录为当前 lambda 的捕获变量（运行时装箱）
+                // 注：全局变量也需捕获——VM 通道无独立的全局加载机制，
+                // 不捕获则 c_find_var 返回 -1 → 误 emit LOAD_VAR slot0（读到形参），
+                // 导致 lambda 内读全局变量不可靠。捕获后经 cell 别名绑到 lambda 槽位。
                 cap_add(node->u.varname);
             }
             ValueType t;

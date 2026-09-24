@@ -1,0 +1,201 @@
+// ============================================================
+// lumyr-Set：SetInterface<E> 泛型接口 + AbstractSet<E> 抽象基类
+// 所有集合（Set）封装类的统一契约与通用实现
+// E = Element（集合元素类型）
+// 底层用 map 做去重存储（键=元素，值=占位 true），O(1) 增删查
+//
+// 用法：
+//   import <Function/Set>;
+//   public class HashSet<E> extends AbstractSet<E> implements SetInterface<E> { ... }
+// ============================================================
+
+import <Function/Object>;
+
+// 统一集合契约：E = 元素类型
+
+// forEach 回调函数接口
+public interface SetCallback<E> {
+    (elem: E);
+}
+
+public interface SetInterface<E> {
+    func size(): int;
+    func isEmpty(): bool;
+    func add(elem: E): SetInterface<E>;
+    func remove(elem: E): SetInterface<E>;
+    func has(elem: E): bool;
+    func contains(elem: E): bool;
+    func clear(): SetInterface<E>;
+    func toArray();
+    func forEach(cb: SetCallback<E>);
+    func copy();
+    func toMap();
+    func toString(): string;
+    func className(): string;
+    func equals(other): bool;
+    func hashCode(): int;
+    func union(other): SetInterface<E>;
+    func intersection(other): SetInterface<E>;
+    func difference(other): SetInterface<E>;
+    func isSubsetOf(other): bool;
+    func isSupersetOf(other): bool;
+    func isDisjointWith(other): bool;
+}
+
+// 抽象基类：所有通用方法委托 self.value（map）上的内置方法
+// 子类只需声明 value 字段并实现构造函数
+public abstract class AbstractSet<E> extends Object implements SetInterface<E> {
+    // length, count
+    @FuncAlias(["length", "count"])
+    func size(): int { return self.value.len; }
+
+    func isEmpty(): bool { return self.value.len == 0; }
+
+    // put, insert, append
+    @FuncAlias(["put", "insert", "append"])
+    func add(elem: E) { self.value[elem] = true; return self; }
+
+    // delete, discard
+    @FuncAlias(["delete", "discard"])
+    func remove(elem: E) { self.value.remove(elem); return self; }
+
+    // includes, contains
+    @FuncAlias(["includes", "contains"])
+    func has(elem: E): bool { return self.value.has(elem); }
+
+    // removeAll
+    @FuncAlias("removeAll")
+    func clear() { self.value.clear(); return self; }
+
+    // toList
+    @FuncAlias("toList")
+    func toArray() { return self.value.keys(); }
+
+    func forEach(cb: SetCallback<E>) {
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) { cb(ks[i]); i = i + 1; }
+        return self;
+    }
+
+    // clone
+    @FuncAlias("clone")
+    func copy() {
+        c = copy(self);
+        return c;
+    }
+
+    // toDict
+    @FuncAlias("toDict")
+    func toMap() { return self.value.copy(); }
+
+    // getClassName
+    @FuncAlias("getClassName")
+    func className(): string { return type(self); }
+
+    // 集合相等：元素相同即相等（不依赖哈希桶顺序）
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        if (self.value.len != other.size()) { return false; }
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (!other.has(ks[i])) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    // hashValue
+    @FuncAlias("hashValue")
+    func hashCode(): int { return self.value.len; }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string { return self.toJSONString(); }
+
+    // ===== 集合运算：返回与 self 同类型的新实例（经 self.copy() 分派）=====
+
+    // 并集：self ∪ other
+    @FuncAlias(["unionWith", "or"])
+    func union(other) {
+        result = self.copy();
+        ks = other.toArray();
+        i = 0;
+        while (i < ks.len) { result.add(ks[i]); i = i + 1; }
+        return result;
+    }
+
+    // 交集：self ∩ other
+    @FuncAlias(["intersect", "and"])
+    func intersection(other) {
+        result = self.copy();
+        result.clear();
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (other.has(ks[i])) { result.add(ks[i]); }
+            i = i + 1;
+        }
+        return result;
+    }
+
+    // 差集：self - other
+    @FuncAlias(["subtract", "diff", "minus"])
+    func difference(other) {
+        result = self.copy();
+        result.clear();
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (!other.has(ks[i])) { result.add(ks[i]); }
+            i = i + 1;
+        }
+        return result;
+    }
+
+    // 对称差：self △ other = (self - other) ∪ (other - self)
+    @FuncAlias(["xor"])
+    func symmetricDifference(other) {
+        result = self.copy();
+        result.clear();
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (!other.has(ks[i])) { result.add(ks[i]); }
+            i = i + 1;
+        }
+        oks = other.toArray();
+        j = 0;
+        while (j < oks.len) {
+            if (!self.has(oks[j])) { result.add(oks[j]); }
+            j = j + 1;
+        }
+        return result;
+    }
+
+    // 子集判定：self ⊆ other
+    func isSubsetOf(other): bool {
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (!other.has(ks[i])) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    // 超集判定：self ⊇ other
+    func isSupersetOf(other): bool { return other.isSubsetOf(self); }
+
+    // 不相交判定：self ∩ other = ∅
+    func isDisjointWith(other): bool {
+        ks = self.value.keys();
+        i = 0;
+        while (i < ks.len) {
+            if (other.has(ks[i])) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+}

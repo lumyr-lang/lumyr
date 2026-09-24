@@ -34,6 +34,7 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node);
 static CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck);
 static void c_expr_to_value(Ctx* c, AstNode* node);
+static int emit_cond_jump_if_false(Ctx* c, AstNode* cond);
 AstNode* func_ast_lookup(const char* name);   /* AST 函数表（func_compile.c） */
 static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast, AstNode* args, int keep_result, AstNode* method_recv);
 static BytecodeFunc* resolve_self_recursive(Ctx* c, const char* func_name, AstNode* tmp_def);
@@ -353,13 +354,13 @@ static const char* ternary_target_name(const char* a, const char* b) {
 static void ternary_cast_to(Ctx* c, const char* from, const char* to) {
     if(strcmp(from, to) == 0) return;
 
-    /* 目标动态 VALUE：typed → box（int/double/ptr 各有 BOX 指令） */
+    /* 目标动态 VALUE：typed → box（int/double/ptr 各有 BOX 指令）
+     * string/bigint/decimal/bitdecimal/unknown/null 已在 VALUE 栈（堆类型），无需 box */
     if(strcmp(to, "unknown") == 0) {
-        ExprType et = strcmp(from, "int") == 0 ? EXPR_TYPE_INT :
-                      strcmp(from, "double") == 0 ? EXPR_TYPE_DOUBLE : EXPR_TYPE_PTR;
-        CastKind ck = strcmp(from, "int") == 0 ? CAST_INT :
-                      strcmp(from, "double") == 0 ? CAST_DOUBLE : CAST_NONE;
-        emit_to_dynamic(c, et, ck);
+        if(strcmp(from, "int") == 0) emit_to_dynamic(c, EXPR_TYPE_INT, CAST_INT);
+        else if(strcmp(from, "double") == 0) emit_to_dynamic(c, EXPR_TYPE_DOUBLE, CAST_DOUBLE);
+        else if(strcmp(from, "ptr") == 0) emit_to_dynamic(c, EXPR_TYPE_PTR, CAST_NONE);
+        /* string/bigint/bitdecimal/decimal/unknown/null：已在 VALUE 栈，emit_to_dynamic(NONE) 为 no-op */
         return;
     }
 
@@ -2151,9 +2152,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         const char* name_f = c_expr_type_name(c, node->u.ternary.false_expr);
         const char* name_target = ternary_target_name(name_t, name_f);
 
-        /* 条件（结果在 INT64 栈），假则跳到 else */
-        c_expr(c, node->u.ternary.cond);
-        int jfalse = emit_here(c, OPC_JMP_IF_FALSE, 0, 0);
+        /* 条件：经 emit_cond_jump_if_false 按结果所在栈（INT64/VALUE）选对应跳转指令
+         * 否则硬编码 OPC_JMP_IF_FALSE（INT64）会在 cond 落 VALUE 栈时读到垃圾，
+         * 导致 cond=false 仍走 true 分支（字符串==/方法返回等动态条件触发此 bug） */
+        int jfalse = emit_cond_jump_if_false(c, node->u.ternary.cond);
 
         /* true 分支：编译后按目标类型转换 */
         c_expr(c, node->u.ternary.true_expr);
