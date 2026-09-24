@@ -50,6 +50,9 @@ void stackframe_bind_ptr(StackFrame* f, const char* name, void* v);
 // ref 引用绑定：使槽 name 别名调用方 caller 帧 caller_slot 槽的存储（自动 box/unbox）
 void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, int caller_slot);
 
+// 确保帧内变量槽（含 vals/typed 槽/refs）至少分配到 need 个（按索引访问前调用）
+void stackframe_ensure_slots(StackFrame* f, int need);
+
 // ---- 闭包单元（cell）支持 ----
 void stackframe_add_cell(StackFrame* f, const char* name, Value* cell_ptr);
 Value* stackframe_ensure_cell(StackFrame* f, const char* name);

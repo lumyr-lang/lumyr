@@ -1197,6 +1197,7 @@ typedef struct {
     char* full_name;   /* 全局名 "类名_成员名" */
     char* owner;       /* 属主类名 */
     int access;        /* 0=public, 1=private, 2=protected */
+    int kind;          /* ValueType：VAL_FUNC=静态方法，VAL_NONE=静态属性 */
 } StaticMemberEntry;
 
 static StaticMemberEntry* g_static_members = NULL;
@@ -1205,10 +1206,17 @@ static int g_static_member_cap = 0;
 
 void class_static_member_register(const char* full_name, const char* owner, int access)
 {
-    /* 已注册同名成员则只更新访问级别 */
+    class_static_member_register_ex(full_name, owner, access, VAL_NONE);
+}
+
+void class_static_member_register_ex(const char* full_name, const char* owner,
+                                     int access, int kind)
+{
+    /* 已注册同名成员则只更新访问级别与种类 */
     for(int i = 0; i < g_static_member_n; i++) {
         if(strcmp(g_static_members[i].full_name, full_name) == 0) {
             g_static_members[i].access = access;
+            g_static_members[i].kind = kind;
             return;
         }
     }
@@ -1220,7 +1228,17 @@ void class_static_member_register(const char* full_name, const char* owner, int 
     g_static_members[g_static_member_n].full_name = strdup(full_name);
     g_static_members[g_static_member_n].owner = strdup(owner);
     g_static_members[g_static_member_n].access = access;
+    g_static_members[g_static_member_n].kind = kind;
     g_static_member_n++;
+}
+
+/* 全表枚举：返回条目数，按位置取 full_name / kind（供 typecheck 重建符号表） */
+int class_static_member_total(void) { return g_static_member_n; }
+const char* class_static_member_full_at(int idx) {
+    return (idx >= 0 && idx < g_static_member_n) ? g_static_members[idx].full_name : NULL;
+}
+int class_static_member_kind_at(int idx) {
+    return (idx >= 0 && idx < g_static_member_n) ? g_static_members[idx].kind : VAL_NONE;
 }
 
 int class_static_member_lookup(const char* full_name, const char** owner_out, int* access_out)

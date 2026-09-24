@@ -1,0 +1,136 @@
+// ============================================================
+// 跨文件同名隔离测试：模块 A/B 与主文件定义同名的
+// 顶层变量 / 常量 / 函数 / 类 / 实例方法内局部函数 / 静态方法内局部函数，
+// 只要未 export（非 public），name mangling 应天然隔离互不干扰
+//
+// 两个维度：
+//   黑盒——经模块导出函数访问各自的私有函数/类/静态函数/嵌套 lambda
+//   白盒——主文件顶层直读 mangle 名（__lm_mod_<id>_<name>），
+//         证明私有变量/常量/函数/类真实存在于独立命名下
+//         （id 按 import 顺序从 0 递增，本测试顺序固定故确定）
+// 覆盖的嵌套函数场景：
+//   顶层函数内局部 lambda 互调、lambda 读顶层变量/常量、lambda 调顶层函数、
+//   实例方法内局部 lambda（含 lambda 互调、捕获 self 读字段、捕获方法参数）、
+//   静态方法内局部 lambda（含 lambda 互调、读顶层变量）、递归 lambda
+// 运行：./bin/lumyr tests/module_isolation_test.lm
+// ============================================================
+
+import "mod_iso/mod_a.lm" as A;
+import "mod_iso/mod_b.lm" as B;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ====== 主文件同名符号（不 mangle，程序全局符号）======
+func helper() { return "main-helper"; }
+counter = 999;
+const LIMIT = 9999;
+seed = 99;
+
+class Internal {
+    func who() { return "main-internal"; }
+}
+
+class Util {
+    static ver = 9;
+    static func tag() { return "main-util-static"; }
+}
+
+// 与模块同名的顶层函数（mult 乘 5，区别于 A 乘 10 / B 乘 20）
+func mult(v) { return v * 5; }
+
+// 与模块同名的顶层函数：内部 lambda 读主文件 seed/LIMIT、调主文件 mult，
+// 若隔离失效会读到模块值，期望值随之改变
+func top_chain(x) {
+    p = (v) => { return v + seed; };
+    q = (v) => { return p(v) + mult(v); };
+    return q(x) + LIMIT;
+}
+
+// 与模块同名的类（字段/方法取值全部区别于 A/B）
+class Calc {
+    base: int = 99;
+    func chain(x) { return x + self.base; }
+    static func calc(x) { return x + 7; }
+}
+
+print("=== 黑盒：导出函数访问各自私有函数/类/静态类函数 ===");
+check(A.get_helper() == "A-helper", "A 私有函数 helper");
+check(B.get_helper() == "B-helper", "B 私有函数 helper（与 A 不串）");
+check(A.get_internal() == "A-internal", "A 私有类 Internal");
+check(B.get_internal() == "B-internal", "B 私有类 Internal（与 A 不串）");
+check(A.get_util() == "A-util-static", "A 私有静态类函数 Util.tag");
+check(B.get_util() == "B-util-static", "B 私有静态类函数 Util.tag（与 A 不串）");
+
+print("=== 黑盒：导出同名函数经 alias 各调各的 ===");
+check(A.same() == "A-same", "A.same() 命中 A 模块导出");
+check(B.same() == "B-same", "B.same() 命中 B 模块导出");
+
+print("=== 黑盒：顶层函数内局部 lambda 互调 / 读顶层变量常量 / 调顶层函数 ===");
+// A: seed=1 LIMIT=1000 mult=*10；B: seed=2 LIMIT=2000 mult=*20
+check(A.get_top(0) == 1001, "A top_chain(0) lambda 读 seed/LIMIT");
+check(B.get_top(0) == 2002, "B top_chain(0)（与 A 同名不串）");
+check(A.get_top(1) == 1012, "A top_chain(1) 含 lambda 调 mult");
+check(B.get_top(1) == 2023, "B top_chain(1)（与 A 同名不串）");
+
+print("=== 黑盒：递归 lambda ===");
+check(A.get_fib(10) == 55, "A 递归 lambda fib(10)");
+check(B.get_fib(10) == 55, "B 递归 lambda fib(10)");
+
+print("=== 黑盒：实例方法/静态方法内局部 lambda ===");
+// A: Calc.base=10；B: base=20
+// chain(5): f(5)=5+x(5)=10；g(5)=f(5)+base → A 20 / B 30
+check(A.get_calc_inst() == 20, "A 实例方法内 lambda 互调+捕获 self");
+check(B.get_calc_inst() == 30, "B 实例方法内 lambda（与 A 同名不串）");
+// calc(10): a(10)=11；b(10)=a(10)+seed → A 12 / B 13
+check(A.get_calc_stat() == 12, "A 静态方法内 lambda 互调+读顶层变量");
+check(B.get_calc_stat() == 13, "B 静态方法内 lambda（与 A 同名不串）");
+
+print("=== 白盒：模块私有变量/常量/静态类变量存在于独立 mangle 名下 ===");
+check(__lm_mod_0_counter == 100, "A 私有变量 counter (mangle)");
+check(__lm_mod_1_counter == 200, "B 私有变量 counter (mangle，与 A 不串)");
+check(__lm_mod_0_LIMIT == 1000, "A 私有常量 LIMIT (mangle)");
+check(__lm_mod_1_LIMIT == 2000, "B 私有常量 LIMIT (mangle，与 A 不串)");
+check(__lm_mod_0_seed == 1, "A 私有变量 seed (mangle)");
+check(__lm_mod_1_seed == 2, "B 私有变量 seed (mangle，与 A 不串)");
+check(__lm_mod_0_Util.ver == 1, "A 私有静态类变量 Util.ver (mangle)");
+check(__lm_mod_1_Util.ver == 2, "B 私有静态类变量 Util.ver (mangle，与 A 不串)");
+check(__lm_mod_0_Internal().who() == "A-internal", "A 私有类 mangled 名构造");
+check(__lm_mod_1_Internal().who() == "B-internal", "B 私有类 mangled 名构造");
+
+print("=== 白盒：模块私有函数 / 含字段类的 mangled 直调 ===");
+check(__lm_mod_0_mult(5) == 50, "A 私有函数 mult (mangle) 乘 10");
+check(__lm_mod_1_mult(5) == 100, "B 私有函数 mult (mangle) 乘 20（与 A 不串）");
+check(__lm_mod_0_Calc{}.chain(5) == 20, "A 私有类 Calc mangled 构造+实例方法 lambda");
+check(__lm_mod_1_Calc{}.chain(5) == 30, "B 私有类 Calc mangled（与 A 不串）");
+check(__lm_mod_0_Calc.calc(10) == 12, "A mangled 类访问静态方法 lambda");
+check(__lm_mod_1_Calc.calc(10) == 13, "B mangled 类静态方法（与 A 不串）");
+
+print("=== 主文件符号不被模块污染 ===");
+check(helper() == "main-helper", "主文件函数 helper");
+check(counter == 999, "主文件变量 counter");
+check(LIMIT == 9999, "主文件常量 LIMIT");
+check(seed == 99, "主文件变量 seed");
+check(mult(2) == 10, "主文件函数 mult（区别 A 乘 10 / B 乘 20）");
+check(Internal().who() == "main-internal", "主文件类 Internal");
+check(Util.tag() == "main-util-static", "主文件静态类函数 Util.tag");
+check(Util.ver == 9, "主文件静态类变量 Util.ver");
+check(Calc{}.chain(1) == 100, "主文件类 Calc 实例方法（base=99）");
+check(Calc.calc(10) == 17, "主文件类 Calc 静态方法");
+// 主文件 top_chain：lambda 须读主文件 seed=99/LIMIT=9999/mult=*5
+// top_chain(0): p(0)=99, mult(0)=0, q=99, +9999=10098
+check(top_chain(0) == 10098, "主文件 top_chain 内 lambda 读主文件全局（不被模块带走）");
+
+print("=== 隔离后再次确认各方原样 ===");
+check(__lm_mod_0_counter == 100, "主文件赋值后 A 私有 counter 不变");
+check(__lm_mod_1_counter == 200, "主文件赋值后 B 私有 counter 不变");
+check(__lm_mod_0_seed == 1, "主文件赋值后 A 私有 seed 不变");
+check(__lm_mod_1_seed == 2, "主文件赋值后 B 私有 seed 不变");
+check(A.get_helper() == "A-helper", "全部赋值后 A.get_helper() 不变");
+check(B.get_helper() == "B-helper", "全部赋值后 B.get_helper() 不变");
+check(A.get_top(0) == 1001, "全部赋值后 A.get_top(0) 不变");
+check(B.get_top(0) == 2002, "全部赋值后 B.get_top(0) 不变");
+check(helper() == "main-helper", "全部赋值后主文件 helper 不变");
+
+print("module_isolation_test ALL PASS");

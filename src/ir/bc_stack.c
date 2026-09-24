@@ -22,6 +22,7 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_LOAD_CONST:
         case OPC_LOAD_VAR:
         case OPC_LOAD_VAR_REF:
+        case OPC_LOAD_GLOBAL:
         case OPC_GETFUNC:
         case OPC_MKCLOSURE:
         case OPC_PRE_INC: case OPC_POST_INC:
@@ -368,6 +369,7 @@ int op_stack_push(OpCode op)
         case OPC_LOAD_CONST:
         case OPC_LOAD_VAR:
         case OPC_LOAD_VAR_REF:
+        case OPC_LOAD_GLOBAL:
         case OPC_GETFUNC:
         case OPC_MKCLOSURE:
         case OPC_PUSH_INT64_CONST:

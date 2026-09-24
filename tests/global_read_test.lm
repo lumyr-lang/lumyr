@@ -1,0 +1,69 @@
+// tests/global_read_test.lm
+// 函数体内读顶层变量回归测试（LOAD_GLOBAL 延迟绑定）
+// 语义锁定：
+//   1. 函数/静态方法/实例方法体内可读取顶层变量、const 常量、静态类属性；
+//   2. 读取按根帧(main)槽位运行时存储族装箱（int64/double/string/动态 Value）；
+//   3. 写语义不变：函数体内对未知名赋值仍创建函数局部变量，不写回全局；
+//   4. lambda 闭包捕获全局变量仍走 cell 别名机制（两机制不冲突）；
+//   5. 类体内自引用本类已声明静态成员走编译期静态分派（声明序在先）。
+
+func check(cond, msg) {
+    if(cond) {} else { throw msg; }
+}
+
+counter = 100;
+typed = <int>42;
+ratio = <double>2.5;
+name = "global-name";
+const LIMIT = 1000;
+arr = [1, 2, 3];
+
+class Util {
+    static ver = 7;
+    static func tag() { return Util.ver + 100; }   // 类体内自引用静态属性
+}
+
+func read_dyn() { return counter; }
+func read_typed() { return typed; }
+func read_dbl() { return ratio; }
+func read_str() { return name; }
+func read_const() { return LIMIT; }
+func read_arr() { return arr[1]; }
+func read_static_attr() { return Util.ver; }
+func read_in_expr() { return counter + typed; }
+func write_creates_local() {
+    counter = 999;   // 写语义不变：创建函数局部，不影响全局
+    return counter;
+}
+
+check(read_dyn() == 100, "read dynamic global");
+check(read_typed() == 42, "read typed int global");
+check(read_dbl() == 2.5, "read double global");
+check(read_str() == "global-name", "read string global");
+check(read_const() == 1000, "read const global");
+check(read_arr() == 2, "read global array element");
+check(read_static_attr() == 7, "read static class attr");
+check(Util.tag() == 107, "static method reads own static attr");
+check(read_in_expr() == 142, "globals in expr");
+check(write_creates_local() == 999, "write creates local");
+check(counter == 100, "global unchanged after local write");
+
+// 实例方法内读全局
+class Box {
+    func sum(x) { return x + counter; }
+}
+b = Box();
+check(b.sum(5) == 105, "instance method reads global");
+
+// lambda 闭包捕获全局变量（cell 别名机制，与 LOAD_GLOBAL 不冲突）
+seen = [];
+xs = [1, 2];
+xs.forEach((e) => { seen.add(e); });
+check(seen.len == 2, "lambda capture still works");
+
+// 修改全局后再读：函数内看到新值
+counter = 555;
+check(read_dyn() == 555, "read updated global");
+check(b.sum(5) == 560, "instance method sees updated global");
+
+print("global_read_test ALL PASS");

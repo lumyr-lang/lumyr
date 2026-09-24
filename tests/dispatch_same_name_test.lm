@@ -1,0 +1,82 @@
+// ============================================================
+// 同名分派测试：静态类方法 / 实例方法 / 全局函数 同名共存
+// 验证编译期静态分派无兜底、无静默改绑、无跨命名空间污染
+// 运行：./bin/lumyr tests/dispatch_same_name_test.lm
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ====== 三件套：全局函数 / 静态类方法 / 实例方法 同名 who ======
+func who() { return "global"; }
+
+class StaticBox {
+    static func who() { return "static"; }
+}
+
+class Box {
+    func who() { return "instance"; }
+}
+
+class MiniBox {
+    func who() { return "mini"; }
+}
+
+print("=== 三件套同名分派 ===");
+check(who() == "global", "全局 who() 命中全局函数");
+check(StaticBox.who() == "static", "StaticBox.who() 静态分派");
+check(Box().who() == "instance", "Box().who() 实例分派");
+check(MiniBox().who() == "mini", "MiniBox().who() 多态实例分派");
+// 静态/实例调用后全局函数不被污染
+check(who() == "global", "静态与实例调用后全局 who() 不变");
+
+// ====== 同类 static + 实例同名并存（flat 名不撞实例方法表） ======
+print("=== 同类 static+实例同名 ===");
+class Dual {
+    static func pick() { return "dual-static"; }
+    func pick() { return "dual-inst"; }
+}
+check(Dual.pick() == "dual-static", "Dual.pick() 静态分派");
+check(Dual().pick() == "dual-inst", "Dual().pick() 实例分派");
+
+// ====== 方法体内裸调同名全局函数（不走自身静态/实例） ======
+print("=== 方法体内裸调同名 ===");
+func render() { return "global-render"; }
+class Page {
+    static func render() { return "static-render"; }
+    func show() { return render(); }
+}
+check(Page.render() == "static-render", "Page.render() 静态分派");
+check(Page().show() == "global-render", "方法体内裸 render() 命中全局");
+
+// ====== 继承链 super 同名方法 ======
+print("=== super 链同名 ===");
+class Base {
+    func name() { return "base"; }
+}
+class Child extends Base {
+    func name() { return "child"; }
+    func parentName() { return super.name(); }
+}
+c = Child();
+check(c.name() == "child", "子类重写 name() 多态");
+check(c.parentName() == "base", "super.name() 静态分派父类");
+
+// ====== map 点访问不受静态分派影响 ======
+print("=== map 点访问 ===");
+m = {"who": 42};
+check(m.who == 42, "map 键 who 点访问不受影响");
+
+// ====== 顶层变量与类同名：调用位类优先，值位变量不变 ======
+// （确定性规则：编译期静态分派只看名字是否为类，不看变量遮蔽——
+//   这是明确语义而非兜底；同名变量作值使用不受影响）
+print("=== 顶层变量与类同名 ===");
+class Widget {
+    static func who() { return "widget-static"; }
+}
+Widget = 99;
+check(Widget.who() == "widget-static", "调用位 Widget.who() 类优先");
+check(Widget == 99, "值位 Widget 仍是变量");
+
+print("dispatch_same_name_test ALL PASS");

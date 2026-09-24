@@ -53,6 +53,7 @@ int vm_exec_var_load_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_var_load_ptr(VMExecCtx* ctx, Instruction* in);
 int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in);
+int vm_exec_var_load_global(VMExecCtx* ctx, Instruction* in);
 
 /* 算术运算 */
 int vm_exec_arith_int64_add(VMExecCtx* ctx, Instruction* in);
@@ -264,6 +265,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_STORE_DOUBLE_VAR: handled = vm_exec_var_store_double(ctx, &in); break;
         case OPC_LOAD_PTR_VAR: handled = vm_exec_var_load_ptr(ctx, &in); break;
         case OPC_STORE_PTR_VAR: handled = vm_exec_var_store_ptr(ctx, &in); break;
+        case OPC_LOAD_GLOBAL: handled = vm_exec_var_load_global(ctx, &in); break;
 
         /* ===== 算术运算（INT64 栈） ===== */
         case OPC_INT64_ADD: handled = vm_exec_arith_int64_add(ctx, &in); break;
@@ -477,14 +479,17 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         }
 
         default:
+            /* 指令流损坏（未知操作码）：不可恢复，立即中止（无兜底） */
             fprintf(stderr, "VM: unknown opcode %d at pc %d\n", (int)in.op, ctx->pc-1);
-            ret->et = EXPR_TYPE_NONE;
-            ret->v  = val_none();
-            return 0;
+            exit(1);
         }
 
         if (!handled) {
+            /* 执行函数返回 0 = VM 层硬错误（错误详情已由执行函数打印）。
+             * 无兜底：不可恢复错误必须中止进程并给出非零退出码，
+             * 禁止打印后继续执行（否则 CI/脚本会误判成功）。 */
             fprintf(stderr, "VM: instruction not handled %d at pc %d\n", (int)in.op, ctx->pc-1);
+            exit(1);
         }
 
         /* try 内 return 且所有 finally 已执行完：用挂起值结束当前帧 */

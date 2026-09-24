@@ -388,15 +388,19 @@ static int bf_find_slot(BytecodeFunc* fn, const char* name) {
     return -1;
 }
 
-/* 从调用方帧的 typed 槽位读值并 box 成 Value */
-static Value frame_slot_to_value(StackFrame* f, BytecodeFunc* fn, int slot) {
+/* 按帧自身 type_tags 从指定槽位读值并 box 成 Value。
+ * 用途：闭包捕获——从当前函数帧槽位、或根帧(main)槽位取值建 cell。
+ * 帧槽位纯索引工作，运行时帧不维护变量名。hint 用于 PTR 族消歧
+ * （CAST_STRING 存储的 string/bigint/decimal/bitdecimal/ptr，编译期 fixup
+ * 从 main 变量精确标记取得）：0=string，4=bigint，5=decimal，6=bitdecimal，7=ptr。 */
+static Value frame_slot_value_at(StackFrame* f, int slot, int ptrHint) {
     Value v;
-    if(slot < 0 || slot >= f->cap) { v.type = VAL_NONE; return v; }
-    /* 捕获变量以 ref 别名绑定：值存储在 ref->ptr 指向的 cell 中 */
-    if(slot < f->cnt && f->refs && f->refs[slot] && f->refs[slot]->ptr) {
+    v.type = VAL_NONE; v.v.i = 0;
+    if(!f || slot < 0 || slot >= f->cap) { v.type = VAL_NONE; return v; }
+    /* ref 别名槽 */
+    if(slot < f->cnt && f->refs && f->refs[slot] && f->refs[slot]->ptr)
         return *(Value*)f->refs[slot]->ptr;
-    }
-    int tag = (slot < fn->sym_cnt) ? fn->var_type_tags[slot] : -1;
+    int tag = f->type_tags[slot];
     switch((CastKind)tag) {
     case CAST_INT: case CAST_INT_INFER: case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
     case CAST_LONGLONG: case CAST_LONG: case CAST_SHORT: case CAST_USHORT:
@@ -407,8 +411,14 @@ static Value frame_slot_to_value(StackFrame* f, BytecodeFunc* fn, int slot) {
     case CAST_FLOAT: case CAST_DOUBLE: case CAST_LONG_DOUBLE:
         return lumyr_make_double(f->flt_slots[slot]);
     case CAST_STRING: {
-        v.type = VAL_STRING; v.str_inline = 0; v.v.s = (char*)f->ptr_slots[slot];
-        return v;
+        void* p = f->ptr_slots[slot];
+        switch(ptrHint) {
+        case 4:  v.type = VAL_BIGINT;     v.v.bigint = p; return v;
+        case 5:  v.type = VAL_DECIMAL;    v.v.decimal = p; return v;
+        case 6:  v.type = VAL_BITDECIMAL; v.v.bitdecimal = p; return v;
+        case 7:  v.type = VAL_PTR;        v.v.struct_ptr = p; return v;
+        default: v.type = VAL_STRING; v.str_inline = 0; v.v.s = (char*)p; return v;
+        }
     }
     default:
         return f->vals[slot];
@@ -433,14 +443,60 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
             Value* cell = cellp ? *cellp : NULL;
             if(!cell) {
                 int slot = bf_find_slot(ctx->fn, cname);
-                if(slot < 0) {
-                    fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");
-                    free(cells); free(rf); return 0;
+                int localSlot = -1;   /* >=0：捕获自当前函数帧局部槽 */
+                Value boxed;
+                if(slot >= 0) {
+                    localSlot = slot;
+                    stackframe_ensure_slots(ctx->frame, slot + 1);
+                    CastKind ltag = (CastKind)((slot < ctx->fn->sym_cnt)
+                                      ? ctx->fn->var_type_tags[slot] : -1);
+                    int lhint = 0;
+                    if(ltag == CAST_BIGINT) lhint = 4;
+                    else if(ltag == CAST_DECIMAL) lhint = 5;
+                    else if(ltag == CAST_BITDECIMAL) lhint = 6;
+                    else if(ltag == CAST_PTR) lhint = 7;
+                    boxed = frame_slot_value_at(ctx->frame, slot, lhint);
+                    /* PTR 族槽的帧 vals 镜像由 bind_ptr 写成通用 VAL_PTR；但闭包内
+                     * 字段访问 (INDEX_GET) 只认精确的 VAL_STRUCT_PTR/VAL_CLASS_PTR，
+                     * VAL_PTR 落空返回 null（lambda 捕获 self 后 self.base 读空）。
+                     * 按 fn 编译期精确 ltag 修正 Value 类型（裸指针值不变）。 */
+                    if(boxed.type == VAL_PTR) {
+                        if(ltag == CAST_STRUCT_PTR) boxed.type = VAL_STRUCT_PTR;
+                        else if(ltag == CAST_CLASS_PTR) boxed.type = VAL_CLASS_PTR;
+                    }
+                } else {
+                    /* 当前函数帧无此变量：查全局捕获槽侧表（lambda 捕获的顶层变量），
+                     * 从根帧(main)槽位按编译期 hint 取值建 cell；侧表无则真未定义。
+                     * 不能运行时按名沿链找——运行时帧不维护变量名。 */
+                    int ghint = 0;
+                    int gslot = func_compile_get_global_cap(lname, cname, &ghint);
+                    if(gslot >= 0) {
+                        StackFrame* rootFrame = ctx->frame;
+                        while(rootFrame && rootFrame->parent) rootFrame = rootFrame->parent;
+                        boxed = frame_slot_value_at(rootFrame, gslot, ghint);
+                    } else {
+                        fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");
+                        free(cells); free(rf); return 0;
+                    }
                 }
                 cell = (Value*)malloc(sizeof(Value));
                 if(!cell) { perror("mkclosure cell"); free(cells); free(rf); return 0; }
-                *cell = frame_slot_to_value(ctx->frame, ctx->fn, slot);
+                *cell = boxed;
                 stackframe_add_cell(ctx->frame, cname, cell);
+                if(localSlot >= 0) {
+                    /* 当前帧同名槽挂为 cell 的 ref 别名：随后的 STORE_VAR（如递归
+                     * lambda 自引用赋值）写入 cell，lambda 内 refs 也指向同一 cell，
+                     * 闭包才能读到定义完成后的自身（letrec 语义）。
+                     * 全局侧表路径不在根帧挂——不改变顶层变量存储。 */
+                    if(!ctx->frame->refs[localSlot]) {
+                        RefDesc* rd = (RefDesc*)malloc(sizeof(RefDesc));
+                        if(rd) {
+                            rd->ptr = cell;
+                            rd->type = (int)CAST_NONE;
+                            ctx->frame->refs[localSlot] = rd;
+                        }
+                    }
+                }
             }
             cells[i] = cell;
         }

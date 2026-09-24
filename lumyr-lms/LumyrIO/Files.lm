@@ -1,0 +1,152 @@
+// ============================================================
+// lumyr-Files：文件系统静态工具类（门面 / Facade）
+// 统一封装内置 file/folder 对象：文本/行/字节读写、存在性与类型判断、
+// 复制/移动/重命名/删除、目录创建/列举/遍历/通配
+//
+// 全部方法为静态方法，内部即时构造 file()/folder() 对象（无持久句柄）。
+//
+// 用法：
+//   import <IO/Files>;
+//   Files.createDir("/tmp/demo");
+//   Files.writeText("/tmp/demo/a.txt", "hello");
+//   print(Files.readText("/tmp/demo/a.txt"));   // hello
+//
+// 行号语义（底层一致）：readLine 为 0 基，支持负索引（-1 末行）；
+// writeLines 写多行（末尾带换行）；appendText 原样追加不补换行。
+// ============================================================
+
+public class Files {
+
+    // ========== 读取 ==========
+    // 读取全部文本
+    static func readText(path) {
+        return file(path).readAll();
+    }
+    // 读取全部行（数组）
+    static func readLines(path) {
+        return file(path).readLines();
+    }
+    // 读取指定行（n 为 0 基，支持负数）
+    static func readLine(path, n) {
+        return file(path).readLine(n);
+    }
+    // 读取为字节对象
+    static func readBytes(path) {
+        return file(path).readBytes();
+    }
+
+    // ========== 写入 ==========
+    // 整体写入文本（覆盖）
+    static func writeText(path, text) {
+        return file(path).writeAll(text);
+    }
+    // 写入多行（数组，覆盖）
+    static func writeLines(path, lines) {
+        return file(path).writeLines(lines);
+    }
+    // 改写第 n 行
+    static func writeLine(path, n, text) {
+        return file(path).writeLine(n, text);
+    }
+    // 在第 n 行前插入一行
+    static func insertLine(path, n, text) {
+        return file(path).insertLine(n, text);
+    }
+    // 原样追加文本（不补换行）
+    static func appendText(path, text) {
+        return file(path).append(text);
+    }
+    // 追加一行
+    static func appendLine(path, text) {
+        return file(path).appendLine(text);
+    }
+    // 写入字节对象（覆盖）
+    static func writeBytes(path, b) {
+        return file(path).writeBytes(b);
+    }
+
+    // ========== 信息查询 ==========
+    // 路径是否存在（文件或目录）
+    static func exists(path) {
+        return file(path).exists;
+    }
+    // 是否为目录
+    static func isDir(path) {
+        return folder(path).exists;
+    }
+    // 是否为普通文件
+    static func isFile(path) {
+        return file(path).exists && !folder(path).exists;
+    }
+    // 文件大小（字节）
+    static func size(path) {
+        return file(path).size;
+    }
+    // 目录总大小（递归全部文件字节数）
+    static func dirSize(path) {
+        return folder(path).size;
+    }
+    // 文件名（不含目录）
+    static func name(path) {
+        return file(path).name;
+    }
+    // 扩展名（不含 .，无扩展返回空串）
+    static func ext(path) {
+        return file(path).ext;
+    }
+
+    // ========== 复制 / 移动 / 重命名 / 删除 ==========
+    // 复制文件或目录（按实际类型分派）
+    static func copy(src, dest) {
+        if (folder(src).exists) { return folder(src).copyTo(dest); }
+        return file(src).copyTo(dest);
+    }
+    // 移动文件或目录
+    static func move(src, dest) {
+        if (folder(src).exists) { return folder(src).moveTo(dest); }
+        return file(src).renameTo(dest);
+    }
+    // 重命名（文件或目录）
+    static func rename(path, newPath) {
+        if (folder(path).exists) { return folder(path).renameTo(newPath); }
+        return file(path).renameTo(newPath);
+    }
+    // 删除文件或目录（目录递归删除；路径不存在时幂等不报错）
+    static func delete(path) {
+        // 底层 file.delete 对不存在路径会报错（folder.remove 已幂等），
+        // 门面统一：先判存在
+        if (!file(path).exists) { return; }
+        if (folder(path).exists) { return folder(path).remove(); }
+        return file(path).delete();
+    }
+    // 截断文件到指定字节数
+    static func truncate(path, size) {
+        return file(path).truncate(size);
+    }
+
+    // ========== 目录操作 ==========
+    // 创建目录（递归，类似 mkdir -p）
+    static func createDir(path) {
+        return folder(path).create();
+    }
+    // 列举直接子项（文件与目录名）
+    static func list(path) {
+        return folder(path).list();
+    }
+    // 列举直接文件
+    static func listFiles(path) {
+        return folder(path).files();
+    }
+    // 列举直接子目录
+    static func listDirs(path) {
+        return folder(path).dirs();
+    }
+    // 递归遍历全部文件（完整路径）
+    static func walk(path) {
+        return folder(path).walk();
+    }
+    // 通配匹配（如 *.txt）
+    static func glob(path, pattern) {
+        return folder(path).glob(pattern);
+    }
+}

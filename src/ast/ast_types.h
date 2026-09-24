@@ -139,6 +139,12 @@ int class_check_interface_implementation(const char* class_name, const char* int
  * static 属性/方法以全局名 "类名_成员名" 存在，此表记录其属主类与访问级别，
  * 供 typecheck 在引用这些全局名时做 private/protected 检查。 */
 void class_static_member_register(const char* full_name, const char* owner, int access);
+/* 同上并指定种类（kind：VAL_FUNC=静态方法，VAL_NONE=静态属性） */
+void class_static_member_register_ex(const char* full_name, const char* owner, int access, int kind);
+/* 静态成员表枚举（供 typecheck 重建符号表） */
+int class_static_member_total(void);
+const char* class_static_member_full_at(int idx);
+int class_static_member_kind_at(int idx);
 /* 查找静态成员：找到返回 1 并通过 owner_out/access_out 输出；未找到返回 0 */
 int class_static_member_lookup(const char* full_name, const char** owner_out, int* access_out);
 

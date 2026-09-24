@@ -845,6 +845,24 @@ static int typecheck_type_methods(void) {
     return acc;
 }
 
+/* class 静态方法既不在程序 AST 树（class 归约为 ast_none），也不在 TypeDef 方法表
+ * （它以 flat 名 Class_method 作为自由函数编译），typecheck_expr 遍历不到其体——
+ * 体内 lambda 捕获不登记，静态方法自身也不重编译（lambda 互调时 callee 被编译成
+ * PUSH_NONE，运行时 "动态调用的值不是函数"）。按静态成员表 kind==FUNC，经
+ * func_ast_lookup 取 AST 补检；lambda 有捕获时 RECOMPILE_ADD 会同时登记 lambda
+ * 自身与静态方法（save_cur，g_method_owner=NULL → 普通函数重编译）。 */
+static int typecheck_static_methods(void) {
+    int acc = 0;
+    for(int i = 0; i < class_static_member_total(); i++) {
+        if(class_static_member_kind_at(i) != VAL_FUNC) continue;
+        const char* fnm = class_static_member_full_at(i);
+        AstNode* def = func_ast_lookup(fnm);
+        if(def && def->type == AST_FUNC_DEF)
+            acc |= typecheck_expr(def);
+    }
+    return acc;
+}
+
 int ast_typecheck(AstNode* node)
 {
     static_sym_reset();
@@ -854,10 +872,20 @@ int ast_typecheck(AstNode* node)
     if(!node) return 0;
     // 阶段1：顶层收集（函数名 + 全局变量），支持前向引用/函数体读全局
     collect_top_level(node);
+    /* 根因修复：类静态方法不在 root AST（class 归约为 ast_none），collect_top_level
+     * 收集不到，导致其 flat 名（Class_method）在 static_sym_reset 后丢失——
+     * 只能经 ir 函数表调用、无法作为值引用（export/命名空间 map 取不到）。
+     * 按静态成员表补登记；访问级别另由 class_static_member_lookup 校验。 */
+    for(int i = 0; i < class_static_member_total(); i++) {
+        static_sym_put(class_static_member_full_at(i),
+                       (ValueType)class_static_member_kind_at(i));
+    }
     // 阶段2：全面检查（含函数体递归）
     int err = g_collect_err | typecheck_expr(node);
     // 阶段2b：struct/class 方法补 typecheck（分析方法内嵌套 lambda/arrow 捕获）
     if(!err) err |= typecheck_type_methods();
+    // 阶段2c：class 静态方法补 typecheck（不在 AST 树/TypeDef，同上）
+    if(!err) err |= typecheck_static_methods();
     // 阶段3：重编译。先处理普通函数/嵌套 lambda，再处理方法
     // （方法编译时其体内嵌套 lambda 须已是带捕获的最新版本）
     if(!err) {
@@ -879,6 +907,88 @@ static int count_args(AstNode* args)
 }
 
 
+/* 内置函数签名表（单一事实源）：
+ * 用途1：typecheck_call 对未知 callee 名做 arity 校验；
+ * 用途2：lambda 捕获判定时排除内置——for-in 在 parse 期 desugar 出
+ *        type()/len()/keys()/next() 等内置调用，若 lambda 体内含 for-in，
+ *        这些名字不得被当外层变量捕获（否则 mkclosure "无法捕获未定义变量"）。 */
+typedef struct { const char* name; int min; int max; } BuiltinSig;
+static const BuiltinSig g_builtin_sigs[] = {
+    {"len", 1, 1}, {"type", 1, 1}, {"input", 0, 0}, {"range", 1, 3}, {"substr", 3, 3},
+    {"toupper", 1, 1}, {"tolower", 1, 1}, {"split", 2, 2}, {"del", 2, 2}, {"insert", 3, 3},
+    {"floor", 1, 1}, {"ceil", 1, 1}, {"abs", 1, 1}, {"sqrt", 1, 1},
+    {"sin", 1, 1}, {"cos", 1, 1}, {"tan", 1, 1},
+    {"asin", 1, 1}, {"acos", 1, 1}, {"atan", 1, 1}, {"atan2", 2, 2},
+    {"log", 1, 1}, {"log10", 1, 1}, {"log2", 1, 1},
+    {"exp", 1, 1}, {"pow", 2, 2},
+    {"round", 1, 1}, {"cbrt", 1, 1}, {"hypot", 2, 2},
+    {"sign", 1, 1}, {"degrees", 1, 1}, {"radians", 1, 1}, {"trunc", 1, 1},
+    {"random", 0, 0},
+    {"max", 1, -1}, {"min", 1, -1}, {"join", 2, 2}, {"contains", 2, 2},
+    {"repeat", 2, 2}, {"replace", 3, 3}, {"sum", 1, 1}, {"avg", 1, 1},
+    {"format", 1, -1}, {"sort", 1, 1}, {"reverse", 1, 1},
+    {"map", 2, 2}, {"filter", 2, 2}, {"reduce", 3, 3},
+    {"strip", 1, 1}, {"startswith", 2, 2}, {"endswith", 2, 2},
+    {"readFile", 1, 1}, {"writeFile", 2, 2}, {"fileExists", 1, 1},
+    {"keys", 1, 1}, {"values", 1, 1},
+    {"thread", 1, -1}, {"thread_join", 1, 1},
+    {"mutex", 0, 0}, {"rmutex", 0, 0}, {"rwlock", 0, 0}, {"spinlock", 0, 0},
+    {"lock", 1, 1}, {"unlock", 1, 1}, {"trylock", 1, 1},
+    {"rdlock", 1, 1}, {"wrlock", 1, 1},
+    {"tryrdlock", 1, 1}, {"trywrlock", 1, 1},
+    {"condvar", 0, 0}, {"cond_wait", 2, 2}, {"cond_wait_timeout", 3, 3}, {"cond_signal", 1, 1}, {"cond_broadcast", 1, 1},
+    {"threadlocal_get", 1, 1}, {"threadlocal_set", 2, 2},
+    {"get", 1, 3}, {"post", 1, 3}, {"put", 1, 3}, {"delete", 1, 3}, {"head", 1, 3}, {"patch", 1, 3},
+    {"http_get", 1, 2}, {"http_post", 1, 2}, {"http_put", 1, 2},
+    {"http_delete", 1, 2}, {"http_head", 1, 2}, {"http_patch", 1, 2},
+
+    {"add", 2, 3}, {"remove", 2, 2}, {"clear", 1, 1},
+    {"arr_get", 2, 2}, {"indexOf", 2, 2}, {"set", 0, 32}, {"first", 1, 1}, {"last", 1, 1}, {"has", 0, 32},
+    {"flat", 1, 2}, {"qs", 1, 2}, {"addAll", 2, 2}, {"bytes", 1, 32}, {"str", 1, 2},
+    {"json", 1, 2}, {"stringify", 1, 2},
+    {"encode", 1, 2}, {"decode", 1, 2},
+    {"encodeURL", 1, 1}, {"decodeURL", 1, 1},
+    {"md5", 1, 1}, {"encodeBase64", 1, 1}, {"decodeBase64", 1, 1},
+    {"regexMatch", 2, 2}, {"regexSearch", 2, 2}, {"regexReplace", 3, 3},
+    {"now", 0, 0}, {"timestamp", 0, 0}, {"timestamp_ms", 0, 0},
+    {"sleep", 1, 1}, {"date", 1, 4}, {"time", 1, 6}, {"datetime", 1, 8}, {"timedelta", 1, 2},
+    {"today", 0, 0},
+    {"year", 1, 1}, {"month", 1, 1}, {"day", 1, 1}, {"hour", 1, 1},
+    {"minute", 1, 1}, {"second", 1, 1}, {"weekday", 1, 1}, {"yearday", 1, 1},
+    {"days", 1, 1}, {"seconds", 1, 1}, {"totalSeconds", 1, 1},
+    {"formatDate", 2, 2}, {"diff", 2, 2},
+    {"tuple", 0, 32}, {"complex", 1, 2},
+    {"calendar", 1, 3},
+    {"firstDate", 1, 1}, {"lastDate", 1, 1},
+    {"file", 1, 2}, {"folder", 1, 1},
+    /* socket 构造：大写为主用名（可收可选 config map），小写为别名 */
+    {"TcpSocket", 0, 1}, {"tcpSocket", 0, 1},
+    {"UdpSocket", 0, 1}, {"udpSocket", 0, 1},
+    {"UnixSocket", 0, 1}, {"unixSocket", 0, 1},
+    {"UnixDgramSocket", 0, 1}, {"unixDgramSocket", 0, 1},
+    {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
+    {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
+    {"append", 2, 2}, {"appendLine", 2, 2},
+    {"flush", 1, 1}, {"delete", 1, 1},
+    {"readBytes", 1, 1}, {"writeBytes", 2, 2},
+    {"truncate", 2, 2}, {"renameTo", 2, 2},
+    {"list", 1, 1}, {"files", 1, 1}, {"dirs", 1, 1},
+    {"create", 1, 1}, {"remove", 1, 1}, {"walk", 1, 1},
+    {"copyTo", 2, 2}, {"moveTo", 2, 2}, {"glob", 2, 2},
+    {"fromHex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"toStr", 1, 1},
+    {"format_time", 1, 2},
+    {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
+    {"gc_count", 0, 0}, {"gc_bytes", 0, 0}, {"gc_collect", 0, 0}, {"gc_stw_ns", 0, 0}, {"next", 1, 1}, {"send", 2, 2}, {"receive", 0, 0}, {"close", 1, 1}, {"GenThrow", 2, 2}, {"chain", 2, 2}, {"zip", 2, 2}, {"skip", 2, 2}, {"take", 2, 2}, {"enumerate", 1, 1},
+};
+
+static int is_builtin_name(const char* name) {
+    if(!name) return 0;
+    int n = (int)(sizeof(g_builtin_sigs) / sizeof(g_builtin_sigs[0]));
+    for(int i = 0; i < n; i++)
+        if(strcmp(name, g_builtin_sigs[i].name) == 0) return 1;
+    return 0;
+}
+
 /*
  * 类型检查：函数调用
  * 返回错误标志（0=无错误，1=有错误）
@@ -897,6 +1007,22 @@ static int typecheck_call(AstNode* node)
                       node->line, node->u.call.name,
                       sm_access == ACCESS_PRIVATE ? "private" : "protected");
             err = 1;
+        }
+    }
+    /* lambda 内调用"外层局部变量持有的函数值"（如 a = () => ...; b = () => a()）：
+     * callee 名必须进捕获列表——AST_CALL 用字符串名，不经 AST_VAR 的捕获登记，
+     * 不捕获则运行时 lambda 帧无此槽，CALLV 读到 null（"动态调用的值不是函数"）。
+     * 需要捕获：static_sym 未知（外层局部，collect 不深入函数体；含递归自引用——
+     * 右值检查时左值尚未登记）或已知为 VAL_NONE（动态变量）。
+     * 不捕获：顶层函数 VAL_FUNC 走函数表、内置/type 构造等已知非 VAL_NONE。 */
+    if(in_lambda) {
+        ValueType calleeType = VAL_NONE;
+        _Bool known = static_sym_get(node->u.call.name, &calleeType);
+        if((!known || calleeType == VAL_NONE) &&
+           !is_builtin_name(node->u.call.name) &&
+           !is_lambda_param(node->u.call.name) &&
+           !is_lambda_local(node->u.call.name)) {
+            cap_add(node->u.call.name);
         }
     }
             // 默认参数填充：如果实参不足，用函数定义中的默认值表达式填充。
@@ -942,91 +1068,24 @@ static int typecheck_call(AstNode* node)
                     }
                 }
             } else if(!static_sym_get(node->u.call.name, &t)) {
-                static const struct { const char* name; int min; int max; } builtins[] = {
-                    {"len", 1, 1}, {"type", 1, 1}, {"input", 0, 0}, {"range", 1, 3}, {"substr", 3, 3},
-                    {"toupper", 1, 1}, {"tolower", 1, 1}, {"split", 2, 2}, {"del", 2, 2}, {"insert", 3, 3},
-                    {"floor", 1, 1}, {"ceil", 1, 1}, {"abs", 1, 1}, {"sqrt", 1, 1},
-                    {"sin", 1, 1}, {"cos", 1, 1}, {"tan", 1, 1},
-                    {"asin", 1, 1}, {"acos", 1, 1}, {"atan", 1, 1}, {"atan2", 2, 2},
-                    {"log", 1, 1}, {"log10", 1, 1}, {"log2", 1, 1},
-                    {"exp", 1, 1}, {"pow", 2, 2},
-                    {"round", 1, 1}, {"cbrt", 1, 1}, {"hypot", 2, 2},
-                    {"sign", 1, 1}, {"degrees", 1, 1}, {"radians", 1, 1}, {"trunc", 1, 1},
-                    {"random", 0, 0},
-                    {"max", 1, -1}, {"min", 1, -1}, {"join", 2, 2}, {"contains", 2, 2},
-                    {"repeat", 2, 2}, {"replace", 3, 3}, {"sum", 1, 1}, {"avg", 1, 1},
-                    {"format", 1, -1}, {"sort", 1, 1}, {"reverse", 1, 1},
-                    {"map", 2, 2}, {"filter", 2, 2}, {"reduce", 3, 3},
-                    {"strip", 1, 1}, {"startswith", 2, 2}, {"endswith", 2, 2},
-                    {"readFile", 1, 1}, {"writeFile", 2, 2}, {"fileExists", 1, 1},
-                    {"keys", 1, 1}, {"values", 1, 1},
-                    {"thread", 1, -1}, {"thread_join", 1, 1},
-                    {"mutex", 0, 0}, {"rmutex", 0, 0}, {"rwlock", 0, 0}, {"spinlock", 0, 0},
-                    {"lock", 1, 1}, {"unlock", 1, 1}, {"trylock", 1, 1},
-                    {"rdlock", 1, 1}, {"wrlock", 1, 1},
-                    {"tryrdlock", 1, 1}, {"trywrlock", 1, 1},
-                    {"condvar", 0, 0}, {"cond_wait", 2, 2}, {"cond_wait_timeout", 3, 3}, {"cond_signal", 1, 1}, {"cond_broadcast", 1, 1},
-                    {"threadlocal_get", 1, 1}, {"threadlocal_set", 2, 2},
-                    {"get", 1, 3}, {"post", 1, 3}, {"put", 1, 3}, {"delete", 1, 3}, {"head", 1, 3}, {"patch", 1, 3},
-                    {"http_get", 1, 2}, {"http_post", 1, 2}, {"http_put", 1, 2},
-                    {"http_delete", 1, 2}, {"http_head", 1, 2}, {"http_patch", 1, 2},
-
-                    {"add", 2, 3}, {"remove", 2, 2}, {"clear", 1, 1},
-                    {"arr_get", 2, 2}, {"indexOf", 2, 2}, {"set", 0, 32}, {"first", 1, 1}, {"last", 1, 1}, {"has", 0, 32},
-                    {"flat", 1, 2}, {"qs", 1, 2}, {"addAll", 2, 2}, {"bytes", 1, 32}, {"str", 1, 2},
-                    {"json", 1, 2}, {"stringify", 1, 2},
-                    {"encode", 1, 2}, {"decode", 1, 2},
-                    {"encodeURL", 1, 1}, {"decodeURL", 1, 1},
-                    {"md5", 1, 1}, {"encodeBase64", 1, 1}, {"decodeBase64", 1, 1},
-                    {"regexMatch", 2, 2}, {"regexSearch", 2, 2}, {"regexReplace", 3, 3},
-                    {"now", 0, 0}, {"timestamp", 0, 0}, {"timestamp_ms", 0, 0},
-                    {"sleep", 1, 1}, {"date", 1, 4}, {"time", 1, 6}, {"datetime", 1, 8}, {"timedelta", 1, 2},
-                    {"today", 0, 0},
-                    {"year", 1, 1}, {"month", 1, 1}, {"day", 1, 1}, {"hour", 1, 1},
-                    {"minute", 1, 1}, {"second", 1, 1}, {"weekday", 1, 1}, {"yearday", 1, 1},
-                    {"days", 1, 1}, {"seconds", 1, 1}, {"totalSeconds", 1, 1},
-                    {"formatDate", 2, 2}, {"diff", 2, 2},
-                    {"tuple", 0, 32}, {"complex", 1, 2},
-                    {"calendar", 1, 3},
-                    {"firstDate", 1, 1}, {"lastDate", 1, 1},
-                    {"file", 1, 2}, {"folder", 1, 1},
-                    /* socket 构造：大写为主用名（可收可选 config map），小写为别名 */
-                    {"TcpSocket", 0, 1}, {"tcpSocket", 0, 1},
-                    {"UdpSocket", 0, 1}, {"udpSocket", 0, 1},
-                    {"UnixSocket", 0, 1}, {"unixSocket", 0, 1},
-                    {"UnixDgramSocket", 0, 1}, {"unixDgramSocket", 0, 1},
-                    {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
-                    {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
-                    {"append", 2, 2}, {"appendLine", 2, 2},
-                    {"flush", 1, 1}, {"delete", 1, 1},
-                    {"readBytes", 1, 1}, {"writeBytes", 2, 2},
-                    {"truncate", 2, 2}, {"renameTo", 2, 2},
-                    {"list", 1, 1}, {"files", 1, 1}, {"dirs", 1, 1},
-                    {"create", 1, 1}, {"remove", 1, 1}, {"walk", 1, 1},
-                    {"copyTo", 2, 2}, {"moveTo", 2, 2}, {"glob", 2, 2},
-                    {"fromHex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"toStr", 1, 1},
-                    {"format_time", 1, 2},
-                    {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
-                    {"gc_count", 0, 0}, {"gc_bytes", 0, 0}, {"gc_collect", 0, 0}, {"gc_stw_ns", 0, 0}, {"next", 1, 1}, {"send", 2, 2}, {"receive", 0, 0}, {"close", 1, 1}, {"GenThrow", 2, 2}, {"chain", 2, 2}, {"zip", 2, 2}, {"skip", 2, 2}, {"take", 2, 2}, {"enumerate", 1, 1}, {"next", 1, 1},
-                };
                 int found = 0;
-                int nbuiltins = (int)(sizeof(builtins) / sizeof(builtins[0]));
+                int nbuiltins = (int)(sizeof(g_builtin_sigs) / sizeof(g_builtin_sigs[0]));
                 for(int k = 0; k < nbuiltins; k++) {
-                    if(strcmp(node->u.call.name, builtins[k].name) == 0) {
+                    if(strcmp(node->u.call.name, g_builtin_sigs[k].name) == 0) {
                         found = 1;
                         int nargs = count_args(node->u.call.args);
-                        int bad = (nargs < builtins[k].min) ||
-                                  (builtins[k].max >= 0 && nargs > builtins[k].max);
+                        int bad = (nargs < g_builtin_sigs[k].min) ||
+                                  (g_builtin_sigs[k].max >= 0 && nargs > g_builtin_sigs[k].max);
                         if(bad) {
-                            if(builtins[k].max >= 0 && builtins[k].min == builtins[k].max)
+                            if(g_builtin_sigs[k].max >= 0 && g_builtin_sigs[k].min == g_builtin_sigs[k].max)
                                 LOG_ERROR("语义错误(第%d行)：%s() 需要 %d 个实参（给了 %d 个）\n", node->line,
-                                        builtins[k].name, builtins[k].min, nargs);
-                            else if(builtins[k].max < 0)
+                                        g_builtin_sigs[k].name, g_builtin_sigs[k].min, nargs);
+                            else if(g_builtin_sigs[k].max < 0)
                                 LOG_ERROR("语义错误(第%d行)：%s() 需要至少 %d 个实参（给了 %d 个）\n", node->line,
-                                        builtins[k].name, builtins[k].min, nargs);
+                                        g_builtin_sigs[k].name, g_builtin_sigs[k].min, nargs);
                             else
                                 LOG_ERROR("语义错误(第%d行)：%s() 需要 %d 到 %d 个实参（给了 %d 个）\n", node->line,
-                                        builtins[k].name, builtins[k].min, builtins[k].max, nargs);
+                                        g_builtin_sigs[k].name, g_builtin_sigs[k].min, g_builtin_sigs[k].max, nargs);
                             err = 1;
                         }
                         break;

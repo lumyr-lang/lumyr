@@ -16,6 +16,7 @@
 
 /* yyerror 定义在 %% 之后，helper 中提前使用需前置声明 */
 void yyerror(const char* s);
+extern int yylineno;   /* 与 L1021 处重复声明一致（extern 幂等） */
 
 /* lexer 数字字面量后缀推断的精确类型（lex_number 填充，INTEGER/NUMBER 动作读取；CAST_NONE=按值推断） */
 extern CastKind g_lit_cast;
@@ -329,6 +330,18 @@ static int g_class_ninterfaces = 0; /* 当前 class 实现的接口数量 */
 static void try_register_global_func(const char* name, Value func_val) {
     if(g_current_class_name) return;
     if(g_current_struct_name) return;
+    /* 无兜底：全局函数名不得占用类静态成员 flat 命名空间（<Class>_<member>），
+     * 否则静默覆盖静态方法实现，静态调用被偷偷改绑到手写函数。
+     * （本函数在 prologue，无法 YYABORT；yyerror 不中止解析，故打印后 exit） */
+    {
+        const char* sm_owner = NULL; int sm_access = 0;
+        if(class_static_member_lookup(name, &sm_owner, &sm_access)) {
+            fprintf(stderr,
+                    "语义错误(第%d行)：函数名 \"%s\" 与类 \"%s\" 的静态成员冲突（该名为编译器保留命名）\n",
+                    yylineno, name, sm_owner ? sm_owner : "?");
+            exit(1);
+        }
+    }
     sym_set(name, func_val);
 }
 static int g_class_method_n = 0, g_class_method_cap = 0;
@@ -360,6 +373,40 @@ static AstNode* make_static_prop(char* prop_name, AstNode* expr, int access) {
     free(svn);
     g_class_method_push(assign);
     return assign;
+}
+
+/* 静态成员 flat 名冲突检查（无兜底）：不得与已注册的全局函数撞车，
+ * 否则静态调用被静默改绑。本类/它类静态成员重定义属覆盖语义，放行。
+ * 返回 1=可用，0=冲突（已 yyerror，调用方应 YYABORT）。 */
+static int static_flat_name_ok(const char* flat) {
+    const char* so = NULL; int sa = 0;
+    if(class_static_member_lookup(flat, &so, &sa)) return 1;
+    if(ir_func_table_lookup(flat)) {
+        char buf[320];
+        snprintf(buf, sizeof buf,
+                 "静态成员名 \"%s\" 与已定义的全局函数冲突（该名已被占用）", flat);
+        yyerror(buf);
+        return 0;
+    }
+    return 1;
+}
+
+/* 编译期静态分派：左标识符是类名时查其静态成员。
+ * 返回 1=命中（full_out 填 flat 名 "<类>_<成员>"）；0=是类但无此静态成员；
+ * -1=该名不是类。静态方法/属性的访问级别另由 typecheck 校验。 */
+static int resolve_class_static(const char* cls, const char* member,
+                                char* full_out, int full_sz) {
+    /* 类体内自引用：当前正在定义的类此时尚未注册（class_register 在成员规则
+     * 动作中执行，晚于成员函数体的解析），把 g_current_class_name 视同已注册类，
+     * 使方法体内引用本类已声明静态成员（声明序在先）仍走编译期静态分派。 */
+    if(!class_lookup(cls)) {
+        if(!g_current_class_name || strcmp(cls, g_current_class_name) != 0) return -1;
+    }
+    snprintf(full_out, (size_t)full_sz, "%s_%s", cls, member);
+    const char* owner = NULL;
+    int access = 0;
+    if(class_static_member_lookup(full_out, &owner, &access)) return 1;
+    return 0;
 }
 
 static void class_prop_push(char* name, ValueType vt) {
@@ -1158,6 +1205,7 @@ int yylex(void);
 AstNode* root;
 /* 模块系统（第一阶段）：判断一个标识符是否为 import 别名命名空间 */
 int lm_is_module_alias(const char* name);
+int lm_alias_export_lookup(const char* alias, const char* member);
 // AST 构造辅助：报错定位用（节点行号 = 当前 lookahead 行）
 static inline AstNode* l_set_line(AstNode* __n) { if(__n) __n->line = yylineno; return __n; }
 #define L(n) l_set_line(n)
@@ -1978,6 +2026,7 @@ closed_stmt
           g_current_class_name = NULL;
           g_current_class_parent = NULL;
           g_current_class_is_abstract = 0;
+          clear_formal_generics();
           $$ = abs_method_list2 ? L(abs_method_list2) : L(ast_none());
       }
     | abstract_class_header_implements class_prop_list RBRACE {
@@ -2031,6 +2080,7 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = abs_method_list_impl ? L(abs_method_list_impl) : L(ast_none());
       }
     | abstract_class_header_inherit_implements class_prop_list RBRACE {
@@ -2090,6 +2140,7 @@ closed_stmt
           free(g_class_interfaces);
           g_class_interfaces = NULL;
           g_class_ninterfaces = 0;
+          clear_formal_generics();
           $$ = abs_method_list3 ? L(abs_method_list3) : L(ast_none());
       }
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
@@ -3250,6 +3301,25 @@ postfix_expr
     | postfix_expr DOT ID LPAREN arg_list RPAREN {
           AstNode* recv = $1;
           AstNode* margs = $5;
+          /* 编译期静态分派：recv 是类名 → 直接调用 flat 静态函数（receiver 不进参数）；
+             是类但无此方法 → 立即报错，不进入运行时兜底 */
+          int staticHandled = 0;
+          if(recv->type == AST_VAR) {
+              char sf[256];
+              int sr = resolve_class_static(recv->u.varname, $3, sf, sizeof sf);
+              if(sr == 1) {
+                  $$ = L(ast_call(strdup(sf), margs));
+                  free($3);
+                  staticHandled = 1;
+              } else if(sr == 0) {
+                  fprintf(stderr,
+                          "语义错误(第%d行)：类 \"%s\" 没有静态方法 \"%s\"\n",
+                          recv->line, recv->u.varname, $3);
+                  YYABORT;
+              }
+          }
+          /* 已静态分派则整段常规链跳过，避免末尾 else 覆盖 $$ */
+          if(!staticHandled) {
           /* requests.get/post/put/delete/head/patch：内置 HTTP 命名空间，
              接收者 requests 不进参数（url 是第一个实参） */
           if(recv->type == AST_VAR && strcmp(recv->u.varname, "requests") == 0 &&
@@ -3260,11 +3330,24 @@ postfix_expr
               char httpName[32];
               snprintf(httpName, sizeof(httpName), "http_%s", $3);
               $$ = L(ast_call(httpName, margs));
+          } else if(recv->type == AST_VAR && strcmp(recv->u.varname, "requests") == 0) {
+              /* requests 伪命名空间：非白名单方法无兜底，编译期直接报错 */
+              fprintf(stderr,
+                      "语义错误(第%d行)：requests 没有方法 \"%s\"（支持 get/post/put/delete/head/patch）\n",
+                      recv->line, $3);
+              YYABORT;
           } else if(strcmp($3, "get") == 0) {
               /* x.get(k)：统一走方法分派（内置 BUILTIN_GET：数组/字典安全取，越界/缺键 → null） */
               $$ = L(ast_method_call(recv, $3, margs));
           } else if(recv->type == AST_VAR && lm_is_module_alias(recv->u.varname)) {
-              /* 模块命名空间 m.add(1,2) -> m["add"](1,2)：map 取值后动态调用，不把接收者当前参 */
+              /* 模块命名空间 m.add(1,2) -> m["add"](1,2)：map 取值后动态调用，不把接收者当前参。
+                 无兜底：成员不在导出表中 → 编译期直接报错 */
+              if(lm_alias_export_lookup(recv->u.varname, $3) != 1) {
+                  fprintf(stderr,
+                          "语义错误(第%d行)：模块 \"%s\" 没有导出方法 \"%s\"\n",
+                          recv->line, recv->u.varname, $3);
+                  YYABORT;
+              }
               AstNode* fn = L(ast_index(recv, ast_string(strdup($3))));
               free($3);
               $$ = L(ast_dyn_call(fn, margs));
@@ -3276,6 +3359,7 @@ postfix_expr
                * （方法表含继承槽位，重写覆盖在原位置 → 多态），不再拍平为全局函数名调用 */
               $$ = L(ast_method_call(recv, $3, margs));
           }
+          } /* end if(!staticHandled) */
       }
     /* 属性访问 a.b → a["b"]（map 点属性；无参方法链语法不再保留） */
     | postfix_expr DOT ID {
@@ -3284,7 +3368,29 @@ postfix_expr
           if($1->type == AST_VAR) {
               AstNode* v = enum_table_lookup_member($1->u.varname, $3);
               if(v) { $$ = L(v); free($3); }
-              else  $$ = L(ast_index($1, ast_string($3)));
+              else {
+                  /* 编译期静态分派：是类名 → 取 flat 静态属性；无此成员立即报错 */
+                  char sf[256];
+                  int sr = resolve_class_static($1->u.varname, $3, sf, sizeof sf);
+                  if(sr == 1) {
+                      $$ = L(ast_var(strdup(sf)));
+                      free($3);
+                  } else if(sr == 0) {
+                      fprintf(stderr,
+                              "语义错误(第%d行)：类 \"%s\" 没有静态成员 \"%s\"\n",
+                              $1->line, $1->u.varname, $3);
+                      YYABORT;
+                  } else {
+                      /* 模块别名属性访问 m.x：无兜底，成员不在导出表中编译期报错 */
+                      if(lm_alias_export_lookup($1->u.varname, $3) == 0) {
+                          fprintf(stderr,
+                                  "语义错误(第%d行)：模块 \"%s\" 没有导出成员 \"%s\"\n",
+                                  $1->line, $1->u.varname, $3);
+                          YYABORT;
+                      }
+                      $$ = L(ast_index($1, ast_string($3)));
+                  }
+              }
           } else {
               $$ = L(ast_index($1, ast_string($3)));
           }
@@ -3592,8 +3698,10 @@ class_prop_list
             $4->u.func_def.name = static_name;
             $4->u.func_def.is_class_method = 0;
             $4->u.func_def.is_static_method = 1;
-            /* 注册静态成员访问表（注解 static 方法默认 public） */
-            class_static_member_register(static_name, g_current_class_name, 0);
+            /* 注册静态成员访问表（注解 static 方法默认 public）；
+               无兜底：flat 名不得与已注册全局函数撞车 */
+            if(!static_flat_name_ok(static_name)) { YYABORT; }
+            class_static_member_register_ex(static_name, g_current_class_name, 0, VAL_FUNC);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {
                 Value fv;
@@ -3654,8 +3762,10 @@ class_prop_list
             $3->u.func_def.is_class_method = 0;  // 不标记为 class 方法，作为普通全局函数处理
             $3->u.func_def.is_static_method = 1;
             strip_static_self($3);
-            /* 注册静态成员访问表（默认 public） */
-            class_static_member_register(static_name, g_current_class_name, 0);
+            /* 注册静态成员访问表（默认 public）；
+               无兜底：flat 名不得与已注册全局函数撞车 */
+            if(!static_flat_name_ok(static_name)) { YYABORT; }
+            class_static_member_register_ex(static_name, g_current_class_name, 0, VAL_FUNC);
             /* 立即注册到符号表，以便语义检查阶段能找到 */
             RuntimeFunc* rf = compile_func_from_ast($3);
             if(rf) {
@@ -3735,7 +3845,9 @@ class_prop_list
             $4->u.func_def.is_static_method = 1;
             $4->u.func_def.access_modifier = $3;
             strip_static_self($4);
-            class_static_member_register(static_name, g_current_class_name, $3);
+            /* 无兜底：flat 名不得与已注册全局函数撞车 */
+            if(!static_flat_name_ok(static_name)) { YYABORT; }
+            class_static_member_register_ex(static_name, g_current_class_name, $3, VAL_FUNC);
             RuntimeFunc* rf = compile_func_from_ast($4);
             if(rf) {
                 Value fv;

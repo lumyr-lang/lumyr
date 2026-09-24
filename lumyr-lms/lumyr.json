@@ -1,6 +1,7 @@
 {
   "frameworks": {
     "Function": "./LumyrFunction",
-    "Utils": "./LumyrUtils"
+    "Utils": "./LumyrUtils",
+    "IO": "./LumyrIO"
   }
 }

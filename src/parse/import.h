@@ -39,11 +39,14 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out);
 
 /*
  * 模块命名空间别名注册表。
- * 预处理阶段把 `import ".." as alias;` 的 alias 登记进来；
+ * 预处理阶段把 `import ".." as alias;` 的 alias 及其导出成员名表登记进来；
  * yacc 在解析 `a.b(x)` 方法链时，若接收者是模块别名，则按 map 动态调用处理
  * （a["b"](x)），而不是把接收者当前参（b(a,x)）。
+ * 成员校验无兜底：a.b / a.b(x) 的成员不在导出表中时编译期直接报错。
  */
-void lm_register_alias(const char* name);
+void lm_register_alias(const char* name, char* const* exports, int nexports);
 int  lm_is_module_alias(const char* name);
+/* 返回 1=是别名且有此导出成员；0=是别名但无此成员；-1=不是别名 */
+int  lm_alias_export_lookup(const char* alias, const char* member);
 
 #endif

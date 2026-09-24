@@ -667,6 +667,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 emit(c, OPC_GETFUNC, sym, 0);
                 return EXPR_TYPE_NONE;
             }
+            if(!c->fn->is_main) {
+                /* 函数体内读顶层变量：名字记入本函数符号表，发 LOAD_GLOBAL 占位；
+                 * ir_compile_main 末尾 fixup 按名字解析为 main 帧槽位索引。
+                 * 顶层变量在 main 编译前不可知（函数体在 parse 期编译），必须延迟绑定。 */
+                int sym = bf_sym(c->fn, name);
+                emit(c, OPC_LOAD_GLOBAL, sym, -1);
+                return EXPR_TYPE_NONE;
+            }
             /* 否则当作 VALUE 栈的未声明变量 */
             emit(c, OPC_LOAD_VAR, 0, 0);
             return EXPR_TYPE_NONE;
@@ -2320,7 +2328,12 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
         /* 4. 浮点类型（float 自动提升为 double） */
         if(strcmp(lt, "double") == 0 || strcmp(rt, "double") == 0) return "double";
         if(strcmp(lt, "float") == 0 || strcmp(rt, "float") == 0) return "double";
-        /* 5. 其他都是 int */
+        /* 5. 兜底：含动态(unknown)/null 操作数 → 实际 c_expr 走 VALUE 栈（NONE），
+         *    不得乐观当 int——否则三元 ternary_cast_to 据 name_f="int" 发 BOX_INT64，
+         *    弹空 INT64 栈读到垃圾（动态操作数算术 + 三元/返回场景）。
+         *    两个静态整型才是 int。 */
+        if(strcmp(lt, "unknown") == 0 || strcmp(rt, "unknown") == 0 ||
+           strcmp(lt, "null") == 0 || strcmp(rt, "null") == 0) return "unknown";
         return "int";
     }
 
@@ -3307,6 +3320,26 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
         return EXPR_TYPE_NONE;
     }
 
+    /* 无兜底：已知类型 receiver 调用的 mname 若实为静态成员（含父类链），
+     * 实例调用形式是明确错误——编译期报错，禁止漏到运行时动态分派。 */
+    if(owner && td && !method_deferred && !mdef_ast) {
+        TypeDef* sc = td;
+        while(sc) {
+            char sf[256];
+            snprintf(sf, sizeof sf, "%s_%s", sc->name, mname);
+            const char* sm_owner = NULL; int sm_access = 0;
+            if(class_static_member_lookup(sf, &sm_owner, &sm_access)) {
+                fprintf(stderr,
+                        "IR: \"%s\" 是类 \"%s\" 的静态成员，不能通过实例调用（静态访问请写 %s.%s）\n",
+                        mname, sc->name, sc->name, mname);
+                g_ir_compile_error = 1;
+                free(owner);
+                return EXPR_TYPE_NONE;
+            }
+            sc = sc->parent ? class_lookup(sc->parent) : NULL;
+        }
+    }
+
     /* 4. 无法确定类型：动态方法调用 CALL_METHODV（运行时按 receiver 实际类型分派：
      * 用户实例→方法表 bound；map/formdata→先查键 miss 再内置方法表兜底）。
      * 不能直接把 recv 当函数——方法名会丢失；也不能经 INDEX+CALLV 兜底——
@@ -4185,23 +4218,29 @@ void c_stmt(Ctx* c, AstNode* node) {
  * 主编译入口
  * ============================================================ */
 
+void ir_fixup_global_refs(BytecodeFunc* main_fn);  /* 定义在全局函数表之后 */
+
 BytecodeFunc* ir_compile_main(AstNode* root) {
     /* 创建字节码函数 */
     BytecodeFunc* fn = calloc(1, sizeof(BytecodeFunc));
     fn->is_main = 1;
     fn->name = strdup("main");
-    
+
     /* 创建编译上下文 */
     Ctx c;
     memset(&c, 0, sizeof(Ctx));
     c.fn = fn;
-    
+
     /* 编译 AST */
     c_stmt(&c, root);
-    
+
     /* 添加返回指令 */
     emit(&c, OPC_RETURN, 0, 0);
-    
+
+    /* 函数体内读顶层变量的延迟绑定：main 符号表已就绪，
+     * 把全部函数字节码中的 LOAD_GLOBAL 占位按名字解析为 main 帧槽位 */
+    ir_fixup_global_refs(fn);
+
     return fn;
 }
 
@@ -4581,6 +4620,69 @@ void ir_func_table_reset(void) {
 }
 
 /* ============================================================
+ * 函数体内读顶层变量：LOAD_GLOBAL 延迟绑定 fixup
+ * 函数体在 parse 期编译（早于 main），读不到的局部名按"顶层变量"发 OPC_LOAD_GLOBAL
+ * 占位（a=本函数符号表名字下标, b=-1 未解析）。main 编译完成后调用，
+ * 把每条 LOAD_GLOBAL 按名字解析为 main 帧槽位索引（a）+ PTR 族精确类型提示（b）。
+ * 名字不在 main 符号表 → 未定义变量（typecheck 正常已先报错）：改写 PUSH_NONE，
+ * 保证确定性 null，绝不读槽位 0 的垃圾值。
+ * ============================================================ */
+/* 在 main 符号表按名查槽位，返回槽位索引并写 PTR 族 hint（-1=无） */
+static int main_find_slot(BytecodeFunc* mf, const char* name, int* hintOut) {
+    if(hintOut) *hintOut = 0;
+    if(!mf || !name) return -1;
+    for(int i = 0; i < mf->sym_cnt; i++) {
+        if(!mf->syms[i] || strcmp(mf->syms[i], name) != 0) continue;
+        CastKind tag = (CastKind)mf->var_type_tags[i];
+        int h = 0;
+        if(tag == CAST_BIGINT) h = 4;
+        else if(tag == CAST_DECIMAL) h = 5;
+        else if(tag == CAST_BITDECIMAL) h = 6;
+        else if(tag == CAST_PTR) h = 7;
+        if(hintOut) *hintOut = h;
+        return i;
+    }
+    return -1;
+}
+
+static void global_fixup_cb(RBTNamespace ns, const char* class_name, const char* name, void* data, void* user_data) {
+    (void)ns; (void)class_name; (void)name;
+    BytecodeFunc* mf = (BytecodeFunc*)user_data;
+    BytecodeFunc* fn = (BytecodeFunc*)data;
+    if(!fn || fn->is_main || !fn->code) return;
+    for(int pc = 0; pc < fn->code_len; pc++) {
+        Instruction* in = &fn->code[pc];
+        if(in->op != OPC_LOAD_GLOBAL || in->b != -1) continue;  /* 别名共享 fn：重复扫描幂等 */
+        const char* vname = (in->a >= 0 && in->a < fn->sym_cnt) ? fn->syms[in->a] : NULL;
+        int hint = 0;
+        int mi = vname ? main_find_slot(mf, vname, &hint) : -1;
+        if(mi < 0) {
+            in->op = OPC_PUSH_NONE; in->a = 0; in->b = 0;
+            continue;
+        }
+        in->a = mi;
+        in->b = hint;
+    }
+    /* lambda 捕获的顶层变量：当前函数帧无此槽，运行时帧不维护变量名，
+     * 把 <lambda 名, 捕获名> → main 槽位+hint 登记侧表，供 mkclosure 从根帧取值。
+     * 模块内引用经文本级 mangle，捕获名与 main 槽位名天然一致。
+     * 外层局部变量捕获即使同名也登记，但 mkclosure 优先命中当前帧 cell。 */
+    int ncap = fn->name ? lambda_capture_count(fn->name) : 0;
+    for(int ci = 0; ci < ncap; ci++) {
+        const char* capName = lambda_capture_name(fn->name, ci);
+        int hint = 0;
+        int mi = capName ? main_find_slot(mf, capName, &hint) : -1;
+        if(mi >= 0)
+            func_compile_set_global_cap(fn->name, capName, mi, hint);
+    }
+}
+
+void ir_fixup_global_refs(BytecodeFunc* main_fn) {
+    if(!main_fn || !g_func_table) return;
+    rbtree_foreach(g_func_table, global_fixup_cb, main_fn);
+}
+
+/* ============================================================
  * 自由函数重载组（按 arity + 形参声明类型；仅自由函数）
  * 每个版本以唯一键 __ol__<name>__<seq> 注册进全局函数表，避免同名覆盖；
  * 调用点 ol_resolve 评分选最佳版本，再走 compile_user_call。
@@ -4627,7 +4729,25 @@ static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out) {
         if(g->cands[i].fn->param_cnt == fn->param_cnt &&
            g->cands[i].fn->has_variadic == fn->has_variadic) {
             /* 同 arity → 替换（重编译更新） */
+            BytecodeFunc* oldFn = g->cands[i].fn;
             g->cands[i].fn = fn;
+            if(oldFn && oldFn != fn) {
+                /* 旧 BytecodeFunc 仍可能被两个键引用，导致既有调用点到达旧字节码：
+                 *  - 旧 table_key __ol__<name>__<oldseq>：其它函数 parse 期 CALL 已绑定该键
+                 *  - 裸名 <name>：首版本建的兼容别名（仅当它确实指向 oldFn 才动，
+                 *    避免误伤同名不同 arity 的其它重载版本）
+                 * 重定向到新 fn；旧 fn 按指针只释放一次。 */
+                RBTree* t = func_table_tree();
+                const char* oldKey = oldFn->table_key ? oldFn->table_key : oldFn->name;
+                void* bareOld = NULL;
+                if(rbtree_find(t, NS_FUNCTION, NULL, fn->name) == oldFn)
+                    bareOld = rbtree_set_data(t, NS_FUNCTION, NULL, fn->name, fn);
+                void* keyOld = rbtree_set_data(t, NS_FUNCTION, NULL, oldKey, fn);
+                if(bareOld && bareOld != fn)
+                    bytecode_func_free((BytecodeFunc*)bareOld);
+                if(keyOld && keyOld != fn && keyOld != bareOld)
+                    bytecode_func_free((BytecodeFunc*)keyOld);
+            }
             memset(&g->cands[i].def_shell, 0, sizeof(AstNode));
             g->cands[i].def_shell.type = AST_FUNC_DEF;
             g->cands[i].def_shell.u.func_def.params = params;

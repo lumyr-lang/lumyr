@@ -175,6 +175,59 @@ const char* lambda_capture_name(const char* lambda_name, int i)
     return e->names[i];
 }
 
+// ================= 全局捕获槽侧表 =================
+// lambda 捕获的变量若为顶层(main 帧)变量，运行时帧不维护变量名、无法沿链按名查找，
+// 必须在 ir_compile_main 的 fixup 阶段（main 符号表就绪后）把
+// <lambda 名, 捕获名> → main 帧槽位索引 + PTR 族 hint 登记到本表，
+// vm_exec_mkclosure 在当前函数帧找不到该捕获时查表，从根帧槽位取值建 cell。
+typedef struct {
+    char* lname;
+    char* cname;
+    int slot;
+    int hint;
+} GlobalCapSlot;
+
+static GlobalCapSlot* g_gcap_slots = NULL;
+static int g_gcap_cnt = 0, g_gcap_cap = 0;
+
+void func_compile_set_global_cap(const char* lambda_name, const char* cap_name,
+                                 int main_slot, int hint)
+{
+    for(int i = 0; i < g_gcap_cnt; i++) {
+        if(strcmp(g_gcap_slots[i].lname, lambda_name) == 0 &&
+           strcmp(g_gcap_slots[i].cname, cap_name) == 0) {
+            g_gcap_slots[i].slot = main_slot;
+            g_gcap_slots[i].hint = hint;
+            return;
+        }
+    }
+    if(g_gcap_cnt >= g_gcap_cap) {
+        g_gcap_cap = g_gcap_cap ? g_gcap_cap * 2 : 16;
+        GlobalCapSlot* nt = (GlobalCapSlot*)realloc(g_gcap_slots,
+                                     sizeof(GlobalCapSlot) * (size_t)g_gcap_cap);
+        if(!nt) { fprintf(stderr, "全局捕获槽表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_gcap_slots = nt;
+    }
+    GlobalCapSlot* s = &g_gcap_slots[g_gcap_cnt++];
+    s->lname = strdup(lambda_name);
+    s->cname = strdup(cap_name);
+    s->slot = main_slot;
+    s->hint = hint;
+}
+
+int func_compile_get_global_cap(const char* lambda_name, const char* cap_name,
+                                int* hint_out)
+{
+    for(int i = 0; i < g_gcap_cnt; i++) {
+        if(strcmp(g_gcap_slots[i].lname, lambda_name) == 0 &&
+           strcmp(g_gcap_slots[i].cname, cap_name) == 0) {
+            if(hint_out) *hint_out = g_gcap_slots[i].hint;
+            return g_gcap_slots[i].slot;
+        }
+    }
+    return -1;
+}
+
 // 生成闭包实例：复制模板 payload，沿当前帧链装箱 free 变量
 Value closure_make_instance(RuntimeFunc* template_rf, StackFrame* cur_frame)
 {

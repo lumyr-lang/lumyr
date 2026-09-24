@@ -58,7 +58,7 @@ void stackframe_set_shared(StackFrame* f)
 
 /* 帧内变量槽扩容：翻倍，无硬上限
  * 使用 malloc + memcpy 而非 realloc，避免 GC UAF */
-static void frame_ensure(StackFrame* f, int need)
+void stackframe_ensure_slots(StackFrame* f, int need)
 {
     if(need <= f->cap) return;
     int newcap = f->cap > 0 ? f->cap : 16;
@@ -212,7 +212,7 @@ void stackframe_set(StackFrame* f, const char* name, Value v)
     }
 
     /* 找不到，在当前帧新建 */
-    frame_ensure(f, f->cnt + 1);
+    stackframe_ensure_slots(f, f->cnt + 1);
     int idx = f->cnt++;
     f->names[idx] = strdup(name);
     f->vals[idx] = v;
@@ -252,7 +252,7 @@ void stackframe_bind(StackFrame* f, const char* name, Value v)
         return;
     }
 
-    frame_ensure(f, f->cnt + 1);
+    stackframe_ensure_slots(f, f->cnt + 1);
     idx = f->cnt++;
     f->names[idx] = strdup(name);
     f->vals[idx] = v;
@@ -291,7 +291,7 @@ void stackframe_bind_int64(StackFrame* f, const char* name, int64_t v)
         return;
     }
 
-    frame_ensure(f, f->cnt + 1);
+    stackframe_ensure_slots(f, f->cnt + 1);
     idx = f->cnt++;
     f->names[idx] = strdup(name);
     f->vals[idx].type = VAL_INT;
@@ -329,7 +329,7 @@ void stackframe_bind_double(StackFrame* f, const char* name, double v)
         return;
     }
 
-    frame_ensure(f, f->cnt + 1);
+    stackframe_ensure_slots(f, f->cnt + 1);
     idx = f->cnt++;
     f->names[idx] = strdup(name);
     f->vals[idx].type = VAL_DOUBLE;
@@ -367,7 +367,7 @@ void stackframe_bind_ptr(StackFrame* f, const char* name, void* v)
         return;
     }
 
-    frame_ensure(f, f->cnt + 1);
+    stackframe_ensure_slots(f, f->cnt + 1);
     idx = f->cnt++;
     f->names[idx] = strdup(name);
     f->vals[idx].type = VAL_PTR;
@@ -386,7 +386,7 @@ void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, in
     if(!f || !name || !caller || caller_slot < 0) return;
     int idx = frame_find(f, name);
     if(idx < 0) {
-        frame_ensure(f, f->cnt + 1);
+        stackframe_ensure_slots(f, f->cnt + 1);
         idx = f->cnt++;
         f->names[idx] = strdup(name);
         f->vals[idx].type = VAL_NONE;
@@ -395,7 +395,7 @@ void stackframe_bind_ref(StackFrame* f, const char* name, StackFrame* caller, in
         f->ptr_slots[idx] = NULL;
         f->type_tags[idx] = -1;
     }
-    frame_ensure(caller, caller_slot + 1);
+    stackframe_ensure_slots(caller, caller_slot + 1);
     /* 若调用方槽本身是 ref，跟随 ref 链（传递引用别名） */
     if (caller->refs && caller->refs[caller_slot]) {
         RefDesc* src = caller->refs[caller_slot];

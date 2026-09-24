@@ -684,18 +684,18 @@ static int bi_cmp_str(const void* pa, const void* pb) {
     return strcmp(a, b);
 }
 
-/* 类型错误提示 */
+/* 类型错误提示（无兜底：不可恢复，立即中止进程） */
 static int bi_type_err(const char* name, Value recv) {
     Value tn = lumyr_type(recv);
     fprintf(stderr, "运行时错误: 类型 %s 不支持方法 .%s\n",
             lumyr_str_cstr(&tn), name);
-    return 0;
+    exit(1);
 }
 
 static int bi_need_args(const char* name, int argc, int need) {
     if(argc < need) {
         fprintf(stderr, "运行时错误: .%s 需要 %d 个参数，实际 %d 个\n", name, need, argc);
-        return 0;
+        exit(1);
     }
     return 1;
 }
@@ -1674,8 +1674,34 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
     case BUILTIN_JOIN: {
-        if(recv.type != VAL_ARRAY) return bi_type_err("join", recv);
         if(!bi_need_args("join", argc, 1)) return 0;
+        if(argv[1].type != VAL_STRING) return bi_type_err("join", argv[1]);
+        if(recv.type == VAL_TYPED_ARRAY) {
+            /* TypedArray join：逐元素读值 → value_to_str → 分隔符拼接（与 lumyr_join 同语义） */
+            TypedArray* ta = recv.v.typed_array;
+            int n = ta ? ta->len : 0;
+            const char* sep = lumyr_str_cstr(&argv[1]);
+            size_t seplen = strlen(sep);
+            size_t total = 1;
+            for(int i = 0; i < n; i++) {
+                char* t = value_to_str(bi_ta_read_value(ta, i));
+                total += strlen(t) + (i < n - 1 ? seplen : 0);
+                free(t);
+            }
+            char* buf = (char*)malloc(total);
+            if(!buf) { perror("join"); exit(EXIT_FAILURE); }
+            buf[0] = '\0';
+            for(int i = 0; i < n; i++) {
+                if(i > 0) strcat(buf, sep);
+                char* t = value_to_str(bi_ta_read_value(ta, i));
+                strcat(buf, t);
+                free(t);
+            }
+            *out = lumyr_make_string(buf);
+            free(buf);
+            return 1;
+        }
+        if(recv.type != VAL_ARRAY) return bi_type_err("join", recv);
         *out = lumyr_join(recv, argv[1]);
         return 1;
     }

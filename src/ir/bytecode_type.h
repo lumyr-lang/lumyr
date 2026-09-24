@@ -61,6 +61,8 @@ typedef enum {
     OPC_LOAD_PTR_VAR,      // a=符号表下标：加载指针变量，压入指针栈
     OPC_STORE_PTR_VAR,     // a=符号表下标：从指针栈弹值，存储到变量
     OPC_LOAD_VAR_REF,      // a=符号表下标：加载 ref 参数（struct 不转 Map，直接传递指针）
+    OPC_LOAD_GLOBAL,       // 函数体内读顶层(main)变量：emit 时 a=本函数符号表名字下标, b=-1 未解析；
+                           // ir_compile_main 末尾 fixup 后 a=main 帧槽位索引, b=PTR 族精确类型提示
 
     /* ===== Value 栈算术运算（通用动态类型） ===== */
     OPC_ADD, OPC_SUB, OPC_MUL, OPC_DIV, OPC_MOD,

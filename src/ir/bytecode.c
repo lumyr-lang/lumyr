@@ -341,6 +341,7 @@ const char* opc_name(OpCode op)
         case OPC_LOAD_PTR_VAR: return "LOAD_PTR_VAR";
         case OPC_STORE_PTR_VAR: return "STORE_PTR_VAR";
         case OPC_LOAD_VAR_REF: return "LOAD_VAR_REF";
+        case OPC_LOAD_GLOBAL: return "LOAD_GLOBAL";
         case OPC_ADD: return "ADD";
         case OPC_SUB: return "SUB";
         case OPC_MUL: return "MUL";
@@ -537,6 +538,14 @@ void bc_disasm(FILE* out, BytecodeFunc* fn)
             case OPC_PRE_INC: case OPC_POST_INC: case OPC_PRE_DEC: case OPC_POST_DEC:
                 snprintf(txt, sizeof(txt), "%s %s", opc_name(in.op),
                          (in.a >= 0 && in.a < fn->sym_cnt) ? fn->syms[in.a] : "?");
+                break;
+            case OPC_LOAD_GLOBAL:
+                /* b==-1：未解析（a=本函数符号表名字下标）；b>=0：已绑定 main 帧槽位索引 */
+                if(in.b == -1)
+                    snprintf(txt, sizeof(txt), "%s %s ; unresolved-global", opc_name(in.op),
+                             (in.a >= 0 && in.a < fn->sym_cnt) ? fn->syms[in.a] : "?");
+                else
+                    snprintf(txt, sizeof(txt), "%s main_slot=%d hint=%d", opc_name(in.op), in.a, in.b);
                 break;
             case OPC_JMP:
             case OPC_JMP_IF_FALSE:

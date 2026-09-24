@@ -94,21 +94,45 @@ static int g_mod_seq = 0;
 static char** g_aliases = NULL;
 static int     g_naliases = 0;
 static int     g_aliases_cap = 0;
+static char*** g_alias_exports = NULL;   /* 与 g_aliases 平行：每个别名的导出成员名表 */
+static int*    g_alias_nexports = NULL;
 
-void lm_register_alias(const char* name) {
+void lm_register_alias(const char* name, char* const* exports, int nexports) {
     for(int i = 0; i < g_naliases; i++)
         if(strcmp(g_aliases[i], name) == 0) return;   /* 幂等 */
     if(g_naliases >= g_aliases_cap) {
         int nc = g_aliases_cap ? g_aliases_cap * 2 : 8;
         g_aliases = (char**)realloc(g_aliases, (size_t)nc * sizeof(char*));
+        g_alias_exports = (char***)realloc(g_alias_exports, (size_t)nc * sizeof(char**));
+        g_alias_nexports = (int*)realloc(g_alias_nexports, (size_t)nc * sizeof(int));
         g_aliases_cap = nc;
     }
-    g_aliases[g_naliases++] = strdup(name);
+    g_aliases[g_naliases] = strdup(name);
+    g_alias_exports[g_naliases] = NULL;
+    g_alias_nexports[g_naliases] = 0;
+    if(exports && nexports > 0) {
+        g_alias_exports[g_naliases] = (char**)malloc((size_t)nexports * sizeof(char*));
+        for(int j = 0; j < nexports; j++)
+            g_alias_exports[g_naliases][j] = strdup(exports[j]);
+        g_alias_nexports[g_naliases] = nexports;
+    }
+    g_naliases++;
 }
 int lm_is_module_alias(const char* name) {
     for(int i = 0; i < g_naliases; i++)
         if(strcmp(g_aliases[i], name) == 0) return 1;
     return 0;
+}
+/* 别名成员编译期校验（无兜底：不存在即由调用方报错）：
+ * 返回 1=是别名且有此导出成员；0=是别名但无此成员；-1=不是别名。 */
+int lm_alias_export_lookup(const char* alias, const char* member) {
+    for(int i = 0; i < g_naliases; i++)
+        if(strcmp(g_aliases[i], alias) == 0) {
+            for(int j = 0; j < g_alias_nexports[i]; j++)
+                if(strcmp(g_alias_exports[i][j], member) == 0) return 1;
+            return 0;
+        }
+    return -1;
 }
 
 /* ---------------- 全局已处理模块表（去重） ---------------- */
@@ -125,6 +149,8 @@ typedef struct {
     int    nmangled;
     char** class_names; /* class/interface 名（shim 生成时跳过，因为类名非一等值） */
     int    nclass_names;
+    char** export_names; /* 实际写入导出 map 的键名（供别名成员编译期校验） */
+    int    nexport_names;
 } ProcessedMod;
 
 static ProcessedMod* g_processed = NULL;
@@ -153,6 +179,7 @@ static ProcessedMod* register_processed(const char* realpath) {
     p->sel_old = NULL; p->sel_new = NULL; p->nselective = 0; p->cap_selective = 0;
     p->mangled = NULL; p->nmangled = 0;
     p->class_names = NULL; p->nclass_names = 0;
+    p->export_names = NULL; p->nexport_names = 0;
     return p;
 }
 
@@ -1290,7 +1317,10 @@ static char* expand_file(const char* abs_path, SB* out,
                 free(child_body.buf);
                 /* alias 赋值（仅 alias 模式 / 混合模式有 alias） */
                 if(isp->alias) {
-                    lm_register_alias(isp->alias);
+                    ProcessedMod* cpm = find_processed(real);
+                    lm_register_alias(isp->alias,
+                                      cpm ? (char* const*)cpm->export_names : NULL,
+                                      cpm ? cpm->nexport_names : 0);
                     sb_putc(&body, '\n');
                     sb_puts(&body, isp->alias);
                     sb_puts(&body, " = ");
@@ -1336,11 +1366,15 @@ static char* expand_file(const char* abs_path, SB* out,
     sb_puts(out, expvar);
     sb_puts(out, " = {");
     int first = 1;
+    /* 同步记录实际写入 map 的键名（供别名成员编译期校验，条件与下方发射一致） */
+    pm->export_names = (char**)malloc((size_t)(tr->nexports + 1) * sizeof(char*));
+    pm->nexport_names = 0;
     for(int q = 0; q < tr->nexports; q++) {
         /* selective 符号跳过（已有 shim） */
         if(name_in_list(tr->exports[q], sel_old, nsel)) continue;
         /* class/interface 名跳过（类名非一等值，不能放入 export map） */
         if(tr_is_class_name(tr, tr->exports[q])) continue;
+        pm->export_names[pm->nexport_names++] = strdup(tr->exports[q]);
         if(!first) sb_puts(out, ", ");
         first = 0;
         sb_putc(out, '"');
@@ -1634,7 +1668,10 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
             /* alias 赋值（仅 alias 模式 / 混合模式） */
             if(isp->alias) {
-                lm_register_alias(isp->alias);
+                ProcessedMod* apm = find_processed(mreal);
+                lm_register_alias(isp->alias,
+                                  apm ? (char* const*)apm->export_names : NULL,
+                                  apm ? apm->nexport_names : 0);
                 sb_putc(&out, '\n');
                 sb_puts(&out, isp->alias);
                 sb_puts(&out, " = ");

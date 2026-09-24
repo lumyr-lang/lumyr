@@ -13,7 +13,7 @@
 import <Function/Buffer>;
 
 public class StringBuffer extends AbstractBuffer<string> {
-    value: array;
+    value: <string>array;
 
     func StringBuffer(s) {
         self.value = [];

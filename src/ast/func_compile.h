@@ -67,6 +67,14 @@ int lambda_capture_count(const char* lambda_name);
 // 查询 lambda 第 i 个捕获变量名（0 <= i < count）
 const char* lambda_capture_name(const char* lambda_name, int i);
 
+// ---- 全局捕获槽（lambda 捕获顶层变量的编译期 fixup）----
+// ir_compile_main fixup 阶段登记：<lambda 名, 捕获名> → main 帧槽位 + PTR 族 hint
+void func_compile_set_global_cap(const char* lambda_name, const char* cap_name,
+                                 int main_slot, int hint);
+// vm_exec_mkclosure 查表：返回 main 帧槽位索引，-1=无；hint_out 取 PTR 族提示
+int func_compile_get_global_cap(const char* lambda_name, const char* cap_name,
+                                int* hint_out);
+
 // VM 在 OPC_MKCLOSURE 时调用：沿当前帧链装箱 free 变量并生成新的闭包 RuntimeFunc。
 // template 为该 lambda 的全局共享 RuntimeFunc（capture_count==-1）。
 // 返回一个 VAL_FUNC（持有新堆分配 RuntimeFunc）。

@@ -234,6 +234,16 @@ int main(int argc, char** argv) {
                 snprintf(exe_path, sizeof(exe_path), "%s", base);
 
                 BytecodeFunc* main_fn = ir_compile_main(root);
+                /* IR 致命错误（如静态成员误用实例调用）：中止，不生成 C 代码 */
+                if(ir_compile_had_error()) {
+                    bytecode_func_free(main_fn);
+                    ast_free(root);
+                    root = NULL;
+                    if(yyin && yyin != stdin) fclose(yyin);
+                    if(used_pp_tmp) unlink(pp_tmp);
+                    if(used_cond_tmp) unlink(cond_tmp);
+                    return 1;
+                }
                 ir_cgen_file(c_path, main_fn);
                 bytecode_func_free(main_fn);
                 printf(LM_TR(MSG_CODEGEN_GENERATED), c_path);

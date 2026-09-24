@@ -1,0 +1,61 @@
+// 模块 B：与模块 A、主文件同名的私有符号——未 export 应被 mangle 天然隔离
+// 与 mod_a.lm 结构完全同名、仅取值不同（B 系列），以结果差异证明互不串扰
+
+func helper() { return "B-helper"; }
+counter = 200;
+const LIMIT = 2000;
+seed = 2;
+
+class Internal {
+    func who() { return "B-internal"; }
+}
+
+class Util {
+    static ver = 2;
+    static func tag() { return "B-util-static"; }
+}
+
+// 同名私有顶层函数：lambda 内调用它（B 乘 20，A 乘 10）
+func mult(v) { return v * 20; }
+
+// 顶层函数内声明局部 lambda 并互调（同 A，读 seed/LIMIT/mult）
+func top_chain(x) {
+    p = (v) => { return v + seed; };
+    q = (v) => { return p(v) + mult(v); };
+    return q(x) + LIMIT;
+}
+
+// 递归 lambda
+func fib_holder(n) {
+    fib = (k) => { return k < 2 ? k : fib(k - 1) + fib(k - 2); };
+    return fib(n);
+}
+
+class Calc {
+    base: int = 20;
+    // 实例方法内声明局部 lambda
+    func chain(x) {
+        f = (v) => { return v + x; };
+        g = (v) => { return f(v) + self.base; };
+        return g(x);
+    }
+    // 静态方法内声明局部 lambda
+    static func calc(x) {
+        a = (v) => { return v + 1; };
+        b = (v) => { return a(v) + seed; };
+        return b(x);
+    }
+}
+
+// 导出入口（黑盒维度：函数 / 类 / 静态类函数）
+export func get_helper() { return helper(); }
+export func get_internal() { return Internal().who(); }
+export func get_util() { return Util.tag(); }
+// 导出同名函数：与 A 模块同名，经各自 alias 调用应互不干扰
+export func same() { return "B-same"; }
+
+// 新增场景导出入口
+export func get_top(x) { return top_chain(x); }
+export func get_fib(n) { return fib_holder(n); }
+export func get_calc_inst() { return Calc{}.chain(5); }
+export func get_calc_stat() { return Calc.calc(10); }

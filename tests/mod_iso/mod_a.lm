@@ -1,0 +1,67 @@
+// 模块 A：与模块 B、主文件同名的私有符号——未 export 应被 mangle 天然隔离
+// 覆盖维度（A/B 结构完全同名、仅取值不同，以结果差异证明互不串扰）：
+//   顶层变量(seed/counter)、常量(LIMIT)、函数(helper/mult/top_chain/fib_holder)
+//   实例方法内局部 lambda（Calc.chain 的 f/g），静态方法内局部 lambda（Calc.calc 的 a/b）
+//   局部 lambda 之间互调、lambda 读顶层变量/常量、lambda 调顶层函数、
+//   lambda 捕获 self 读字段、lambda 捕获方法参数、递归 lambda
+
+func helper() { return "A-helper"; }
+counter = 100;
+const LIMIT = 1000;
+seed = 1;
+
+class Internal {
+    func who() { return "A-internal"; }
+}
+
+class Util {
+    static ver = 1;
+    static func tag() { return "A-util-static"; }
+}
+
+// 同名私有顶层函数：lambda 内调用它（A 乘 10，B 乘 20）
+func mult(v) { return v * 10; }
+
+// 顶层函数内声明局部 lambda 并互调：
+// p 读顶层变量 seed；q 调 p 且调顶层函数 mult；返回值再叠加常量 LIMIT
+func top_chain(x) {
+    p = (v) => { return v + seed; };
+    q = (v) => { return p(v) + mult(v); };
+    return q(x) + LIMIT;
+}
+
+// 递归 lambda（自引用经 mkclosure 的 letrec cell 别名）
+func fib_holder(n) {
+    fib = (k) => { return k < 2 ? k : fib(k - 1) + fib(k - 2); };
+    return fib(n);
+}
+
+class Calc {
+    base: int = 10;
+    // 实例方法内声明局部 lambda：f 捕获方法参数 x；
+    // g 调 f 且捕获 self 读字段 base
+    func chain(x) {
+        f = (v) => { return v + x; };
+        g = (v) => { return f(v) + self.base; };
+        return g(x);
+    }
+    // 静态方法内声明局部 lambda：a/b 互调，b 读顶层变量 seed
+    static func calc(x) {
+        a = (v) => { return v + 1; };
+        b = (v) => { return a(v) + seed; };
+        return b(x);
+    }
+}
+
+// 导出入口（黑盒维度：函数 / 类 / 静态类函数）
+export func get_helper() { return helper(); }
+export func get_internal() { return Internal().who(); }
+export func get_util() { return Util.tag(); }
+// 导出同名函数：与 B 模块同名，经各自 alias 调用应互不干扰
+export func same() { return "A-same"; }
+
+// 新增场景导出入口
+export func get_top(x) { return top_chain(x); }
+export func get_fib(n) { return fib_holder(n); }
+export func get_calc_inst() { return Calc{}.chain(5); }
+export func get_calc_stat() { return Calc.calc(10); }

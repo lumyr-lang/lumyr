@@ -1,0 +1,109 @@
+// ============================================================
+// lumyr Files 类测试：文件系统操作全流程
+// 运行：./bin/lumyr lumyr-lms/example/files_example.lm
+// 覆盖：文本/行/字节读写、追加/插入/截断、信息查询、
+//       复制/移动/重命名/删除（文件+目录）、目录列举/遍历/通配
+// ============================================================
+
+import <IO/Files>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+base = "/tmp/lumyr_files_example";
+// 清理并重建工作目录（delete 对不存在路径不报错）
+Files.delete(base);
+Files.createDir(base);
+
+// ========== 1. 文本读写 ==========
+p1 = base + "/a.txt";
+Files.writeText(p1, "hello world");
+check(Files.exists(p1), "writeText exists");
+check(Files.readText(p1) == "hello world", "readText value");
+check(Files.size(p1) == 11, "file size");
+check(Files.name(p1) == "a.txt", "file name");
+check(Files.ext(p1) == "txt", "file ext");
+check(Files.isFile(p1) == true, "isFile");
+check(Files.isDir(p1) == false, "not isDir");
+
+// ========== 2. 多行读写 ==========
+p2 = base + "/lines.txt";
+Files.writeLines(p2, ["one", "two", "three"]);
+check(Files.readLines(p2) == ["one", "two", "three"], "writeLines/readLines");
+check(Files.readLine(p2, 0) == "one", "readLine(0)");
+check(Files.readLine(p2, -1) == "three", "readLine(-1)");
+Files.writeLine(p2, 0, "TOP");
+check(Files.readLine(p2, 0) == "TOP", "writeLine");
+Files.insertLine(p2, 1, "MID");
+check(Files.readLines(p2) == ["TOP", "MID", "two", "three"], "insertLine");
+
+// ========== 3. 追加 ==========
+// writeLines 写入的文件以换行结尾，故 appendText 另起一行
+Files.appendText(p2, "X");
+check(Files.readLine(p2, -1) == "X", "appendText starts new line after trailing newline");
+// 文件末行 "X" 无尾换行，appendLine 与其同行拼接并补换行
+Files.appendLine(p2, "Y");
+check(Files.readLine(p2, -1) == "XY", "appendLine joins unterminated line then newline");
+
+// ========== 4. 字节读写 ==========
+p4 = base + "/data.bin";
+Files.writeBytes(p4, bytes("ABC"));
+check(Files.readBytes(p4) == bytes("ABC"), "writeBytes/readBytes");
+
+// ========== 5. 截断 ==========
+p5 = base + "/trunc.txt";
+Files.writeText(p5, "abcdefghij");
+Files.truncate(p5, 4);
+check(Files.readText(p5) == "abcd", "truncate");
+check(Files.size(p5) == 4, "truncate size");
+
+// ========== 6. 复制 / 重命名 / 删除（文件） ==========
+p6 = base + "/orig.txt";
+Files.writeText(p6, "copy me");
+Files.copy(p6, base + "/copied.txt");
+check(Files.readText(base + "/copied.txt") == "copy me", "copy file");
+Files.rename(base + "/copied.txt", base + "/renamed.txt");
+check(Files.exists(base + "/renamed.txt") && !Files.exists(base + "/copied.txt"), "rename file");
+Files.delete(base + "/renamed.txt");
+check(!Files.exists(base + "/renamed.txt"), "delete file");
+
+// ========== 7. 目录创建 / 列举 ==========
+sub = base + "/sub/dir";
+Files.createDir(sub);
+check(Files.isDir(sub), "createDir recursive");
+check(Files.exists(sub) && !Files.isFile(sub), "isDir not file");
+
+// 精确校验列举内容
+all = Files.list(base);
+check(all.len == 6, "list total 6");
+files = Files.listFiles(base);
+check(files.len == 5, "listFiles 5: a/lines/data/trunc/orig");
+dirs = Files.listDirs(base);
+check(dirs.len == 1 && dirs[0] == "sub", "listDirs 1: sub");
+
+// ========== 8. walk / glob ==========
+walks = Files.walk(base);
+check(walks.len == 5, "walk finds 5 files (recursive, deep dir empty)");
+// 通配：*.txt 应匹配 4 个 txt（a/lines/trunc/orig，不含 data.bin）
+txts = Files.glob(base, "*.txt");
+check(txts.len == 4, "glob *.txt matches 4");
+bins = Files.glob(base, "*.bin");
+check(bins.len == 1, "glob *.bin matches 1");
+check(Files.dirSize(base) >= Files.size(p1) + Files.size(p2), "dirSize accumulates");
+
+// ========== 9. 目录复制 / 移动 / 删除 ==========
+Files.copy(base + "/sub", base + "/sub_copy");
+check(Files.isDir(base + "/sub_copy/dir"), "copy dir recursive");
+Files.move(base + "/sub_copy", base + "/sub_moved");
+check(Files.isDir(base + "/sub_moved/dir") && !Files.exists(base + "/sub_copy"), "move dir");
+Files.delete(base + "/sub");
+check(!Files.exists(base + "/sub"), "delete dir recursive");
+Files.delete(base + "/sub_moved");
+check(!Files.exists(base + "/sub_moved"), "delete moved dir");
+
+// ========== 10. 清理 ==========
+Files.delete(base);
+check(!Files.exists(base), "cleanup work dir");
+
+print("files_example ALL PASS");

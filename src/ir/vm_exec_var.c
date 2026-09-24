@@ -95,6 +95,55 @@ static void frame_ensure_slots(StackFrame* f, int need) {
 
 /* ===== 变量存取（VALUE 栈） ===== */
 
+/* LOAD_GLOBAL：函数体内读顶层(main 根帧)变量。
+ * in->a = 根帧槽位索引（ir_compile_main 末尾 fixup 已按名字解析）；
+ * in->b = PTR 族精确类型提示（3 string / 4 bigint / 5 decimal / 6 bitdecimal / 7 裸 ptr），
+ *         仅在根帧槽位运行时为 PTR 存储（type_tags==CAST_STRING）时用于消歧。
+ * 运行时按根帧槽位当前存储族装箱：INT 族→VAL_INT64、DOUBLE 族→VAL_DOUBLE、
+ * PTR 族→按 b 装箱 ptr_slots、其余→vals[a] 原样（动态变量/容器/实例）。 */
+int vm_exec_var_load_global(VMExecCtx* ctx, Instruction* in) {
+    int idx = in->a;
+    StackFrame* root = ctx->frame;
+    while(root && root->parent) root = root->parent;
+    if(!root) {
+        Value v = val_none();
+        stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+        return 1;
+    }
+    frame_ensure_slots(root, idx + 1);
+    int rtag = (idx < root->cap) ? root->type_tags[idx] : -1;
+    Value v;
+    memset(&v, 0, sizeof(v));
+    switch(rtag) {
+    case CAST_INT:
+        /* 所有整数/布尔/字符统一 int64 宽槽 */
+        v = lumyr_make_int64(root->int_slots[idx]);
+        break;
+    case CAST_DOUBLE:
+        v = lumyr_make_double(root->flt_slots[idx]);
+        break;
+    case CAST_STRING: {
+        /* PTR 族存储：按编译期 fixup 的精确提示装箱 */
+        void* p = root->ptr_slots[idx];
+        switch(in->b) {
+        case 4:  v.type = VAL_BIGINT;     v.v.bigint = p; break;
+        case 5:  v.type = VAL_DECIMAL;    v.v.decimal = p; break;
+        case 6:  v.type = VAL_BITDECIMAL; v.v.bitdecimal = p; break;
+        case 7:  v.type = VAL_PTR;        v.v.struct_ptr = p; break;
+        default: v.type = VAL_STRING;     v.str_inline = 0; v.v.s = (char*)p; break;
+        }
+        break;
+    }
+    default:
+        /* 动态变量（容器/实例/函数/null 等）：vals 原样 */
+        v = root->vals[idx];
+        break;
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
+
+
 /* LOAD_VAR：从帧槽位加载 Value 到 VALUE 栈；ref 槽 box 调用方存储 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
@@ -132,7 +181,12 @@ int vm_exec_var_store(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_load_int64(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     StackFrame* f = ctx->frame;
-    int64_t v = (f->refs && f->refs[idx]) ? *(int64_t*)f->refs[idx]->ptr : f->int_slots[idx];
+    int64_t v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) v = lumyr_extract_ll(*(Value*)r->ptr);  /* mkclosure 的 Value-cell */
+        else v = *(int64_t*)r->ptr;                                       /* typed 引用存储 */
+    } else v = f->int_slots[idx];
     stack_vm_push(g_stack_mgr, STACK_INT64, &v);
     return 1;
 }
@@ -144,7 +198,11 @@ int vm_exec_var_store_int64(VMExecCtx* ctx, Instruction* in) {
     StackFrame* f = ctx->frame;
     int sp = --g_stack_mgr->sp[STACK_INT64];
     int64_t v = ((int64_t*)g_stack_mgr->stacks[STACK_INT64])[sp];
-    if(f->refs && f->refs[idx]) *(int64_t*)f->refs[idx]->ptr = v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) *(Value*)r->ptr = lumyr_make_int64(v);
+        else *(int64_t*)r->ptr = v;
+    }
     else { f->int_slots[idx] = v; f->type_tags[idx] = (uint8_t)CAST_INT; }
     return 1;
 }
@@ -155,7 +213,12 @@ int vm_exec_var_store_int64(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_load_double(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     StackFrame* f = ctx->frame;
-    double v = (f->refs && f->refs[idx]) ? *(double*)f->refs[idx]->ptr : f->flt_slots[idx];
+    double v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) v = lumyr_extract_double(*(Value*)r->ptr);
+        else v = *(double*)r->ptr;
+    } else v = f->flt_slots[idx];
     stack_vm_push(g_stack_mgr, STACK_DOUBLE, &v);
     return 1;
 }
@@ -167,7 +230,11 @@ int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in) {
     StackFrame* f = ctx->frame;
     int sp = --g_stack_mgr->sp[STACK_DOUBLE];
     double v = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
-    if(f->refs && f->refs[idx]) *(double*)f->refs[idx]->ptr = v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) *(Value*)r->ptr = lumyr_make_double(v);
+        else *(double*)r->ptr = v;
+    }
     else { f->flt_slots[idx] = v; f->type_tags[idx] = (uint8_t)CAST_DOUBLE; }
     return 1;
 }
@@ -178,7 +245,12 @@ int vm_exec_var_store_double(VMExecCtx* ctx, Instruction* in) {
 int vm_exec_var_load_ptr(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
     StackFrame* f = ctx->frame;
-    void* v = (f->refs && f->refs[idx]) ? *(void**)f->refs[idx]->ptr : f->ptr_slots[idx];
+    void* v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) v = ((Value*)r->ptr)->v.struct_ptr;
+        else v = *(void**)r->ptr;
+    } else v = f->ptr_slots[idx];
     stack_vm_push(g_stack_mgr, STACK_PTR, &v);
     return 1;
 }
@@ -190,7 +262,11 @@ int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in) {
     StackFrame* f = ctx->frame;
     int sp = --g_stack_mgr->sp[STACK_PTR];
     void* v = ((void**)g_stack_mgr->stacks[STACK_PTR])[sp];
-    if(f->refs && f->refs[idx]) *(void**)f->refs[idx]->ptr = v;
+    if(f->refs && f->refs[idx]) {
+        RefDesc* r = f->refs[idx];
+        if(r->type == CAST_NONE) ((Value*)r->ptr)->v.struct_ptr = v;  /* 保留 cell Value 类型 */
+        else *(void**)r->ptr = v;
+    }
     else { f->ptr_slots[idx] = v; f->type_tags[idx] = (uint8_t)CAST_STRING; }
     return 1;
 }
