@@ -15,8 +15,8 @@ struct Pt {
 }
 
 type BoxT {
-    name: string,
-    v: int
+    name: string;
+    v: int;
 }
 
 class Kls {
@@ -365,10 +365,10 @@ ec.arr[0] = 11;
 check(ec.arr[0] == 11, "E.struct in-place modify");
 
 type EHolderT {
-    name: string,
-    items: array,
-    info: map,
-    p: Pt
+    name: string;
+    items: array;
+    info: map;
+    p: Pt;
 }
 et = <EHolderT>{name: "hb", items: [4, 5, 6], info: {"z": 1}, p: Pt(2, 3)};
 check(et.name == "hb", "E.type scalar field");
@@ -417,8 +417,8 @@ gtc.mp["y"] = 200;
 check(gtc.mp["y"] == 200, "E2.class typed map add");
 
 type GTypedT {
-    nums: <int>array,
-    mp: <string, int>map
+    nums: <int>array;
+    mp: <string, int>map;
 }
 gtt = <GTypedT>{nums: <int>[7, 8], mp: <string, int>{"k": 9}};
 check(type(gtt.nums) == "typed_array", "E2.type typed array field");

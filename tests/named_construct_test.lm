@@ -97,10 +97,10 @@ check(s.x == "world", "struct write: string");
 // 2. type 形状命名字段构造（值 cast 到声明类型）
 // ------------------------------------------------------------
 type Shape {
-    name: string,
-    count: int,
-    ratio: double,
-    flag: bool
+    name: string;
+    count: int;
+    ratio: double;
+    flag: bool;
 }
 
 sh = <Shape>{
@@ -160,9 +160,9 @@ check(o.inner.v == 99, "nested: inner value");
 // 5. 用户原始用例
 // ------------------------------------------------------------
 type CustomType {
-    name: string,
-    age: int,
-    price: float
+    name: string;
+    age: int;
+    price: float;
 }
 a = <CustomType>{
     "name": "nick",
@@ -218,7 +218,7 @@ check(c2.data["key"] == 42, "shorthand class: nested map value");
 check(type(c2.data) == "map", "shorthand class: nested map type");
 
 // type 形状简写
-type Shape2 { x: int, y: int }
+type Shape2 { x: int; y: int; }
 sh3 = Shape2{x: 5, y: 6};
 check(type(sh3) == "map", "shorthand type shape: container");
 check(sh3.x == 5, "shorthand type shape: x");
@@ -226,9 +226,9 @@ check(sh3.y == 6, "shorthand type shape: y");
 
 // 用户原始用例简写形式
 type CustomType2 {
-    name: string,
-    age: int,
-    price: float
+    name: string;
+    age: int;
+    price: float;
 }
 b2 = CustomType2{name: "nick", age: 10, price: 1.0};
 check(type(b2) == "map", "shorthand user case: container");

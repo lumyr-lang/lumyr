@@ -3335,14 +3335,14 @@ map_item
       }
     ;
 
-/* type 声明属性清单 */
+/* type 声明属性清单：字段间以分号结尾（与 struct_prop 风格一致） */
 type_prop_list
     : %empty                     { $$ = NULL; }
     | type_prop                  { $$ = $1; }
-    | type_prop_list COMMA type_prop { $$ = ast_seq($1, $3); }
+    | type_prop_list type_prop   { $$ = ast_seq($1, $2); }
     ;
 type_prop
-    : ID COLON type_name         {
+    : ID COLON type_name SEMI    {
           char* sn = g_last_custom_type_name; g_last_custom_type_name = NULL;
           ValueType vt = $3;
           /* 命名字段类型（type_name_to_valtype 对自定义名返回 VAL_NONE）：
@@ -3354,12 +3354,12 @@ type_prop
       }
     /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT）
      * 元素 CastKind 一并收集（$3）：声明收敛赋值依赖（[] → TypedArray(elem)） */
-    | ID COLON TOK_TYPE_ANNOT {
+    | ID COLON TOK_TYPE_ANNOT SEMI {
         type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
         type_prop_set_elem((int)$3);
         $$ = ast_none();
     }
-    | ID COLON TOK_TYPE_ANNOT ID {
+    | ID COLON TOK_TYPE_ANNOT ID SEMI {
         if(strcmp($4, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
@@ -3370,12 +3370,12 @@ type_prop
     }
     /* 泛型容器字段：<K,V> / <string,int>（TOK_GENERIC，擦除语义）；
      * 可带 map 后缀；单标识符 <T> 作为字段类型=动态 */
-    | ID COLON TOK_GENERIC {
+    | ID COLON TOK_GENERIC SEMI {
         type_prop_push($1, strchr($3, ',') ? VAL_MAP : VAL_NONE, 0, 0, NULL);
         free($3);
         $$ = ast_none();
     }
-    | ID COLON TOK_GENERIC ID {
+    | ID COLON TOK_GENERIC ID SEMI {
         if(strcmp($4, "map") != 0 && strcmp($4, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
         if(strcmp($4, "map") == 0) {
             type_prop_push($1, VAL_MAP, 0, 0, NULL);

@@ -265,7 +265,7 @@ check(a_class.name == "dog", "class: name field");
 check(a_class.speak() == "dog says woof", "class: speak() method");
 
 // 8.3 type（命名构造）
-type Color { red: int, grn: int, blu: int }
+type Color { red: int; grn: int; blu: int; }
 a_type: Color = <Color>{red: 255, grn: 128, blu: 0};
 check(type(a_type) == "map", "type: type == map");
 check(a_type.red == 255 && a_type.grn == 128 && a_type.blu == 0, "type: fields");

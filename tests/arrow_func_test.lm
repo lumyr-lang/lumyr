@@ -368,8 +368,8 @@ check(eng10.apply((v: int): int => { return v * 2; }, 5) == 30, "10.4 method app
 
 // 10.5 type 形状存箭头函数（type 用花括号构造，map 字段承载 arrow）
 type Shape10 {
-    name: string,
-    ops: map
+    name: string;
+    ops: map;
 }
 s10 = Shape10{
     name: "thing",

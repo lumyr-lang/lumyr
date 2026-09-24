@@ -83,13 +83,13 @@ n = n + 1;
 
 // ===== 7. type 形状嵌套 type =====
 type Address {
-    city: string,
-    zip: int
+    city: string;
+    zip: int;
 }
 type Person {
-    name: string,
-    age: int,
-    addr: Address
+    name: string;
+    age: int;
+    addr: Address;
 }
 p1 = <Person>{name: "nick", age: 18, addr: <Address>{city: "BJ", zip: 100000}};
 check(p1.name == "nick", "7. type nested base");
@@ -100,9 +100,9 @@ n = n + 1;
 
 // ===== 8. type 形状含 map / array 字段 =====
 type Bag {
-    label: string,
-    things: map,
-    items: array
+    label: string;
+    things: map;
+    items: array;
 }
 b1 = <Bag>{label: "bag", things: {"a": 1}, items: [5, 6]};
 check(b1.things["a"] == 1, "8. type map field");

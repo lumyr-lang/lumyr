@@ -461,9 +461,9 @@ print("iterator_types_test PART7 (class) PASS");
 // ============================================================
 
 type Color {
-    red: int,
-    grn: int,
-    blu: int
+    red: int;
+    grn: int;
+    blu: int;
 }
 
 gen func type_gen() {

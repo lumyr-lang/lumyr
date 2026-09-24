@@ -125,33 +125,33 @@ check(big["bigint"] != null, "mixed map remove: others intact");
 // 2. 单个 type 形状同时承载全部字段类型（含高精度）
 // ------------------------------------------------------------
 type AllFields {
-    f_int: int,
-    f_double: double,
-    f_string: string,
-    f_bool: bool,
-    f_char: char,
-    f_byte: byte,
-    f_int8: int8,
-    f_int16: int16,
-    f_int32: int32,
-    f_int64: int64,
-    f_uint8: uint8,
-    f_uint16: uint16,
-    f_uint32: uint32,
-    f_uint64: uint64,
-    f_long: long,
-    f_longlong: long long,
-    f_ulong: ulong,
-    f_uchar: uchar,
-    f_short: short,
-    f_ushort: ushort,
-    f_size_t: size_t,
-    f_ssize_t: ssize_t,
-    f_float: float,
-    f_longdouble: long double,
-    f_bigint: bigint,
-    f_decimal: decimal,
-    f_bitdecimal: bitdecimal
+    f_int: int;
+    f_double: double;
+    f_string: string;
+    f_bool: bool;
+    f_char: char;
+    f_byte: byte;
+    f_int8: int8;
+    f_int16: int16;
+    f_int32: int32;
+    f_int64: int64;
+    f_uint8: uint8;
+    f_uint16: uint16;
+    f_uint32: uint32;
+    f_uint64: uint64;
+    f_long: long;
+    f_longlong: long long;
+    f_ulong: ulong;
+    f_uchar: uchar;
+    f_short: short;
+    f_ushort: ushort;
+    f_size_t: size_t;
+    f_ssize_t: ssize_t;
+    f_float: float;
+    f_longdouble: long double;
+    f_bigint: bigint;
+    f_decimal: decimal;
+    f_bitdecimal: bitdecimal;
 }
 
 af = <AllFields>{

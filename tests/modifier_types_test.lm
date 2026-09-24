@@ -58,8 +58,8 @@ struct Point {
     func sum() { return self.x + self.y; }
 }
 type Label {
-    text: string,
-    weight: int
+    text: string;
+    weight: int;
 }
 class Shape3 {
     private origin: Point;

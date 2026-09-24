@@ -476,8 +476,8 @@ class FdRec {
 }
 
 type FdLabel {
-    text: string,
-    weight: int
+    text: string;
+    weight: int;
 }
 
 /* struct：toMap 全字段 map / toArray [[field,v],...] / toJSONString 含全部字段 */
