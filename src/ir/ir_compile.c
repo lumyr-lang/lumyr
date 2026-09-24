@@ -14,6 +14,7 @@
 #include "ast/ast_runtime_sym.h"
 #include "ast/ast_types.h"
 #include "ast/func_compile.h"
+#include "annotation/lm_annotation.h"
 #include "lm_value.h"
 #include "lm_type.h"
 #include <stdio.h>
@@ -4276,6 +4277,60 @@ static void ctx_cleanup(Ctx* c) {
 static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out);
 static void ol_insert_bare_alias(BytecodeFunc* fn);
 
+/* 从 @FuncAlias 注解参数提取别名列表
+ * 支持三种形式：
+ *   @FuncAlias("add")            → ["add"]            （AST_STRING）
+ *   @FuncAlias(["a","b"])        → ["a","b"]          （AST_ARRAY_LIT，元素为 SEQ 树）
+ *   @FuncAlias("a","b")          → ["a","b"]          （AST_SEQ 树，多个实参）
+ * 返回别名数量；*out_names 为 malloc 的 char* 数组（每个元素 strdup），调用方逐元素 free 后 free 数组 */
+int extract_alias_names(AstNode* args, char*** out_names) {
+    *out_names = NULL;
+    if(!args) return 0;
+
+    /* 单字符串：@FuncAlias("add") */
+    if(args->type == AST_STRING) {
+        *out_names = (char**)malloc(sizeof(char*));
+        (*out_names)[0] = strdup(args->u.sval ? args->u.sval : "");
+        return 1;
+    }
+
+    /* 数组字面量：@FuncAlias(["add","append"]) — elems 为 AST_SEQ 树 */
+    if(args->type == AST_ARRAY_LIT) {
+        AstNode** argv = NULL;
+        int argc = 0, acap = 0;
+        collect_call_args(args->u.array_lit.elems, &argv, &argc, &acap);
+        int count = 0;
+        char** names = (char**)malloc(sizeof(char*) * (argc > 0 ? argc : 1));
+        for(int i = 0; i < argc; i++) {
+            if(argv[i] && argv[i]->type == AST_STRING) {
+                names[count++] = strdup(argv[i]->u.sval ? argv[i]->u.sval : "");
+            }
+        }
+        free(argv);
+        *out_names = names;
+        return count;
+    }
+
+    /* AST_SEQ 树（多个实参）：@FuncAlias("a","b") — ast_arg_append 复用 AST_SEQ */
+    if(args->type == AST_SEQ) {
+        AstNode** argv = NULL;
+        int argc = 0, acap = 0;
+        collect_call_args(args, &argv, &argc, &acap);
+        int count = 0;
+        char** names = (char**)malloc(sizeof(char*) * (argc > 0 ? argc : 1));
+        for(int i = 0; i < argc; i++) {
+            if(argv[i] && argv[i]->type == AST_STRING) {
+                names[count++] = strdup(argv[i]->u.sval ? argv[i]->u.sval : "");
+            }
+        }
+        free(argv);
+        *out_names = names;
+        return count;
+    }
+
+    return 0;
+}
+
 /* 编译函数 / Compile a lumin function into bytecode and register it */
 BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
     /* 方法唯一内部名：<属主>__m__<方法>，避免不同 struct/class 的同名方法
@@ -4368,6 +4423,29 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
        形参类型与返回标注此时已就绪；递归 CALL 真正运行时函数体已编译完整。 */
     ir_func_table_register(fn);
 
+    /* @FuncAlias 方法别名（NS_FUNCTION 空间）：
+     * 方法在 class_add_method/struct_add_method 中编译（注解已由 attach_func_annotations
+     * 先行登记），此处可查到注解，为 <Class>__m__<alias> 注册同一 BytecodeFunc。
+     * 普通函数的别名注册由 yacc.y 的 attach_func_annotations 在 func_def 编译后调用
+     * register_global_func_aliases 完成（此时注解刚登记、函数已入表）。 */
+    if(class_name) {
+        AnnotationInfo* ai = annotation_lookup_func(class_name, name, ANNOTATION_FUNCALIAS);
+        if(ai && ai->args) {
+            char** aliases = NULL;
+            int nalias = extract_alias_names(ai->args, &aliases);
+            for(int i = 0; i < nalias; i++) {
+                if(!aliases[i]) continue;
+                size_t need = strlen(class_name) + strlen(aliases[i]) + 8;
+                char* alias_internal = (char*)malloc(need);
+                snprintf(alias_internal, need, "%s__m__%s", class_name, aliases[i]);
+                ir_func_table_register_alias(fn, alias_internal);
+                free(alias_internal);
+                free(aliases[i]);
+            }
+            free(aliases);
+        }
+    }
+
     /* 登记进重载组；首版本额外以裸名建别名（兼容函数值/裸名路径） */
     if(is_free_for_overload) {
         int first = 0;
@@ -4441,6 +4519,17 @@ void ir_func_table_register(BytecodeFunc* fn) {
         if(old != fn) bytecode_func_free((BytecodeFunc*)old);
     } else {
         rbtree_insert(t, NS_FUNCTION, NULL, key, fn);
+    }
+}
+
+/* 为函数注册别名（共享同一 BytecodeFunc 指针，不复制字节码，不释放旧值）
+ * 用于 @FuncAlias 注解：别名在 NS_FUNCTION 空间直接注册同一 BytecodeFunc，
+ * callsite callee 可为别名或原函数名。若别名键已存在则保留旧值（不覆盖、不释放）。 */
+void ir_func_table_register_alias(BytecodeFunc* fn, const char* alias_name) {
+    if(!fn || !alias_name) return;
+    RBTree* t = func_table_tree();
+    if(!rbtree_find(t, NS_FUNCTION, NULL, alias_name)) {
+        rbtree_insert(t, NS_FUNCTION, NULL, alias_name, fn);
     }
 }
 

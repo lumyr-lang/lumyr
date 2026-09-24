@@ -9,6 +9,7 @@
 #include "ast/ast_types.h"
 #include "parse/macro.h"
 #include "ir/ir_arith.h"
+#include "ir/ir_compile.h"
 #include "annotation/lm_annotation.h"
 #include <stdio.h>
 #include <string.h>
@@ -478,6 +479,79 @@ static void register_class_annotations(AstNode* list) {
         }
         a = a->u.seq.second;
     }
+}
+
+/* 把注解列表附加到函数定义节点并登记到注解注册表。
+ * 用于 annotated_decl（class 方法）和顶层 annotation_list func_def（全局函数）。
+ * 注解属主：class 方法用类名，struct 方法用结构体名，全局函数为 NULL。 */
+static AstNode* attach_func_annotations(AstNode* func_def, AstNode* ann_list) {
+    if(func_def && func_def->type == AST_FUNC_DEF) {
+        func_def->u.func_def.annotations = ann_list;
+        AstNode* ann = ann_list;
+        const char* ann_owner = g_current_class_name ? g_current_class_name : g_current_struct_name;
+        /* 注解列表可为裸 AST_ANNOTATION（单注解）或 AST_SEQ 右深链（多注解）。
+         * 注意：不能直接对 AST_ANNOTATION 读 u.seq.second（union 越界 UB，
+         * 当 args 非空时 u.annotation.args 会被当作 second 指针，导致遍历越界）。
+         * 故按节点类型分发：SEQ 取 first/second 推进，ANNOTATION 处理后终止。 */
+        while(ann) {
+            AstNode* cur = NULL;
+            if(ann->type == AST_ANNOTATION) {
+                cur = ann;
+                ann = NULL;
+            } else if(ann->type == AST_SEQ) {
+                cur = ann->u.seq.first;
+                ann = ann->u.seq.second;
+            } else {
+                break;
+            }
+            if(cur && cur->type == AST_ANNOTATION && cur->u.annotation.name) {
+                int type_marks = ANNOTATION_TYPE_FUNC;
+                if(g_current_class_name) type_marks |= ANNOTATION_TYPE_CLASS;
+                int category = annotation_is_system(cur->u.annotation.name)
+                                ? ANNOTATION_CATEGORY_SYSTEM : ANNOTATION_CATEGORY_USER;
+                annotation_register(cur->u.annotation.name, type_marks, category,
+                                    cur->u.annotation.args,
+                                    ann_owner, func_def->u.func_def.name, NULL);
+                if(strcmp(cur->u.annotation.name, "abstract") == 0) {
+                    func_def->u.func_def.is_abstract_method = 1;
+                }
+                if(strcmp(cur->u.annotation.name, "override") == 0) {
+                    func_def->u.func_def.is_override_method = 1;
+                }
+            }
+        }
+    }
+    return func_def;
+}
+
+/* 全局函数 @FuncAlias 别名注册（func_def 已编译并登记到函数表后调用）。
+ * 仅在全局函数语境（无 class/struct 属主）生效；方法别名由 class_add_method/
+ * struct_add_method 中的 register_method_aliases 负责（含 NS_FUNCTION 内部名）。
+ * 通过裸名 ir_func_table_lookup 取得原函数 BytecodeFunc，别名共享同一指针；
+ * 同时登记 AST 表使 func_ast_lookup(alias) 命中原 AST（参数签名解析）。 */
+static void register_global_func_aliases(AstNode* func_def) {
+    if(!func_def || func_def->type != AST_FUNC_DEF) return;
+    if(g_current_class_name || g_current_struct_name) return;  /* 仅全局函数 */
+    const char* name = func_def->u.func_def.name;
+    if(!name) return;
+    AnnotationInfo* ai = annotation_lookup_func(NULL, name, ANNOTATION_FUNCALIAS);
+    if(!ai || !ai->args) return;
+    char** aliases = NULL;
+    int nalias = extract_alias_names(ai->args, &aliases);
+    AstNode* def_ast = func_ast_lookup(name);
+    for(int i = 0; i < nalias; i++) {
+        if(!aliases[i]) continue;
+        BytecodeFunc* fn = ir_func_table_lookup(aliases[i]);
+        if(fn) { free(aliases[i]); continue; }  /* 别名已占用，跳过 */
+        /* 先查裸名（ol_insert_bare_alias 已为首个重载版本登记）取原 BytecodeFunc */
+        fn = ir_func_table_lookup(name);
+        if(fn) {
+            ir_func_table_register_alias(fn, aliases[i]);
+            if(def_ast) func_ast_register(aliases[i], def_ast);
+        }
+        free(aliases[i]);
+    }
+    free(aliases);
 }
 
 /* 当前 class 临时方法列表中是否已存在同名方法（@Data 不覆盖手写实现） */
@@ -1414,6 +1488,7 @@ closed_stmt
     | return_stmt                    { $$ = $1; }
     | yield_stmt                     { $$ = $1; }
     | func_def                       { $$ = $1; }          /* 新增函数定义语句 */
+    | annotation_list func_def       { $$ = attach_func_annotations($2, $1); register_global_func_aliases($2); }  /* 带注解的顶层函数定义 */
     | macro_def                      { $$ = $1; }          /* 宏定义语句 */
     | WRITE STRING_LIT expr SEMI {
           /* write "path" value → write_file(path, value)；普通路径不内插 */
@@ -2252,33 +2327,8 @@ operator : PLUS  { $$ = strdup("+"); }
 /* 带注解的声明：统一处理所有声明类型的注解 */
 annotated_decl:
     annotation_list func_def  {
-        /* 带注解的函数定义 */
-        $$ = $2;
-        if($$ && $$->type == AST_FUNC_DEF) {
-            $$->u.func_def.annotations = $1;
-            /* 处理注解：注册到注解注册表，识别系统内置注解 */
-            AstNode* ann = $1;
-            while(ann) {
-                if(ann->type == AST_ANNOTATION && ann->u.annotation.name) {
-                    int type_marks = ANNOTATION_TYPE_FUNC;
-                    if(g_current_class_name) {
-                        type_marks |= ANNOTATION_TYPE_CLASS;
-                    }
-                    int category = annotation_is_system(ann->u.annotation.name) ? ANNOTATION_CATEGORY_SYSTEM : ANNOTATION_CATEGORY_USER;
-                    annotation_register(ann->u.annotation.name, type_marks, category,
-                                        ann->u.annotation.args,
-                                        g_current_class_name, $$->u.func_def.name, NULL);
-                    /* 识别系统内置注解 */
-                    if(strcmp(ann->u.annotation.name, "abstract") == 0) {
-                        $$->u.func_def.is_abstract_method = 1;
-                    }
-                    if(strcmp(ann->u.annotation.name, "override") == 0) {
-                        $$->u.func_def.is_override_method = 1;
-                    }
-                }
-                ann = ann->u.seq.second;
-            }
-        }
+        /* 带注解的函数定义（class 方法路径） */
+        $$ = attach_func_annotations($2, $1);
       }
     | func_def  {
         /* 不带注解的函数定义 */

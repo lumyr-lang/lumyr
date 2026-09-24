@@ -31,6 +31,7 @@
 #define ANNOTATION_VISIBILITY  "visibility"
 #define ANNOTATION_CONSTRUCTOR "constructor"
 #define ANNOTATION_DESTRUCTOR  "destructor"
+#define ANNOTATION_FUNCALIAS   "FuncAlias"
 
 /* 注解信息结构体 */
 typedef struct {

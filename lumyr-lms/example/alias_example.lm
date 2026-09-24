@@ -1,0 +1,66 @@
+// ============================================================
+// @FuncAlias 函数别名注解示例
+// 运行：./bin/lumyr lumyr-lms/example/alias_example.lm
+// 为函数/方法创建别名：调用别名等同调用原函数。
+// 支持单字符串、数组字面量、多实参三种形式：
+//   @FuncAlias("push")
+//   @FuncAlias(["peek", "first"])
+//   @FuncAlias("a", "b")
+// ============================================================
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 方法别名：单个别名 + 多别名（数组字面量）
+// ------------------------------------------------------------
+class Counter {
+    n: int;
+    func Counter() { self.n = 0; }
+
+    // 单个别名
+    @FuncAlias("inc")
+    func add(v: int) { self.n = self.n + v; return self; }
+
+    // 单个别名
+    @FuncAlias("get")
+    func value(): int { return self.n; }
+
+    // 多个别名（数组字面量）
+    @FuncAlias(["plus", "increment"])
+    func bump(): int { self.n = self.n + 1; return self.n; }
+}
+
+c = Counter();
+c.add(5);
+check(c.value() == 5, "原方法 add/value");
+c.inc(3);
+check(c.get() == 8, "别名 inc/get");
+c.bump();
+check(c.value() == 9, "原方法 bump");
+c.plus();
+check(c.get() == 10, "别名 plus");
+c.increment();
+check(c.value() == 11, "别名 increment");
+
+// ------------------------------------------------------------
+// 普通函数别名（全局函数）
+// 注意：别名不能使用语言保留字（如 double 是类型关键字），
+//       请用普通标识符作为别名名。
+// ------------------------------------------------------------
+@FuncAlias("dbl")
+func twice(x: int): int { return x * 2; }
+
+check(twice(3) == 6, "原函数 twice");
+check(dbl(4) == 8, "别名 dbl");
+
+// 多个别名（多实参形式）
+@FuncAlias("square", "squared")
+func power2(n: int): int { return n * n; }
+
+check(power2(5) == 25, "原函数 power2");
+check(square(6) == 36, "别名 square");
+check(squared(7) == 49, "别名 squared");
+
+print("alias_example ALL PASS");

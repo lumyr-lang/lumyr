@@ -6,6 +6,7 @@
 #include "ast_node.h"
 #include "lm_type.h"
 #include "lumyr_value.h"
+#include "annotation/lm_annotation.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -590,12 +591,98 @@ TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, c
     return td;
 }
 
+/* ---- @FuncAlias 方法别名注册辅助 ---- */
+
+/* 递归遍历 AST_SEQ 树收集 AST_STRING 叶子的 strdup 副本
+ * 用于解析 @FuncAlias 的别名参数（"x" / ["a","b"] / "a","b"） */
+static void collect_string_leaves(AstNode* n, char*** out, int* cnt, int* cap) {
+    if(!n) return;
+    if(n->type == AST_SEQ) {
+        collect_string_leaves(n->u.seq.first, out, cnt, cap);
+        collect_string_leaves(n->u.seq.second, out, cnt, cap);
+        return;
+    }
+    if(n->type == AST_STRING) {
+        if(*cnt >= *cap) {
+            *cap = *cap ? *cap * 2 : 4;
+            *out = (char**)realloc(*out, (size_t)*cap * sizeof(char*));
+        }
+        (*out)[(*cnt)++] = strdup(n->u.sval ? n->u.sval : "");
+    }
+}
+
+/* 从 @FuncAlias 注解参数提取别名列表
+ * 支持单字符串、数组字面量、多实参三种形式
+ * 返回别名数量；*out_names 为 malloc 数组，调用方逐元素 free 后 free 数组 */
+static int extract_method_aliases(AstNode* args, char*** out_names) {
+    *out_names = NULL;
+    if(!args) return 0;
+    /* 单字符串：@FuncAlias("add") */
+    if(args->type == AST_STRING) {
+        *out_names = (char**)malloc(sizeof(char*));
+        (*out_names)[0] = strdup(args->u.sval ? args->u.sval : "");
+        return 1;
+    }
+    /* 数组字面量：@FuncAlias(["a","b"]) */
+    if(args->type == AST_ARRAY_LIT) {
+        int cnt = 0, cap = 0;
+        collect_string_leaves(args->u.array_lit.elems, out_names, &cnt, &cap);
+        return cnt;
+    }
+    /* 多实参 SEQ 树：@FuncAlias("a","b") */
+    if(args->type == AST_SEQ) {
+        int cnt = 0, cap = 0;
+        collect_string_leaves(args, out_names, &cnt, &cap);
+        return cnt;
+    }
+    return 0;
+}
+
+/* 为方法注册 @FuncAlias 别名：在 TypeDef 方法表和 RuntimeTypeInfo 方法表
+ * 注册别名指向同一 RuntimeFunc / AST，使 obj.alias() 静态/动态分派都能命中。
+ * NS_FUNCTION 空间的 <owner>__m__<alias> 别名由 ir_compile_function 注册。 */
+static void register_method_aliases(TypeDef* td, const char* owner,
+                                   const char* method_name,
+                                   struct AstNode* method_node,
+                                   RuntimeFunc* rf) {
+    AnnotationInfo* ai = annotation_lookup_func(owner, method_name, ANNOTATION_FUNCALIAS);
+    if(!ai || !ai->args) return;
+    char** aliases = NULL;
+    int nalias = extract_method_aliases(ai->args, &aliases);
+    for(int i = 0; i < nalias; i++) {
+        const char* alias = aliases[i];
+        if(!alias) continue;
+        /* TypeDef 方法表：别名指向同一 AST 和 RuntimeFunc */
+        int found = 0;
+        for(int j = 0; j < td->nmethods; j++) {
+            if(strcmp(td->method_names[j], alias) == 0) {
+                td->method_nodes[j] = method_node;
+                td->method_funcs[j] = rf;
+                found = 1; break;
+            }
+        }
+        if(!found) {
+            int n = td->nmethods + 1;
+            td->method_names = (char**)realloc(td->method_names, (size_t)n * sizeof(char*));
+            td->method_nodes = (struct AstNode**)realloc(td->method_nodes, (size_t)n * sizeof(struct AstNode*));
+            td->method_funcs = (void**)realloc(td->method_funcs, (size_t)n * sizeof(void*));
+            td->method_names[td->nmethods] = strdup(alias);
+            td->method_nodes[td->nmethods] = method_node;
+            td->method_funcs[td->nmethods] = rf;
+            td->nmethods = n;
+        }
+        /* RuntimeTypeInfo 方法表：别名指向同一 RuntimeFunc（多态分派依据） */
+        if(td->runtime_info) lumyr_type_set_method(td->runtime_info, alias, rf);
+        free(aliases[i]);
+    }
+    free(aliases);
+}
+
 // 添加 struct 方法
 void struct_add_method(const char* struct_name, const char* method_name, struct AstNode* method_node)
 {
     TypeDef* td = struct_lookup(struct_name);
     if(!td) return;
-
     /* 给 self 参数设置 constraint（struct 名），让编译期识别为 STRUCT_PTR */
     if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.params) {
         AstNode* self_param = method_node->u.func_def.params;
@@ -621,6 +708,9 @@ void struct_add_method(const char* struct_name, const char* method_name, struct 
 
     /* 同步到 RuntimeTypeInfo 方法表（VM OPC_CALL_METHOD 分派依据） */
     if(td->runtime_info) lumyr_type_set_method(td->runtime_info, method_name, rf);
+
+    /* @FuncAlias：为方法注册别名（共享同一 RuntimeFunc / AST，多态分派可见） */
+    register_method_aliases(td, struct_name, method_name, method_node, rf);
 
     /* 不再以扁平方法名全局注册：方法必须通过接收者类型分派（recv.method()） */
 }
@@ -939,6 +1029,9 @@ void class_add_method(const char* class_name, const char* method_name, struct As
 
     /* 同步 RuntimeTypeInfo 方法表（含父类继承槽位，重写覆盖在原位置）→ 多态分派依据 */
     if(td->runtime_info) lumyr_type_set_method(td->runtime_info, method_name, rf);
+
+    /* @FuncAlias：为方法注册别名（共享同一 RuntimeFunc / AST，多态分派可见） */
+    register_method_aliases(td, class_name, method_name, method_node, rf);
 }
 
 // 查找 class 方法的 RuntimeFunc（支持继承链查找）

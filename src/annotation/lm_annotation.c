@@ -22,6 +22,7 @@ static const char* g_system_annotations[] = {
     ANNOTATION_VISIBILITY,
     ANNOTATION_CONSTRUCTOR,
     ANNOTATION_DESTRUCTOR,
+    ANNOTATION_FUNCALIAS,
     NULL
 };
 
@@ -75,7 +76,10 @@ int annotation_is_system(const char* name) {
 /* 注册注解（返回 1=成功，0=失败） */
 int annotation_register(const char* name, int type_marks, int category, AstNode* args,
                         const char* target_class, const char* target_func, const char* target_field) {
-    if (!name || !g_annotation_tree) return 0;
+    if (!name) return 0;
+    /* 惰性初始化注解注册表（与 ast_types/func_table 等模块一致的懒初始化策略） */
+    if (!g_annotation_tree) g_annotation_tree = rbtree_create();
+    if (!g_annotation_tree) return 0;
 
     /* 创建注解信息 */
     AnnotationInfo* info = (AnnotationInfo*)malloc(sizeof(AnnotationInfo));

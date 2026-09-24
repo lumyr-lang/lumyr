@@ -32,7 +32,11 @@ int ir_compile_had_error(void);
 void ir_func_table_reset(void);
 /* 注册/替换普通函数（同名旧函数被释放） */
 void ir_func_table_register(BytecodeFunc* fn);
+/* 为函数注册别名（共享同一 BytecodeFunc 指针，用于 @FuncAlias 注解） */
+void ir_func_table_register_alias(BytecodeFunc* fn, const char* alias_name);
 BytecodeFunc* ir_func_table_lookup(const char* name);
+/* 从 @FuncAlias 注解参数提取别名列表（返回别名数，*out_names 为 malloc 数组） */
+int extract_alias_names(AstNode* args, char*** out_names);
 /* 按 class_name + method_name 查找 class 方法（红黑树快速查找） */
 BytecodeFunc* ir_func_table_lookup_class(const char* class_name, const char* method_name);
 /* 查找任意函数（先查找普通函数，如果找不到，再按名字查找第一个匹配的 class 方法）
