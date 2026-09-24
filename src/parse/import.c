@@ -1663,6 +1663,24 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
                     rename_map[nrename].old_name = strdup(isp->sel_old[s]);
                     nrename++;
                 }
+                /* no-alias 模式：被 mangle 的非导出 class/interface 名需重写
+                 * （否则主文件 extends/implements 引用原名，但模块声明的是 mangled 名）
+                 * 只对 class_names 中且确实被 mangle 的名字建映射 */
+                if(isp->is_no_alias) {
+                    for(int c = 0; c < pm->nclass_names; c++) {
+                        const char* cn = pm->class_names[c];
+                        if(pm_was_mangled(pm, cn)) {
+                            if(nrename >= cap_rename) {
+                                cap_rename = cap_rename ? cap_rename * 2 : 8;
+                                rename_map = (RenameEntry*)realloc(rename_map, (size_t)cap_rename * sizeof(RenameEntry));
+                            }
+                            rename_map[nrename].new_name = strdup(cn);
+                            rename_map[nrename].module_id = pm->module_id;
+                            rename_map[nrename].old_name = strdup(cn);
+                            nrename++;
+                        }
+                    }
+                }
             }
 
             free(expvar);

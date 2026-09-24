@@ -1715,7 +1715,11 @@ closed_stmt
               }
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
@@ -1770,7 +1774,11 @@ closed_stmt
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
@@ -1913,7 +1921,11 @@ closed_stmt
               }
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
@@ -1968,7 +1980,11 @@ closed_stmt
           }
           /* 接口方法检查：必须在方法注册后执行（见上方根因修复注释） */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
@@ -2020,7 +2036,11 @@ closed_stmt
               }
           }
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
@@ -2075,7 +2095,11 @@ closed_stmt
           }
           /* 接口方法检查：检查 class 是否实现了接口中定义的所有方法 */
           for(int ii = 0; ii < g_class_ninterfaces; ii++) {
-              class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              int _ci_ret = class_check_interface_implementation(g_current_class_name, g_class_interfaces[ii]);
+              if(_ci_ret == -1) {
+                  fprintf(stderr, "parse: class \"%s\" implements unknown interface \"%s\" / 未知接口\n",
+                          g_current_class_name, g_class_interfaces[ii]);
+              }
           }
           g_class_method_clear();
           type_prop_clear();
