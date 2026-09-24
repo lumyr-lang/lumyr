@@ -41,11 +41,6 @@ public class ByteArrayBuffer extends AbstractBuffer<byte> {
         return r;
     }
 
-    // clone——override 必须重新声明别名，确保返回本类实例
-    @FuncAlias("clone")
-    func copy(): ByteArrayBuffer {
-        r = ByteArrayBuffer();
-        r.value = self.value.copy();
-        return r;
-    }
+    // copy() 继承自 AbstractBuffer：调用全局 copy(self) → bi_copy 深拷贝路径
+    // （lumyr_instance_copy memcpy + 字段递归深拷贝），返回本类实例，无需 override
 }

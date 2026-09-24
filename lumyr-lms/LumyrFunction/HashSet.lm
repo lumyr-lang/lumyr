@@ -76,12 +76,7 @@ public class HashSet<E> extends AbstractSet<E> {
         return self;
     }
 
-    // override 返回同类型实例
-    // clone——override 必须重新声明别名，确保返回本类实例
-    @FuncAlias("clone")
-    func copy(): HashSet<E> {
-        c = HashSet<E>();
-        c.value = self.value.copy();
-        return c;
-    }
+    // copy() 继承自 AbstractSet：调用全局 copy(self) → lumyr_instance_copy
+    // 后者通过对象头 RuntimeTypeInfo 按运行时类型（HashSet）分配 + 整块 memcpy
+    // + v.type = obj.type 保留 vtype，返回的就是 HashSet 实例，无需 override
 }
