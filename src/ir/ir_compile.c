@@ -545,6 +545,55 @@ static int is_typed_bytes_cast(CastKind ct) {
     }
 }
 
+/* 泛型类型绑定：解析 type_args 为 CastKind 数组，构造 GenericBindInfo 存入常量池，
+ * 发射 OPC_GENERIC_BIND。实例已在 PTR 栈顶（构造函数调用后/CLASS_NEW 后）。
+ * 仅当类型有泛型形参、字段含泛型索引且 callsite 提供了类型实参时发射，否则 no-op。
+ * 用户提供的类型实参可能是单类型（"int"）或多类型（"string,int"），按逗号拆分。 */
+static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
+{
+    if(!node || !td) return;
+    if(!node->u.class_new.type_args) return;
+    if(td->generic_param_count <= 0) return;
+    if(!td->field_generic_indices || !td->runtime_info) return;
+
+    /* 检查是否有泛型字段需要绑定 */
+    int has_generic_field = 0;
+    for(int i = 0; i < td->nprops; i++) {
+        if(td->field_generic_indices[i] >= 0) { has_generic_field = 1; break; }
+    }
+    if(!has_generic_field) return;
+
+    /* 解析 type_args（逗号分隔的类型名字符串，如 "int" 或 "string,int"）。
+     * 菱形语法 Array<>() 传入空字符串，nbound=0，无操作。 */
+    char* ta_copy = strdup(node->u.class_new.type_args);
+    int cap_bound = td->generic_param_count;
+    int* bound_types = (int*)calloc((size_t)cap_bound, sizeof(int));
+    for(int i = 0; i < cap_bound; i++) bound_types[i] = (int)CAST_NONE;
+    int nbound = 0;
+    char* saveptr = NULL;
+    char* tok = strtok_r(ta_copy, ",", &saveptr);
+    while(tok && nbound < cap_bound) {
+        bound_types[nbound++] = name_to_castkind(tok);
+        tok = strtok_r(NULL, ",", &saveptr);
+    }
+    free(ta_copy);
+
+    if(nbound <= 0) { free(bound_types); return; }
+
+    /* 构造 GenericBindInfo 并存入常量池（CONST_UINT64 存指针） */
+    GenericBindInfo* gbi = (GenericBindInfo*)calloc(1, sizeof(GenericBindInfo));
+    gbi->info = td->runtime_info;
+    gbi->nfields = td->nprops;
+    gbi->nbound = nbound;
+    gbi->field_generic_indices = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
+    for(int i = 0; i < td->nprops; i++)
+        gbi->field_generic_indices[i] = td->field_generic_indices[i];
+    gbi->bound_types = bound_types;  /* ownership transfer，gbi 生命周期 = 进程 */
+
+    int gbi_idx = bf_add_u64_const(c->fn, (uint64_t)(uintptr_t)gbi);
+    emit(c, OPC_GENERIC_BIND, gbi_idx, 0);
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
@@ -1332,6 +1381,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             /* 加载临时变量（实例）到 PTR 栈作为表达式结果 */
             emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
+            /* 泛型类型绑定：构造函数调用后，把泛型字段的 ValueArray 转为 TypedArray */
+            emit_generic_bind(c, node, td);
             return EXPR_TYPE_PTR;
         } else {
             /* struct 或 class 无 __init__：实参压 VALUE 栈，CLASS_NEW 弹参直接初始化 */
@@ -1341,6 +1392,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             for(int i = 0; i < argc2; i++) c_expr_to_value(c, argv2[i]);
             free(argv2);
             emit(c, OPC_CLASS_NEW, cp_idx, argc2);
+            /* 泛型类型绑定：构造后，把泛型字段的 ValueArray 转为 TypedArray */
+            emit_generic_bind(c, node, td);
             return EXPR_TYPE_PTR;
         }
     }

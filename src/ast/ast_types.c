@@ -14,6 +14,10 @@
 /* 类型表用红黑树存储，键为类型名，class_name 为 NULL */
 static RBTree* g_types_tree = NULL;
 
+/* yacc.y 中维护的字段→泛型形参索引数组（与 elem_kinds 平行，-1=非泛型字段） */
+extern int* g_prop_generic_indices;
+extern int* g_struct_generic_indices;
+
 TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int nprops, char** generic_params, int generic_param_count, char** interfaces, int ninterfaces)
 {
     if(!g_types_tree) g_types_tree = rbtree_create();
@@ -40,7 +44,9 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
     }
     if(td->field_cast_kinds) free(td->field_cast_kinds);
     if(td->field_elem_kinds) free(td->field_elem_kinds);
+    if(td->field_generic_indices) free(td->field_generic_indices);
     if(td->field_offsets) free(td->field_offsets);
+    td->field_generic_indices = NULL;
     td->props = (char**)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(char*));
     td->ptypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
     for(int k = 0; k < nprops; k++) {
@@ -318,6 +324,55 @@ char* castkind_to_name(int ck) {
     }
 }
 
+/* 类型名字符串 → CastKind（castkind_to_name 的逆函数）
+ * 用于解析泛型 type_args（如 "int" → CAST_INT, "string,int" → 多个 CastKind）
+ * 支持 trim 首尾空白；未知类型名返回 CAST_NONE */
+int name_to_castkind(const char* tname) {
+    if(!tname) return CAST_NONE;
+    /* trim 前导空白 */
+    while(*tname == ' ' || *tname == '\t') tname++;
+    /* trim 尾部空白 */
+    const char* end = tname + strlen(tname);
+    while(end > tname && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    size_t len = (size_t)(end - tname);
+    char buf[32];
+    if(len >= sizeof(buf)) return CAST_NONE; /* 名字过长，不可能匹配 */
+    memcpy(buf, tname, len);
+    buf[len] = '\0';
+    if(strcmp(buf, "int") == 0) return CAST_INT;
+    if(strcmp(buf, "double") == 0) return CAST_DOUBLE;
+    if(strcmp(buf, "string") == 0) return CAST_STRING;
+    if(strcmp(buf, "bool") == 0) return CAST_BOOL;
+    if(strcmp(buf, "char") == 0) return CAST_CHAR;
+    if(strcmp(buf, "byte") == 0) return CAST_BYTE;
+    if(strcmp(buf, "int8") == 0) return CAST_INT8;
+    if(strcmp(buf, "int16") == 0) return CAST_INT16;
+    if(strcmp(buf, "int32") == 0) return CAST_INT32;
+    if(strcmp(buf, "int64") == 0) return CAST_INT64;
+    if(strcmp(buf, "uint8") == 0) return CAST_UINT8;
+    if(strcmp(buf, "uint16") == 0) return CAST_UINT16;
+    if(strcmp(buf, "uint32") == 0) return CAST_UINT32;
+    if(strcmp(buf, "uint64") == 0) return CAST_UINT64;
+    if(strcmp(buf, "uint") == 0) return CAST_UINT;
+    if(strcmp(buf, "long") == 0) return CAST_LONG;
+    if(strcmp(buf, "long long") == 0) return CAST_LONGLONG;
+    if(strcmp(buf, "float") == 0) return CAST_FLOAT;
+    if(strcmp(buf, "ascii") == 0) return CAST_ASCII;
+    if(strcmp(buf, "ulong") == 0) return CAST_ULONG;
+    if(strcmp(buf, "uchar") == 0) return CAST_UCHAR;
+    if(strcmp(buf, "short") == 0) return CAST_SHORT;
+    if(strcmp(buf, "ushort") == 0) return CAST_USHORT;
+    if(strcmp(buf, "size_t") == 0) return CAST_SIZE_T;
+    if(strcmp(buf, "ssize_t") == 0) return CAST_SSIZE_T;
+    if(strcmp(buf, "void") == 0) return CAST_VOID;
+    if(strcmp(buf, "long double") == 0) return CAST_LONG_DOUBLE;
+    if(strcmp(buf, "ptr") == 0) return CAST_PTR;
+    if(strcmp(buf, "bigint") == 0) return CAST_BIGINT;
+    if(strcmp(buf, "decimal") == 0) return CAST_DECIMAL;
+    if(strcmp(buf, "bitdecimal") == 0) return CAST_BITDECIMAL;
+    return CAST_NONE;
+}
+
 /* ValueType -> 类型名字符串（用于接口方法返回类型存储） */
 char* valtype_to_name(ValueType vt) {
     switch(vt) {
@@ -472,6 +527,12 @@ TypeDef* struct_register(const char* name, char** props, CastKind* cast_kinds, c
     td->field_cast_kinds = (CastKind*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(char*));
     td->field_elem_kinds = (CastKind*)calloc((size_t)(nprops > 0 ? nprops : 1), sizeof(CastKind));
+    td->field_generic_indices = (int*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(int));
+    for(int k = 0; k < nprops; k++) td->field_generic_indices[k] = -1;
+    if(g_struct_generic_indices) {
+        for(int k = 0; k < nprops; k++)
+            td->field_generic_indices[k] = g_struct_generic_indices[k];
+    }
     for(int k = 0; k < nprops; k++) {
         td->field_cast_kinds[k] = cast_kinds[k];
         if(elem_kinds) td->field_elem_kinds[k] = elem_kinds[k];
@@ -668,6 +729,21 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     td->field_cast_kinds = (CastKind*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
     td->field_elem_kinds = (CastKind*)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(CastKind));
+    td->field_generic_indices = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+    for(int k = 0; k < merged_nprops; k++) td->field_generic_indices[k] = -1;
+    /* 合并父类与子类的泛型字段索引（与 elem_kinds 同路径） */
+    if(parent) {
+        TypeDef* ptd = type_lookup(parent);
+        if(ptd && ptd->field_generic_indices) {
+            for(int k = 0; k < ptd->nprops && k < merged_nprops; k++)
+                td->field_generic_indices[k] = ptd->field_generic_indices[k];
+        }
+    }
+    if(g_prop_generic_indices) {
+        int offset = (parent && type_lookup(parent)) ? type_lookup(parent)->nprops : 0;
+        for(int k = 0; k < nprops && offset + k < merged_nprops; k++)
+            td->field_generic_indices[offset + k] = g_prop_generic_indices[k];
+    }
     for(int k = 0; k < merged_nprops; k++) {
         td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);
         /* 类型化数组字段元素 CastKind：无继承信息时按声明 valtype 反推兜底 */

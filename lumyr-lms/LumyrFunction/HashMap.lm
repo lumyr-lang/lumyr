@@ -16,9 +16,9 @@
 import <Function/Map>;
 
 public class HashMap<K, V> extends AbstractMap<K, V> {
-    value: map;
+    value: <K, V>map;
 
-    func HashMap(m) {
+    func HashMap(m: Map<K, V>) {
         self.value = {};
         if (m != null) { self.value = copy(m); }
     }

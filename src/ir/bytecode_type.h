@@ -8,10 +8,11 @@
 
 /* ============================================================
  * OpCode 枚举：所有字节码指令
- * ============================================================ */
+ * ============================================================
+ */
 /* ============================================================
  * OpCode 枚举：所有字节码指令（4 核心栈设计）
- * 
+ *
  * 栈设计：
  *   STACK_VALUE  - 通用 Value 栈（动态类型、对象、字符串堆指针）
  *   STACK_INT64  - 统一整数栈（所有整数类型、bool、char 都存 int64_t）
@@ -23,6 +24,18 @@
  *   - 指令合并精简（4 核心栈对应 4 组指令）
  *   - 类型截断/扩展由 C 编译器自动处理
  * ============================================================ */
+
+/* 泛型类型绑定信息（编译期构造，存入常量池供 OPC_GENERIC_BIND 使用）。
+ * 用 void* info 避免引入 RuntimeTypeInfo 依赖到本头文件；
+ * vm_exec_generic_bind 中 cast 回 RuntimeTypeInfo*。 */
+typedef struct {
+    void* info;                  /* RuntimeTypeInfo* 指针（查字段偏移和类型） */
+    int* field_generic_indices;  /* 字段→泛型形参索引（-1=非泛型；0+=bound_types 索引） */
+    int* bound_types;            /* callsite 解析的 CastKind 数组（如 CAST_INT, CAST_STRING...） */
+    int nfields;                 /* 字段总数 */
+    int nbound;                  /* 类型实参数（泛型形参数） */
+} GenericBindInfo;
+
 typedef enum {
     /* ===== 栈操作（通用） ===== */
     OPC_NOP,
@@ -252,6 +265,10 @@ typedef enum {
     // map/formdata→先查键（字段函数值）miss 再内置方法表兜底——统一
     // "用户方法优先于内置"语义的两端。
     OPC_CALL_METHODV,
+
+    // 泛型类型绑定：a=常量池下标（GenericBindInfo* 存为 CONST_UINT64）
+    // 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray，压回 PTR 栈
+    OPC_GENERIC_BIND,
 } OpCode;
 
 /* ============================================================

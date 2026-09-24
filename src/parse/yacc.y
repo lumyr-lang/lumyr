@@ -37,6 +37,7 @@ static int* g_prop_setter_policy = NULL;
 /* 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
  * 声明收敛语义依赖：赋值 []/字面量给该字段时按元素类型构造 TypedArray */
 static int* g_prop_elem_kinds = NULL;
+int* g_prop_generic_indices = NULL;  /* 字段→泛型形参索引（-1=非泛型；0+=g_cur_generic_names 索引）；extern 于 ast_types.c */
 static int g_prop_n = 0, g_prop_cap = 0;
 static void type_prop_push(char* name, ValueType vt, int access_modifier, int is_const, char* struct_name)
 {
@@ -50,6 +51,7 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
         g_prop_getter_policy = (int*)realloc(g_prop_getter_policy, (size_t)nc * sizeof(int));
         g_prop_setter_policy = (int*)realloc(g_prop_setter_policy, (size_t)nc * sizeof(int));
         g_prop_elem_kinds = (int*)realloc(g_prop_elem_kinds, (size_t)nc * sizeof(int));
+        g_prop_generic_indices = (int*)realloc(g_prop_generic_indices, (size_t)nc * sizeof(int));
         g_prop_cap = nc;
     }
     g_prop_names[g_prop_n] = name;
@@ -60,12 +62,18 @@ static void type_prop_push(char* name, ValueType vt, int access_modifier, int is
     g_prop_getter_policy[g_prop_n] = -1;
     g_prop_setter_policy[g_prop_n] = -1;
     g_prop_elem_kinds[g_prop_n] = CAST_NONE;
+    g_prop_generic_indices[g_prop_n] = -1;  /* 默认非泛型字段 */
     g_prop_n++;
 }
 /* 紧跟 type_prop_push 调用：设置刚收集字段的类型化数组元素 CastKind */
 static void type_prop_set_elem(int elem_ck)
 {
     if(g_prop_n > 0) g_prop_elem_kinds[g_prop_n - 1] = elem_ck;
+}
+/* 紧跟 type_prop_push 调用：设置刚收集字段的泛型形参索引 */
+static void type_prop_set_generic_idx(int idx)
+{
+    if(g_prop_n > 0) g_prop_generic_indices[g_prop_n - 1] = idx;
 }
 static void type_prop_clear(void)
 {
@@ -77,10 +85,12 @@ static void type_prop_clear(void)
     free(g_prop_const_flags); free(g_prop_struct_names);
     free(g_prop_getter_policy); free(g_prop_setter_policy);
     free(g_prop_elem_kinds);
+    free(g_prop_generic_indices);
     g_prop_names = NULL; g_prop_types = NULL; g_prop_access_modifiers = NULL;
     g_prop_const_flags = NULL; g_prop_struct_names = NULL;
     g_prop_getter_policy = NULL; g_prop_setter_policy = NULL;
     g_prop_elem_kinds = NULL;
+    g_prop_generic_indices = NULL;
     g_prop_n = 0; g_prop_cap = 0;
 }
 
@@ -89,6 +99,7 @@ static char** g_struct_prop_names = NULL;
 static CastKind* g_struct_cast_kinds = NULL;
 static char** g_struct_prop_struct_names = NULL;
 static int* g_struct_elem_kinds = NULL; /* 类型化数组字段元素 CastKind（同 g_prop_elem_kinds） */
+int* g_struct_generic_indices = NULL; /* struct 字段→泛型形参索引（同 g_prop_generic_indices）；extern 于 ast_types.c */
 static int g_struct_prop_n = 0, g_struct_prop_cap = 0;
 static char* g_current_struct_name = NULL; /* 当前正在解析的 struct 名，用于方法注册 */
 
@@ -697,18 +708,25 @@ static void struct_prop_push(char* name, CastKind ck, char* struct_name)
         g_struct_cast_kinds = (CastKind*)realloc(g_struct_cast_kinds, (size_t)nc * sizeof(CastKind));
         g_struct_prop_struct_names = (char**)realloc(g_struct_prop_struct_names, (size_t)nc * sizeof(char*));
         g_struct_elem_kinds = (int*)realloc(g_struct_elem_kinds, (size_t)nc * sizeof(int));
+        g_struct_generic_indices = (int*)realloc(g_struct_generic_indices, (size_t)nc * sizeof(int));
         g_struct_prop_cap = nc;
     }
     g_struct_prop_names[g_struct_prop_n] = name;
     g_struct_cast_kinds[g_struct_prop_n] = ck;
     g_struct_prop_struct_names[g_struct_prop_n] = struct_name;
     g_struct_elem_kinds[g_struct_prop_n] = CAST_NONE;
+    g_struct_generic_indices[g_struct_prop_n] = -1;
     g_struct_prop_n++;
 }
 /* 紧跟 struct_prop_push 调用：设置刚收集字段的类型化数组元素 CastKind */
 static void struct_prop_set_elem(int elem_ck)
 {
     if(g_struct_prop_n > 0) g_struct_elem_kinds[g_struct_prop_n - 1] = elem_ck;
+}
+/* 紧跟 struct_prop_push 调用：设置刚收集字段的泛型形参索引 */
+static void struct_prop_set_generic_idx(int idx)
+{
+    if(g_struct_prop_n > 0) g_struct_generic_indices[g_struct_prop_n - 1] = idx;
 }
 static void struct_prop_clear(void)
 {
@@ -718,8 +736,10 @@ static void struct_prop_clear(void)
     }
     free(g_struct_prop_names); free(g_struct_cast_kinds); free(g_struct_prop_struct_names);
     free(g_struct_elem_kinds);
+    free(g_struct_generic_indices);
     g_struct_prop_names = NULL; g_struct_cast_kinds = NULL; g_struct_prop_struct_names = NULL;
     g_struct_elem_kinds = NULL;
+    g_struct_generic_indices = NULL;
     g_struct_prop_n = 0; g_struct_prop_cap = 0;
 }
 
@@ -3310,9 +3330,15 @@ type_prop
         if(strcmp($4, "map") == 0) {
             type_prop_push($1, VAL_MAP, 0, 0, NULL);
         } else {
-            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
             type_prop_set_elem(CAST_NONE);
+            /* 记录 E 在 generic_params 中的索引，供 callsite fix-up 使用 */
+            int gi = -1;
+            for(int i = 0; i < g_cur_generic_count; i++) {
+                if(g_cur_generic_names[i] && strcmp(g_cur_generic_names[i], $3) == 0) { gi = i; break; }
+            }
+            type_prop_set_generic_idx(gi);
         }
         free($3); free($4);
         $$ = ast_none();
@@ -3775,9 +3801,15 @@ class_prop
         if(strcmp($4, "map") == 0) {
             type_prop_push($1, VAL_MAP, 0, 0, NULL);
         } else {
-            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
             type_prop_set_elem(CAST_NONE);
+            /* 记录 E 在 generic_params 中的索引，供 callsite fix-up 使用 */
+            int gi = -1;
+            for(int i = 0; i < g_cur_generic_count; i++) {
+                if(g_cur_generic_names[i] && strcmp(g_cur_generic_names[i], $3) == 0) { gi = i; break; }
+            }
+            type_prop_set_generic_idx(gi);
         }
         free($3); free($4);
         $$ = ast_none();
@@ -3808,9 +3840,15 @@ class_prop
         if(strcmp($5, "map") == 0) {
             type_prop_push($2, VAL_MAP, $1, 0, NULL);
         } else {
-            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（动态） */
+            /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
             type_prop_set_elem(CAST_NONE);
+            /* 记录 E 在 generic_params 中的索引，供 callsite fix-up 使用 */
+            int gi = -1;
+            for(int i = 0; i < g_cur_generic_count; i++) {
+                if(g_cur_generic_names[i] && strcmp(g_cur_generic_names[i], $4) == 0) { gi = i; break; }
+            }
+            type_prop_set_generic_idx(gi);
         }
         free($4); free($5);
         $$ = ast_none();

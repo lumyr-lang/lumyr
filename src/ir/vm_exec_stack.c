@@ -15,6 +15,7 @@
 #include "lm_file.h"
 #include "lm_socket.h"
 #include "vm_exec.h"
+#include "ast/ast_types.h"   /* castkind_to_valtype（name_to_castkind 反查） */
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
 static inline int typed_ptr_ok(const void* p) {
@@ -694,3 +695,95 @@ int vm_exec_class_new(VMExecCtx* ctx, Instruction* in) {
 }
 
 /* CALL_METHOD（多态方法分派）实现在 vm_exec_call.c，与普通 CALL 共用建帧/状态切换链路 */
+
+/* ValueArray → TypedArray 转换：逐元素从 Value 装箱提取为紧凑裸存储 */
+static Value convert_dynamic_array_to_typed(Value src, CastKind ck) {
+    if(src.type != VAL_ARRAY || !src.v.array) return src; /* 非动态数组，原样返回 */
+    ValueArray* va = src.v.array;
+    ValueType et = castkind_to_valtype((int)ck);
+    if(et == VAL_NONE) return src; /* 无法映射的类型，保持动态 */
+
+    gc_disable();
+    TypedArray* ta = (TypedArray*)gc_alloc(sizeof(TypedArray), VAL_TYPED_ARRAY);
+    ta->elem_type = et;
+    ta->stack_alloc = 0;
+    ta->len = va->len;
+    ta->cap = va->len > 0 ? va->len : 8;
+    size_t isz = lumyr_etype_itemsz(et);
+    ta->items = gc_alloc_old(isz * (size_t)ta->cap, VAL_TYPED_ARRAY);
+    gc_mark_internal_buf(ta->items);
+
+    int cls = lumyr_etype_stackcls(et);
+    for(int i = 0; i < va->len; i++) {
+        Value* ev = &va->items[i];
+        if(cls == 1) {
+            typed_write_i64(et, ta->items, i, value_to_i64_all(*ev));
+        } else if(cls == 2) {
+            double v = value_to_dbl_all(*ev);
+            if(et == VAL_DOUBLE)          ((double*)ta->items)[i] = v;
+            else if(et == VAL_FLOAT)      ((float*)ta->items)[i] = (float)v;
+            else                          ((long double*)ta->items)[i] = (long double)v;
+        } else {
+            void* p = value_to_typed_ptr(*ev);
+            if(et == VAL_STRING && p) {
+                size_t l = strlen((const char*)p);
+                char* np = (char*)gc_alloc(l + 1, VAL_STRING);
+                memcpy(np, p, l + 1);
+                p = np;
+            }
+            ((void**)ta->items)[i] = p;
+        }
+    }
+
+    Value r;
+    memset(&r, 0, sizeof(r));
+    r.type = VAL_TYPED_ARRAY;
+    r.v.typed_array = ta;
+    gc_enable();
+    return r;
+}
+
+/* GENERIC_BIND：a=常量池下标（GenericBindInfo*）
+ * 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray，压回 PTR 栈 */
+int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    int idx = in->a;
+    GenericBindInfo* gbi = (GenericBindInfo*)(uintptr_t)ctx->const_pool[idx].u64;
+    void* p;
+    stack_vm_pop(g_stack_mgr, STACK_PTR, &p);
+    if(!p || !gbi) { stack_vm_push(g_stack_mgr, STACK_PTR, &p); return 1; }
+
+    /* 实例偏移 0 是 RuntimeTypeInfo* 指针，用 gbi->info 查字段 */
+    RuntimeTypeInfo* info = (RuntimeTypeInfo*)gbi->info;
+    if(info && gbi->field_generic_indices && gbi->bound_types) {
+        for(int i = 0; i < gbi->nfields && i < info->nfields; i++) {
+            int gi = gbi->field_generic_indices[i];
+            if(gi < 0 || gi >= gbi->nbound) continue;
+            CastKind ck = (CastKind)gbi->bound_types[gi];
+            if(ck == CAST_NONE) continue; /* 动态擦除，跳过 */
+
+            FieldInfo* fi = &info->fields[i];
+            if(fi->valtype != VAL_TYPED_ARRAY && fi->valtype != VAL_ARRAY) continue;
+
+            /* 读取字段当前值（ValueArray* 指针存储在字段偏移处） */
+            void** field_slot = (void**)((char*)p + fi->offset);
+            if(!*field_slot) continue;
+
+            /* 构造 Value 假设构造函数创建了动态数组（VAL_ARRAY）。
+             * convert_dynamic_array_to_typed 会检查 type，非 VAL_ARRAY 原样返回。
+             * 如果字段已是 TypedArray（之前已绑定），跳过转换。 */
+            Value cur;
+            memset(&cur, 0, sizeof(cur));
+            cur.type = VAL_ARRAY;
+            cur.v.array = (ValueArray*)*field_slot;
+
+            Value converted = convert_dynamic_array_to_typed(cur, ck);
+            if(converted.type == VAL_TYPED_ARRAY) {
+                *field_slot = converted.v.typed_array;
+            }
+        }
+    }
+
+    stack_vm_push(g_stack_mgr, STACK_PTR, &p);
+    return 1;
+}

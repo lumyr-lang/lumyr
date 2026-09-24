@@ -28,6 +28,7 @@ typedef struct {
     CastKind* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）
     CastKind* field_elem_kinds; // 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
+    int* field_generic_indices; // 字段→泛型形参索引（-1=非泛型字段；0+=generic_params 中的索引）
     int* field_offsets;    // struct 字段偏移量（编译通道用，NULL=未计算）
     /* struct/class 方法 */
     char** method_names;   // 方法名列表（NULL=无方法）
@@ -86,6 +87,7 @@ char* valtype_to_name(ValueType vt);
 ValueType castkind_to_valtype(int ck);
 int valuetype_to_castkind(int vt);
 char* castkind_to_name(int ck);
+int name_to_castkind(const char* tname);
 
 /* ===== 接口/trait 系统 ===== */
 // interface Printable { func to_string(): string }

@@ -56,6 +56,11 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.ptr = +1;
             break;
 
+        /* GENERIC_BIND：弹 1 PTR 实例，遍历字段转换后压回，净 0 */
+        case OPC_GENERIC_BIND:
+            d.ptr = 0;
+            break;
+
         /* CALL_METHOD：实参（含 receiver）已分散压入 4 栈，保守不扣减（同 OPC_CALL，
          * 计入最大栈深避免误报）；keep_result 时按 callsite.ret_stack 压返回值到对应栈 */
         case OPC_CALL_METHOD:
@@ -384,6 +389,7 @@ int op_stack_push(OpCode op)
         case OPC_RETURN_NIL:
         case OPC_GET_ERR:
         case OPC_CLASS_NEW:
+        case OPC_GENERIC_BIND:
         case OPC_NEG: case OPC_POS: case OPC_LOGIC_NOT:
         case OPC_TO_BOOL:
             return 1;
