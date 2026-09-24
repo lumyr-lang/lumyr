@@ -2805,7 +2805,16 @@ primary
                     (g_current_class_name && strcmp($1, g_current_class_name) == 0) ||
                     (g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
               /* 已注册的 struct/class 名：构造调用 → ast_class_new
-               * 含类体内自构造（class_register 尚未执行，g_current_class_name 兜底） */
+               * 含类体内自构造（class_register 尚未执行，g_current_class_name 兜底）
+               * 泛型类必须显式提供类型实参 */
+              TypeDef* td_for_gen = class_lookup($1);
+              if(!td_for_gen) td_for_gen = struct_lookup($1);
+              if(td_for_gen && td_for_gen->generic_param_count > 0) {
+                  fprintf(stderr, "parse: \"%s\" 声明了 %d 个泛型形参，实例化必须提供类型实参如 %s<...>(...) / generic type requires type args\n",
+                          $1, td_for_gen->generic_param_count, $1);
+                  free($1);
+                  YYABORT;
+              }
               int argc = 0;
               for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
               $$ = L(ast_class_new($1, argc, $3, NULL));
@@ -2848,15 +2857,36 @@ primary
               /* socket 简写：TcpSocket{host:..,port:..} 反糖为 TcpSocket({map}) 调用 */
               $$ = L(ast_call($1, ast_map_lit($3)));
           } else if(struct_lookup($1) || class_lookup($1) || type_lookup($1)) {
-              AstNode* made = wrap_struct_named($1, $3);
-              if(!made) YYERROR;   /* 字段校验失败：终止解析（yyparse 返回 1），勿把 NULL 塞进 AST */
-              $$ = L(made);
+              TypeDef* td_nm = class_lookup($1);
+              if(!td_nm) td_nm = struct_lookup($1);
+              if(td_nm && td_nm->generic_param_count > 0) {
+                  /* 泛型类命名构造 ClassName{...}：map 作为构造函数参数（位置构造）
+                   * 非命名字段：HashMap{...} → HashMap({...}) */
+                  $$ = L(ast_class_new($1, 1, L(ast_map_lit($3)), NULL));
+              } else {
+                  AstNode* made = wrap_struct_named($1, $3);
+                  if(!made) YYERROR;
+                  $$ = L(made);
+              }
           } else {
               /* 非类型名：回退为普通 map 字面量（ID 作 map 前缀不合法） */
               char buf[256];
               snprintf(buf, sizeof buf, "'%s' 不是已注册的类型，无法使用命名构造 %s{...}", $1, $1);
               yyerror(buf);
               $$ = L(ast_map_lit($3));
+          }
+      }
+    | ID TOK_GENERIC MAP_OPEN map_items RBRACE {
+          /* 泛型命名构造：HashMap<String,Object>{...} / Box<T>{value: ...}
+           * 等价于 HashMap<String,Object>(map_literal) */
+          if(!struct_lookup($1) && !class_lookup($1) && !type_lookup($1)) {
+              char buf[256];
+              snprintf(buf, sizeof buf, "'%s' 不是已注册类型，无法泛型命名构造", $1);
+              yyerror(buf);
+              free($1); free($2);
+              $$ = L(ast_map_lit($4));
+          } else {
+              $$ = L(ast_class_new($1, 1, L(ast_map_lit($4)), $2));
           }
       }
     | LPAREN expr RPAREN      { $$ = $2; }
@@ -2948,7 +2978,8 @@ primary
           } else {
               /* 泛型形参/通配符/非接口类型：透传表达式
                * 特例：<K,V>{...} / <string,int>{...} 泛型 map 字面量——逐 entry 包 K/V cast
-               * 仅当泛型参数含逗号（双参数 K,V）时才应用，避免 <map>{...} 被误 cast */
+               * 仅当泛型参数含逗号（双参数 K,V）时才应用，避免 <map>{...} 被误 cast
+               * 特例：<T>ClassName{...} 前缀泛型命名构造——记录 type_args 到 class_new */
               if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',')) {
                   CastKind kck, vck;
                   parse_two_generic_args(gt, &kck, &vck);

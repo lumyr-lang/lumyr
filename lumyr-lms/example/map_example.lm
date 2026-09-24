@@ -12,7 +12,7 @@ func check(cond, msg) {
 // ============================================================
 // 第一节：构造与基本 put/get
 // ============================================================
-m = HashMap();
+m = HashMap<string, int>();
 check(m.size() == 0, "new HashMap size 0");
 check(m.isEmpty() == true, "new HashMap isEmpty");
 m.put("a", 1).put("b", 2).put("c", 3);
@@ -70,10 +70,10 @@ check(m.isEmpty() == true, "cleared isEmpty");
 // 第五节：从 map 字面量构造 + putAll
 // ============================================================
 src = {"x": 1, "y": 2};
-m2 = HashMap(src);
+m2 = HashMap<string, int>(src);
 check(m2.get("x") == 1 && m2.get("y") == 2, "ctor from map");
 check(m2.size() == 2, "ctor from map size");
-m3 = HashMap();
+m3 = HashMap<string, int>();
 m3.putAll(src);
 check(m3.size() == 2, "putAll size");
 check(m3.get("x") == 1 && m3.get("y") == 2, "putAll entries");
@@ -86,7 +86,7 @@ check(m3.put("w", 9).has("w") == true, "put chainable");
 // ============================================================
 // 第六节：toMap / toArray / toString / copy
 // ============================================================
-m4 = HashMap({"k1": 11, "k2": 22});
+m4 = HashMap<string, int>({"k1": 11, "k2": 22});
 raw = m4.toMap();
 check(type(raw) == "map" && raw.get("k1") == 11, "toMap native map");
 arr = m4.toArray();
@@ -103,15 +103,36 @@ check(cp.size() == m4.size(), "copy same size");
 // ============================================================
 // 第七节：equals / className / isEmpty
 // ============================================================
-a = HashMap({"p": 1, "q": 2});
-b = HashMap({"p": 1, "q": 2});
-c = HashMap({"p": 1, "q": 3});
+a = HashMap<string, int>({"p": 1, "q": 2});
+b = HashMap<string, int>({"p": 1, "q": 2});
+c = HashMap<string, int>({"p": 1, "q": 3});
 check(a.equals(b) == true, "equals same content");
 check(a.equals(c) == false, "equals diff content");
 check(a.className() == "HashMap", "className");
-e = HashMap();
+e = HashMap<string, int>();
 check(e.isEmpty() == true, "isEmpty empty");
 e.put("only", 0);
 check(e.isEmpty() == false, "isEmpty after put");
+
+// ============================================================
+// 第八节：泛型命名构造简写语法
+// ============================================================
+// HashMap<String,Object>{...} 形式：String、Object 均为 Function 模块中的类
+import <Function/String>;
+import <Function/Object>;
+
+m5 = HashMap<string, int>{"a": 1, "b": 2};
+check(m5.size() == 2, "generic named ctor size");
+check(m5.get("a") == 1 && m5.get("b") == 2, "generic named ctor values");
+
+// <String,Object>HashMap{...} 形式：前缀泛型命名构造
+m6 = <string, int>HashMap{"x": 10, "y": 20};
+check(m6.size() == 2, "prefix generic ctor size");
+check(m6.get("x") == 10 && m6.get("y") == 20, "prefix generic ctor values");
+
+// 使用类名作为泛型实参：String、Object 均为 Function 模块中的类
+m7 = <String, Object>HashMap{"name": "lumin", "ver": 1};
+check(m7.size() == 2, "class type arg ctor size");
+check(m7.get("name") == "lumin", "class type arg ctor value");
 
 print("lumyr HashMap example ALL PASS");

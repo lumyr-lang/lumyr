@@ -10,7 +10,7 @@
 import <Function/Object>;
 
 // 统一映射契约：K = 键类型（Key），V = 值类型（Value）
-interface Map<K, V> {
+public interface Map<K, V> {
     func size(): int;
     func isEmpty(): bool;
     func get(key: K): V;
