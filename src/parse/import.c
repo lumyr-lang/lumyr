@@ -13,6 +13,7 @@
  * 主文件不做 mangle，其符号为程序全局符号。
  */
 #include "import.h"
+#include "cond_compile.h"
 #include "lumyr_log.h"
 
 #include <stdio.h>
@@ -1176,11 +1177,17 @@ static char* expand_file(const char* abs_path, SB* out,
     ProcessedMod* pm = register_processed(abs_path);
     int mod_id = pm->module_id;
 
-    /* 3) 读模块源码 + transform */
+    /* 3) 读模块源码 + 条件编译过滤 + transform */
     char* content = slurp_file(abs_path);
     if(!content) {
         LOG_ERROR("[module] 无法打开模块文件: %s\n", abs_path);
         return NULL;
+    }
+    {
+        int cerr = 0;
+        char* filtered = lm_cond_filter_text(content, abs_path, &cerr);
+        if(cerr) { free(content); return NULL; }
+        if(filtered) { free(content); content = filtered; }
     }
     TransformResult* tr = transform(content);
     free(content);
@@ -1556,6 +1563,13 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
         perror("open");
         *had_mod_out = -1;
         return NULL;
+    }
+    /* 条件编译过滤（主文件；死分支中的 import 在 transform 前已被移除） */
+    {
+        int cerr = 0;
+        char* filtered = lm_cond_filter_text(content, real, &cerr);
+        if(cerr) { free(content); *had_mod_out = -1; return NULL; }
+        if(filtered) { free(content); content = filtered; }
     }
     TransformResult* tr = transform(content);
     free(content);

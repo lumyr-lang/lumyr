@@ -1,0 +1,204 @@
+// ============================================================
+// 条件编译全功能测试（环境自适应：任何平台/架构/通道均可运行）
+// 覆盖：#if/#elif/#else/#endif/#ifdef/#ifndef、!/&&/||/括号、
+//       0/1 字面量、未定义符号=0、嵌套、死分支语法错误不引爆、
+//       字符串/注释不触发、字面量替换（platform/arch/formFactor/
+//       channel/targetLang）与指令一致性、成员调用不替换、-D 标记
+// ============================================================
+
+func check(cond, msg) {
+    if (cond) { } else { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 1. 符号覆盖：OS / 架构 / 位宽 / 形态 / 通道 至少各命中一个
+// ------------------------------------------------------------
+#if macos || windows || linux || ios || android || freebsd || browser
+os_hit = 1;
+#else
+os_hit = 0;
+#endif
+check(os_hit == 1, "some OS symbol defined");
+
+#if x86_64 || arm64 || arm || x86 || wasm32 || riscv64 || riscv32 || loongarch64 || loongarch32 || sw64 || avr || msp430 || pic || mcs51 || xtensa || cortexm
+arch_hit = 1;
+#else
+arch_hit = 0;
+#endif
+check(arch_hit == 1, "some arch symbol defined");
+
+#if bits64 || bits32 || bits16 || bits8
+bits_hit = 1;
+#else
+bits_hit = 0;
+#endif
+check(bits_hit == 1, "some bits symbol defined");
+
+#if desktop || mobile || browser || mcu
+form_hit = 1;
+#else
+form_hit = 0;
+#endif
+check(form_hit == 1, "some form factor defined");
+
+// ------------------------------------------------------------
+// 2. 指令与字面量一致性：channel
+// ------------------------------------------------------------
+#if vm
+ch_sel = "vm";
+#else
+ch_sel = "cc";
+#endif
+check(ch_sel == channel(), "channel() matches #if vm/cc");
+
+// ------------------------------------------------------------
+// 3. 指令与字面量一致性：platform
+// ------------------------------------------------------------
+#if macos
+pf_sel = "macos";
+#elif windows
+pf_sel = "windows";
+#elif linux
+pf_sel = "linux";
+#elif ios
+pf_sel = "ios";
+#elif android
+pf_sel = "android";
+#elif freebsd
+pf_sel = "freebsd";
+#else
+pf_sel = "browser";
+#endif
+check(pf_sel == platform(), "platform() matches OS directive");
+
+// ------------------------------------------------------------
+// 4. 指令与字面量一致性：arch
+// ------------------------------------------------------------
+#if arm64
+ar_sel = "arm64";
+#elif x86_64
+ar_sel = "x86_64";
+#elif wasm32
+ar_sel = "wasm32";
+#else
+ar_sel = "other";
+#endif
+if (ar_sel != "other") {
+    check(ar_sel == arch(), "arch() matches arch directive");
+}
+
+// ------------------------------------------------------------
+// 5. 指令与字面量一致性：formFactor / targetLang
+// ------------------------------------------------------------
+#if mcu
+ff_sel = "mcu";
+#elif mobile
+ff_sel = "mobile";
+#elif browser
+ff_sel = "browser";
+#else
+ff_sel = "desktop";
+#endif
+check(ff_sel == formFactor(), "formFactor() matches form directive");
+
+#if vm
+tl_sel = "vm";
+#else
+tl_sel = "c";
+#endif
+check(tl_sel == targetLang(), "targetLang() matches channel");
+
+// ------------------------------------------------------------
+// 6. 嵌套 + 括号 + !
+// ------------------------------------------------------------
+#if (macos || windows || linux) && (x86_64 || arm64) && !browser
+nest = "unix64";
+#else
+nest = "other";
+#endif
+if (nest == "unix64") {
+    check(platform() != "browser", "nested: not browser");
+    check(arch() == "x86_64" || arch() == "arm64", "nested: 64bit arch");
+}
+
+// ------------------------------------------------------------
+// 7. 0/1 字面量、未定义符号按 0、#ifndef
+// ------------------------------------------------------------
+#if 1
+one = 1;
+#else
+one = 0;
+#endif
+check(one == 1, "#if 1 taken");
+
+#if 0
+zero = 1;
+#else
+zero = 0;
+#endif
+check(zero == 0, "#if 0 not taken");
+
+#if SOME_UNDEFINED_SYMBOL_XYZ
+undef = 1;
+#else
+undef = 0;
+#endif
+check(undef == 0, "undefined symbol is 0");
+
+#ifndef SOME_UNDEFINED_SYMBOL_XYZ
+ndef = 1;
+#else
+ndef = 0;
+#endif
+check(ndef == 1, "#ifndef undefined taken");
+
+// ------------------------------------------------------------
+// 8. #elif 链：首个真分支胜出
+// ------------------------------------------------------------
+#if 0
+chain = "a";
+#elif 1
+chain = "b";
+#elif 1
+chain = "c";
+#else
+chain = "d";
+#endif
+check(chain == "b", "elif first true wins");
+
+// ------------------------------------------------------------
+// 9. 死分支内的非法语法不引爆
+// ------------------------------------------------------------
+#if 0
+@@@ 这不是合法 lumin 语法 @@@
+#endif
+dead = 1;
+
+// ------------------------------------------------------------
+// 10. 字符串内容不触发指令、不做字面量替换
+// ------------------------------------------------------------
+s_dir = "#if fake";
+s_end = "#endif";
+check(s_dir == "#if fake", "string #if not directive");
+check(s_end == "#endif", "string #endif not directive");
+s_lit = "platform()";
+check(s_lit == "platform()", "string content not substituted");
+
+// ------------------------------------------------------------
+// 11. 成员调用不替换（. 前缀保护）
+// ------------------------------------------------------------
+m = {};
+m["platform"] = func() { return "mine"; };
+check(m.platform() == "mine", "member call not substituted");
+
+// ------------------------------------------------------------
+// 12. -D 标记（外部断言：无 -D 应打印 DBG_OFF；-DDEBUG 应打印 DBG_ON）
+// ------------------------------------------------------------
+#ifdef DEBUG
+print("DBG_ON");
+#else
+print("DBG_OFF");
+#endif
+
+print("platform=" + platform() + " arch=" + arch() + " form=" + formFactor() + " channel=" + channel() + " lang=" + targetLang());
+print("cond_compile_test ALL PASS");

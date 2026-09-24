@@ -34,6 +34,7 @@
 #include "ir/vm.h"
 #include "ir/ir_cgen.h"
 #include "parse/import.h"
+#include "parse/cond_compile.h"
 #include "i18n/lm_i18n.h"
 #include "ast/ast_runtime_sym.h"
 
@@ -89,6 +90,12 @@ int main(int argc, char** argv) {
         } else if(strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             out_base = argv[i + 1];
             i += 2;
+        } else if(strncmp(argv[i], "-D", 2) == 0) {
+            /* -D 自定义条件编译符号：支持 -DNAME 与 -D NAME 两种写法 */
+            const char* def = argv[i] + 2;
+            if(*def == '\0' && i + 1 < argc) { def = argv[i + 1]; i++; }
+            if(*def) lm_cond_add_define(def);
+            i++;
         } else {
             src_file = argv[i];
             i++;
@@ -108,6 +115,11 @@ int main(int argc, char** argv) {
        把 export 符号收集成 map。无模块语法的源文件走原始 fopen 路径，行为不变。 */
     char pp_tmp[PATH_MAX] = {0};   /* 预处理临时文件路径（若使用） */
     int used_pp_tmp = 0;
+    char cond_tmp[PATH_MAX] = {0}; /* 条件编译临时文件路径（若使用） */
+    int used_cond_tmp = 0;
+
+    /* 条件编译：设置通道（vm/cc 符号与 channel()/targetLang() 字面量） */
+    lm_cond_set_channel(codegen_mode);
 
     int had_mod = 0;
     char* merged = lm_preprocess_main(src_file, &had_mod);
@@ -117,7 +129,38 @@ int main(int argc, char** argv) {
     }
 
     if(had_mod == 0) {
-        yyin = fopen(src_file, "r");
+        /* 无模块语法：主文件仍需过条件编译（含 import 的文件已在 import.c 内过滤） */
+        int cerr = 0;
+        char* filtered = lm_cond_filter_file(src_file, &cerr);
+        if(cerr) return 1;
+        if(filtered) {
+#ifdef _WIN32
+            const char* win_tmp = getenv("TEMP");
+            if (!win_tmp) win_tmp = getenv("TMP");
+            if (!win_tmp) win_tmp = ".";
+            snprintf(cond_tmp, sizeof(cond_tmp), "%s/lumyr_cc_XXXXXX", win_tmp);
+#else
+            snprintf(cond_tmp, sizeof(cond_tmp), "%s/lumyr_cc_XXXXXX", P_tmpdir ? P_tmpdir : "/tmp");
+#endif
+            int cfd = mkstemp(cond_tmp);
+            if(cfd < 0) {
+                perror("mkstemp");
+                free(filtered);
+                return 1;
+            }
+            if(write(cfd, filtered, strlen(filtered)) < 0) {
+                perror("write cond tmp");
+                close(cfd);
+                unlink(cond_tmp);
+                free(filtered);
+                return 1;
+            }
+            close(cfd);
+            free(filtered);
+            used_cond_tmp = 1;
+        }
+        /* 注意：不改写 src_file——CC 通道 default_basename 依赖原始源文件名 */
+        yyin = fopen(used_cond_tmp ? cond_tmp : src_file, "r");
         if(!yyin) {
             perror("open file failed");
             return 1;
@@ -228,6 +271,7 @@ int main(int argc, char** argv) {
                 ret = 1;
                 if(yyin && yyin != stdin) fclose(yyin);
                 if(used_pp_tmp) unlink(pp_tmp);
+                if(used_cond_tmp) unlink(cond_tmp);
                 return 1;
             }
             vm_run_main(main_fn);
@@ -240,5 +284,6 @@ int main(int argc, char** argv) {
         fclose(yyin);
     }
     if(used_pp_tmp) unlink(pp_tmp);
+    if(used_cond_tmp) unlink(cond_tmp);
     return ret;
 }
