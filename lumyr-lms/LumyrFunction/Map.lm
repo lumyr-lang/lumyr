@@ -22,6 +22,8 @@ public interface Map<K, V> {
     func clear(): Map<K, V>;
     func keys();
     func values();
+    /* 回调签名：(key: K, val: V) → void */
+    (key: K, val: V);
     func forEach(cb);
     func copy();
     func toMap();

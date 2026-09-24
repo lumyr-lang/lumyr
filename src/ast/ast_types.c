@@ -378,6 +378,8 @@ InterfaceDef* interface_register(const char* name, void* methods, const char* pa
         for(int i = 0; i < parent_methods_count; i++) {
             idef->methods[idx].name = strdup(parent_methods[i].name);
             idef->methods[idx].return_type = parent_methods[i].return_type ? strdup(parent_methods[i].return_type) : NULL;
+            idef->methods[idx].call_params = NULL;
+            idef->methods[idx].ncall_params = 0;
             idx++;
         }
         /* 再复制当前接口的方法 */
@@ -385,6 +387,30 @@ InterfaceDef* interface_register(const char* name, void* methods, const char* pa
         for(int i = 0; i < own_count; i++) {
             idef->methods[idx].name = strdup(cur->u.param.name);
             idef->methods[idx].return_type = cur->u.param.constraint ? strdup(cur->u.param.constraint) : NULL;
+            /* 调用签名参数：从 default_val（param_list 链）提取参数类型名 */
+            idef->methods[idx].call_params = NULL;
+            idef->methods[idx].ncall_params = 0;
+            if(cur->u.param.default_val) {
+                AstNode* p = cur->u.param.default_val;
+                int pc = 0;
+                while(p) { pc++; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL; }
+                if(pc > 0) {
+                    idef->methods[idx].call_params = (char**)calloc((size_t)pc, sizeof(char*));
+                    int pi = 0;
+                    p = cur->u.param.default_val;
+                    while(p) {
+                        if(p->type == AST_SEQ) {
+                            if(p->u.seq.first)
+                                idef->methods[idx].call_params[pi++] = p->u.seq.first->u.param.constraint ? strdup(p->u.seq.first->u.param.constraint) : strdup("");
+                            p = p->u.seq.second;
+                        } else {
+                            idef->methods[idx].call_params[pi++] = p->u.param.constraint ? strdup(p->u.param.constraint) : strdup("");
+                            p = NULL;
+                        }
+                    }
+                    idef->methods[idx].ncall_params = pi;
+                }
+            }
             cur = cur->u.param.next;
             idx++;
         }

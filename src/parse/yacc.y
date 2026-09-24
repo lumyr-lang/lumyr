@@ -2176,7 +2176,7 @@ interface_methods : interface_method { $$ = $1; }
                   | interface_methods interface_method { $$ = ast_param_append($1, $2); }
                   ;
 
-/* 接口方法签名：func name(params): return_type */
+/* 接口方法签名：func name(params): return_type | 调用签名 (params): return_type */
 interface_method : FUNC ID LPAREN param_list RPAREN COLON iface_ret_type SEMI {
                       $$ = ast_param($2, 0, NULL);
                       /* 用 constraint 字段存储返回类型原文（含泛型形参 K/V，擦除语义） */
@@ -2184,6 +2184,27 @@ interface_method : FUNC ID LPAREN param_list RPAREN COLON iface_ret_type SEMI {
                   }
                   | FUNC ID LPAREN param_list RPAREN SEMI {
                       $$ = ast_param($2, 0, NULL);
+                  }
+                  | LPAREN param_list RPAREN COLON iface_ret_type SEMI {
+                      /* 调用签名：(a: int, b: string): string → 方法名 __call__
+                       * param_list 存在 default_val 字段（next 被方法链表占用） */
+                      $$ = ast_param("__call__", 0, NULL);
+                      $$->u.param.constraint = $5;
+                      $$->u.param.default_val = $2;
+                  }
+                  | LPAREN param_list RPAREN SEMI {
+                      /* 调用签名（无返回值）：(a: int): void */
+                      $$ = ast_param("__call__", 0, NULL);
+                      $$->u.param.default_val = $2;
+                  }
+                  | LPAREN RPAREN COLON iface_ret_type SEMI {
+                      /* 调用签名（无参数）：(): string */
+                      $$ = ast_param("__call__", 0, NULL);
+                      $$->u.param.constraint = $4;
+                  }
+                  | LPAREN RPAREN SEMI {
+                      /* 调用签名（无参数无返回值）：(): void */
+                      $$ = ast_param("__call__", 0, NULL);
                   }
                   ;
 

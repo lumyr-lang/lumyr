@@ -92,8 +92,10 @@ char* castkind_to_name(int ck);
 // 接口表为编译期全局注册表：yacc 声明时注册，typecheck 校验类型是否实现接口
 
 typedef struct {
-    char* name;           // 方法名
+    char* name;           // 方法名（"__call__" = 调用签名）
     char* return_type;    // 返回类型名（NULL=无返回值/void）
+    char** call_params;  // 调用签名参数类型名列表（仅 __call__，NULL=普通方法）
+    int ncall_params;    // 调用签名参数数量
 } InterfaceMethod;
 
 typedef struct {
