@@ -12,7 +12,7 @@ Value lumyr_formdata_make(int cap);
 // 返回 1=成功，0=参数错误/内存不足
 int lumyr_formdata_add(Value fd, Value nameVal, Value val);
 
-// 设置字段：删除全部同名字段后追加（JS FormData.set 语义；数组值发送时展开）
+// 设置字段：删除全部同名字段后追加（FormData.set 语义；数组值发送时展开）
 // 返回 1=成功，0=参数错误/内存不足
 int lumyr_formdata_set(Value fd, Value nameVal, Value val);
 

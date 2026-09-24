@@ -280,7 +280,7 @@ if(netOk == 0) {
     assert tagList2[0] == "x1";
     assert tagList2[1] == "x2";
 
-    /* set：同名全覆盖（JS FormData.set 语义，其余字段不受影响） */
+    /* set：同名全覆盖（FormData.set 语义，其余字段不受影响） */
     fd6 = <formdata>{"k": "v1", "keep": "yes"};
     fd6.append("k", "v2");              /* k 现有 v1,v2 两个值 */
     fd6.set("k", "over");               /* 覆盖后仅剩 1 个 k */

@@ -25,11 +25,15 @@ public class Integer extends Number {
         return self.value == other.value;
     }
 
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         return self.value;
     }
 
     // 比较：-1 <, 0 ==, 1 >
+    // compare
+    @FuncAlias("compare")
     func compareTo(other): int {
         if (type(other) != type(self)) { return -2; }
         if (self.value < other.value) { return -1; }
@@ -37,6 +41,8 @@ public class Integer extends Number {
         return 0;
     }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         v = self.value;
         return "" + v;
@@ -106,6 +112,8 @@ public class Integer extends Number {
     }
 
     // 十六进制表示（正数）
+    // toHexString
+    @FuncAlias("toHexString")
     func toHex(): string {
         hexChars = ["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"];
         n = self.value;

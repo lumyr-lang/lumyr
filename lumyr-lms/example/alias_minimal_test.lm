@@ -1,0 +1,8 @@
+import <Function/StringBuffer>;
+import <Function/Character>;
+
+print("test sb");
+sb = StringBuffer();
+sb.append("hello");
+print(sb.toString());
+print("done");

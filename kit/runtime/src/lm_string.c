@@ -197,7 +197,7 @@ Value lumyr_replace(Value s, Value from, Value to)
 
 // sum/avg：数字数组聚合（只允许 int/double 元素）
 
-// === f-string format spec 格式化（Python 兼容子集） ===
+// === f-string format spec 格式化（兼容子集） ===
 // spec 语法：[[fill]align][sign][#][0][width][,][.prec][type]
 //   fill    任意单字节字符（默认空格）
 //   align   < > ^ = （= 仅数值：符号后填充）

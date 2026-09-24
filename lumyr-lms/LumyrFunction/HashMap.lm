@@ -24,6 +24,8 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
     }
 
     // 批量导入另一映射的全部键值对（同为 Map<K,V> 家族实例或原生 map）
+    // assign, update, merge
+    @FuncAlias(["assign", "update", "merge"])
     func putAll(other: Map<K, V>) {
         ks = other.keys();
         i = 0;

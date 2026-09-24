@@ -35,6 +35,7 @@ public class ArrayBuffer extends AbstractBuffer {
     }
 
     // set 时 wrap 到 0-255（uint8 语义）
+    // override 但签名同父类——重新声明别名确保分派命中本类 RuntimeFunc
     func set(idx: int, v) {
         b = v;
         while (b < 0) { b = b + 256; }
@@ -43,8 +44,16 @@ public class ArrayBuffer extends AbstractBuffer {
         return self;
     }
 
+    // toByteArray
+    @FuncAlias("toByteArray")
     func toBytes() { return bytes(self.value); }
+
+    // toHexString
+    @FuncAlias("toHexString")
     func hex() { return self.toBytes().hex(); }
+
+    // toString
+    @FuncAlias("toString")
     func toStr() { return self.toBytes().toStr(); }
 
     func copy(): ArrayBuffer {

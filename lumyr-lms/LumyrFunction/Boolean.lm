@@ -23,11 +23,15 @@ public class Boolean extends Object {
         return self.value == other.value;
     }
 
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         if (self.value) { return 1; }
         return 0;
     }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         if (self.value) { return "true"; }
         return "false";

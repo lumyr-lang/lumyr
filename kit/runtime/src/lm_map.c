@@ -1,4 +1,4 @@
-// lm_map.c —— 字典（哈希表 + 红黑树自适应，Java HashMap 策略）
+// lm_map.c —— 字典（哈希表 + 红黑树自适应，HashMap 策略）
 // 初始容量 16，负载因子 0.75；桶链表>8 且总容量>=64 → 红黑树；红黑树<6 → 退化为链表
 #include "lm_map.h"
 #include "lm_value.h"
@@ -98,7 +98,7 @@ static uint32_t value_hash(Value v) {
             }
             break;
         }
-        /* struct/class 实例：引用身份哈希（同一实例引用才作同一键，与 JS Map/Java identity 一致） */
+        /* struct/class 实例：引用身份哈希（同一实例引用才作同一键，引用身份语义） */
         case VAL_STRUCT_PTR:
         case VAL_CLASS_PTR: {
             uintptr_t p = (uintptr_t)v.v.struct_ptr;
@@ -108,7 +108,7 @@ static uint32_t value_hash(Value v) {
         default:
             break;
     }
-    // 扰动函数（Java HashMap 的 hash 扰动）
+    // 扰动函数（HashMap 的 hash 扰动）
     h ^= (h >> 16);
     return h;
 }

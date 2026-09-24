@@ -272,7 +272,7 @@ struct MapEntry {
     int color;                // 红黑树颜色：0=红, 1=黑
 };
 
-// 字典运行时对象，VAL_MAP 使用（哈希表 + 红黑树自适应，Java HashMap 策略）
+// 字典运行时对象，VAL_MAP 使用（哈希表 + 红黑树自适应，HashMap 策略）
 // GC 管理：ValueMap* 本身由 gc_alloc(vtype=VAL_MAP) 管理；
 //          buckets/tree 数组及 MapEntry 节点也由 gc_alloc(vtype=VAL_MAP) 管理（独立 GC 对象，各自 sweep）。
 // stack_alloc：0=堆分配（默认，有 GCObject 头），1=编译通道栈分配（无 GCObject 头，GC 标记时跳过自身但仍标记 buckets/entries）

@@ -460,7 +460,7 @@ f\"([^"\\]|\\.)*\"   {
 "<file>"           { LEX_RET(TOK_FILE); }
 "<folder>"         { LEX_RET(TOK_FOLDER); }
 "<formdata>"       { yylval.ll = CAST_FORMDATA; LEX_RET(TOK_TYPE_ANNOT); }
-    /* ===== 泛型标记（Java 风格泛型形参/实参）=====
+    /* ===== 泛型标记（泛型形参/实参）=====
      * 值为尖括号内原文，语法层解析；整体匹配以避免 < 与比较运算符歧义。
      * 约定：泛型尖括号内侧不留空格（a <b,c> 才是泛型；a < b, c > 是比较） */
     /* 多项列表：<K,V> / <string,int> / <K extends Number,V?>（首字符必须非空格） */

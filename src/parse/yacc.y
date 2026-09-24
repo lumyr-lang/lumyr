@@ -112,7 +112,7 @@ static char* g_current_class_name = NULL; /* 当前正在解析的 class 名，�
 static char* g_current_class_parent = NULL; /* 当前 class 的父类名 */
 static int g_current_class_is_abstract = 0; /* 当前 class 是否是抽象类 */
 
-/* ===== Java 风格泛型形参（声明时未知，实例化时绑定；lumin 采用擦除语义）===== */
+/* ===== 泛型形参（声明时未知，实例化时绑定；lumin 采用擦除语义）===== */
 static char** g_cur_generic_names = NULL;   /* 当前 class/interface/struct 的泛型形参名 */
 static char** g_cur_generic_bounds = NULL;  /* 平行的上界名（CAST 语义扩展点），NULL 项=无界 */
 static int g_cur_generic_count = 0;
@@ -1245,7 +1245,7 @@ static AstNode* enum_table_lookup_member(const char* enum_name, const char* memb
 %token TOK_DATE TOK_DATETIME TOK_TIME_KW TOK_TIMEDELTA
 %token TOK_TUPLE TOK_BYTES TOK_COMPLEX TOK_CALENDAR TOK_FILE TOK_FOLDER
 %token<ll> TOK_TYPE_ANNOT   /* 类型标注 <type>：词法层面整体匹配，值为 CastKind 枚举 */
-%token<s> TOK_GENERIC      /* Java 风格泛型 <K,V>/<string,int>/<?>：值为尖括号内原文 */
+%token<s> TOK_GENERIC      /* 泛型 <K,V>/<string,int>/<?>：值为尖括号内原文 */
 %token TOK_TYPE TOK_STRUCT TOK_ENUM TOK_INTERFACE TOK_IMPLEMENTS TOK_EXTENDS TOK_EXTEND TOK_UNPACK TOK_CLASS TOK_SUPER TOK_STATIC TOK_ABSTRACT TOK_PUBLIC TOK_PRIVATE TOK_PROTECTED
 %token PLUSPLUS MINUSMINUS
 %token QMARK COLON CASE_COLON
@@ -2882,7 +2882,7 @@ primary
     | TOK_FILE STRING_LIT   { $$ = L(ast_call(strdup("file"), ast_string($2))); free($2); }
     | TOK_FOLDER STRING_LIT { $$ = L(ast_call(strdup("folder"), ast_string($2))); free($2); }
     | ID TOK_GENERIC LPAREN arg_list RPAREN {
-          /* Java 风格泛型实例化：HashMap<string,int>() / Box<int>() / Map<>() / List<?>()
+          /* 泛型实例化：HashMap<string,int>() / Box<int>() / Map<>() / List<?>()
            * 擦除语义：类型实参仅消费记录到 class_new.type_args，不生成特化代码；
            * 尖括号内必须是已注册类型，否则显式报错，绝不静默当普通函数调用 */
           if(!struct_lookup($1) && !class_lookup($1) &&

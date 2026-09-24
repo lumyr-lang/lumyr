@@ -217,6 +217,8 @@ RuntimeFunc* lumyr_type_find_method(RuntimeTypeInfo* info, const char* method_na
         if(info->method_names[i] && strcmp(info->method_names[i], method_name) == 0)
             return info->methods[i];
     }
+    /* 当前类型方法表未命中：沿 parent 链查找（别名可能只注册在父类方法表） */
+    if(info->parent) return lumyr_type_find_method(info->parent, method_name);
     return NULL;
 }
 

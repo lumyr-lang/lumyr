@@ -3,7 +3,7 @@
  *
  * 设计：
  * - 用数组存储二进制数字（每个元素存 30 位，逆序存储，方便运算）
- * - 参考 Python 的 longobject.c 实现
+ * - 参考 longobject.c 实现
  * - 符号：正负标记
  * - 堆分配，GC 管理
  * - PTR 栈存储指针
@@ -21,7 +21,7 @@ extern "C" {
 #endif
 
 /* bigint 结构体：任意精度整数
- * 参考 Python 的 longobject.c 实现：
+ * 参考 longobject.c 实现：
  * - 用 uint32_t 数组存储二进制数字（每个 digit 是 30 位）
  * - 逆序存储（低位在前），方便运算
  * - 符号：正负标记

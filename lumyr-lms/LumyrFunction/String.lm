@@ -26,11 +26,15 @@ public class String extends Object {
         return self.value == other.value;
     }
 
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         return self.value.len;
     }
 
     // 比较：-1 <, 0 ==, 1 >
+    // compare
+    @FuncAlias("compare")
     func compareTo(other): int {
         if (type(other) != type(self)) { return -2; }
         a = self.value;
@@ -40,10 +44,14 @@ public class String extends Object {
         return 1;
     }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         return self.value;
     }
 
+    // length
+    @FuncAlias("length")
     func length(): int {
         return self.value.len;
     }
@@ -67,6 +75,8 @@ public class String extends Object {
     }
 
     // 委托内置 contains
+    // includes
+    @FuncAlias("includes")
     func contains(sub: string): bool {
         return self.value.contains(sub);
     }

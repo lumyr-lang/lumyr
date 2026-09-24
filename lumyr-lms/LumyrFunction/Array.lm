@@ -22,37 +22,66 @@ public class Array<E> extends AbstractBuffer<E> {
         if (arr != null) { self.value = copy(arr); }
     }
 
-    
+
+    // append, add
+    @FuncAlias(["append", "add"])
     func push(v: E) { self.value.add(v); return self; }
+
+    // removeLast, popLast
+    @FuncAlias(["removeLast", "popLast"])
     func pop() {
         if (self.value.len == 0) { return; }
         last = self.value.last();
         self.value.remove(self.value.len - 1);
         return last;
     }
+
+    // shiftLeft, removeFirst
+    @FuncAlias(["shiftLeft", "removeFirst"])
     func shift(): E {
         if (self.value.len == 0) { return; }
         first = self.value.first();
         self.value.remove(0);
         return first;
     }
+
+    // prepend, addFirst
+    // 注：不为 unshift 添加 insert 别名——会与
+    // AbstractBuffer.insert(idx,val) 的方法名冲突，覆盖父类 insert 实现
+    @FuncAlias(["prepend", "addFirst"])
     func unshift(v: E) { self.value.insert(0, v); return self; }
+
+    // popAt
+    // 注：不为 removeAt 添加 remove 别名——会与
+    // AbstractBuffer.remove(idx) 的方法名冲突，覆盖父类 remove 实现
+    @FuncAlias("popAt")
     func removeAt(idx: int) {
         removed = self.value.get(idx);
         self.value.remove(idx);
         return removed;
     }
+
+    // sliceAssign
+    @FuncAlias("sliceAssign")
     func splice(start: int, count: int) {
         removed = self.value.slice(start, start + count);
         i = start + count - 1;
         while (i >= start) { self.value.remove(i); i = i - 1; }
         return Array<>(removed);
     }
+
+    // extend, appendContents
+    @FuncAlias(["extend", "appendContents"])
     func addAll(other: E[]) { self.value.addAll(other.value); return self; }
 
     // override 返回 Array 实例
+    // subList——子类 override 必须重新声明别名，才能让别名指向子类 RuntimeFunc
+    @FuncAlias("subList")
     func slice(start: int, end: int): Array { return Array<>(self.value.slice(start, end)); }
     func concat(other: E[]): Array { return Array<>(self.value.concat(other.value)); }
+
+    // clone——override 重新声明别名，确保调用 dispatch 到 Array.copy
+    @FuncAlias("clone")
     func copy(): Array<E> {
         c = Array<E>();
         c.value = self.value.copy();

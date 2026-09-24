@@ -41,16 +41,33 @@ public interface Map<K, V> {
 // 抽象基类：所有通用方法委托 self.value 上的内置 map 方法
 // 子类只需声明 value 字段并实现构造函数
 public abstract class AbstractMap<K, V> extends Object implements Map<K, V> {
+    // length, count
+    @FuncAlias(["length", "count"])
     func size(): int { return self.value.len; }
+
     func isEmpty(): bool { return self.value.len == 0; }
 
     func get(key: K): V { return self.value.get(key); }
+
+    // set, setValue
+    @FuncAlias(["set", "setValue"])
     func put(key: K, val: V) { self.value[key] = val; return self; }
+
+    // delete, pop, removeValue
+    @FuncAlias(["delete", "pop", "removeValue"])
     func remove(key: K) { self.value.remove(key); return self; }
+
+    // removeAll
+    @FuncAlias("removeAll")
     func clear() { self.value.clear(); return self; }
 
+    // hasKey
+    @FuncAlias(["hasKey", "contains", "containsKey"])
     func has(key: K): bool { return self.value.has(key); }
-    func containsKey(key: K): bool { return self.value.has(key); }
+
+
+    // hasValue
+    @FuncAlias("hasValue")
     func containsValue(val: V): bool {
         vs = self.value.values();
         i = 0;
@@ -61,22 +78,40 @@ public abstract class AbstractMap<K, V> extends Object implements Map<K, V> {
         return false;
     }
 
+    // keySet
+    @FuncAlias("keySet")
     func keys() { return self.value.keys(); }
     func values() { return self.value.values(); }
     func forEach(cb: MapCallback<K, V>) { self.value.forEach(cb); return self; }
 
+    // clone
+    @FuncAlias("clone")
     func copy() {
         c = copy(self);
         return c;
     }
+
+    // toDict
+    @FuncAlias("toDict")
     func toMap() { return self.value.copy(); }
+
+    // toList
+    @FuncAlias("toList")
     func toArray() { return self.value.toArray(); }
 
+    // getClassName
+    @FuncAlias("getClassName")
     func className(): string { return type(self); }
     func equals(other): bool {
         if (type(other) != type(self)) { return false; }
         return self.toJSONString() == other.toJSONString();
     }
+
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int { return self.value.len; }
+
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string { return self.toJSONString(); }
 }

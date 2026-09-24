@@ -20,22 +20,24 @@ public interface ObjectInterface {
 }
 
 public class Object implements ObjectInterface{
-    // 相等判断：默认引用相等（== 语义）；子类按值重写
     func equals(other): bool {
         return self == other;
     }
 
-    // 哈希码：默认 0；子类按字段重写以支持容器去重与查找
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         return 0;
     }
 
-    // 类型名（委托内置 type()，返回如 "Person"）
+    // getClassName
+    @FuncAlias("getClassName")
     func className(): string {
         return type(self);
     }
 
-    // 字符串表示（委托内置 toJSONString，含全部字段；子类可重写为更友好格式）
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         return self.toJSONString();
     }
@@ -51,6 +53,8 @@ public class Object implements ObjectInterface{
     }
 
     // 深拷贝（委托内置 copy()，容器字段递归独立）
+    // clone
+    @FuncAlias("clone")
     func copy() {
         return copy(self);
     }

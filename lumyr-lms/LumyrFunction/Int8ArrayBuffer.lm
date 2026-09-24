@@ -22,9 +22,14 @@ public class Int8ArrayBuffer extends AbstractBuffer<int8> {
     }
 
     func indexOf(val): int { return self.value.indexOf(val); }
+
+    // includes——override 重新声明别名确保分派命中本类 RuntimeFunc
+    @FuncAlias("includes")
     func contains(val): bool { return self.value.indexOf(val) >= 0; }
 
     // override 返回同类型实例
+    // subList——override 必须重新声明别名，确保返回本类实例
+    @FuncAlias("subList")
     func slice(start: int, end: int): Int8ArrayBuffer {
         r = Int8ArrayBuffer();
         r.value = self.value.slice(start, end);
@@ -35,6 +40,9 @@ public class Int8ArrayBuffer extends AbstractBuffer<int8> {
         r.value = self.value.concat(other.value);
         return r;
     }
+
+    // clone——override 必须重新声明别名，确保返回本类实例
+    @FuncAlias("clone")
     func copy(): Int8ArrayBuffer {
         r = Int8ArrayBuffer();
         r.value = self.value.copy();

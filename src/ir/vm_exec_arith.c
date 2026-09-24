@@ -712,7 +712,7 @@ int vm_exec_vne(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vb
 /* ========== 动态类型位运算：运行时校验操作数必须为整数 ========== */
 
 /* 判定 ValueType 是否属于整数家族（含 bool 与各固定宽度整型；不含 float/string）
- * bool 计入：C 中 bool 提升为 int、Python 中 bool 是 int 子类，位运算/整数幂应接受 0/1 */
+ * bool 计入：bool 提升为 int、bool 是 int 子类，位运算/整数幂应接受 0/1 */
 static int vtype_is_integer(ValueType t) {
     switch(t) {
     case VAL_BOOL:

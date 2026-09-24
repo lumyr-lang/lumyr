@@ -26,11 +26,15 @@ public class Character extends Object {
         return self.value == other.value;
     }
 
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         return (int)self.value;
     }
 
     // 比较：-1 <, 0 ==, 1 >
+    // compare
+    @FuncAlias("compare")
     func compareTo(other): int {
         if (type(other) != type(self)) { return -2; }
         if (self.value < other.value) { return -1; }
@@ -38,6 +42,8 @@ public class Character extends Object {
         return 0;
     }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         return Character_charStr(self.value);
     }

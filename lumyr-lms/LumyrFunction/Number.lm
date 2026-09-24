@@ -20,14 +20,20 @@ public abstract class Number extends Object {
         return self == other;
     }
 
+    // hashValue
+    @FuncAlias("hashValue")
     func hashCode(): int {
         return 0;
     }
 
+    // compare
+    @FuncAlias("compare")
     func compareTo(other): int {
         return -2;
     }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         return self.toJSONString();
     }
@@ -59,6 +65,8 @@ public abstract class Number extends Object {
     // ====== 具体方法（子类可直接使用） ======
 
     // 类型名
+    // getClassName
+    @FuncAlias("getClassName")
     func className(): string {
         return type(self);
     }

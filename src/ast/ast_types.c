@@ -1175,7 +1175,7 @@ int class_check_interface_implementation(const char* class_name, const char* int
     TypeDef* td = class_lookup(class_name);
     if(!td) return -1; /* class不存在 */
 
-    /* 抽象类豁免：未实现的接口方法由具体子类承担（同 Java 语义） */
+    /* 抽象类豁免：未实现的接口方法由具体子类承担（同抽象类语义） */
     if(td->is_abstract) return 1;
 
     /* 检查 class 是否有接口要求的所有方法（包括继承的方法） */

@@ -20,12 +20,16 @@ public class StringBuffer extends AbstractBuffer<string> {
         if (s != null) { self.value = [s]; }
     }
 
+    // push, add
+    @FuncAlias(["push", "add"])
     func append(s) { self.value.add(s); return self; }
     func appendChar(c) { self.value.add("" + c); return self; }
     func appendInt(n) { self.value.add("" + n); return self; }
     func appendDouble(d) { self.value.add("" + d); return self; }
     func appendLine(s) { self.value.add(s); self.value.add("\n"); return self; }
 
+    // toStr
+    @FuncAlias("toStr")
     func toString(): string {
         if (self.value.len == 0) { return ""; }
         return self.value.join("");
@@ -38,6 +42,8 @@ public class StringBuffer extends AbstractBuffer<string> {
         return sb[idx];
     }
 
+    // clone——override 必须重新声明别名，确保返回本类实例
+    @FuncAlias("clone")
     func copy(): StringBuffer {
         c = StringBuffer();
         c.value = self.value.copy();

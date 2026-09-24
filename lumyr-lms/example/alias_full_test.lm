@@ -1,0 +1,290 @@
+// ============================================================
+// @FuncAlias 多语言别名综合测试
+// 验证 Array / HashMap / StringBuffer / ArrayBuffer / 数值类
+// 在各语言习惯别名下的方法调用
+// 运行：./bin/lumyr lumyr-lms/example/alias_full_test.lm
+// ============================================================
+
+import <Function/Array>;
+import <Function/HashMap>;
+import <Function/StringBuffer>;
+import <Function/ArrayBuffer>;
+import <Function/Int8ArrayBuffer>;
+import <Function/Integer>;
+import <Function/Double>;
+import <Function/String>;
+import <Function/Boolean>;
+import <Function/Object>;
+import <Function/Character>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// ============================================================
+// 第一节：Array 别名
+// ============================================================
+print("=== Array aliases ===");
+
+arr = Array<>();
+// push → append, add
+arr.push(1).append(2).add(3);
+check(arr.size() == 3, "push/append/add 等价");
+
+// size → length, count
+check(arr.length() == 3, "size → length");
+check(arr.count() == 3, "size → count");
+
+// pop → removeLast, popLast
+arr.push(10);
+last = arr.removeLast();
+check(last == 10, "pop → removeLast");
+
+// shift → removeFirst
+arr.push(99);
+first = arr.removeFirst();
+check(first == 1, "shift → removeFirst");
+
+// unshift → prepend, addFirst
+arr.prepend(0);
+check(arr.first() == 0, "unshift → prepend");
+
+arr.addFirst(-1);
+check(arr.first() == -1, "unshift → addFirst");
+
+// first → getFirst
+check(arr.getFirst() == -1, "first → getFirst");
+// last → getLast
+check(arr.getLast() == 99, "last → getLast");
+
+// contains → includes
+check(arr.includes(2), "contains → includes");
+check(!arr.includes(999), "contains → includes false");
+
+// clear → removeAll
+arr.removeAll();
+check(arr.size() == 0, "clear → removeAll");
+
+// copy → clone
+arr.push(1).push(2);
+cp = arr.clone();
+arr.push(3);
+check(cp.size() == 2, "copy → clone 独立");
+
+// slice → subList——override 后别名仍指向子类实现
+arr.push(3);
+sub = arr.subList(0, 2);
+check(sub.size() == 2, "slice → subList 返回 Array");
+// subList 应返回 Array（可继续调用 Array 方法验证）
+sub.push(99);
+check(sub.size() == 3, "subList 返回 Array 实例");
+
+// avg → mean, average
+arr2 = Array<>();
+arr2.push(10).push(20).push(30);
+check(arr2.mean() == 20.0, "avg → mean");
+check(arr2.average() == 20.0, "avg → average");
+
+// toArray → toList
+toListResult = arr2.toList();
+check(toListResult.len == 3, "toArray → toList");
+
+// toString → toStr
+arr3 = Array<>();
+arr3.push(1).push(2);
+str = arr3.toStr();
+check(str.contains("[1,2]") || str.contains("[1, 2]"), "toString → toStr");
+
+// className → getClassName
+check(arr3.getClassName() == "Array", "className → getClassName");
+
+// hashCode → hashValue
+check(arr3.hashValue() == 2, "hashCode → hashValue");
+
+print("Array aliases PASS");
+
+// ============================================================
+// 第二节：HashMap 别名
+// ============================================================
+print("=== HashMap aliases ===");
+
+m = HashMap<string, int>();
+// put → set, setValue
+m.put("a", 1).set("b", 2).setValue("c", 3);
+check(m.size() == 3, "put/set/setValue 等价");
+
+// get 别名：（无）
+check(m.get("a") == 1, "HashMap.get");
+
+// remove → delete, pop, removeValue
+m.delete("a");
+check(m.size() == 2, "remove → delete");
+m.pop("b");
+check(m.size() == 1, "remove → pop");
+m.removeValue("c");
+check(m.size() == 0, "remove → removeValue");
+
+// 重新填充测试 has/containsKey/contains
+m.put("x", 100);
+// has → hasKey, containsKey, contains
+check(m.has("x"), "has");
+check(m.hasKey("x"), "has → hasKey");
+check(m.containsKey("x"), "has → containsKey");
+check(m.contains("x"), "has → contains");
+check(!m.has("missing"), "has false");
+
+// containsValue → hasValue
+check(m.containsValue(100), "containsValue");
+check(m.hasValue(100), "containsValue → hasValue");
+
+// putAll → assign, update, merge
+m2 = HashMap<string, int>();
+m2.put("y", 200);
+m.putAll(m2);
+check(m.get("y") == 200, "putAll");
+m.assign(m2);
+check(m.get("y") == 200, "putAll → assign");
+m.update(m2);
+check(m.get("y") == 200, "putAll → update");
+m.merge(m2);
+check(m.get("y") == 200, "putAll → merge");
+
+// keys → keySet
+ks = m.keySet();
+check(ks.len >= 2, "keys → keySet");
+
+// toMap → toDict
+d = m.toDict();
+check(d.len >= 2, "toMap → toDict");
+
+// size → length, count
+check(m.length() == m.size(), "Map size → length");
+check(m.count() == m.size(), "Map size → count");
+
+print("HashMap aliases PASS");
+
+// ============================================================
+// 第三节：StringBuffer 别名
+// ============================================================
+print("=== StringBuffer aliases ===");
+
+sb = StringBuffer();
+// append → push, add
+sb.append("hello").push(" ").add("world");
+check(sb.toString() == "hello world", "append/push/add 等价");
+
+// toString → toStr
+check(sb.toStr() == "hello world", "toString → toStr");
+
+// copy → clone
+sbCopy = sb.clone();
+sb.append("!");
+check(sbCopy.toString() == "hello world", "copy → clone 独立");
+
+print("StringBuffer aliases PASS");
+
+// ============================================================
+// 第四节：ArrayBuffer 别名
+// ============================================================
+print("=== ArrayBuffer aliases ===");
+
+ab = ArrayBuffer("hello");
+// toBytes → toByteArray
+b = ab.toByteArray();
+check(b.len == 5, "toBytes → toByteArray");
+
+// hex → toHexString
+h = ab.toHexString();
+check(h == "68656c6c6f", "hex → toHexString");
+
+// toStr → toString
+check(ab.toStr().contains("hello"), "toStr");
+check(ab.toString().contains("hello"), "toStr → toString");
+
+print("ArrayBuffer aliases PASS");
+
+// ============================================================
+// 第五节：Int8ArrayBuffer override 别名
+// ============================================================
+print("=== Int8ArrayBuffer aliases ===");
+
+i8 = Int8ArrayBuffer();
+i8.append(1).append(2).append(3);
+
+// contains → includes——override 后仍正确
+check(i8.includes(2), "Int8 contains → includes");
+check(!i8.includes(999), "Int8 contains → includes false");
+
+// slice → subList——override 必须返回同类型实例
+i8sub = i8.subList(0, 2);
+check(i8sub.size() == 2, "Int8 slice → subList");
+// subList 应返回 Int8ArrayBuffer（可继续调用 Int8 方法验证）
+i8sub.append(99);
+check(i8sub.size() == 3, "subList 返回 Int8ArrayBuffer 实例");
+
+// copy → clone——override 必须返回同类型实例
+i8cp = i8.clone();
+i8.append(77);
+check(i8cp.size() == 3, "Int8 copy → clone 独立");
+
+// size → length, count——继承自父类
+check(i8.length() == 4, "Int8 size → length");
+check(i8.count() == 4, "Int8 size → count");
+
+// avg → mean——继承自父类
+i8avg = Int8ArrayBuffer();
+i8avg.append(10).append(20).append(30);
+check(i8avg.mean() == 20.0, "Int8 avg → mean");
+
+print("Int8ArrayBuffer aliases PASS");
+
+// ============================================================
+// 第六节：Integer / Double / String / Boolean 数值类别名
+// ============================================================
+print("=== Number/String/Boolean aliases ===");
+
+n = Integer(42);
+// hashCode → hashValue
+check(n.hashValue() == 42, "Integer hashCode → hashValue");
+// compareTo → compare
+check(n.compare(Integer(40)) == 1, "Integer compareTo → compare");
+check(n.compare(Integer(42)) == 0, "Integer compareTo → compare equal");
+check(n.compare(Integer(50)) == -1, "Integer compareTo → compare less");
+// toString → toStr
+check(n.toStr() == "42", "Integer toString → toStr");
+// toHex → toHexString
+check(n.toHexString() == "2a", "Integer toHex → toHexString");
+// className → getClassName
+check(n.getClassName() == "Integer", "Integer className → getClassName");
+
+d = Double(3.14);
+check(d.toStr().contains("3.14"), "Double toString → toStr");
+check(d.hashValue() == 3, "Double hashCode → hashValue");
+
+s = String("hello");
+check(s.length() == 5, "String length → length");
+// contains → includes
+check(s.includes("ell"), "String contains → includes");
+// hashCode → hashValue
+check(s.hashValue() == 5, "String hashCode → hashValue");
+// compareTo → compare
+check(s.compare(String("hello")) == 0, "String compareTo → compare");
+
+b = Boolean(true);
+check(b.toStr() == "true", "Boolean toString → toStr");
+check(b.hashValue() == 1, "Boolean hashCode → hashValue");
+
+c = Character(<char>'A');
+check(c.toStr() == "A", "Character toString → toStr");
+check(c.hashValue() == 65, "Character hashCode → hashValue");
+
+// Object 通用别名
+o = Object();
+check(o.getClassName() == "Object", "Object className → getClassName");
+
+print("Number/String/Boolean aliases PASS");
+
+// ============================================================
+// 结果
+// ============================================================
+print("alias_full_test ALL PASS");
