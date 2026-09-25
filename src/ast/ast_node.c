@@ -453,6 +453,36 @@ AstNode* ast_clone_node(const AstNode* src)
             n->u.defer.body = ast_clone_node(src->u.defer.body);
             return n;
         }
+        /* ===== 默认值可达的容器/值表达式：必须深拷贝子节点 =====
+         * typecheck_call 用本函数为缺失实参填充默认值，若浅拷贝会与函数定义
+         * 共享子节点，最终整树释放时二次 free（malloc: pointer freed was not allocated）。 */
+        case AST_ARRAY_LIT: {
+            AstNode* n = ast_new(AST_ARRAY_LIT);
+            n->u.array_lit.elems = ast_clone_node(src->u.array_lit.elems);
+            n->u.array_lit.elem_type = src->u.array_lit.elem_type;
+            return n;
+        }
+        case AST_MAP_LIT: {
+            AstNode* n = ast_new(AST_MAP_LIT);
+            n->u.map_lit.entries = ast_clone_node(src->u.map_lit.entries);
+            return n;
+        }
+        case AST_MAP_ENTRY:
+            return ast_map_entry(ast_clone_node(src->u.map_entry.key),
+                                 ast_clone_node(src->u.map_entry.value));
+        case AST_TYPE_ANNOTATION: {
+            AstNode* n = ast_new(AST_TYPE_ANNOTATION);
+            n->u.type_annotation.cast_type = src->u.type_annotation.cast_type;
+            n->u.type_annotation.expr = ast_clone_node(src->u.type_annotation.expr);
+            return n;
+        }
+        case AST_TERNARY: {
+            AstNode* n = ast_new(AST_TERNARY);
+            n->u.ternary.cond = ast_clone_node(src->u.ternary.cond);
+            n->u.ternary.true_expr = ast_clone_node(src->u.ternary.true_expr);
+            n->u.ternary.false_expr = ast_clone_node(src->u.ternary.false_expr);
+            return n;
+        }
         default:
             // 复合赋值下标展开只会克隆表达式节点；其余类型直接复制（保守）
             {

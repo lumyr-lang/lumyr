@@ -162,11 +162,18 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
         if(ck != CAST_NONE) return castkind_to_exprtype(ck);
     }
 
-    /* 一元运算：按位取反 ~ —— 操作数为整数 → INT；否则动态（运行时校验抛错） */
+    /* 一元运算：
+     *   按位取反 ~ —— 操作数为整数 → INT；否则动态（运行时校验抛错）
+     *   一元正负 +/- —— 保持子表达式数值类型（int→int，double→double，动态→动态）。
+     *   此前 UNARY_MINUS/PLUS 一律返回 NONE，导致 -7/2 等含符号字面量的运算
+     *   误落 VALUE 栈走真除法（-3.5），与 7/2 的 INT64_DIV 整数除法（3）不一致。 */
     if(node->type == AST_UNARY) {
         if(node->u.uny.op == OP_BIT_NOT) {
             ExprType ct = arith_get_expr_type(c, node->u.uny.child);
             return ct == EXPR_TYPE_INT ? EXPR_TYPE_INT : EXPR_TYPE_NONE;
+        }
+        if(node->u.uny.op == OP_UNARY_MINUS || node->u.uny.op == OP_UNARY_PLUS) {
+            return arith_get_expr_type(c, node->u.uny.child);
         }
         return EXPR_TYPE_NONE;
     }

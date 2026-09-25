@@ -2361,12 +2361,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         record_var_owner(c, bf_idx, node->u.assign.expr);
         if(rt == EXPR_TYPE_INT) {
             emit(c, OPC_STORE_INT64_VAR, var_idx, 0);
+            /* 赋值表达式的值：重新加载被赋的值留在 INT64 栈（C 语义），
+             * 否则外层 d=(c+=4) 读到空栈垃圾 */
+            emit(c, OPC_LOAD_INT64_VAR, var_idx, 0);
         } else if(rt == EXPR_TYPE_DOUBLE) {
             emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
+            emit(c, OPC_LOAD_DOUBLE_VAR, var_idx, 0);
         } else if(rt == EXPR_TYPE_PTR) {
             emit(c, OPC_STORE_PTR_VAR, var_idx, 0);
+            emit(c, OPC_LOAD_PTR_VAR, var_idx, 0);
         } else {
             emit(c, OPC_STORE_VAR, var_idx, 0);
+            emit(c, OPC_LOAD_VAR, var_idx, 0);
         }
         return rt;
     }
@@ -2705,6 +2711,15 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         return node->u.cast.cast_type;
     }
 
+    /* 一元运算 +/-/~：保持子表达式类型（-7 仍为 int，不被加宽成 int64）。
+     * 此前缺此分支落到 CAST_NONE，使 m=-7 变量标签退化为 CAST_INT64（int64），
+     * 与 m=7（int）不一致。逻辑非 ! 结果为 bool 但走 VALUE 栈，不在此列。 */
+    if(node->type == AST_UNARY &&
+       (node->u.uny.op == OP_UNARY_MINUS || node->u.uny.op == OP_UNARY_PLUS
+        || node->u.uny.op == OP_BIT_NOT)) {
+        return c_expr_cast_type(c, node->u.uny.child);
+    }
+
     /* 变量：查符号表 */
     if(node->type == AST_VAR) {
         int idx = c_find_var(c, node->u.varname);
@@ -2988,6 +3003,16 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
             ExprType t = c_expr(c, synthCall);
             if(t != EXPR_TYPE_NONE)
                 emit_to_dynamic(c, t, c_expr_cast_type(c, synthCall));
+            return;
+        }
+        /* 除法/取模：自然编译（int/int → INT64_DIV/MOD 整数结果，double → DOUBLE，
+         * 动态 → V 指令），再按真实类型装箱。不能走通用 VDIV —— lumyr_div 恒为 double
+         * 真除法（3.5），与 typecheck 声明（int/int → VAL_INT 整数）及语句路径（3）矛盾，
+         * 导致 type(7/2)="double"、实参与语句同表达式不同值。 */
+        if(bop == OP_DIV || bop == OP_MOD) {
+            ExprType t = c_expr(c, node);
+            if(t != EXPR_TYPE_NONE)
+                emit_to_dynamic(c, t, c_expr_cast_type(c, node));
             return;
         }
         /* 幂与位运算：不走通用 value 算术（lumyr_add 对 int64 会提升为 double，
