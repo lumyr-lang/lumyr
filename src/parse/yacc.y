@@ -3731,6 +3731,7 @@ class_prop_list
             $3->u.func_def.access_modifier = $1;
             strip_static_self($3);
             class_static_member_register(static_name, g_current_class_name, $1);
+            ensure_ctors_compiled();
             RuntimeFunc* rf = compile_static_func_from_ast($3, g_current_class_name);
             if(rf) {
                 Value fv;
@@ -3940,7 +3941,8 @@ class_prop_list
             $4->u.func_def.is_static_method = 1;
             $4->u.func_def.access_modifier = $2;
             strip_static_self($4);
-            class_static_member_register(static_name, g_current_class_name, $2);
+            class_static_member_register_ex(static_name, g_current_class_name, $2, VAL_FUNC);
+            ensure_ctors_compiled();
             RuntimeFunc* rf = compile_static_func_from_ast($4, g_current_class_name);
             if(rf) {
                 Value fv;
@@ -3971,6 +3973,7 @@ class_prop_list
             /* 无兜底：flat 名不得与已注册全局函数撞车 */
             if(!static_flat_name_ok(static_name)) { YYABORT; }
             class_static_member_register_ex(static_name, g_current_class_name, $3, VAL_FUNC);
+            ensure_ctors_compiled();
             RuntimeFunc* rf = compile_static_func_from_ast($4, g_current_class_name);
             if(rf) {
                 Value fv;

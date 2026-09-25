@@ -34,6 +34,21 @@ static AstNode** g_recompile = NULL;
 static int g_recompile_cnt = 0;
 static int g_recompile_cap = 0;
 
+/* 登记阶段3重编译（去重）。用于：函数名引用就地转换、static 方法 parse 期
+ * 以不完整类信息编译后的强制纠正等。 */
+static void recompile_add(AstNode* n) {
+    if(!n) return;
+    for(int i = 0; i < g_recompile_cnt; i++)
+        if(g_recompile[i] == n) return;
+    if(g_recompile_cnt >= g_recompile_cap) {
+        int nc = g_recompile_cap > 0 ? g_recompile_cap * 2 : 16;
+        AstNode** nt = (AstNode**)realloc(g_recompile, (size_t)nc * sizeof(AstNode*));
+        if(!nt) { LOG_ERROR("重编译表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_recompile = nt; g_recompile_cap = nc;
+    }
+    g_recompile[g_recompile_cnt++] = n;
+}
+
 /* struct/class 方法重编译表：方法节点不在程序 AST 树中，单独记录属主以便重编译。
  * 方法内嵌套的 lambda/arrow 仍进 g_recompile（它们是普通函数）。 */
 typedef struct {
@@ -871,6 +886,12 @@ static int typecheck_static_methods(void) {
             g_access_ctx_owner = so;
             acc |= typecheck_expr(def);
             g_access_ctx_owner = NULL;
+            /* static 方法体在 parse 期类归约完成前已被编译为自由函数，
+             * 此时所属 TypeDef 尚未构建完成（constructor 未挂、字段/runtime_info
+             * 可能不完整）：AST_CLASS_NEW 会误走"无 __init__"路径，函数名引用等
+             * 也可能基于过时状态。无论体内是否有捕获 lambda，都须在类完全注册后
+             * 重编译；体内嵌套 lambda 已在上面 typecheck_expr 中先入表，顺序正确。 */
+            recompile_add(def);
         }
     }
     return acc;

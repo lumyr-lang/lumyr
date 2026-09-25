@@ -100,12 +100,6 @@ public abstract class AbstractThread implements Runnable {
     }
 }
 
-// futureMaker：submit 的构造助手（模块私有）。
-// 泛型类的 static 方法在解析期编译，早于类构造器注册，
-// 直接调用 Future<T>(...) 会丢失实参；改为运行时调用在类注册后
-// 编译的闭包，由顶层语句在模块初始化时赋值
-futureMaker = null;
-
 // 通用线程类：子类化重写 run，或构造时传入 Runnable
 public class Thread extends AbstractThread {
     target: <dynamic>;
@@ -187,11 +181,11 @@ public class Future<T> implements FutureInterface<T> {
         return self.joined;
     }
 
-    // 提交任务：构造并启动一个 Future（经 futureMaker 闭包构造，
-    // 规避解析期 static 方法中泛型实例化丢参问题）
+    // 提交任务：构造并启动一个 Future（直接泛型构造；
+    // static 方法 parse 期编译的构造丢参问题已由编译器修复：
+    // 编译前 ensure_ctors_compiled + 阶段3按完整类信息重编译）
     public static func submit(task: Callable<T>): Future<T> {
-        mk = futureMaker;
-        return mk(task);
+        return Future<T>(task);
     }
 
     // toStr
@@ -200,8 +194,3 @@ public class Future<T> implements FutureInterface<T> {
         return "Future(tid=" + self.tid + ", done=" + self.joined + ")";
     }
 }
-
-// 模块初始化：装配 submit 的构造助手
-futureMaker = func(task) {
-    return Future<dynamic>(task);
-};
