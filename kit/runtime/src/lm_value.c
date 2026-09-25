@@ -544,14 +544,12 @@ Value lumyr_array_get(Value arr, Value idx) {
     return arr.v.array->items[i];   // 返回数组持有值的引用（调用方如需长期持有需 clone）
 }
 
-// len(x)：数组长度 / 字符串字符数
+// len(x)：数组长度 / 字符串字符数（UTF-8 码点数）
 Value lumyr_len(Value v) {
     if(v.type == VAL_ARRAY) return lumyr_make_int(v.v.array->len);
     if(v.type == VAL_TYPED_ARRAY) return lumyr_make_int(v.v.typed_array->len);
     if(v.type == VAL_STRING) {
-        /* 已知是字符串，直接内联访问，跳过 lumyr_str_len 的冗余 type 检查 */
-        int l = v.str_inline ? (int)v.v.sso.len : (int)(v.v.s ? strlen(v.v.s) : 0);
-        return lumyr_make_int((long long)l);
+        return lumyr_make_int((long long)lumyr_str_ulen(&v));
     }
     if(v.type == VAL_MAP) return lumyr_make_int(v.v.map->len);
     if(v.type == VAL_TUPLE) return lumyr_make_int((long long)lumyr_tuple_len(v));

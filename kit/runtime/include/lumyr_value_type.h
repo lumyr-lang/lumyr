@@ -340,10 +340,33 @@ static inline const char* lumyr_str_cstr(const Value* v) {
     return v->str_inline ? v->v.sso.data : v->v.s;
 }
 
-// 获取字符串长度（内联用sso.len，堆用strlen）
+// 获取字符串长度（内联用sso.len，堆用strlen）—— 字节数
 static inline int lumyr_str_len(const Value* v) {
     if (v->type != VAL_STRING) return 0;
     return v->str_inline ? (int)v->v.sso.len : (int)(v->v.s ? strlen(v->v.s) : 0);
+}
+
+/* UTF-8 序列长度（按首字节；非法首字节按 1 处理避免死循环） */
+static inline int lumyr_utf8_seqlen(unsigned char b) {
+    if (b < 0x80) return 1;
+    if ((b & 0xE0) == 0xC0) return 2;
+    if ((b & 0xF0) == 0xE0) return 3;
+    if ((b & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+/* 获取字符串字符数（UTF-8 码点数；continuation byte 10xxxxxx 不计） */
+static inline int lumyr_str_ulen(const Value* v) {
+    if (v->type != VAL_STRING) return 0;
+    const unsigned char* s = v->str_inline
+        ? (const unsigned char*)v->v.sso.data
+        : (const unsigned char*)(v->v.s ? v->v.s : "");
+    int n = v->str_inline ? (int)v->v.sso.len : (int)(v->v.s ? strlen(v->v.s) : 0);
+    int cnt = 0;
+    for (int i = 0; i < n; i++) {
+        if ((s[i] & 0xC0) != 0x80) cnt++;
+    }
+    return cnt;
 }
 
 // 日期时间对象，VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA 使用（堆分配，GC 管理）

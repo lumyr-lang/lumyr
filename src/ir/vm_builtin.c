@@ -307,7 +307,7 @@ static void bi_ta_addall(TypedArray* ta, Value src) {
 
 static int bi_len_of(Value v) {
     switch(v.type) {
-    case VAL_STRING:      return lumyr_str_len(&v);
+    case VAL_STRING:      return lumyr_str_ulen(&v);   /* 字符数（UTF-8 码点） */
     case VAL_ARRAY:       return v.v.array ? v.v.array->len : 0;
     case VAL_TYPED_ARRAY: return v.v.typed_array ? v.v.typed_array->len : 0;
     case VAL_MAP:         return v.v.map ? v.v.map->len : 0;
@@ -1319,12 +1319,24 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(!bi_need_args("charAt", argc, 1)) return 0;
         const char* s = lumyr_str_cstr(&recv);
         int64_t i = bi_num_i64(argv[1]);
-        int len = lumyr_str_len(&recv);
-        if(i < 0 || i >= len) {
-            fprintf(stderr, "运行时错误: char_at(%lld) 越界（长度 %d）\n", (long long)i, len);
-            return 0;
+        int clen = lumyr_str_ulen(&recv);
+        if(i < 0 || i >= clen) {
+            fprintf(stderr, "运行时错误 / Runtime error: char_at(%lld) 越界（长度 %d）/ char_at(%lld) out of bounds (length %d)\n",
+                    (long long)i, clen, (long long)i, clen);
+            exit(EXIT_FAILURE);
         }
-        *out = lumyr_make_char(s[i]);
+        /* 字符语义：定位第 i 个码点的字节范围，返回该字符（1 码点字符串） */
+        const unsigned char* p = (const unsigned char*)s;
+        int blen = lumyr_str_len(&recv);
+        int64_t ci = 0;
+        int off = 0;
+        while(ci < i && off < blen) { off += lumyr_utf8_seqlen(p[off]); ci++; }
+        int sl = lumyr_utf8_seqlen(p[off]);
+        if(off + sl > blen) sl = blen - off;   /* 截断的非法序列取剩余字节 */
+        char buf[8];
+        memcpy(buf, s + off, (size_t)sl);
+        buf[sl] = '\0';
+        *out = lumyr_make_string(buf);
         return 1;
     }
     /* 文件 I/O 简写函数（read "path" / write "path" value 语法糖映射到此） */

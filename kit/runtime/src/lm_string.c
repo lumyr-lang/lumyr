@@ -10,17 +10,27 @@
 
 
 Value lumyr_substr(Value s, Value start, Value n) {
-    if(s.type != VAL_STRING) runtime_error("substr() 第一个参数必须是字符串");
-    long long slen = (long long)strlen(lumyr_str_cstr(&s));
+    if(s.type != VAL_STRING) runtime_error("substr() 第一个参数必须是字符串 / first arg must be string");
+    const char* sp = lumyr_str_cstr(&s);
+    /* 字符语义：start/n 为 UTF-8 码点索引与个数 */
+    long long clen = (long long)lumyr_str_ulen(&s);
     long long i = array_index_of(start);
     long long cnt = array_index_of(n);
-    if(i < 0 || i > slen) runtime_error("substr() 起始越界");
-    if(cnt < 0) runtime_error("substr() 长度不能为负数");
-    if(i + cnt > slen) cnt = slen - i;
-    char* out = (char*)malloc(cnt + 1);
+    if(i < 0 || i > clen) runtime_error("substr() 起始越界 / start out of bounds");
+    if(cnt < 0) runtime_error("substr() 长度不能为负数 / length must not be negative");
+    if(i + cnt > clen) cnt = clen - i;
+    /* 码点 → 字节偏移 */
+    const unsigned char* p = (const unsigned char*)sp;
+    int blen = (int)strlen(sp);
+    int off0 = 0;
+    for(long long k = 0; k < i && off0 < blen; k++) off0 += lumyr_utf8_seqlen(p[off0]);
+    int off1 = off0;
+    for(long long k = 0; k < cnt && off1 < blen; k++) off1 += lumyr_utf8_seqlen(p[off1]);
+    int outn = off1 - off0;
+    char* out = (char*)malloc((size_t)outn + 1);
     if(!out) { perror("lumyr_substr"); exit(EXIT_FAILURE); }
-    memcpy(out, lumyr_str_cstr(&s) + i, cnt);
-    out[cnt] = '\0';
+    memcpy(out, sp + off0, (size_t)outn);
+    out[outn] = '\0';
     Value r = lumyr_make_string(out);
     free(out);
     return r;
