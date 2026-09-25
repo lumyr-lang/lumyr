@@ -4673,7 +4673,9 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
             pck = CAST_STRUCT_PTR;
             fn->var_type_tags[slot] = (int)pck;
             if(!fn->method_self_struct) fn->method_self_struct = strdup(p->u.param.constraint);
-        } else {
+        } else if(!p->u.param.is_nullable) {
+            /* 可空形参 T?：不写 typed tag，落动态 VALUE（null 才能原样传入，
+             * 函数体内 x == null 判定有效；typed int/double 槽无法表示 null） */
             if(pck != CAST_NONE) fn->var_type_tags[slot] = (int)pck;
             /* 若是 self 参数且已识别为 struct/class：也设 method_self_struct */
             if(strcmp(p->u.param.name, "self") == 0 && p->u.param.constraint &&
@@ -4681,7 +4683,8 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
                 if(!fn->method_self_struct) fn->method_self_struct = strdup(p->u.param.constraint);
             }
         }
-        ExprType et = castkind_to_exprtype(pck);   /* 无标注 → NONE（动态） */
+        /* 可空形参 T?：Ctx 类型也落 NONE（动态 VALUE 槽访问），与 var_type_tags 一致 */
+        ExprType et = p->u.param.is_nullable ? EXPR_TYPE_NONE : castkind_to_exprtype(pck);
         ctx_register_param(&c, p->u.param.name, et);
         if(p->u.param.is_ellipsis) fn->has_variadic = 1;
         else fn->param_cnt++;

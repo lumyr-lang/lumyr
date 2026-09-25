@@ -1546,19 +1546,20 @@ int typecheck_expr(AstNode* node)
             node->val_type = VAL_MAP;
             break;
         case AST_COMP_LIST:
+            /* iter 先检查（不引入循环变量），随后注册循环变量供 cond/expr 引用
+             * （此前 cond 在注册前检查，新作用域下首次使用的循环变量名被误报未定义） */
             err |= typecheck_expr(node->u.comp.iter);
-            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
-            /* 注册循环变量后检查表达式 */
             if(node->u.comp.var && node->u.comp.var->type == AST_VAR)
                 static_sym_put(node->u.comp.var->u.varname, VAL_NONE);
+            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
             err |= typecheck_expr(node->u.comp.expr);
             node->val_type = VAL_ARRAY;
             break;
         case AST_COMP_MAP:
             err |= typecheck_expr(node->u.comp.iter);
-            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
             if(node->u.comp.var && node->u.comp.var->type == AST_VAR)
                 static_sym_put(node->u.comp.var->u.varname, VAL_NONE);
+            if(node->u.comp.cond) err |= typecheck_expr(node->u.comp.cond);
             err |= typecheck_expr(node->u.comp.expr);
             err |= typecheck_expr(node->u.comp.value);
             node->val_type = VAL_MAP;
