@@ -461,6 +461,15 @@ Value lumyr_add(Value a, Value b) {
     }
     // complex 运算（complex + complex → complex）
     if(a.type == VAL_COMPLEX && b.type == VAL_COMPLEX) return lumyr_complex_add(a, b);
+    /* 数组拼接：VAL_ARRAY + VAL_ARRAY → 新数组（元素浅拷贝，与 concat 一致） */
+    if(a.type == VAL_ARRAY && b.type == VAL_ARRAY) {
+        int n1 = a.v.array ? (int)a.v.array->len : 0;
+        int n2 = b.v.array ? (int)b.v.array->len : 0;
+        Value r = val_array(n1 + n2);
+        for(int i = 0; i < n1; i++) r.v.array->items[i] = a.v.array->items[i];
+        for(int i = 0; i < n2; i++) r.v.array->items[n1 + i] = b.v.array->items[i];
+        return r;
+    }
     if(a.type == VAL_INT && b.type == VAL_INT)
     {
         return lumyr_make_int(a.v.i + b.v.i);

@@ -128,19 +128,29 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     /* 异常首先穿过同帧「仅 finally」try（catch_pc==0, fin_pc!=0）：
      * 压入 RETHROW 完成动作并跳到 finally 入口；finally 执行完由 FINISH
      * 重新抛出（继续向外搜真正的 catch）。不弹/不 free 该 try 节点
-     * （FINISH 时统一 pop_current_try）。 */
+     * （FINISH 时统一 pop_current_try）。
+     * 例外：若 throw 来自 finally 块内部（pc > fin_pc），说明 finally
+     * 已在执行中，不再跳回 finally（否则死循环），而是弹出当前 try
+     * 并继续向外搜 catch。 */
     if(g_try_stack && g_try_stack->frame == ctx->frame &&
        g_try_stack->catch_pc == 0 && g_try_stack->fin_pc != 0) {
-        FinNode* fn = (FinNode*)malloc(sizeof(FinNode));
-        if(!fn) { perror("fin rethrow"); exit(EXIT_FAILURE); }
-        fn->action = 2;    /* RETHROW */
-        fn->target = 0;
-        fn->next   = g_fin_stack;
-        g_fin_stack = fn;
-        g_current_error     = err;
-        g_current_throw_val = v;
-        ctx->pc = g_try_stack->fin_pc;
-        return 1;
+        if(ctx->pc > g_try_stack->fin_pc) {
+            /* finally 内部 throw：弹出当前 try，继续向外传播 */
+            TryCtxNode* d = g_try_stack;
+            g_try_stack = d->prev;
+            free(d);
+        } else {
+            FinNode* fn = (FinNode*)malloc(sizeof(FinNode));
+            if(!fn) { perror("fin rethrow"); exit(EXIT_FAILURE); }
+            fn->action = 2;    /* RETHROW */
+            fn->target = 0;
+            fn->next   = g_fin_stack;
+            g_fin_stack = fn;
+            g_current_error     = err;
+            g_current_throw_val = v;
+            ctx->pc = g_try_stack->fin_pc;
+            return 1;
+        }
     }
 
     /* 沿 try 栈找第一个有 catch 的处理器 */
