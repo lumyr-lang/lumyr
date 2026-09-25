@@ -226,6 +226,11 @@ int builtin_id_by_name(const char* name) {
         {"firstDate", BUILTIN_CALENDAR_FIRST_DATE},
         {"lastDate", BUILTIN_CALENDAR_LAST_DATE},
         {"file", BUILTIN_FILE_MAKE},
+        /* 对象二进制序列化（内部名，ObjectStream .lm 层调用） */
+        {"__lmSerialize", BUILTIN_LM_SERIALIZE},
+        {"__lmDeserialize", BUILTIN_LM_DESERIALIZE},
+        {"__lmBuildStream", BUILTIN_LM_BUILD_STREAM},
+        {"__lmCheckHeader", BUILTIN_LM_CHECK_HEADER},
         {"readAll", BUILTIN_FILE_READ_ALL},
         {"readLines", BUILTIN_FILE_READ_LINES},
         {"readLine", BUILTIN_FILE_READ_LINE},
@@ -3637,6 +3642,19 @@ void c_stmt(Ctx* c, AstNode* node) {
             else if(et == EXPR_TYPE_PTR) pop_sel = 3;
             emit(c, OPC_POP, pop_sel, 0);
         }
+        break;
+    }
+
+    case AST_CLASS_NEW: {
+        /* 构造表达式语句：TypeName(args) 作为裸语句。
+         * 编译实例化并丢弃结果，按返回类型选择栈（与 INDEX_ASSIGN 同策略，
+         * 避免 PTR 结果误弹 VALUE 偷调用方数据） */
+        ExprType et = c_expr(c, node);
+        int pop_sel = 0;
+        if(et == EXPR_TYPE_INT) pop_sel = 1;
+        else if(et == EXPR_TYPE_DOUBLE) pop_sel = 2;
+        else if(et == EXPR_TYPE_PTR) pop_sel = 3;
+        emit(c, OPC_POP, pop_sel, 0);
         break;
     }
 

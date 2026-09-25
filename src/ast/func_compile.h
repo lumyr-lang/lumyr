@@ -26,6 +26,8 @@ typedef struct InterpFuncPayload {
 // 将AST_FUNC_DEF节点编译生成RuntimeFunc（不持有AstNode，内部提取信息生成IR/解释器句柄）
 RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast);
 RuntimeFunc* compile_func_from_ast_with_class(AstNode* func_def_ast, const char* class_name);
+// class 静态方法：保持 flat 注册名（<Class>_<method>），仅回填字节码 class_name 供访问控制
+RuntimeFunc* compile_static_func_from_ast(AstNode* func_def_ast, const char* class_name);
 
 // ---- 全局函数 AST 表（用于 const fn 编译期求值查找）----
 // 注册函数 AST 节点（compile_func_from_ast 内部自动调用）

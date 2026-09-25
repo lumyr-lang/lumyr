@@ -316,8 +316,27 @@ static void compile_class_ctors(const char* cls) {
     for(int i = 0; i < g_class_ctor_cnt; i++) {
         AstNode* ctor = g_class_ctor_list[i];
         if(!ctor || ctor->type != AST_FUNC_DEF) continue;
+        /* 已在静态方法解析期提前编译（ensure_ctors_compiled）则跳过 */
+        if(ir_func_table_lookup(ctor->u.func_def.name)) continue;
         RuntimeFunc* rf = compile_func_from_ast(ctor);
         class_add_constructor(cls, ctor, rf);
+    }
+}
+
+/* 时序修复：确保当前类已解析的构造函数完成编译注册。
+ * 静态方法在解析期就编译其方法体（见 class_prop 中的 static 规则），
+ * 而 compile_class_ctors 要等类 RBRACE；若静态方法体内自构造，
+ * td->constructor 尚为 NULL，AST_CLASS_NEW 编译会退化为裸分配、
+ * 构造函数体静默不执行。故在编译静态方法前先补编译构造函数。 */
+static void ensure_ctors_compiled(void) {
+    if(!g_current_class_name || g_class_ctor_cnt == 0) return;
+    TypeDef* tdE = class_lookup(g_current_class_name);
+    if(!tdE || tdE->constructor) return;
+    for(int ci = 0; ci < g_class_ctor_cnt; ci++) {
+        AstNode* ctorNode = g_class_ctor_list[ci];
+        if(!ctorNode || ctorNode->type != AST_FUNC_DEF) continue;
+        RuntimeFunc* rfC = compile_func_from_ast(ctorNode);
+        class_add_constructor(g_current_class_name, ctorNode, rfC);
     }
 }
 
@@ -1399,6 +1418,15 @@ closed_stmt
           if(macro_is_defined($1)) {
               AstNode* mdef = macro_lookup($1);
               $$ = macro_expand(mdef, $3);
+          } else if(struct_lookup($1) || class_lookup($1) ||
+                    (g_current_class_name && strcmp($1, g_current_class_name) == 0) ||
+                    (g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
+              /* 已注册 struct/class 名的裸调用语句：构造调用 → ast_class_new。
+               * 此前直接 ast_call，import 类（如 ObjectInputStream(b)）不赋值时
+               * 被当普通函数，经模块 map 动态调用失败。与 expr 的 ID LPAREN 规则同路径。 */
+              int argc = 0;
+              for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
+              $$ = L(ast_class_new($1, argc, $3, NULL));
           } else {
               $$ = L(ast_call($1, $3));
           }
@@ -2277,6 +2305,13 @@ closed_stmt
           clear_formal_generics();
           $$ = L(ast_none());
       }
+    | TOK_INTERFACE ID gdecl_opt LBRACE RBRACE {
+          /* 空体标记接口：interface Serializable {} */
+          interface_register($2, NULL, NULL, g_cur_generic_names, g_cur_generic_count);
+          free($2);
+          clear_formal_generics();
+          $$ = L(ast_none());
+      }
     | TOK_INTERFACE ID gdecl_opt TOK_EXTENDS extends_name LBRACE interface_methods RBRACE {
           /* interface Colored extends Printable { ... }：注册接口（带父接口） */
           interface_register($2, $7, $5, g_cur_generic_names, g_cur_generic_count);
@@ -2287,6 +2322,13 @@ closed_stmt
     | TOK_PUBLIC TOK_INTERFACE ID gdecl_opt LBRACE interface_methods RBRACE {
           /* public interface X { ... }：public 仅为显式标注，interface 默认全局可见 */
           interface_register($3, $6, NULL, g_cur_generic_names, g_cur_generic_count);
+          free($3);
+          clear_formal_generics();
+          $$ = L(ast_none());
+      }
+    | TOK_PUBLIC TOK_INTERFACE ID gdecl_opt LBRACE RBRACE {
+          /* public 空体标记接口：public interface Serializable {} */
+          interface_register($3, NULL, NULL, g_cur_generic_names, g_cur_generic_count);
           free($3);
           clear_formal_generics();
           $$ = L(ast_none());
@@ -3652,7 +3694,7 @@ class_prop_list
             $3->u.func_def.access_modifier = $1;
             strip_static_self($3);
             class_static_member_register(static_name, g_current_class_name, $1);
-            RuntimeFunc* rf = compile_func_from_ast($3);
+            RuntimeFunc* rf = compile_static_func_from_ast($3, g_current_class_name);
             if(rf) {
                 Value fv;
                 fv.type = VAL_FUNC;
@@ -3713,7 +3755,8 @@ class_prop_list
                无兜底：flat 名不得与已注册全局函数撞车 */
             if(!static_flat_name_ok(static_name)) { YYABORT; }
             class_static_member_register_ex(static_name, g_current_class_name, 0, VAL_FUNC);
-            RuntimeFunc* rf = compile_func_from_ast($4);
+            ensure_ctors_compiled();
+            RuntimeFunc* rf = compile_static_func_from_ast($4, g_current_class_name);
             if(rf) {
                 Value fv;
                 fv.type = VAL_FUNC;
@@ -3809,7 +3852,8 @@ class_prop_list
             if(!static_flat_name_ok(static_name)) { YYABORT; }
             class_static_member_register_ex(static_name, g_current_class_name, 0, VAL_FUNC);
             /* 立即注册到符号表，以便语义检查阶段能找到 */
-            RuntimeFunc* rf = compile_func_from_ast($3);
+            ensure_ctors_compiled();
+            RuntimeFunc* rf = compile_static_func_from_ast($3, g_current_class_name);
             if(rf) {
                 Value fv;
                 fv.type = VAL_FUNC;
@@ -3860,7 +3904,7 @@ class_prop_list
             $4->u.func_def.access_modifier = $2;
             strip_static_self($4);
             class_static_member_register(static_name, g_current_class_name, $2);
-            RuntimeFunc* rf = compile_func_from_ast($4);
+            RuntimeFunc* rf = compile_static_func_from_ast($4, g_current_class_name);
             if(rf) {
                 Value fv;
                 fv.type = VAL_FUNC;
@@ -3890,7 +3934,7 @@ class_prop_list
             /* 无兜底：flat 名不得与已注册全局函数撞车 */
             if(!static_flat_name_ok(static_name)) { YYABORT; }
             class_static_member_register_ex(static_name, g_current_class_name, $3, VAL_FUNC);
-            RuntimeFunc* rf = compile_func_from_ast($4);
+            RuntimeFunc* rf = compile_static_func_from_ast($4, g_current_class_name);
             if(rf) {
                 Value fv;
                 fv.type = VAL_FUNC;

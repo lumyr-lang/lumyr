@@ -216,6 +216,11 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
     ret->p  = NULL;
 
     int total_instr = 0;
+    /* 访问控制上下文：执行某 class 的字节码方法期间，g_current_class 标记属主类，
+     * 使同类内动态字段访问（非 self 快路径，如静态方法里 other.privateField）
+     * 能通过访问检查。可重入：进入保存、每个出口恢复调用者类。 */
+    const char* prev_class = lumyr_get_current_class();
+    if(ctx->fn->class_name) lumyr_set_current_class(ctx->fn->class_name);
     /* 程序计数器统一使用 ctx->pc：控制流指令（JMP/JMP_IF_*）直接改写它。
        取指后自增；若指令是跳转，会在执行时覆盖为目标地址。 */
     while (ctx->pc < ctx->fn->code_len) {
@@ -498,8 +503,10 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
 
         /* 异常跨帧展开：捕获帧由 check 内部设 current_error 并重定位 pc；
            非捕获帧结束当前层，向调用者传播 VM_LOOP_UNWIND。 */
-        if (vm_except_check_unwind(ctx) < 0)
+        if (vm_except_check_unwind(ctx) < 0) {
+            lumyr_set_current_class(prev_class);
             return VM_LOOP_UNWIND;
+        }
     }
 
     /* 函数自然走到末尾（无显式 return）：返回 nil */

@@ -1,0 +1,159 @@
+// ============================================================
+// lumyr-Serialization：对象二进制序列化（Java 风格）
+//
+// 组成：
+//   Serializable       标记接口（无方法）：类显式 implements Serializable
+//                      才允许被序列化，未实现者 writeObject 编译期硬错误
+//   ObjectOutputStream 对象 → 二进制流（内存 bytes 或直接写文件）
+//   ObjectInputStream  二进制流 → 对象（从 bytes 或文件读取）
+//
+// 用法：
+//   import <IO/Serialization>;
+//
+//   class Person implements Serializable {
+//       name: string; age: int;
+//   }
+//   // 内存模式
+//   out = ObjectOutputStream{};
+//   out.writeObject(Person{...});
+//   b = out.toBytes();
+//   in = ObjectInputStream{b};
+//   p = in.readObject();
+//
+//   // 文件模式
+//   ObjectOutputStream.toFile("/tmp/p.lmo").writeObject(p);
+//   p2 = ObjectInputStream{"/tmp/p.lmo"}.readObject();
+//
+// 数据格式：流头 'LMOS'+版本+标志；值=类型标记+载荷，大端字节序。
+// 第一版语义：整数族统一 int64、浮点族统一 double（实例字段写回时
+// 按字段精确类型转换，不丢精度；顶层/容器元素宽化）。
+// 不支持循环引用与函数/文件/套接字等运行时资源对象。
+// ============================================================
+
+// 标记接口：可序列化类的唯一准入标记
+public interface Serializable {
+}
+
+// 对象输出流
+public class ObjectOutputStream {
+
+    private chunks: array;       // 已写入值的编码块（bytes 数组）
+    private targetPath: string;  // 文件模式路径（空串=内存模式）
+
+    // 内存模式构造
+    func ObjectOutputStream() {
+        self.chunks = [];
+        self.targetPath = "";
+    }
+
+    // 文件模式工厂：创建后写入操作在 close/flush 时落盘
+    static func toFile(path: string): ObjectOutputStream {
+        // 类内用圆括号构造：大括号命名构造的 '{' 由 lexer 按"已注册
+        // 类型名"消歧，而当前类尚在解析中，圆括号形式不受此限制
+        out = ObjectOutputStream();
+        out.targetPath = path;
+        return out;
+    }
+
+    // 写入任意可序列化值
+    func writeObject(obj): void {
+        self.chunks.add(__lmSerialize(obj));
+    }
+    // 基本类型流式写入
+    func writeNull(): void {
+        self.chunks.add(__lmSerialize(null));
+    }
+    func writeBool(b: bool): void {
+        self.chunks.add(__lmSerialize(b));
+    }
+    func writeInt(n: int): void {
+        self.chunks.add(__lmSerialize(n));
+    }
+    func writeDouble(d: double): void {
+        self.chunks.add(__lmSerialize(d));
+    }
+    func writeChar(c: char): void {
+        self.chunks.add(__lmSerialize(c));
+    }
+    func writeByte(b: byte): void {
+        self.chunks.add(__lmSerialize(b));
+    }
+    func writeString(s: string): void {
+        self.chunks.add(__lmSerialize(s));
+    }
+    // bytes 作为单个值写入（读回仍为 bytes）
+    func writeBytes(b: bytes): void {
+        self.chunks.add(__lmSerialize(b));
+    }
+
+    // 组装完整流（流头 + 全部数据块）
+    func toBytes(): bytes {
+        return __lmBuildStream(self.chunks);
+    }
+
+    // 文件模式落盘；内存模式为空操作
+    func flush(): void {
+        if (self.targetPath != "") {
+            file(self.targetPath).writeBytes(self.toBytes());
+        }
+    }
+    func close(): void {
+        self.flush();
+    }
+}
+
+// 对象输入流
+public class ObjectInputStream {
+
+    private data: bytes;     // 完整流字节
+    private cursor: int;     // 当前读取偏移
+
+    // 从 bytes 或文件路径（string）构造，立即校验流头
+    func ObjectInputStream(src) {
+        if (type(src) == "bytes") {
+            self.data = src;
+        } else {
+            self.data = file(src).readBytes();
+        }
+        self.cursor = __lmCheckHeader(self.data);
+    }
+
+    // 读取下一个值并推进游标
+    private func readNext() {
+        r = __lmDeserialize(self.data, self.cursor);
+        self.cursor = r[1];
+        return r[0];
+    }
+
+    func readObject() {
+        return self.readNext();
+    }
+    func readBool(): bool {
+        return self.readNext();
+    }
+    func readInt(): int {
+        return self.readNext();
+    }
+    func readDouble(): double {
+        return self.readNext();
+    }
+    func readChar(): char {
+        return self.readNext();
+    }
+    func readByte(): byte {
+        return self.readNext();
+    }
+    func readString(): string {
+        return self.readNext();
+    }
+    func readBytes(): bytes {
+        return self.readNext();
+    }
+
+    // 剩余未读字节数
+    func available(): int {
+        return self.data.len - self.cursor;
+    }
+    func close(): void {
+    }
+}

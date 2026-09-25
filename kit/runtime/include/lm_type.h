@@ -112,6 +112,8 @@ RuntimeTypeInfo* lumyr_instance_get_info(Value obj);
 /* CC 模式字段读写（VM 模式直接用 FieldInfo 做 typed 读写，不走这里） */
 Value lumyr_field_get(Value obj, const char* field_name);
 void lumyr_field_set(Value obj, const char* field_name, Value value);
+/* 受信写入（check_access=0 时绕过访问修饰符检查）：供反序列化恢复 private 字段 */
+void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int check_access);
 
 /* 类型判断：obj is TypeName（沿 parent 链 + interfaces 查） */
 int lumyr_type_is(Value obj, const char* type_name);

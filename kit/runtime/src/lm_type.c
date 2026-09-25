@@ -489,6 +489,14 @@ Value lumyr_field_get(Value obj, const char* field_name)
 
 void lumyr_field_set(Value obj, const char* field_name, Value value)
 {
+    lumyr_field_set_trusted(obj, field_name, value, 1);
+}
+
+/* 内部实现：check_access=1 走访问修饰符运行时检查（class 动态路径）；
+ * check_access=0 为受信写入（反序列化逐字段恢复，须能写 private，
+ * 语义同 Java ObjectInputStream 绕过访问控制）。 */
+void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int check_access)
+{
     if((obj.type != VAL_STRUCT_PTR && obj.type != VAL_CLASS_PTR) || !obj.v.struct_ptr || !field_name) {
         runtime_error("field_set: 对象不是实例或字段名为空");
         return;
@@ -504,8 +512,8 @@ void lumyr_field_set(Value obj, const char* field_name, Value value)
         return;
     }
 
-    /* 访问修饰符运行时检查（仅 class 动态路径） */
-    if(info->kind == TYPE_KIND_CLASS && fi->access != ACCESS_PUBLIC) {
+    /* 访问修饰符运行时检查（仅 class 动态路径；受信写入跳过） */
+    if(check_access && info->kind == TYPE_KIND_CLASS && fi->access != ACCESS_PUBLIC) {
         if(!lumyr_is_accessor_inside_class(info->name) &&
            !lumyr_is_accessor_subclass_of(info->name)) {
             char buf[256];

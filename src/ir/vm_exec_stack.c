@@ -655,8 +655,12 @@ int vm_exec_class_new(VMExecCtx* ctx, Instruction* in) {
     Value v = lumyr_instance_new(info);
     void* p = v.v.struct_ptr;
 
-    /* struct（kind == TYPE_KIND_STRUCT）且无 __init__：直接按字段顺序初始化 */
-    if(p && info && info->kind == TYPE_KIND_STRUCT && argc > 0 && argc <= info->nfields) {
+    /* struct/class 无 __init__：直接按字段顺序初始化。
+     * 此前仅允许 TYPE_KIND_STRUCT，导致无显式 ctor 的 class 用
+     * Type{f:v}（编译为 CLASS_NEW argc=n）时字段不写入、实参残留 VALUE 栈
+     * （栈错位）。无 ctor 的 class 直接按字段初始化与 struct 同语义。 */
+    if(p && info && (info->kind == TYPE_KIND_STRUCT || info->kind == TYPE_KIND_CLASS)
+       && argc > 0 && argc <= info->nfields) {
         /* 逆序弹参（栈顶是最后一个实参）暂存 */
         Value* args = (Value*)malloc(sizeof(Value) * argc);
         if(!args) { stack_vm_push(g_stack_mgr, STACK_PTR, &p); return 1; }

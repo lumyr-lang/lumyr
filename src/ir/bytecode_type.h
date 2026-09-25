@@ -565,6 +565,13 @@ typedef enum {
     BUILTIN_RADIANS,       // radians(x)：角度→弧度
     BUILTIN_TRUNC,         // trunc(x)：向零取整
     BUILTIN_RANDOM,        // random()：返回 [0,1) 随机 double
+    /* ===== 对象二进制序列化（ObjectStream） =====
+     * __lmSerialize(v)：单值 → bytes；__lmDeserialize(b, off) → [value, newOff]；
+     * __lmBuildStream(chunks)：加流头拼接 → bytes；__lmCheckHeader(b) → payload 偏移 */
+    BUILTIN_LM_SERIALIZE,
+    BUILTIN_LM_DESERIALIZE,
+    BUILTIN_LM_BUILD_STREAM,
+    BUILTIN_LM_CHECK_HEADER,
     BUILTIN_COUNT
 } BuiltinId;
 

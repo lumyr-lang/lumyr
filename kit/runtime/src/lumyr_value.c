@@ -1073,6 +1073,8 @@ int lumyr_etype_stackcls(ValueType et) {
     case VAL_STRUCT_PTR: case VAL_CLASS_PTR:
     /* 容器引用：map/array/typed_array 均为堆指针，走 PTR 栈 */
     case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY:
+    /* bytes：不可变字节串堆对象，走 PTR 栈 */
+    case VAL_BYTES:
         return 3;
     default:
         return 0;
@@ -1096,8 +1098,8 @@ size_t lumyr_etype_itemsz(ValueType et) {
     case VAL_DECIMAL: case VAL_BITDECIMAL:
     /* struct/class 实例引用：字段存实例指针，8 字节 */
     case VAL_STRUCT_PTR: case VAL_CLASS_PTR:
-    /* 容器引用：字段存 map/array/typed_array 堆指针，8 字节 */
-    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY:
+    /* 容器引用：字段存 map/array/typed_array/bytes 堆指针，8 字节 */
+    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY: case VAL_BYTES:
         return 8;
     case VAL_LONG_DOUBLE:
         return sizeof(long double);

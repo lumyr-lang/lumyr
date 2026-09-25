@@ -32,6 +32,7 @@
 #include "lm_type.h"
 #include "lm_json.h"
 #include "lm_io.h"
+#include "vm_serialize.h"
 #include "lm_http.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -2528,6 +2529,34 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
 
+    /* ===== 对象二进制序列化（内部名，供 ObjectStream .lm 层调用） ===== */
+    case BUILTIN_LM_SERIALIZE: {
+        if(argc < 1) { runtime_error("__lmSerialize 需要 1 个参数"); return 0; }
+        *out = lm_serialize_value(argv[0]);
+        return 1;
+    }
+    case BUILTIN_LM_DESERIALIZE: {
+        if(argc < 2) { runtime_error("__lmDeserialize 需要 2 个参数"); return 0; }
+        if(argv[0].type != VAL_BYTES) { runtime_error("__lmDeserialize 首参必须是 bytes"); return 0; }
+        Value val = val_none();
+        int newOff = lm_deserialize_value_at(argv[0], (int)bi_num_i64(argv[1]), &val);
+        Value r = val_array(2);
+        r.v.array->items[0] = val;
+        r.v.array->items[1] = val_int((long long)newOff);
+        *out = r;
+        return 1;
+    }
+    case BUILTIN_LM_BUILD_STREAM: {
+        if(argc < 1) { runtime_error("__lmBuildStream 需要 1 个参数"); return 0; }
+        *out = lm_build_stream(argv[0]);
+        return 1;
+    }
+    case BUILTIN_LM_CHECK_HEADER: {
+        if(argc < 1) { runtime_error("__lmCheckHeader 需要 1 个参数"); return 0; }
+        *out = val_int((long long)lm_check_stream_header(argv[0]));
+        return 1;
+    }
+
     /* ===== date 族构造（接受 ISO 字符串 或 多个整数参数） ===== */
     case BUILTIN_DATE_MAKE: {
         /* 全局形式 date(...)：argv[0] 是第 1 个实参
@@ -3363,6 +3392,10 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOFTMAX: return "softmax";
     case BUILTIN_FROM_VALUE: return "fromValue";
     case BUILTIN_ASSERT: return "__assert";
+    case BUILTIN_LM_SERIALIZE: return "__lmSerialize";
+    case BUILTIN_LM_DESERIALIZE: return "__lmDeserialize";
+    case BUILTIN_LM_BUILD_STREAM: return "__lmBuildStream";
+    case BUILTIN_LM_CHECK_HEADER: return "__lmCheckHeader";
     case BUILTIN_DATE_MAKE: return "date";
     case BUILTIN_DATETIME_MAKE: return "datetime";
     case BUILTIN_TIME_MAKE: return "time";

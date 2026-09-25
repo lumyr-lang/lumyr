@@ -151,6 +151,8 @@ int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in) {
         v.type = VAL_STRUCT_PTR; v.v.struct_ptr = val; break;
     case CAST_CLASS_PTR:
         v.type = VAL_CLASS_PTR; v.v.struct_ptr = val; break;
+    case CAST_BYTES:
+        v.type = VAL_BYTES; v.v.bytes_obj = val; break;
     /* 容器裸指针：装回对应容器 Value，后续动态 INDEX_GET/print 才能识别。
      * 根因修复：装箱身份以 GC 头运行时 vtype 为准，声明 CastKind 仅是静态提示。
      * 此前按声明 CastKind 打标——`value: array` 字段实际持有 TypedArray* 时
@@ -244,6 +246,7 @@ int vm_exec_unbox_ptr(VMExecCtx* ctx, Instruction* in) {
     case VAL_ARRAY:      p = v.v.array; break;
     case VAL_TYPED_ARRAY: p = v.v.typed_array; break;
     case VAL_MAP:        p = v.v.map; break;
+    case VAL_BYTES:      p = v.v.bytes_obj; break;
     case VAL_STRING:
         p = v.str_inline ? strdup(v.v.sso.data) : strdup(v.v.s);
         break;

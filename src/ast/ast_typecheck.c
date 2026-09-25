@@ -990,6 +990,9 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"copyTo", 2, 2}, {"moveTo", 2, 2}, {"glob", 2, 2},
     {"fromHex", 1, 1}, {"conjugate", 1, 1}, {"union", 2, 2}, {"intersect", 2, 2}, {"hex", 1, 1}, {"toStr", 1, 1},
     {"format_time", 1, 2},
+    /* 对象二进制序列化（内部名） */
+    {"__lmSerialize", 1, 1}, {"__lmDeserialize", 2, 2},
+    {"__lmBuildStream", 1, 1}, {"__lmCheckHeader", 1, 1},
     {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
     {"gc_count", 0, 0}, {"gc_bytes", 0, 0}, {"gc_collect", 0, 0}, {"gc_stw_ns", 0, 0}, {"next", 1, 1}, {"send", 2, 2}, {"receive", 0, 0}, {"close", 1, 1}, {"GenThrow", 2, 2}, {"chain", 2, 2}, {"zip", 2, 2}, {"skip", 2, 2}, {"take", 2, 2}, {"enumerate", 1, 1},
 };

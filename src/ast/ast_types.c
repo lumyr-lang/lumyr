@@ -163,6 +163,7 @@ ValueType type_name_to_valtype(const char* tname)
     /* 容器类型：map/array 字段声明需正确识别，否则落 VAL_NONE 被 cast 成 long long */
     if(strcmp(tname, "map") == 0)        return VAL_MAP;
     if(strcmp(tname, "array") == 0)      return VAL_ARRAY;
+    if(strcmp(tname, "bytes") == 0)     return VAL_BYTES;
     return VAL_NONE;
 }
 
@@ -368,6 +369,7 @@ int name_to_castkind(const char* tname) {
     if(strcmp(buf, "void") == 0) return CAST_VOID;
     if(strcmp(buf, "long double") == 0) return CAST_LONG_DOUBLE;
     if(strcmp(buf, "ptr") == 0) return CAST_PTR;
+    if(strcmp(buf, "bytes") == 0) return CAST_BYTES;
     if(strcmp(buf, "bigint") == 0) return CAST_BIGINT;
     if(strcmp(buf, "decimal") == 0) return CAST_DECIMAL;
     if(strcmp(buf, "bitdecimal") == 0) return CAST_BITDECIMAL;
@@ -851,8 +853,14 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     td->method_nodes = NULL;
     td->method_funcs = NULL;
     td->nmethods = 0;
-    td->constructor = NULL;
-    td->constructor_func = NULL;
+    /* constructor 仅在此前未建立时清空：静态方法解析期会触发提前
+     * class_register + ensure_ctors_compiled（ctor 已编译注册），
+     * 类 RBRACE 时本次"最终注册"不得破坏它，否则主程序构造调用
+     * 因 td->constructor=NULL 退化为裸分配、构造函数静默不执行。 */
+    if(!td->constructor) {
+        td->constructor = NULL;
+        td->constructor_func = NULL;
+    }
     // 设置属性访问修饰符（默认 public=0）
     if(merged_access_modifiers) {
         td->prop_access_modifiers = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
@@ -901,12 +909,35 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
             parent_info = lumyr_type_lookup(parent);
         }
 
-        td->runtime_info = lumyr_type_register(
-            name, nfields, fields, instance_size,
-            TYPE_KIND_CLASS, NULL, 0, NULL,
-            parent_info, td->ninterfaces, td->interfaces,
-            (uint8_t)td->is_abstract
-        );
+        if(td->runtime_info) {
+            /* 复用提前注册（class 内静态方法解析触发）的同一个 info：
+             * CLASS_NEW 在提前期已把该 info 指针固化进字节码常量池，若此时
+             * 重新 lumyr_type_register 会得到两个 info——实例持旧 info（方法表
+             * 为空）、RBRACE 后的 class_add_method 只写新 info → 方法分派查不到。
+             * 故原地更新布局，保持指针不变；方法表由后续 lumyr_type_set_method
+             * 写入同一 info。 */
+            RuntimeTypeInfo* ri0 = td->runtime_info;
+            if(ri0->fields) {
+                for(int fi = 0; fi < ri0->nfields; fi++) {
+                    if(ri0->fields[fi].name) free(ri0->fields[fi].name);
+                    if(ri0->fields[fi].type_name) free(ri0->fields[fi].type_name);
+                }
+                free(ri0->fields);
+            }
+            ri0->fields = fields;
+            ri0->nfields = nfields;
+            ri0->instance_size = instance_size;
+            ri0->parent = parent_info;
+            ri0->ninterfaces = td->ninterfaces;
+            ri0->interfaces = (const char**)td->interfaces;
+        } else {
+            td->runtime_info = lumyr_type_register(
+                name, nfields, fields, instance_size,
+                TYPE_KIND_CLASS, NULL, 0, NULL,
+                parent_info, td->ninterfaces, td->interfaces,
+                (uint8_t)td->is_abstract
+            );
+        }
         /* 填充 field_offsets 供编译器使用 */
         td->field_offsets = (int*)calloc(nfields > 0 ? nfields : 1, sizeof(int));
         for(int i = 0; i < nfields; i++) {

@@ -370,6 +370,25 @@ RuntimeFunc* compile_func_from_ast(AstNode* func_def_ast)
     return compile_func_from_ast_with_class(func_def_ast, NULL);
 }
 
+/* 编译 class 静态方法。静态方法名在 parse 期已被扁平化为 <Class>_<method>
+ * 并按全局函数注册（main 等按该 flat 名静态解析调用），故这里**不能**再用
+ * compile_func_from_ast_with_class——它会把注册名二次 mangle 成
+ * <Class>__m__<Class>_<method>，导致调用点按 flat 名查不到、退化为动态调用。
+ * 只需在 flat 字节码上回填 fn->class_name，使方法体执行期间访问控制上下文
+ * 标记属主类（同类内访问 private 成员）。 */
+RuntimeFunc* compile_static_func_from_ast(AstNode* func_def_ast, const char* class_name)
+{
+    RuntimeFunc* rf = compile_func_from_ast(func_def_ast);   /* flat 名，class_name=NULL */
+    if(rf && class_name) {
+        InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+        if(pl && pl->bytecode) {
+            if(pl->bytecode->class_name) free(pl->bytecode->class_name);
+            pl->bytecode->class_name = strdup(class_name);
+        }
+    }
+    return rf;
+}
+
 // typecheck 把 AST_VAR（函数名）就地转成 AST_FUNCREF 后，重新编译该函数的
 // 字节码并替换（parse 期生成的旧字节码里函数名引用还是 LOAD_VAR）。
 void func_compile_recompile(AstNode* def)
