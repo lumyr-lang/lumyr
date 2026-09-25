@@ -45,6 +45,10 @@ static int g_method_recomp_cnt = 0;
 static int g_method_recomp_cap = 0;
 /* 当前正在 typecheck 的方法属主（NULL=普通函数上下文） */
 static const char* g_method_owner = NULL;
+/* 访问控制上下文属主（仅供 tc_access_ok）：静态方法按普通函数 typecheck
+ * （g_method_owner 必须保持 NULL，否则 self/super 误判且改变重编译路径），
+ * 但类内访问 private/protected 静态成员仍需知道本类身份 */
+static const char* g_access_ctx_owner = NULL;
 /* 当前是否正在检查构造函数（const 字段在构造函数内允许首次赋值/初始化） */
 static int g_in_ctor = 0;
 
@@ -133,7 +137,8 @@ static const char* tc_owner(AstNode* node) {
 /* 当前上下文是否允许访问 owner 类中 access 级别的成员 */
 static int tc_access_ok(const char* owner, int access) {
     if(access == ACCESS_PUBLIC) return 1;
-    const char* ctx = g_method_owner;
+    /* 实例方法上下文优先；静态方法等普通函数上下文取访问控制专用属主 */
+    const char* ctx = g_method_owner ? g_method_owner : g_access_ctx_owner;
     if(!ctx) return 0;                        /* 外部上下文：private/protected 均拒绝 */
     if(strcmp(ctx, owner) == 0) return 1;     /* 同类：private/protected 允许 */
     if(access == ACCESS_PROTECTED) {
@@ -857,8 +862,16 @@ static int typecheck_static_methods(void) {
         if(class_static_member_kind_at(i) != VAL_FUNC) continue;
         const char* fnm = class_static_member_full_at(i);
         AstNode* def = func_ast_lookup(fnm);
-        if(def && def->type == AST_FUNC_DEF)
+        if(def && def->type == AST_FUNC_DEF) {
+            /* 访问控制上下文设为本类（仅 tc_access_ok 用；g_method_owner 保持 NULL，
+             * 不改变 self/super 判定与重编译路径），使静态方法内可访问本类
+             * private/protected 静态成员，与实例方法语义一致 */
+            const char* so = NULL; int sa = 0;
+            class_static_member_lookup(fnm, &so, &sa);
+            g_access_ctx_owner = so;
             acc |= typecheck_expr(def);
+            g_access_ctx_owner = NULL;
+        }
     }
     return acc;
 }
@@ -1214,6 +1227,11 @@ int typecheck_expr(AstNode* node)
                     LOG_ERROR("语义错误：++/-- 的操作数必须是变量\n");
                     return -1;
                 }
+                /* static const 成员自增/自减同为写操作，编译期拦截 */
+                if(class_static_member_is_const(kid->u.varname)) {
+                    LOG_ERROR("语义错误(第%d行)：不能给静态常量 '%s' 重新赋值\n", node->line, kid->u.varname);
+                    err = 1;
+                }
             }
             node->val_type = kid->val_type;
             break;
@@ -1308,10 +1326,18 @@ int typecheck_expr(AstNode* node)
         case AST_ASSIGN: {
             const char* assign_vn = node->u.assign.varname;
             int is_const_decl = node->u.assign.is_const;
+            /* static const 成员重赋值拦截（扁平名 Class_prop 路径，作用域无关）：
+             * 初始化器本身是 const 声明（is_const_decl=1），天然放行。 */
+            if(!is_const_decl && class_static_member_is_const(assign_vn)) {
+                LOG_ERROR("语义错误(第%d行)：不能给静态常量 '%s' 重新赋值\n", node->line, assign_vn);
+                err = 1;
+            }
             /* const 重复赋值拦截（put 之前查）：
              * 顶层无遮蔽直接拦截；函数/lambda 内仅当本层已登记过该名字才算重复
-             * （本层首次出现是对外部常量的合法遮蔽，put 会保存并清除外层标记）。 */
-            if(!is_const_decl && static_sym_is_const(assign_vn) &&
+             * （本层首次出现是对外部常量的合法遮蔽，put 会保存并清除外层标记）。
+             * static const 成员已由上方专属分支报错，此处跳过避免重复。 */
+            if(!is_const_decl && !class_static_member_is_const(assign_vn) &&
+               static_sym_is_const(assign_vn) &&
                (!static_sym_scope_active() || static_sym_level_knows(assign_vn))) {
                 LOG_ERROR("语义错误(第%d行)：不能给常量 '%s' 重新赋值\n", node->line, assign_vn);
                 err = 1;
@@ -1398,6 +1424,30 @@ int typecheck_expr(AstNode* node)
             break;
         }
         case AST_INDEX_ASSIGN: {
+            /* Class.prop = v：recv 为类名且命中静态成员表时优先给明确错误
+             * （否则 arr 按普通变量检查会报"使用未定义变量 C"，误导）。
+             * const → 不能给静态常量赋值；非 const → 静态成员写入暂不支持。 */
+            if(node->u.index_assign.arr->type == AST_VAR &&
+               node->u.index_assign.idx->type == AST_STRING) {
+                char sfn[300];
+                snprintf(sfn, sizeof sfn, "%s_%s",
+                         node->u.index_assign.arr->u.varname,
+                         node->u.index_assign.idx->u.sval);
+                const char* so = NULL; int sa = 0;
+                if(class_static_member_lookup(sfn, &so, &sa)) {
+                    if(class_static_member_is_const(sfn)) {
+                        LOG_ERROR("语义错误(第%d行)：不能给静态常量 '%s.%s' 赋值\n",
+                                  node->line, node->u.index_assign.arr->u.varname,
+                                  node->u.index_assign.idx->u.sval);
+                    } else {
+                        LOG_ERROR("语义错误(第%d行)：静态成员 '%s.%s' 不支持赋值（静态属性初始化后只读）\n",
+                                  node->line, node->u.index_assign.arr->u.varname,
+                                  node->u.index_assign.idx->u.sval);
+                    }
+                    err = 1;
+                    break;
+                }
+            }
             err |= typecheck_expr(node->u.index_assign.arr);
             err |= typecheck_expr(node->u.index_assign.idx);
             err |= typecheck_expr(node->u.index_assign.value);

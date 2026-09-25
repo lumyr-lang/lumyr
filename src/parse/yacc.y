@@ -364,12 +364,13 @@ static void g_class_method_clear(void) {
     g_class_ctor_list_clear();
 }
 
-/* 构造 class 静态属性 assign 节点、注册静态成员访问表并压入方法列表 */
-static AstNode* make_static_prop(char* prop_name, AstNode* expr, int access) {
+/* 构造 class 静态属性 assign 节点、注册静态成员访问表并压入方法列表；
+ * is_const=1 时按 const 声明构造（初始化后不可写，typecheck 拦截重赋值） */
+static AstNode* make_static_prop(char* prop_name, AstNode* expr, int access, int is_const) {
     char* svn = (char*)malloc(strlen(g_current_class_name) + strlen(prop_name) + 2);
     sprintf(svn, "%s_%s", g_current_class_name, prop_name);
-    class_static_member_register(svn, g_current_class_name, access);
-    AstNode* assign = ast_assign(svn, expr);
+    class_static_member_register_ex2(svn, g_current_class_name, access, VAL_NONE, is_const);
+    AstNode* assign = is_const ? ast_assign_const(svn, expr) : ast_assign(svn, expr);
     free(svn);
     g_class_method_push(assign);
     return assign;
@@ -3595,12 +3596,22 @@ class_prop_list
           private func 作为首成员时报语法错误。此处显式补齐。 —— */
     | access_modifier TOK_STATIC ID ASSIGN expr SEMI    {
         /* private/public/protected static count = 0（首成员） */
-        make_static_prop($3, $5, $1);
+        make_static_prop($3, $5, $1, 0);
+        $$ = NULL;
+      }
+    | access_modifier TOK_STATIC CONST ID ASSIGN expr SEMI    {
+        /* private/public/protected static const count = 0（首成员） */
+        make_static_prop($4, $6, $1, 1);
         $$ = NULL;
       }
     | access_modifier TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
         /* private/public/protected static count: int = 0（首成员，带类型标注） */
-        make_static_prop($3, $7, $1);
+        make_static_prop($3, $7, $1, 0);
+        $$ = NULL;
+      }
+    | access_modifier TOK_STATIC CONST ID COLON type_name ASSIGN expr SEMI    {
+        /* private/public/protected static const count: int = 0（首成员，带类型标注） */
+        make_static_prop($4, $8, $1, 1);
         $$ = NULL;
       }
     | access_modifier func_def    {
@@ -3716,33 +3727,64 @@ class_prop_list
       }
     | class_prop_list TOK_STATIC ID ASSIGN expr SEMI    {
         /* class 静态属性：static count = 0，全局名加类名前缀 */
-        make_static_prop($3, $5, 0);
+        make_static_prop($3, $5, 0, 0);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC CONST ID ASSIGN expr SEMI    {
+        /* class 静态常量：static const count = 0 */
+        make_static_prop($4, $6, 0, 1);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
         /* class 静态属性（带类型标注）：static count: int = 0 */
-        AstNode* assign = make_static_prop($3, $7, 0);
+        AstNode* assign = make_static_prop($3, $7, 0, 0);
+        (void)assign; /* 类型校验在 AST_ASSIGN 统一处理 */
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC CONST ID COLON type_name ASSIGN expr SEMI    {
+        /* class 静态常量（带类型标注）：static const count: int = 0 */
+        AstNode* assign = make_static_prop($4, $8, 0, 1);
         (void)assign; /* 类型校验在 AST_ASSIGN 统一处理 */
         $$ = $1;
       }
     | class_prop_list access_modifier TOK_STATIC ID ASSIGN expr SEMI    {
         /* private/public/protected static count = 0 */
-        make_static_prop($4, $6, $2);
+        make_static_prop($4, $6, $2, 0);
+        $$ = $1;
+      }
+    | class_prop_list access_modifier TOK_STATIC CONST ID ASSIGN expr SEMI    {
+        /* private/public/protected static const count = 0 */
+        make_static_prop($5, $7, $2, 1);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC access_modifier ID ASSIGN expr SEMI    {
         /* static private/public/protected count = 0（修饰符顺序等价） */
-        make_static_prop($4, $6, $3);
+        make_static_prop($4, $6, $3, 0);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC access_modifier CONST ID ASSIGN expr SEMI    {
+        /* static private/public/protected const count = 0（修饰符顺序等价） */
+        make_static_prop($5, $7, $3, 1);
         $$ = $1;
       }
     | class_prop_list access_modifier TOK_STATIC ID COLON type_name ASSIGN expr SEMI    {
         /* private/public/protected static count: int = 0 */
-        make_static_prop($4, $8, $2);
+        make_static_prop($4, $8, $2, 0);
+        $$ = $1;
+      }
+    | class_prop_list access_modifier TOK_STATIC CONST ID COLON type_name ASSIGN expr SEMI    {
+        /* private/public/protected static const count: int = 0 */
+        make_static_prop($5, $9, $2, 1);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC access_modifier ID COLON type_name ASSIGN expr SEMI    {
         /* static private/public/protected count: int = 0（修饰符顺序等价） */
-        make_static_prop($4, $8, $3);
+        make_static_prop($4, $8, $3, 0);
+        $$ = $1;
+      }
+    | class_prop_list TOK_STATIC access_modifier CONST ID COLON type_name ASSIGN expr SEMI    {
+        /* static private/public/protected const count: int = 0（修饰符顺序等价） */
+        make_static_prop($5, $9, $3, 1);
         $$ = $1;
       }
     | class_prop_list TOK_STATIC func_def  {

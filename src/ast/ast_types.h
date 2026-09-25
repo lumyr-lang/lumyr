@@ -141,6 +141,10 @@ int class_check_interface_implementation(const char* class_name, const char* int
 void class_static_member_register(const char* full_name, const char* owner, int access);
 /* 同上并指定种类（kind：VAL_FUNC=静态方法，VAL_NONE=静态属性） */
 void class_static_member_register_ex(const char* full_name, const char* owner, int access, int kind);
+/* 同上并指定 is_const（1=static const，初始化后不可写） */
+void class_static_member_register_ex2(const char* full_name, const char* owner, int access, int kind, int is_const);
+/* 查询静态成员是否 const：是返回 1，否或未找到返回 0 */
+int class_static_member_is_const(const char* full_name);
 /* 静态成员表枚举（供 typecheck 重建符号表） */
 int class_static_member_total(void);
 const char* class_static_member_full_at(int idx);

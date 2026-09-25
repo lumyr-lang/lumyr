@@ -1198,6 +1198,7 @@ typedef struct {
     char* owner;       /* 属主类名 */
     int access;        /* 0=public, 1=private, 2=protected */
     int kind;          /* ValueType：VAL_FUNC=静态方法，VAL_NONE=静态属性 */
+    int is_const;      /* 1=static const（初始化后不可写） */
 } StaticMemberEntry;
 
 static StaticMemberEntry* g_static_members = NULL;
@@ -1212,11 +1213,18 @@ void class_static_member_register(const char* full_name, const char* owner, int 
 void class_static_member_register_ex(const char* full_name, const char* owner,
                                      int access, int kind)
 {
+    class_static_member_register_ex2(full_name, owner, access, kind, 0);
+}
+
+void class_static_member_register_ex2(const char* full_name, const char* owner,
+                                      int access, int kind, int is_const)
+{
     /* 已注册同名成员则只更新访问级别与种类 */
     for(int i = 0; i < g_static_member_n; i++) {
         if(strcmp(g_static_members[i].full_name, full_name) == 0) {
             g_static_members[i].access = access;
             g_static_members[i].kind = kind;
+            g_static_members[i].is_const = is_const;
             return;
         }
     }
@@ -1229,7 +1237,18 @@ void class_static_member_register_ex(const char* full_name, const char* owner,
     g_static_members[g_static_member_n].owner = strdup(owner);
     g_static_members[g_static_member_n].access = access;
     g_static_members[g_static_member_n].kind = kind;
+    g_static_members[g_static_member_n].is_const = is_const;
     g_static_member_n++;
+}
+
+int class_static_member_is_const(const char* full_name)
+{
+    for(int i = 0; i < g_static_member_n; i++) {
+        if(strcmp(g_static_members[i].full_name, full_name) == 0) {
+            return g_static_members[i].is_const;
+        }
+    }
+    return 0;
 }
 
 /* 全表枚举：返回条目数，按位置取 full_name / kind（供 typecheck 重建符号表） */
