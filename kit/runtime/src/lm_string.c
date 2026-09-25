@@ -299,7 +299,10 @@ static char* apply_comma(const char* numstr) {
     int ilen = (int)(end - p);
     int ncomma = ilen > 0 ? (ilen - 1) / 3 : 0;
     int suffix_len = (int)strlen(end);
-    int newlen = ilen + ncomma + suffix_len + 1;
+    /* 根因修复：带符号（+/-/空格）时符号位也写入 out（下方 w++），
+     * newlen 必须包含它——否则负数+千分位 memcpy 溢出 1 字节（ASAN 堆溢出） */
+    int sign_len = (p != numstr) ? 1 : 0;
+    int newlen = sign_len + ilen + ncomma + suffix_len + 1;
     char* out = (char*)malloc(newlen);
     int w = 0;
     if(p != numstr) out[w++] = numstr[0];  // 符号

@@ -4,6 +4,7 @@
 #include "lumyr_value.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include "ast_node.h"
 #include "ir/ir_compile.h"
 #include "ast_runtime_sym.h"
@@ -28,6 +29,30 @@ void func_ast_register(const char* name, AstNode* func_ast) {
     g_func_ast_table[g_func_ast_cnt].name = strdup(name);
     g_func_ast_table[g_func_ast_cnt].ast = func_ast;
     g_func_ast_cnt++;
+}
+
+// ---- parse 期未决函数表：体内引用了尚未注册的类型，阶段3强制重编译 ----
+static char** g_pending = NULL;
+static int g_pending_cnt = 0, g_pending_cap = 0;
+
+void func_compile_mark_pending(const char* func_name) {
+    if(!func_name) return;
+    for(int i = 0; i < g_pending_cnt; i++)
+        if(strcmp(g_pending[i], func_name) == 0) return;  /* 去重 */
+    if(g_pending_cnt >= g_pending_cap) {
+        int nc = g_pending_cap > 0 ? g_pending_cap * 2 : 16;
+        char** nt = (char**)realloc(g_pending, (size_t)nc * sizeof(char*));
+        if(!nt) { fprintf(stderr, "未决函数表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        g_pending = nt; g_pending_cap = nc;
+    }
+    g_pending[g_pending_cnt++] = strdup(func_name);
+}
+
+int func_compile_pending_count(void) { return g_pending_cnt; }
+
+const char* func_compile_pending_name(int idx) {
+    if(idx < 0 || idx >= g_pending_cnt) return NULL;
+    return g_pending[idx];
 }
 
 AstNode* func_ast_lookup(const char* name) {

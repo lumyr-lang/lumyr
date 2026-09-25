@@ -37,6 +37,12 @@ AstNode* func_ast_lookup(const char* name);
 
 // typecheck 转换函数名引用（AST_VAR→AST_FUNCREF）后重编译该函数字节码并替换
 void func_compile_recompile(AstNode* def);
+
+// ---- parse 期未决引用：函数体内引用了当时尚未注册的类型（如后定义的类）----
+// AST_CLASS_NEW 查不到 TypeDef 走回退路径时标记当前函数，阶段3强制重编译
+void func_compile_mark_pending(const char* func_name);
+int func_compile_pending_count(void);
+const char* func_compile_pending_name(int idx);
 // 重编译 struct/class 方法（携带属主，同步更新 TypeDef 方法表 payload 指针）
 void func_compile_recompile_method(const char* owner, AstNode* def);
 

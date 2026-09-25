@@ -21,6 +21,9 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
 // 重编译已注册函数（typecheck 转换 AST_VAR→AST_FUNCREF 后原位替换字节码）
 BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
 
+/* 释放重编译期间延迟释放的旧 BytecodeFunc 链表（阶段3重编译全部完成后调用） */
+void ir_free_deferred_funcs(void);
+
 // 编译顶层语句为 main 字节码（执行 / -c 生成 C 共用同一 IR）
 BytecodeFunc* ir_compile_main(AstNode* root);
 

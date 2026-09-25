@@ -309,6 +309,13 @@ static void g_class_ctor_list_clear(void) {
     g_class_ctor_cap = 0;
 }
 
+/* 数调用实参：arg_list 为裸节点或左倾 AST_SEQ 树（ast_arg_append） */
+static int count_arg_list(AstNode* n) {
+    if(!n) return 0;
+    if(n->type != AST_SEQ) return 1;
+    return count_arg_list(n->u.seq.first) + 1;
+}
+
 /* 编译并注册当前类的全部构造函数重载：
  * 首个保持 <Cls>___init__（主构造，super() 链与无参合成路径依赖此名），
  * 后续按声明序唯一化为 <Cls>___init__2/3...（AST_CLASS_NEW 按实参数选重载） */
@@ -3365,14 +3372,51 @@ postfix_expr
     | postfix_expr MINUSMINUS { $$ = ast_unary(OP_POST_DEC, $1); }
     /* 调用链 f(1)(2)：callee 为表达式（函数值），动态调用 */
     | postfix_expr LPAREN arg_list RPAREN {
-          /* super(args)：调用父类构造函数 <parent>___init__(self, args) */
+          /* super(args)：调用父类构造函数，实参 self 前置 */
           if($1->type == AST_VAR && strcmp($1->u.varname, "super") == 0) {
               AstNode* self_arg = L(ast_var(strdup("self")));
               AstNode* all_args = $3 ? ast_seq_front($3, self_arg) : self_arg;
-              /* 父类构造函数名：<parent>___init__ */
-              char ctor_name[256];
-              snprintf(ctor_name, sizeof(ctor_name), "%s___init__", g_current_class_parent ? g_current_class_parent : "unknown");
-              $$ = L(ast_call(strdup(ctor_name), all_args));
+              /* 根因修复：此前硬编码 <parent>___init__ 主构造名，父类构造器重载
+               * （如 super(a) 对应 Base___init__2）永远调错。与 AST_CLASS_NEW
+               * 同一选择规则：沿继承链找到真正持有构造器的类，枚举其
+               * <owner>___init__/2/3...，按用户实参数精确 arity 优先，
+               * 其次可变参数（...args），最后主构造。父类必须先定义，
+               * 此刻其构造器全部已注册。 */
+              const char* ctor_owner = NULL;
+              TypeDef* ptd = g_current_class_parent ? class_lookup(g_current_class_parent) : NULL;
+              while(ptd) {
+                  if(ptd->constructor) { ctor_owner = ptd->name; break; }
+                  if(!ptd->parent) break;
+                  ptd = class_lookup(ptd->parent);
+              }
+              if(!ctor_owner) ctor_owner = g_current_class_parent ? g_current_class_parent : "unknown";
+              char ctor_base[256];
+              snprintf(ctor_base, sizeof(ctor_base), "%s___init__", ctor_owner);
+              int user_argc = count_arg_list($3);
+              char sel_name[272];
+              snprintf(sel_name, sizeof(sel_name), "%s", ctor_base);
+              char var_name[272]; int var_found = 0, var_min = 0;
+              for(int ord = 1; ord <= 64; ord++) {
+                  char nm[272];
+                  if(ord == 1) snprintf(nm, sizeof(nm), "%s", ctor_base);
+                  else snprintf(nm, sizeof(nm), "%s%d", ctor_base, ord);
+                  AstNode* ast = func_ast_lookup(nm);
+                  if(!ast) break;
+                  int np = 0, ell = 0;
+                  for(AstNode* p = ast->u.func_def.params; p; p = p->u.param.next) {
+                      if(p->u.param.name && strcmp(p->u.param.name, "self") == 0 && np == 0) continue;
+                      if(p->u.param.is_ellipsis) { ell = 1; break; }
+                      np++;
+                  }
+                  if(ell) {
+                      if(!var_found) { var_found = 1; var_min = np; snprintf(var_name, sizeof(var_name), "%s", nm); }
+                      continue;
+                  }
+                  if(np == user_argc) { snprintf(sel_name, sizeof(sel_name), "%s", nm); break; }
+              }
+              if(var_found && user_argc >= var_min && strcmp(sel_name, ctor_base) == 0)
+                  snprintf(sel_name, sizeof(sel_name), "%s", var_name);
+              $$ = L(ast_call(strdup(sel_name), all_args));
           } else {
               $$ = L(ast_dyn_call($1, $3));
           }

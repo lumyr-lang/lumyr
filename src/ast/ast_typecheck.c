@@ -8,6 +8,7 @@
 #include "ast_symtab.h"
 #include "ast_runtime_sym.h"
 #include "func_compile.h"
+#include "ir/ir_compile.h"
 #include "ast_types.h"
 #include "ast_node.h"
 #include "lm_type.h"
@@ -856,6 +857,12 @@ static void method_typecheck_cb(const char* name, TypeDef* td, void* user_data) 
         g_method_owner = name;
         *acc |= typecheck_expr(m);
         g_method_owner = NULL;
+        /* 实例方法体在 parse 期类体归约过程中已编译（class_add_method），
+         * 当时仅主构造前置注册，构造器重载/其它类型可能不完整：AST_CLASS_NEW
+         * 重载选择会回退主构造（如 Node(88) 误调无参 Node())。与 static 方法
+         * 对称，类完全注册后无条件重编译；体内嵌套 lambda 已先入 g_recompile。
+         * method_recomp_add 去重，捕获路径先前的登记不会重复。 */
+        method_recomp_add(name, m);
     }
 }
 
@@ -923,11 +930,22 @@ int ast_typecheck(AstNode* node)
     // 阶段3：重编译。先处理普通函数/嵌套 lambda，再处理方法
     // （方法编译时其体内嵌套 lambda 须已是带捕获的最新版本）
     if(!err) {
+        /* parse 期未决函数（体内引用了当时未注册的类型，如"先使用后定义"的类）：
+         * 此刻类型表已完整，按名取回 AST 入重编译表。体内嵌套 lambda 已先入表，
+         * 重编译顺序正确；recompile_add 去重。 */
+        for(int i = 0; i < func_compile_pending_count(); i++) {
+            const char* pn = func_compile_pending_name(i);
+            AstNode* pdef = func_ast_lookup(pn);
+            if(pdef) recompile_add(pdef);
+        }
         for(int i = 0; i < g_recompile_cnt; i++)
             func_compile_recompile(g_recompile[i]);
         for(int i = 0; i < g_method_recomp_cnt; i++)
             func_compile_recompile_method(g_method_recomp[i].owner,
                                           g_method_recomp[i].node);
+        /* 重编译全部完成：RuntimeFunc payload 均已指向新字节码，
+         * 统一释放替换下来的旧 BytecodeFunc（编译期 UAF 根因修复） */
+        ir_free_deferred_funcs();
     }
     return err;
 }
@@ -1060,7 +1078,12 @@ static int typecheck_call(AstNode* node)
         if((!known || calleeType == VAL_NONE) &&
            !is_builtin_name(node->u.call.name) &&
            !is_lambda_param(node->u.call.name) &&
-           !is_lambda_local(node->u.call.name)) {
+           !is_lambda_local(node->u.call.name) &&
+           /* 已注册类型名（class/struct 构造）不捕获：前向引用类 parse 期
+            * 生成 AST_CALL，此处若捕获，mkclosure 报"无法捕获未定义变量"；
+            * 实际走 CLASS_NEW 路径，与变量无关 / registered type is not a capture */
+           !struct_lookup(node->u.call.name) &&
+           !class_lookup(node->u.call.name)) {
             cap_add(node->u.call.name);
         }
     }

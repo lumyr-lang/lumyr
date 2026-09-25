@@ -1152,6 +1152,28 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
         }
 
+        /* 前向引用的类/结构体：parse 期名字未注册，归约为 AST_CALL；阶段3
+         * 重编译时类型表已完整，按构造调用编译（与 AST_CLASS_NEW 完全同路，
+         * 含 __init__/重载选择）。与 parser L3051 的优先级一致：注册类型
+         * 优先于内置，故置于内置检查之前；自由函数已在上面先查。 */
+        {
+            TypeDef* fwd_td = struct_lookup(func_name);
+            if(!fwd_td) fwd_td = class_lookup(func_name);
+            if(fwd_td && fwd_td->runtime_info) {
+                AstNode ctor_tmp;
+                memset(&ctor_tmp, 0, sizeof(ctor_tmp));
+                ctor_tmp.type = AST_CLASS_NEW;
+                ctor_tmp.line = node->line;
+                ctor_tmp.u.class_new.class_name = (char*)func_name;
+                ctor_tmp.u.class_new.args = args;
+                int targc = 0;
+                for(AstNode* p = args; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) targc++;
+                ctor_tmp.u.class_new.argc = targc;
+                ctor_tmp.u.class_new.type_args = NULL;
+                return c_expr(c, &ctor_tmp);
+            }
+        }
+
         /* 内置函数：编译期静态表解析为 BuiltinId（无运行时字符串查表），
          * 实参全部转 VALUE，OPC_BUILTIN 弹 argc 个（栈顶为最后一个）压返回值。
          * 注意：若 func_name 同时是当前作用域内的局部变量（例如 add = (a,b)=>...;
@@ -1186,6 +1208,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
 
         /* 动态调用：func_name 是持有函数值的变量 */
         {
+            /* callee 编译期完全未解析且非局部变量：可能是后定义的自由函数或类型。
+             * 标记当前函数阶段3重编译——重编译时前向类分派可把"后定义类"
+             * 纠正为构造调用；后定义自由函数重走此动态路径，无害。 */
+            if(!is_local_var) func_compile_mark_pending(c->fn->name);
             /* 编译 callee 表达式（变量名 → 函数值） */
             AstNode callee_var;
             memset(&callee_var, 0, sizeof(callee_var));
@@ -1270,7 +1296,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         TypeDef* td = struct_lookup(tname);
         if(!td) td = class_lookup(tname);
         if(!td || !td->runtime_info) {
-            /* 未注册类型：回退到普通函数调用（兼容旧语义） */
+            /* 未注册类型（典型：函数定义在前、类定义在后）：回退到普通函数调用，
+             * 同时标记当前函数 parse 期未决——阶段3类全部注册后强制重编译，
+             * 否则错误代码（把类名当普通变量）永远得不到纠正 */
+            func_compile_mark_pending(c->fn->name);
+            /* 回退到普通函数调用（兼容旧语义） */
             AstNode** argv = NULL;
             int argc = 0, acap = 0;
             collect_call_args(node->u.class_new.args, &argv, &argc, &acap);
@@ -1387,6 +1417,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 }
                 int ai = 0;
                 int has_ellipsis = 0;
+                int stk_tmp[72];                  /* 记录每槽实参栈型（含 self） */
+                stk_tmp[0] = (int)EXPR_TYPE_PTR; /* self 在 PTR 栈 */
                 while(p && ai < argc2) {
                     if(p->u.param.is_ellipsis) { has_ellipsis = 1; break; }
                     CastKind pck = (slot < ctor_fn->sym_cnt) ? (CastKind)ctor_fn->var_type_tags[slot] : CAST_NONE;
@@ -1397,6 +1429,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     } else {
                         c_expr_to_value(c, argv2[ai]);
                     }
+                    stk_tmp[slot] = (int)param_et;
                     slot++;
                     ai++;
                     p = p->u.param.next;
@@ -1419,6 +1452,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                  * total = self + 已绑定实参 +（可变槽数组算 1 个） */
                 int total = 1 + ai + (has_ellipsis ? 1 : 0);
                 int cs = bf_add_callsite(c->fn, sel_name, total, 0, (int)EXPR_TYPE_NONE);
+                CallSite* ctor_csp = &c->fn->callsites[cs];
+                for(int _i = 0; _i < total && _i < 72; _i++)
+                    ctor_csp->arg_stacks[_i] = stk_tmp[_i]; /* 可变槽默认 0=VALUE */
                 emit(c, OPC_CALL, cs, total);
             } else {
                 free(argv2);
@@ -2601,6 +2637,11 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
 
     /* 函数调用：取 callee 返回类型标注（无标注 → NONE） */
     if(node->type == AST_CALL) {
+        /* 前向引用类型构造（parse 期类未注册，生成了 AST_CALL）：
+         * 重编译时类型表已完整，按构造返回精确指针类型——否则 BOX_PTR
+         * 装箱成裸 VAL_PTR，实例字段访问/type() 全落空 */
+        if(struct_lookup(node->u.call.name)) return CAST_STRUCT_PTR;
+        if(class_lookup(node->u.call.name)) return CAST_CLASS_PTR;
         BytecodeFunc* callee = ir_func_table_lookup(node->u.call.name);
         if(callee && callee->ret_type_name)
             return ir_type_name_to_castkind(callee->ret_type_name);
@@ -3127,6 +3168,19 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     int is_method = (method_recv != NULL);
     int base_slot = is_method ? 1 : 0;
     int total = 0;
+
+    /* 绑定槽临时表：ref 标记/槽位 + 实参栈型。容量需在编译 receiver 前确定
+     * （receiver 占 slot 0，要写 arg_stack_tmp[0]）。 */
+    int bound = 0;
+    int nslots = base_slot + argc;
+    int alloc_n = nslots > 0 ? nslots : 1;
+    if(callee->sym_cnt > alloc_n) alloc_n = callee->sym_cnt;
+    int* ref_flags = (int*)calloc(alloc_n, sizeof(int));
+    int* ref_slots = (int*)malloc(alloc_n * sizeof(int));
+    /* 记录每个绑定槽实参最终压入的核心栈（0/1/2/3），供 callsite 栈深分析精确扣减 */
+    int* arg_stack_tmp = (int*)calloc(alloc_n, sizeof(int));
+    for(int i = 0; i < alloc_n; i++) ref_slots[i] = -1;
+
     if(is_method) {
         ExprType rt0 = c_expr(c, method_recv);
         if(rt0 != EXPR_TYPE_PTR) {
@@ -3135,19 +3189,13 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
             emit(c, OPC_UNBOX_PTR, (int)CAST_CLASS_PTR, 0);
         }
         total = 1;
+        arg_stack_tmp[0] = (int)EXPR_TYPE_PTR;   /* receiver 拆箱后在 PTR 栈 */
     }
 
     /* 2. 逐形参绑定（方法时第一个形参 self 已由 receiver 占据，跳过；可变形参前停止）
      * 注意：bound 是形参数（≥用户实参 argc，默认参数场景 argc < bound），
      * total = base_slot + bound + (可变?1:0) 可能 > nslots = base_slot + argc，
      * 故 ref_flags/ref_slots 容量取 max(nslots, sym_cnt) 防止 ASAN heap-buffer-overflow */
-    int bound = 0;
-    int nslots = base_slot + argc;
-    int alloc_n = nslots > 0 ? nslots : 1;
-    if(callee->sym_cnt > alloc_n) alloc_n = callee->sym_cnt;
-    int* ref_flags = (int*)calloc(alloc_n, sizeof(int));
-    int* ref_slots = (int*)malloc(alloc_n * sizeof(int));
-    for(int i = 0; i < alloc_n; i++) ref_slots[i] = -1;
     int pindex = 0;
     for(AstNode* p = def_ast->u.func_def.params; p; p = p->u.param.next, pindex++) {
         if(is_method && pindex == 0) continue;       /* self 槽已由 receiver 填 */
@@ -3197,6 +3245,8 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
             fprintf(stderr, "IR: 调用 %s 缺少第 %d 个必填参数\n",
                     callee->name ? callee->name : "?", slot + 1);
         }
+        /* 该槽实参 cast 后的最终栈：param_et 枚举值即栈号（NONE=0 VALUE） */
+        arg_stack_tmp[slot] = (int)param_et;
         bound++;
     }
     total += bound;
@@ -3238,9 +3288,11 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
     for(int i = 0; i < total; i++) {
         csp->arg_is_ref[i] = ref_flags[i];
         csp->arg_ref_slots[i] = ref_slots[i];
+        csp->arg_stacks[i] = arg_stack_tmp[i];
     }
     free(ref_flags);
     free(ref_slots);
+    free(arg_stack_tmp);
     emit(c, is_method ? OPC_CALL_METHOD : OPC_CALL, cs, total);
     free(argv);
     free(pnames);
@@ -4601,14 +4653,62 @@ static RBTree* func_table_tree(void) {
     return g_func_table;
 }
 
-/* 注册/替换函数（key 取 fn->table_key 否则 name）；同键旧函数被释放 */
+/* 重编译替换时，把全表所有指向 old_fn 的共享键（@FuncAlias 别名）改指 new_fn。
+ * 根因修复：别名键与主键共享同一 BytecodeFunc 指针；旧实现直接 free 旧 fn，
+ * 别名键悬空，global_fixup_cb 全表遍历时 use-after-free（flaky SIGSEGV）。
+ * 遍历中仅做 rbtree_set_data（改已存在节点的 data，不改树结构），安全。 */
+typedef struct { void* old_fn; void* new_fn; } RebindCtx;
+static void rebind_alias_cb(RBTNamespace ns, const char* class_name, const char* name,
+                            void* data, void* user_data) {
+    RebindCtx* rc = (RebindCtx*)user_data;
+    if(data == rc->old_fn)
+        rbtree_set_data(func_table_tree(), ns, class_name, name, rc->new_fn);
+}
+
+/* 注册/替换函数（key 取 fn->table_key 否则 name）；同键旧函数延迟释放。
+ * 根因修复：不能在此直接 free 旧 fn——register 发生在 ir_compile_function
+ * 编译函数体*之前*（支持递归），而旧 fn 仍被两处持有：
+ *   1. @FuncAlias 别名键（已用 rebind_alias_cb 改指新 fn）；
+ *   2. RuntimeFunc payload->bytecode，要到 func_compile_recompile* 返回后才更新，
+ *      编译函数体途中 arith_get_expr_type 等会读它（self 方法调用 → UAF）。
+ * 故挂入延迟链表，由 ir_free_deferred_funcs 在阶段3重编译全部完成后统一释放。 */
+typedef struct DeferredFree {
+    BytecodeFunc* fn;
+    struct DeferredFree* next;
+} DeferredFree;
+static DeferredFree* g_deferred_free = NULL;
+
+void ir_defer_free_func(BytecodeFunc* fn) {
+    if(!fn) return;
+    DeferredFree* d = (DeferredFree*)malloc(sizeof(DeferredFree));
+    if(!d) { perror("deferred free"); exit(EXIT_FAILURE); }
+    d->fn = fn;
+    d->next = g_deferred_free;
+    g_deferred_free = d;
+}
+
+void ir_free_deferred_funcs(void) {
+    DeferredFree* p = g_deferred_free;
+    g_deferred_free = NULL;
+    while(p) {
+        DeferredFree* nx = p->next;
+        bytecode_func_free(p->fn);
+        free(p);
+        p = nx;
+    }
+}
+
 void ir_func_table_register(BytecodeFunc* fn) {
     if(!fn || !fn->name) return;
     const char* key = fn->table_key ? fn->table_key : fn->name;
     RBTree* t = func_table_tree();
     void* old = rbtree_set_data(t, NS_FUNCTION, NULL, key, fn);
     if(old) {
-        if(old != fn) bytecode_func_free((BytecodeFunc*)old);
+        if(old != fn) {
+            RebindCtx rc = { old, fn };
+            rbtree_foreach(t, rebind_alias_cb, &rc);
+            ir_defer_free_func((BytecodeFunc*)old);
+        }
     } else {
         rbtree_insert(t, NS_FUNCTION, NULL, key, fn);
     }
@@ -4783,21 +4883,14 @@ static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out) {
             BytecodeFunc* oldFn = g->cands[i].fn;
             g->cands[i].fn = fn;
             if(oldFn && oldFn != fn) {
-                /* 旧 BytecodeFunc 仍可能被两个键引用，导致既有调用点到达旧字节码：
-                 *  - 旧 table_key __ol__<name>__<oldseq>：其它函数 parse 期 CALL 已绑定该键
-                 *  - 裸名 <name>：首版本建的兼容别名（仅当它确实指向 oldFn 才动，
-                 *    避免误伤同名不同 arity 的其它重载版本）
-                 * 重定向到新 fn；旧 fn 按指针只释放一次。 */
-                RBTree* t = func_table_tree();
-                const char* oldKey = oldFn->table_key ? oldFn->table_key : oldFn->name;
-                void* bareOld = NULL;
-                if(rbtree_find(t, NS_FUNCTION, NULL, fn->name) == oldFn)
-                    bareOld = rbtree_set_data(t, NS_FUNCTION, NULL, fn->name, fn);
-                void* keyOld = rbtree_set_data(t, NS_FUNCTION, NULL, oldKey, fn);
-                if(bareOld && bareOld != fn)
-                    bytecode_func_free((BytecodeFunc*)bareOld);
-                if(keyOld && keyOld != fn && keyOld != bareOld)
-                    bytecode_func_free((BytecodeFunc*)keyOld);
+                /* 全表 rebind：旧 fn 可能被多个键共享——旧 table_key
+                 * __ol__<name>__<oldseq>（parse 期 CALL 已绑定）、裸名 <name>
+                 * 兼容别名、@FuncAlias 别名；逐键 set_data 会漏别名键。
+                 * 旧 fn 延迟释放：编译函数体途中 RuntimeFunc payload->bytecode
+                 * 仍指向它（阶段3统一 free），直接 free 即 UAF。 */
+                RebindCtx rc = { oldFn, fn };
+                rbtree_foreach(func_table_tree(), rebind_alias_cb, &rc);
+                ir_defer_free_func(oldFn);
             }
             memset(&g->cands[i].def_shell, 0, sizeof(AstNode));
             g->cands[i].def_shell.type = AST_FUNC_DEF;
@@ -4949,6 +5042,9 @@ void ir_func_table_foreach(void (*callback)(const char*, const char*, void*, voi
 }
 
 BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
+    /* 键重定向由两条已有路径处理，此处无需干预：
+     * - 方法（class_name != NULL）：register 同键替换（别名 rebind + 延迟释放）
+     * - 自由函数：ol_add 同 arity 候选替换（rebind 全表共享键 + 延迟释放） */
     return ir_compile_function(name, params, body, is_generator, class_name, ret_type_name);
 }
 

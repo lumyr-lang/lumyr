@@ -609,6 +609,8 @@ typedef struct CallSite {
     int* arg_ref_slots;  /* ref 实参在调用方帧的槽位（非 ref 为 -1，长度 argc） */
     int keep_result;     /* 1=压返回值（表达式语境）；0=丢弃（表达式语句语境） */
     int ret_stack;       /* 返回值压入的栈（ExprType：INT/DOUBLE/PTR/NONE→VALUE） */
+    int* arg_stacks;     /* 每个实参压入的核心栈（0 VALUE/1 INT64/2 DOUBLE/3 PTR，长度 argc），
+                            供栈深分析精确扣减；未记录时为 NULL（按全 VALUE 处理） */
 } CallSite;
 
 /* ============================================================

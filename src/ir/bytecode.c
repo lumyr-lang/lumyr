@@ -240,6 +240,9 @@ int bf_add_callsite(BytecodeFunc* fn, const char* callee, int argc, int keep_res
     for(int i = 0; i < (argc > 0 ? argc : 1); i++) cs->arg_ref_slots[i] = -1;
     cs->keep_result = keep_result ? 1 : 0;
     cs->ret_stack = ret_stack;
+    cs->arg_stacks = (int*)malloc((argc > 0 ? argc : 1) * sizeof(int));
+    if(!cs->arg_stacks) { perror("bf_add_callsite arg_stacks"); exit(EXIT_FAILURE); }
+    for(int i = 0; i < (argc > 0 ? argc : 1); i++) cs->arg_stacks[i] = 0;
     return fn->callsite_cnt++;
 }
 
@@ -255,14 +258,18 @@ int bc_analyze_stack(BytecodeFunc* fn, int* depth_out, int depth_cap)
     }
     d[0].value = 0;
 
-    /* 深度合并：4 核心栈设计 */
+    /* 深度合并：4 核心栈设计。
+     * 根因修复：必须逐分量独立取最大。此前整个向量替换——当两个前驱分别
+     * 压不同栈（如前驱 A 只压 Value、前驱 B 只压 Ptr），合并点会在
+     * A(value大) 与 B(ptr大) 间交替写入（每次任一分量更大），无限振荡，
+     * while(changed) 永不终止（-S 挂死）。逐分量 max 各维单调有界，必然收敛。 */
     #define STACK_MERGE(target_idx, src) do { \
         StackDelta* _t = &d[target_idx]; \
         const StackDelta* _s = &(src); \
-        if(_t->value < _s->value || _t->int64 < _s->int64 || \
-           _t->double_stk < _s->double_stk || _t->ptr < _s->ptr) { \
-            *_t = *_s; changed = 1; \
-        } \
+        if(_t->value < _s->value) { _t->value = _s->value; changed = 1; } \
+        if(_t->int64 < _s->int64) { _t->int64 = _s->int64; changed = 1; } \
+        if(_t->double_stk < _s->double_stk) { _t->double_stk = _s->double_stk; changed = 1; } \
+        if(_t->ptr < _s->ptr) { _t->ptr = _s->ptr; changed = 1; } \
     } while(0)
 
     /* 检查所有栈是否下溢 */

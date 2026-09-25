@@ -30,17 +30,8 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_DUP:
         case OPC_NEG: case OPC_POS: case OPC_LOGIC_NOT:
         case OPC_TO_BOOL:
-        case OPC_INDEX_GET:
         case OPC_LOAD_STRUCT_PTR:
-        case OPC_BUILTIN:
-        case OPC_CALL_BUILTIN_METHOD: /* 同 OPC_BUILTIN：弹实参+receiver 后压 1 个返回值，保守 +1 */
-        case OPC_CALLV:
-        case OPC_RETURN:
-        case OPC_RETURN_NIL:
         case OPC_GET_ERR:
-        case OPC_ARRAY_LIT:
-        case OPC_MAP_LIT:
-        case OPC_TYPED_BYTES:
             d.value = +1;
             break;
 
@@ -62,18 +53,7 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.ptr = 0;
             break;
 
-        /* CALL_METHOD：实参（含 receiver）已分散压入 4 栈，保守不扣减（同 OPC_CALL，
-         * 计入最大栈深避免误报）；keep_result 时按 callsite.ret_stack 压返回值到对应栈 */
-        case OPC_CALL_METHOD:
-            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result) {
-                switch((ExprType)fn->callsites[in.a].ret_stack) {
-                case EXPR_TYPE_INT:         d.int64 = +1; break;
-                case EXPR_TYPE_DOUBLE:      d.double_stk = +1; break;
-                case EXPR_TYPE_PTR:         d.ptr = +1; break;
-                default:                    d.value = +1; break;
-                }
-            }
-            break;
+        /* CALL_METHOD 与 CALL 共用下方精确扣减分支 */
 
         /* ===== 弹栈指令：a 选择栈（0 VALUE/1 INT64/2 DOUBLE/3 PTR） ===== */
         case OPC_POP:
@@ -86,7 +66,36 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.value = -1;
             break;
         case OPC_INDEX_SET:
-            d.value = -3; /* idx + val + receiver */
+            d.value = -2; /* 弹 val+idx+receiver（3），压回 val（1），净 -2 */
+            break;
+        /* INDEX_GET：弹 idx + receiver，压结果 = 净 -1。
+         * 根因修复：此前误按 +1（当作纯压入），循环环内每轮虚增 2，
+         * bc_analyze_stack 不动点迭代回边深度无限抬升，-S 挂死。 */
+        case OPC_INDEX_GET:
+            d.value = -1;
+            break;
+        /* CALLV：弹 argc 实参 + 1 函数值，压 1 返回值 = 净 -argc。
+         * 根因修复：此前误按 +1（纯压入），环内每轮虚增 argc+1，分析挂死。
+         * CALLV 只用于表达式语境（结果总保留）。 */
+        case OPC_CALLV:
+            d.value = -in.b;
+            break;
+        /* 字面量/内置：元素与实参先压栈，指令弹回后压 1 个结果，必须按计数扣减。
+         * 根因修复：此前误按 +1（纯压入），循环环内每轮虚增，栈深分析挂死/误报。 */
+        case OPC_ARRAY_LIT:            /* 弹 b 个元素压 1 数组 */
+            d.value = 1 - in.b;
+            break;
+        case OPC_MAP_LIT:              /* 弹 2*b（key+val）压 1 map */
+            d.value = 1 - 2 * in.b;
+            break;
+        case OPC_TYPED_BYTES:          /* 弹 1 源压 1 结果 */
+            d.value = 0;
+            break;
+        case OPC_BUILTIN:              /* 弹 b 个实参压 1 返回值 */
+            d.value = 1 - in.b;
+            break;
+        case OPC_CALL_BUILTIN_METHOD:  /* 弹 b 实参 + 1 receiver 压 1 返回值 = -b */
+            d.value = -in.b;
             break;
         /* STORE_FIELD：弹 typed(值) + 弹 ptr(obj) + 压回 typed(值) = ptr -1 */
         case OPC_STORE_FIELD:
@@ -176,20 +185,32 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.value = +1;
             break;
 
-        /* CALL：压返回值与否取决于 callsite.keep_result。
-         * argc 个实参分散在各栈，此处不精确扣减（保守计入最大栈深，避免误报）。
-         * 按 callsite.ret_stack 路由到对应栈（与 OPC_CALL_METHOD 一致），
-         * 否则 <string>/<bigint> 等返回值被误算到 VALUE 栈，PTR 栈深度低估致溢出。 */
+        /* CALL：VM 弹掉 argc 个实参（分散 4 栈），keep_result 时压 1 返回值。
+         * 根因修复：实参栈型已在编译期记入 callsite.arg_stacks，必须精确扣减。
+         * 此前不扣减（"保守计入"）——在循环环里实参深度每轮虚增，不动点迭代
+         * 永不收敛（-S 挂死），且峰值深度被高估。arg_stacks 缺失时按全 VALUE 扣。 */
         case OPC_CALL:
-            if(in.a >= 0 && in.a < fn->callsite_cnt && fn->callsites[in.a].keep_result) {
-                switch((ExprType)fn->callsites[in.a].ret_stack) {
-                case EXPR_TYPE_INT:         d.int64 = +1; break;
-                case EXPR_TYPE_DOUBLE:      d.double_stk = +1; break;
-                case EXPR_TYPE_PTR:         d.ptr = +1; break;
-                default:                    d.value = +1; break;
+        case OPC_CALL_METHOD: {
+            CallSite* csx = (in.a >= 0 && in.a < fn->callsite_cnt)
+                            ? &fn->callsites[in.a] : NULL;
+            int argc = csx ? csx->argc : in.b;
+            for(int _i = 0; _i < argc; _i++) {
+                int stk = (csx && csx->arg_stacks) ? csx->arg_stacks[_i] : 0;
+                if(stk == 1) d.int64--;
+                else if(stk == 2) d.double_stk--;
+                else if(stk == 3) d.ptr--;
+                else d.value--;
+            }
+            if(csx && csx->keep_result) {
+                switch((ExprType)csx->ret_stack) {
+                case EXPR_TYPE_INT:         d.int64++; break;
+                case EXPR_TYPE_DOUBLE:      d.double_stk++; break;
+                case EXPR_TYPE_PTR:         d.ptr++; break;
+                default:                    d.value++; break;
                 }
             }
             break;
+        }
 
         /* ===== INT64 栈压入指令 ===== */
         case OPC_PUSH_INT64_CONST:
