@@ -143,25 +143,195 @@ public class HttpResponse<T> implements ResponseInterface {
     }
 }
 
+// HTTP 标头集合：大小写不敏感名值管理（内部统一小写键存储；
+// HTTP 标头名大小写不敏感，内置 requests 响应标头同样按小写规范化）
+public class Headers {
+    items: map;
+
+    func Headers() {
+        self.items = {};
+    }
+
+    // 设置（覆盖同名标头）
+    func set(name: string, value: string) {
+        self.items[name.lower()] = value;
+        return self;
+    }
+
+    // 追加（同名按 RFC 7230 列表语义逗号合并）
+    func add(name: string, value: string) {
+        k = name.lower();
+        if (self.items.has(k)) {
+            self.items[k] = self.items[k] + ", " + value;
+        } else {
+            self.items[k] = value;
+        }
+        return self;
+    }
+
+    func has(name: string): bool {
+        return self.items.has(name.lower());
+    }
+
+    func get(name: string): string {
+        k = name.lower();
+        if (self.items.has(k)) { return self.items[k]; }
+        return "";
+    }
+
+    func remove(name: string) {
+        k = name.lower();
+        if (self.items.has(k)) {
+            /* map 无 delete 内置：按键集重建（标头数量小，代价可忽略） */
+            kept = {};
+            for key in self.items.keys() {
+                if (key != k) { kept[key] = self.items[key]; }
+            }
+            self.items = kept;
+        }
+        return self;
+    }
+
+    func size(): int {
+        return self.items.len;
+    }
+
+    // 转出普通 map（可直接作为 requests config 的 headers 使用）
+    func toMap(): map {
+        return self.items;
+    }
+}
+
+// Cookie：名值 + 标准属性（Domain/Path/Max-Age/Secure/HttpOnly/SameSite）
+// toHeader() → Cookie 请求头形式（"name=value"）
+// toString() → Set-Cookie 完整形式；parse() 解析 Set-Cookie 字符串
+public class Cookie {
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
+    maxAge: int;
+    secure: bool;
+    httpOnly: bool;
+    sameSite: string;
+
+    func Cookie(name: string, value: string) {
+        self.name = name;
+        self.value = value;
+        self.domain = "";
+        self.path = "";
+        self.maxAge = 0;
+        self.secure = false;
+        self.httpOnly = false;
+        self.sameSite = "";
+    }
+
+    func setDomain(d: string) { self.domain = d; return self; }
+    func setPath(p: string) { self.path = p; return self; }
+    func setMaxAge(seconds: int) { self.maxAge = seconds; return self; }
+    func setSecure(on: bool) { self.secure = on; return self; }
+    func setHttpOnly(on: bool) { self.httpOnly = on; return self; }
+    // SameSite："Strict" / "Lax" / "None"
+    func setSameSite(s: string) { self.sameSite = s; return self; }
+
+    // Cookie 请求头形式："name=value"
+    func toHeader(): string {
+        return self.name + "=" + self.value;
+    }
+
+    // Set-Cookie 完整形式
+    @FuncAlias("toStr")
+    func toString(): string {
+        s = self.name + "=" + self.value;
+        if (self.domain != "") { s = s + "; Domain=" + self.domain; }
+        if (self.path != "") { s = s + "; Path=" + self.path; }
+        if (self.maxAge > 0) { s = s + "; Max-Age=" + self.maxAge; }
+        if (self.secure == true) { s = s + "; Secure"; }
+        if (self.httpOnly == true) { s = s + "; HttpOnly"; }
+        if (self.sameSite != "") { s = s + "; SameSite=" + self.sameSite; }
+        return s;
+    }
+
+    // 解析 Set-Cookie 字符串（首段为名值，其余按属性名小写识别；
+    // Expires 日期属性忽略，Max-Age 转 int）
+    public static func parse(s: string): Cookie {
+        segs = s.split(";");
+        kv = segs[0].split("=");
+        c = Cookie(kv[0].trim(), kv.slice(1, kv.len).join("=").trim());
+        i = 1;
+        while (i < segs.len) {
+            attr = segs[i].split("=");
+            aname = attr[0].trim().lower();
+            aval = "";
+            if (attr.len > 1) { aval = attr.slice(1, attr.len).join("=").trim(); }
+            if (aname == "domain") { c.domain = aval; }
+            else if (aname == "path") { c.path = aval; }
+            else if (aname == "max-age") {
+                ma: int = aval;
+                c.maxAge = ma;
+            }
+            else if (aname == "samesite") { c.sameSite = aval; }
+            else if (aname == "secure") { c.secure = true; }
+            else if (aname == "httponly") { c.httpOnly = true; }
+            i = i + 1;
+        }
+        return c;
+    }
+}
+
+// UserAgent：常见 UA 常量 + 自定义构造（主 product/version + 注释段 + 追加 product 段）
+public class UserAgent {
+    public static const CHROME: string = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    public static const FIREFOX: string = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
+    public static const SAFARI: string = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+    public static const EDGE: string = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0";
+    public static const CURL: string = "curl/8.4.0";
+    public static const LUMYR: string = "lumyr/1.0";
+
+    text: string;
+
+    // 以主 product/version 构造："product/version"
+    func UserAgent(product: string, version: string) {
+        self.text = product + "/" + version;
+    }
+
+    // 追加注释段：" (comment)"
+    func comment(c: string) {
+        self.text = self.text + " (" + c + ")";
+        return self;
+    }
+
+    // 追加 product 段：" product/version"
+    func product(p: string, v: string) {
+        self.text = self.text + " " + p + "/" + v;
+        return self;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return self.text;
+    }
+}
+
 // Http 请求：链式构造，send 委托内置 requests 按方法分派
 // 泛型 <T, R>：T = 请求体类型（setBody 参数），R = 响应体类型（send 返回 HttpResponse<R>）
 public class HttpRequest<T, R> implements RequestInterface {
     // ========== 常用请求标头（static const） ==========
-    static const HEADER_ACCEPT: string = "Accept";
-    static const HEADER_AUTHORIZATION: string = "Authorization";
-    static const HEADER_CACHE_CONTROL: string = "Cache-Control";
-    static const HEADER_CONTENT_TYPE: string = "Content-Type";
-    static const HEADER_COOKIE: string = "Cookie";
-    static const HEADER_HOST: string = "Host";
-    static const HEADER_USER_AGENT: string = "User-Agent";
+    public static const HEADER_ACCEPT: string = "Accept";
+    public static const HEADER_AUTHORIZATION: string = "Authorization";
+    public static const HEADER_CACHE_CONTROL: string = "Cache-Control";
+    public static const HEADER_CONTENT_TYPE: string = "Content-Type";
+    public static const HEADER_COOKIE: string = "Cookie";
+    public static const HEADER_HOST: string = "Host";
+    public static const HEADER_USER_AGENT: string = "User-Agent";
 
     // ========== 常用 Content-Type 值（static const） ==========
-    static const CONTENT_JSON: string = "application/json";
-    static const CONTENT_FORM: string = "application/x-www-form-urlencoded";
-    static const CONTENT_TEXT: string = "text/plain";
-    static const CONTENT_HTML: string = "text/html";
-    static const CONTENT_XML: string = "application/xml";
-    static const CONTENT_OCTET: string = "application/octet-stream";
+    public static const CONTENT_JSON: string = "application/json";
+    public static const CONTENT_FORM: string = "application/x-www-form-urlencoded";
+    public static const CONTENT_TEXT: string = "text/plain";
+    public static const CONTENT_HTML: string = "text/html";
+    public static const CONTENT_XML: string = "application/xml";
+    public static const CONTENT_OCTET: string = "application/octet-stream";
 
     method: string;
     url: string;
@@ -200,6 +370,30 @@ public class HttpRequest<T, R> implements RequestInterface {
         return self;
     }
 
+    // 链式合并 Headers 集合（大小写不敏感，键已小写规范化）
+    func setHeaders(h: Headers) {
+        for k in h.toMap().keys() {
+            self.headers[k] = h.toMap()[k];
+        }
+        return self;
+    }
+
+    // 链式追加 Cookie（多个按 "; " 连接，Cookie 请求头语义）
+    func addCookie(c: Cookie) {
+        if (self.headers.has("Cookie")) {
+            self.headers["Cookie"] = self.headers["Cookie"] + "; " + c.toHeader();
+        } else {
+            self.headers["Cookie"] = c.toHeader();
+        }
+        return self;
+    }
+
+    // 链式设置 User-Agent（UserAgent 实例或 UA 字符串均可，传字符串）
+    func setUserAgent(ua: string) {
+        self.headers["User-Agent"] = ua;
+        return self;
+    }
+
     // 链式设置 query 参数
     func setParam(name: string, value: string) {
         self.params[name] = value;
@@ -216,6 +410,13 @@ public class HttpRequest<T, R> implements RequestInterface {
     // 链式设置超时（秒）
     func setTimeout(seconds: int) {
         self.timeoutSec = seconds;
+        return self;
+    }
+
+    // 链式设置 multipart 表单（formdata 经 body 通道，requests 按类型识别为 multipart）
+    func setFormData(fd: formdata) {
+        self.reqBody = fd;
+        self.hasBody = true;
         return self;
     }
 

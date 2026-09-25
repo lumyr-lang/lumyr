@@ -1,0 +1,307 @@
+// ============================================================
+// lumyr-HttpUtil：HTTP 常用静态工具（Utils 模块）
+// 基于 NetWork 模块封装：
+//   通用请求 request(method, url, options) 全配置入口
+//   各动词快捷：get/post/put/patch/delete/head × json/form/text/bytes/formData
+//   响应直取：getText/getJson/getBytes/getStatus
+//   URL 工具：buildQuery/buildUrl/parseQuery/getQueryParam/urlJoin
+//   标头工具：cookiesToHeader/isJsonContent
+//   状态工具：statusText + 2xx/3xx/4xx/5xx 区间判定
+//
+// options（全可选）：
+//   params: map               query 参数
+//   headers: map | Headers    请求标头
+//   body: any                 请求体（map/array 自动 JSON；bytes 原始字节）
+//   formData: formdata        multipart 表单（与 body 互斥，优先）
+//   timeout: int              超时秒
+//   responseType: string      "json"/"text"/"bytes"
+//   userAgent: string         User-Agent 标头
+//   cookies: map | Cookie[]   map 拼 "k=v; ..."；数组逐项 addCookie
+//
+// 用法：
+//   import <Utils/HttpUtil>;
+//   resp = HttpUtil.get("https://api.example.com/items");
+//   data = HttpUtil.getJson("https://api.example.com/items");
+//   resp = HttpUtil.postJson(url, {"a": 1});
+//   resp = HttpUtil.request("POST", url, {"params": {"p": 1}, "timeout": 10});
+// ============================================================
+
+import <NetWork/Http>;
+
+public class HttpUtil {
+
+    // ========== 标头 / Cookie 工具（被 request() 引用，置于前） ==========
+
+    // Cookie map → 请求头值：{"a": 1, "b": "x"} → "a=1; b=x"
+    public static func cookiesToHeader(cookies: map): string {
+        parts = [];
+        for k in cookies.keys() {
+            parts.add(k + "=" + cookies[k]);
+        }
+        return parts.join("; ");
+    }
+
+    // Content-Type 是否 JSON（含 "+json" 后缀形式）
+    public static func isJsonContent(contentType: string): bool {
+        return contentType.lower().contains("json");
+    }
+
+    // 响应是否 JSON（按 Content-Type 判定）
+    public static func isJsonResponse(resp: HttpResponse): bool {
+        return HttpUtil.isJsonContent(resp.header(HttpRequest.HEADER_CONTENT_TYPE));
+    }
+
+    // 单标头 map 构造（map 字面量键位置不支持类常量表达式，键须命令式写入）
+    static func headerMap(name: string, value: string): map {
+        h = {};
+        h[name] = value;
+        return h;
+    }
+
+    // ========== 通用请求（全配置入口） ==========
+
+    // options 全可选；返回 HttpResponse<map>
+    public static func request(method: string, url: string, options: map) {
+        req = HttpRequest<map, map>(method, url);
+        if (options.has("params")) {
+            ps = options["params"];
+            for k in ps.keys() { req.setParam(k, ps[k]); }
+        }
+        if (options.has("headers")) {
+            hs = options["headers"];
+            if (type(hs) == "Headers") { req.setHeaders(hs); }
+            else {
+                for k in hs.keys() { req.setHeader(k, hs[k]); }
+            }
+        }
+        if (options.has("userAgent")) { req.setUserAgent(options["userAgent"]); }
+        if (options.has("cookies")) {
+            cs = options["cookies"];
+            if (type(cs) == "array") {
+                for c in cs { req.addCookie(c); }
+            } else {
+                req.setHeader(HttpRequest.HEADER_COOKIE, HttpUtil.cookiesToHeader(cs));
+            }
+        }
+        if (options.has("timeout")) { req.setTimeout(options["timeout"]); }
+        if (options.has("responseType")) { req.setResponseType(options["responseType"]); }
+        if (options.has("formData")) { req.setFormData(options["formData"]); }
+        else if (options.has("body")) { req.setBody(options["body"]); }
+        return req.send();
+    }
+
+    // ========== GET ==========
+
+    public static func get(url: string) {
+        return HttpRequest<string, map>(url).get();
+    }
+
+    public static func getWithParams(url: string, params: map) {
+        return HttpUtil.request("GET", url, {"params": params});
+    }
+
+    public static func getWithHeaders(url: string, headers: map) {
+        return HttpUtil.request("GET", url, {"headers": headers});
+    }
+
+    // ========== POST ==========
+
+    public static func postJson(url: string, data: map) {
+        return HttpUtil.request("POST", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_JSON),
+            "body": data
+        });
+    }
+
+    public static func postForm(url: string, data: map) {
+        return HttpUtil.request("POST", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_FORM),
+            "body": data
+        });
+    }
+
+    // 原始文本体（Content-Type 可指定，缺省 text/plain）
+    public static func postText(url: string, text: string) {
+        return HttpUtil.request("POST", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_TEXT),
+            "body": text
+        });
+    }
+
+    public static func postTextAs(url: string, text: string, contentType: string) {
+        return HttpUtil.request("POST", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, contentType),
+            "body": text
+        });
+    }
+
+    // 原始字节体
+    public static func postBytes(url: string, data: bytes) {
+        return HttpUtil.request("POST", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_OCTET),
+            "body": data
+        });
+    }
+
+    // multipart 表单：fields 文本域 + files 文件域（值 = 文件路径）
+    public static func postFormData(url: string, fields: map, files: map) {
+        fd = <formdata>{};
+        for k in fields.keys() { fd.append(k, fields[k]); }
+        for k in files.keys() { fd.append(k, file(files[k])); }
+        return HttpUtil.request("POST", url, {"formData": fd});
+    }
+
+    // ========== PUT / PATCH / DELETE / HEAD ==========
+
+    public static func putJson(url: string, data: map) {
+        return HttpUtil.request("PUT", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_JSON),
+            "body": data
+        });
+    }
+
+    public static func putForm(url: string, data: map) {
+        return HttpUtil.request("PUT", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_FORM),
+            "body": data
+        });
+    }
+
+    public static func patchJson(url: string, data: map) {
+        return HttpUtil.request("PATCH", url, {
+            "headers": HttpUtil.headerMap(HttpRequest.HEADER_CONTENT_TYPE, HttpRequest.CONTENT_JSON),
+            "body": data
+        });
+    }
+
+    public static func delete(url: string) {
+        return HttpUtil.request("DELETE", url, {});
+    }
+
+    public static func deleteWithParams(url: string, params: map) {
+        return HttpUtil.request("DELETE", url, {"params": params});
+    }
+
+    public static func head(url: string) {
+        return HttpUtil.request("HEAD", url, {});
+    }
+
+    // ========== 响应直取（绕过 HttpResponse 包装） ==========
+
+    // GET 直接取文本正文
+    public static func getText(url: string): string {
+        return HttpUtil.get(url).text();
+    }
+
+    // GET 直接取 JSON 正文（map/array，按 Content-Type 自动解析）
+    public static func getJson(url: string) {
+        return HttpUtil.get(url).json();
+    }
+
+    // GET 直接取字节正文
+    public static func getBytes(url: string): bytes {
+        return HttpUtil.request("GET", url, {"responseType": "bytes"}).body();
+    }
+
+    // HEAD 直接取状态码
+    public static func getStatus(url: string): int {
+        return HttpUtil.head(url).statusCode();
+    }
+
+    // ========== URL / query 工具 ==========
+
+    // query 字符串拼接：{"a": 1, "b": "x"} → "a=1&b=x"（值原样拼接，编码由 requests 负责）
+    public static func buildQuery(params: map): string {
+        parts = [];
+        for k in params.keys() {
+            parts.add(k + "=" + params[k]);
+        }
+        return parts.join("&");
+    }
+
+    // URL 拼接 query（已含 ? 时用 & 续接）
+    public static func buildUrl(url: string, params: map): string {
+        q = HttpUtil.buildQuery(params);
+        if (q == "") { return url; }
+        if (url.contains("?")) { return url + "&" + q; }
+        return url + "?" + q;
+    }
+
+    // query 字符串解析："a=1&b=x" → {"a": "1", "b": "x"}（值均为字符串，不解码）
+    public static func parseQuery(q: string): map {
+        out = {};
+        if (q == "") { return out; }
+        segs = q.split("&");
+        for seg in segs {
+            kv = seg.split("=");
+            if (kv.len > 1) { out[kv[0]] = kv.slice(1, kv.len).join("="); }
+            else if (kv.len == 1 && kv[0] != "") { out[kv[0]] = ""; }
+        }
+        return out;
+    }
+
+    // 取 URL 中单个 query 参数（无则 ""）
+    public static func getQueryParam(url: string, name: string): string {
+        if (url.contains("?") == false) { return ""; }
+        q = url.split("?").slice(1, url.split("?").len).join("?");
+        q = q.split("#")[0];
+        m = HttpUtil.parseQuery(q);
+        if (m.has(name)) { return m[name]; }
+        return "";
+    }
+
+    // 路径拼接：处理 base/path 交界处的斜杠
+    public static func urlJoin(base: string, path: string): string {
+        bEnd = base.slice(base.len - 1, base.len) == "/";
+        pStart = path.slice(0, 1) == "/";
+        if (bEnd && pStart) { return base + path.slice(1, path.len); }
+        if (bEnd || pStart) { return base + path; }
+        return base + "/" + path;
+    }
+
+    // ========== 状态码工具 ==========
+
+    // 状态码 → 原因短语（RFC 7231 常用项，未知返回 ""）
+    public static func statusText(code: int): string {
+        if (code == HttpStatus.CONTINUE) { return "Continue"; }
+        if (code == HttpStatus.SWITCHING_PROTOCOLS) { return "Switching Protocols"; }
+        if (code == HttpStatus.OK) { return "OK"; }
+        if (code == HttpStatus.CREATED) { return "Created"; }
+        if (code == HttpStatus.ACCEPTED) { return "Accepted"; }
+        if (code == HttpStatus.NO_CONTENT) { return "No Content"; }
+        if (code == HttpStatus.MULTIPLE_CHOICES) { return "Multiple Choices"; }
+        if (code == HttpStatus.MOVED_PERMANENTLY) { return "Moved Permanently"; }
+        if (code == HttpStatus.FOUND) { return "Found"; }
+        if (code == HttpStatus.NOT_MODIFIED) { return "Not Modified"; }
+        if (code == HttpStatus.BAD_REQUEST) { return "Bad Request"; }
+        if (code == HttpStatus.UNAUTHORIZED) { return "Unauthorized"; }
+        if (code == HttpStatus.FORBIDDEN) { return "Forbidden"; }
+        if (code == HttpStatus.NOT_FOUND) { return "Not Found"; }
+        if (code == HttpStatus.METHOD_NOT_ALLOWED) { return "Method Not Allowed"; }
+        if (code == HttpStatus.REQUEST_TIMEOUT) { return "Request Timeout"; }
+        if (code == HttpStatus.CONFLICT) { return "Conflict"; }
+        if (code == HttpStatus.TOO_MANY_REQUESTS) { return "Too Many Requests"; }
+        if (code == HttpStatus.INTERNAL_SERVER_ERROR) { return "Internal Server Error"; }
+        if (code == HttpStatus.BAD_GATEWAY) { return "Bad Gateway"; }
+        if (code == HttpStatus.SERVICE_UNAVAILABLE) { return "Service Unavailable"; }
+        if (code == HttpStatus.GATEWAY_TIMEOUT) { return "Gateway Timeout"; }
+        return "";
+    }
+
+    // 状态码区间判定（2xx/3xx/4xx/5xx）
+    public static func isSuccess(code: int): bool {
+        return code >= HttpStatus.OK && code < HttpStatus.MULTIPLE_CHOICES;
+    }
+    public static func isRedirect(code: int): bool {
+        return code >= HttpStatus.MULTIPLE_CHOICES && code < HttpStatus.BAD_REQUEST;
+    }
+    public static func isClientError(code: int): bool {
+        return code >= HttpStatus.BAD_REQUEST && code < HttpStatus.INTERNAL_SERVER_ERROR;
+    }
+    public static func isServerError(code: int): bool {
+        return code >= HttpStatus.INTERNAL_SERVER_ERROR && code < 600;
+    }
+    public static func isError(code: int): bool {
+        return code >= HttpStatus.BAD_REQUEST;
+    }
+}
