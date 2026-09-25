@@ -616,6 +616,68 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     emit(c, OPC_GENERIC_BIND, gbi_idx, 0);
 }
 
+/* BinOp → 运算符重载方法名（与 yacc operator 规则注册名一致）；不可重载返回 NULL */
+static const char* binop_overload_name(int op) {
+    switch(op) {
+    case OP_ADD: return "+";
+    case OP_SUB: return "-";
+    case OP_MUL: return "*";
+    case OP_DIV: return "/";
+    case OP_MOD: return "%%";   /* yacc: MOD → strdup("%%") */
+    case OP_EQ:  return "==";
+    case OP_NE:  return "!=";
+    case OP_LT:  return "<";
+    case OP_GT:  return ">";
+    case OP_LE:  return "<=";
+    case OP_GE:  return ">=";
+    default: return NULL;
+    }
+}
+
+/* 检查 expr 的属主 class/struct 是否定义了 opMethod 运算符方法 */
+static int has_operator_overload(Ctx* c, AstNode* expr, const char* opMethod) {
+    char* owner = c_expr_owner_type(c, expr);
+    if(!owner) return 0;
+    TypeDef* td = type_lookup(owner);
+    free(owner);
+    if(!td || !td->runtime_info) return 0;
+    return lumyr_type_find_method(td->runtime_info, opMethod) != NULL;
+}
+
+/* 运算符重载 BINOP 的结果 ExprType：
+ * left 属主定义同名运算符方法时，结果类型取该方法返回标注（无标注→NONE）。
+ * arith_get_expr_type 用它修正「重载 BINOP 被按操作数推断为 PTR，实际编译为方法调用」的误判。
+ * 返回 -1 表示无重载（调用方按普通规则推断）。 */
+int operator_overload_result_type(Ctx* c, AstNode* left, int binop) {
+    const char* opMethod = binop_overload_name(binop);
+    if(!opMethod) return -1;
+    char* owner = c_expr_owner_type(c, left);
+    if(!owner) return -1;
+    TypeDef* td = type_lookup(owner);
+    free(owner);
+    if(!td || !td->runtime_info) return -1;
+    RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, opMethod);
+    if(!rf) return -1;
+    if(!interp_func_is_payload(rf)) return (int)EXPR_TYPE_NONE;
+    InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+    BytecodeFunc* def_fn = pl ? pl->bytecode : NULL;
+    if(def_fn && def_fn->ret_type_name)
+        return (int)castkind_to_exprtype(ir_type_name_to_castkind(def_fn->ret_type_name));
+    return (int)EXPR_TYPE_NONE;
+}
+
+/* INT64 栈值按原始 cast 转字符串到 PTR 栈：
+ * bool → "true"/"false"；char/uchar → 单字符；其余整型（含 ascii/byte/各int）→ 数字。
+ * 此前统一 INT64_TO_STRING 导致 "x="+true 得 "x=1"、"c="+'A' 得 "c=65"。 */
+static void emit_int64_to_string_cast(Ctx* c, CastKind ck) {
+    if(ck == CAST_BOOL || ck == CAST_CHAR || ck == CAST_UCHAR) {
+        emit(c, OPC_BOX_INT64, (int)ck, 0);   /* INT64 → VALUE（VAL_BOOL/VAL_CHAR） */
+        emit(c, OPC_CAST_STRING, 0, 0);       /* VALUE → PTR（value_to_str） */
+    } else {
+        emit(c, OPC_INT64_TO_STRING, 0, 0);
+    }
+}
+
 /* 编译表达式，返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node) {
     if(!node) return EXPR_TYPE_NONE;
@@ -1884,6 +1946,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_BINOP: {
+        /* 运算符重载：左操作数为用户定义 class/struct 且该类定义同名运算符方法
+         * → 编译为 left.<op>(right)（合成方法调用，复用继承/多态分派） */
+        const char* opMethod = binop_overload_name(node->u.bin.op);
+        if(opMethod && has_operator_overload(c, node->u.bin.left, opMethod)) {
+            AstNode* synthCall = ast_method_call(node->u.bin.left, strdup(opMethod),
+                                                  node->u.bin.right);
+            return c_expr(c, synthCall);
+        }
         /* 逻辑运算 && || 短路求值：left/right 转 VALUE 栈，结果（0/1 或原值）压 VALUE 栈 */
         if(node->u.bin.op == OP_LOGIC_AND || node->u.bin.op == OP_LOGIC_OR) {
             int is_and = (node->u.bin.op == OP_LOGIC_AND);
@@ -1892,13 +1962,16 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(lt != EXPR_TYPE_NONE) emit_to_dynamic(c, lt, c_expr_cast_type(c, node->u.bin.left));
             /* 短路：AND 假则跳 push_short；OR 真则跳 push_short */
             int jshort = emit_here(c, is_and ? OPC_JMP_IF_FALSE_V : OPC_JMP_IF_TRUE_V, 0, 0);
-            /* right 压 VALUE 栈（作为正常路径结果） */
+            /* right 压 VALUE 栈并归一为 bool（逻辑运算结果统一 VAL_BOOL，
+             * 与静态类型一致，避免返回 VAL_INT 导致 (a&&b)==false 类型不符） */
             ExprType rt = c_expr(c, node->u.bin.right);
             if(rt != EXPR_TYPE_NONE) emit_to_dynamic(c, rt, c_expr_cast_type(c, node->u.bin.right));
+            emit(c, OPC_TO_BOOL, 0, 0);
             int jend = emit_here(c, OPC_JMP, 0, 0);
-            /* short 分支：AND push 0；OR push 1 */
+            /* short 分支：AND push false；OR push true（VAL_BOOL） */
             patch_to(c, jshort);
             emit(c, OPC_PUSH_INT_VAL, is_and ? 0 : 1, 0);
+            emit(c, OPC_TO_BOOL, 0, 0);
             patch_to(c, jend);
             return EXPR_TYPE_NONE;
         }
@@ -2030,7 +2103,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             /* 字符串运算：先编译左操作数，立即转换；再编译右操作数，立即转换 */
             ExprType lt = c_expr(c, node->u.bin.left);
             if(lt == EXPR_TYPE_INT) {
-                emit(c, OPC_INT64_TO_STRING, 0, 0);
+                emit_int64_to_string_cast(c, lt_cast);
             } else if(lt == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
             } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BIGINT) {
@@ -2045,7 +2118,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             ExprType rt = c_expr(c, node->u.bin.right);
             if(rt == EXPR_TYPE_INT) {
-                emit(c, OPC_INT64_TO_STRING, 0, 0);
+                emit_int64_to_string_cast(c, rt_cast);
             } else if(rt == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
             } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BIGINT) {
@@ -2081,6 +2154,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型提升：左操作数立即转换，保证栈顺序正确 */
         if(result == EXPR_TYPE_DOUBLE && lt == EXPR_TYPE_INT) {
             emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+        } else if(result == EXPR_TYPE_INT && lt == EXPR_TYPE_NONE) {
+            /* 动态 Value（方法调用返回等）→ INT64，否则 INT64 指令读栈错位 */
+            emit(c, OPC_UNBOX_INT64, 0, 0);
+        } else if(result == EXPR_TYPE_DOUBLE && lt == EXPR_TYPE_NONE) {
+            emit(c, OPC_UNBOX_DOUBLE, 0, 0);
         } else if(result == EXPR_TYPE_NONE && lt != EXPR_TYPE_NONE) {
             emit_to_dynamic(c, lt, c_expr_cast_type(c, node->u.bin.left));
         }
@@ -2088,6 +2166,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型提升：右操作数立即转换，保证栈顺序正确 */
         if(result == EXPR_TYPE_DOUBLE && rt == EXPR_TYPE_INT) {
             emit(c, OPC_INT64_TO_DOUBLE, 0, 0);
+        } else if(result == EXPR_TYPE_INT && rt == EXPR_TYPE_NONE) {
+            emit(c, OPC_UNBOX_INT64, 0, 0);
+        } else if(result == EXPR_TYPE_DOUBLE && rt == EXPR_TYPE_NONE) {
+            emit(c, OPC_UNBOX_DOUBLE, 0, 0);
         } else if(result == EXPR_TYPE_NONE && rt != EXPR_TYPE_NONE) {
             emit_to_dynamic(c, rt, c_expr_cast_type(c, node->u.bin.right));
         }
@@ -2691,6 +2773,13 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
 
     /* 二元运算：递归判断（严格遵循 C/C++ 算术类型提升规则） */
     if(node->type == AST_BINOP) {
+        /* 比较运算结果为 bool（与操作数类型无关）：装箱标签/转字符串须为
+         * VAL_BOOL（"true"/"false"），否则 "eq="+(a==b) 得 "eq=1" */
+        int bopx = node->u.bin.op;
+        if(bopx == OP_EQ || bopx == OP_NE || bopx == OP_LT ||
+           bopx == OP_GT || bopx == OP_LE || bopx == OP_GE)
+            return CAST_BOOL;
+
         CastKind lt = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt = c_expr_cast_type(c, node->u.bin.right);
         
@@ -2890,6 +2979,17 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
     /* 二元运算：左右子树均目标 VALUE，发通用 Value 指令 */
     case AST_BINOP: {
         int bop = node->u.bin.op;
+        /* 运算符重载：与 c_expr AST_BINOP 一致分派为 left.<op>(right)，
+         * 否则函数实参路径直接把 class box 成 VAL_CLASS_PTR 发 VEQ 按指针比较，绕过用户方法 */
+        const char* opMethod = binop_overload_name(bop);
+        if(opMethod && has_operator_overload(c, node->u.bin.left, opMethod)) {
+            AstNode* synthCall = ast_method_call(node->u.bin.left, strdup(opMethod),
+                                                  node->u.bin.right);
+            ExprType t = c_expr(c, synthCall);
+            if(t != EXPR_TYPE_NONE)
+                emit_to_dynamic(c, t, c_expr_cast_type(c, synthCall));
+            return;
+        }
         /* 幂与位运算：不走通用 value 算术（lumyr_add 对 int64 会提升为 double，
          * 位运算又严格要求整数）。改为自然编译——静态整数走 typed INT64（保留整数性），
          * 浮点走 DOUBLE，动态 c_expr 已发 V 指令落 VALUE；typed 结果按 int64/double 装箱，

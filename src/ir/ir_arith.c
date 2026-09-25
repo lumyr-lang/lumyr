@@ -173,6 +173,10 @@ ExprType arith_get_expr_type(Ctx* c, AstNode* node) {
 
     /* 二元运算：递归判断左右操作数类型 */
     if(node->type == AST_BINOP) {
+        /* 运算符重载：该 BINOP 实际编译为 left.<op>(right)，结果类型取方法返回标注，
+         * 不能按操作数 class(PTR) 推断，否则 (v1==v2)==false 误入字符串 PTR 比较路径 */
+        int ovr = operator_overload_result_type(c, node->u.bin.left, node->u.bin.op);
+        if(ovr >= 0) return (ExprType)ovr;
         ExprType left_type = arith_get_expr_type(c, node->u.bin.left);
         ExprType right_type = arith_get_expr_type(c, node->u.bin.right);
 

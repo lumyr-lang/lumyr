@@ -48,8 +48,14 @@ int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in) {
 /* VNEG：通用 Value 一元负（动态兜底：VALUE 栈） */
 int vm_exec_vneg(VMExecCtx* ctx, Instruction* in) {
     Value val;
-    (void)ctx; (void)in;
+    (void)in;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &val);
+    if(val.type == VAL_NONE) {
+        /* 无兜底：-null 抛 TypeError，不再静默得 -0.0 */
+        vm_except_raise_str(ctx, "TypeError",
+            "null 不能参与算术运算 / null cannot participate in arithmetic");
+        return 1;
+    }
     Value r = lumyr_unary_minus(val);
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
@@ -267,6 +273,17 @@ int vm_exec_cast_string(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
     char* s = value_to_str(v);   /* malloc，调用方（PTR 栈消费方）持有 */
     stack_vm_push(g_stack_mgr, STACK_PTR, &s);
+    return 1;
+}
+
+/* TO_BOOL：VALUE 栈弹 1 -> 真值判定 -> 压 VAL_BOOL 到 VALUE 栈
+ * 逻辑 && / || 结果归一为 bool，保证运行时类型与静态推断一致 */
+int vm_exec_to_bool(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx; (void)in;
+    Value v;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+    Value r = lumyr_make_bool(lumyr_to_bool(v));
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
 }
 

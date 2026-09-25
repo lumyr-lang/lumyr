@@ -694,12 +694,44 @@ static int vbin_exec(VBinFn fn) {
     return 1;
 }
 
+/* null 参与算术运算：抛 TypeError（可被 try/catch 捕获）。
+ * 无兜底原则：null 不再按 0 静默参与数值运算。 */
+static int varith_raise_null(VMExecCtx* ctx) {
+    vm_except_raise_str(ctx, "TypeError",
+        "null 不能参与算术运算 / null cannot participate in arithmetic");
+    return 1;
+}
+
+/* 算术二元运算通用：弹 b、a，任一为 null(VAL_NONE) → TypeError；否则调 fn 压结果。
+ * allowConcat（VADD 用）：当另一侧使运算成为字符串拼接（string/bool，
+ * 与 lumyr_add 拼接触发条件一致）时放行，"x="+null 保持字符串拼接语义。 */
+static int varith_bin_exec(VMExecCtx* ctx, VBinFn fn, int allowConcat) {
+    Value a, b;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &b);
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &a);
+    if(a.type == VAL_NONE || b.type == VAL_NONE) {
+        if(allowConcat) {
+            int isConcat = (a.type == VAL_STRING || b.type == VAL_STRING
+                            || a.type == VAL_BOOL || b.type == VAL_BOOL);
+            if(isConcat) {
+                Value r = fn(a, b);
+                stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+                return 1;
+            }
+        }
+        return varith_raise_null(ctx);
+    }
+    Value r = fn(a, b);
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+    return 1;
+}
+
 /* 通用算术：VADD/VSUB/VMUL/VDIV/VMOD */
-int vm_exec_vadd(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_add); }
-int vm_exec_vsub(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_sub); }
-int vm_exec_vmul(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_mul); }
-int vm_exec_vdiv(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_div); }
-int vm_exec_vmod(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_mod); }
+int vm_exec_vadd(VMExecCtx* ctx, Instruction* in) { (void)in; return varith_bin_exec(ctx, lumyr_add, 1); }
+int vm_exec_vsub(VMExecCtx* ctx, Instruction* in) { (void)in; return varith_bin_exec(ctx, lumyr_sub, 0); }
+int vm_exec_vmul(VMExecCtx* ctx, Instruction* in) { (void)in; return varith_bin_exec(ctx, lumyr_mul, 0); }
+int vm_exec_vdiv(VMExecCtx* ctx, Instruction* in) { (void)in; return varith_bin_exec(ctx, lumyr_div, 0); }
+int vm_exec_vmod(VMExecCtx* ctx, Instruction* in) { (void)in; return varith_bin_exec(ctx, lumyr_mod, 0); }
 
 /* 通用比较：结果为 bool Value（压 VALUE 栈） */
 int vm_exec_vgt(VMExecCtx* ctx, Instruction* in) { (void)ctx;(void)in; return vbin_exec(lumyr_gt); }
@@ -777,6 +809,9 @@ int vm_exec_vpow(VMExecCtx* ctx, Instruction* in) {
     Value a, b;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &b);
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &a);
+    if(a.type == VAL_NONE || b.type == VAL_NONE) {
+        return varith_raise_null(ctx);
+    }
     Value r;
     if(vtype_is_integer(a.type) && vtype_is_integer(b.type) && lumyr_extract_ll(b) >= 0) {
         int64_t base = lumyr_extract_ll(a);

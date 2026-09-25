@@ -153,6 +153,7 @@ int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_unbox_double(VMExecCtx* ctx, Instruction* in);
 int vm_exec_unbox_ptr(VMExecCtx* ctx, Instruction* in);
 int vm_exec_cast_string(VMExecCtx* ctx, Instruction* in);
+int vm_exec_to_bool(VMExecCtx* ctx, Instruction* in);
 int vm_exec_str_to_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_str_to_double(VMExecCtx* ctx, Instruction* in);
 
@@ -306,6 +307,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_UNBOX_DOUBLE: handled = vm_exec_unbox_double(ctx, &in); break;
         case OPC_UNBOX_PTR:    handled = vm_exec_unbox_ptr(ctx, &in); break;
         case OPC_CAST_STRING:  handled = vm_exec_cast_string(ctx, &in); break;
+        case OPC_TO_BOOL:      handled = vm_exec_to_bool(ctx, &in); break;
         case OPC_STR_TO_INT64:  handled = vm_exec_str_to_int64(ctx, &in); break;
         case OPC_STR_TO_DOUBLE: handled = vm_exec_str_to_double(ctx, &in); break;
 

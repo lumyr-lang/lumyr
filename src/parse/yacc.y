@@ -1173,18 +1173,20 @@ static char* make_unpack_tmp_name(void) {
  *   ((a<b)&&(b<c))<d → ((a<b)&&(b<c)) && (c<d)
  * 中项克隆以避免节点共享；非比较/非链化 binop 退回普通 binop */
 static AstNode* chain_cmp(AstNode* left, int op, AstNode* right) {
+    /* == / != 不参与链式比较：(a<b)==c、(a==b)==c、a==b==c 一律按普通左结合布尔比较，
+     * 否则带括号的嵌套比较会被误改成 (a==b)&&(b==c)，且 reduce 后无法区分括号 */
+    if(op != OP_LT && op != OP_GT && op != OP_GE && op != OP_LE)
+        return ast_binop(op, left, right);
     if(left && left->type == AST_BINOP) {
         int lop = left->u.bin.op;
-        if(lop == OP_LT || lop == OP_GT || lop == OP_GE || lop == OP_LE ||
-           lop == OP_EQ || lop == OP_NE) {
+        if(lop == OP_LT || lop == OP_GT || lop == OP_GE || lop == OP_LE) {
             AstNode* mid = ast_clone_node(left->u.bin.right);
             return ast_binop(OP_LOGIC_AND, left, ast_binop(op, mid, right));
         }
         if(lop == OP_LOGIC_AND && left->u.bin.right &&
            left->u.bin.right->type == AST_BINOP) {
             int rop = left->u.bin.right->u.bin.op;
-            if(rop == OP_LT || rop == OP_GT || rop == OP_GE || rop == OP_LE ||
-               rop == OP_EQ || rop == OP_NE) {
+            if(rop == OP_LT || rop == OP_GT || rop == OP_GE || rop == OP_LE) {
                 AstNode* mid = ast_clone_node(left->u.bin.right->u.bin.right);
                 return ast_binop(OP_LOGIC_AND, left, ast_binop(op, mid, right));
             }

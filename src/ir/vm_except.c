@@ -43,6 +43,15 @@ static _Thread_local Value g_current_error;
 /* 原始 throw 值（catch 变量绑定它，而非包装后的 ValueError） */
 static _Thread_local Value g_current_throw_val;
 
+/* finally 完成动作节点（FIN_PUSH 压入，FINISH 消费）。
+ * 前置于 throw_value：异常穿过仅 finally 的 try 时需压入 RETHROW 动作。 */
+typedef struct FinNode {
+    int action;                 /* 1=JMP 2=RETHROW 3=BREAK 4=CONT */
+    int target;
+    struct FinNode* next;
+} FinNode;
+static FinNode* g_fin_stack = NULL;
+
 /* 把任意抛出值规范化为 VAL_ERROR */
 static Value ensure_error(Value v) {
     if (v.type == VAL_ERROR) return v;
@@ -115,6 +124,24 @@ int vm_exec_throw(VMExecCtx* ctx, Instruction* in) {
  * 返回 1 表示已被同层捕获或启动跨帧展开；未捕获时内部 exit(1)。 */
 int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     Value err = ensure_error(v);
+
+    /* 异常首先穿过同帧「仅 finally」try（catch_pc==0, fin_pc!=0）：
+     * 压入 RETHROW 完成动作并跳到 finally 入口；finally 执行完由 FINISH
+     * 重新抛出（继续向外搜真正的 catch）。不弹/不 free 该 try 节点
+     * （FINISH 时统一 pop_current_try）。 */
+    if(g_try_stack && g_try_stack->frame == ctx->frame &&
+       g_try_stack->catch_pc == 0 && g_try_stack->fin_pc != 0) {
+        FinNode* fn = (FinNode*)malloc(sizeof(FinNode));
+        if(!fn) { perror("fin rethrow"); exit(EXIT_FAILURE); }
+        fn->action = 2;    /* RETHROW */
+        fn->target = 0;
+        fn->next   = g_fin_stack;
+        g_fin_stack = fn;
+        g_current_error     = err;
+        g_current_throw_val = v;
+        ctx->pc = g_try_stack->fin_pc;
+        return 1;
+    }
 
     /* 沿 try 栈找第一个有 catch 的处理器 */
     TryCtxNode* t = g_try_stack;
@@ -195,14 +222,7 @@ int vm_except_check_unwind(VMExecCtx* ctx) {
     return -1;
 }
 
-/* ========== finally 完成动作（FIN_PUSH 压入，FINISH 消费） ========== */
-
-typedef struct FinNode {
-    int action;                 /* 1=JMP 2=RETHROW 3=BREAK 4=CONT */
-    int target;
-    struct FinNode* next;
-} FinNode;
-static FinNode* g_fin_stack = NULL;
+/* ========== finally 完成动作（FinNode/g_fin_stack 定义见文件头部） ========== */
 
 /* FIN_PUSH：压入 finally 完成动作（a=action，b=目标pc） */
 int vm_exec_fin_push(VMExecCtx* ctx, Instruction* in) {
