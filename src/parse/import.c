@@ -151,6 +151,9 @@ typedef struct {
     int    nclass_names;
     char** export_names; /* 实际写入导出 map 的键名（供别名成员编译期校验） */
     int    nexport_names;
+    char** exports_full; /* 全部导出名（含 class/interface/type/struct 名，selective 校验用） */
+    int    nexports_full;
+    int    no_alias;     /* 首次处理时的导入模式：1=no-alias（导出保持原名全局） */
 } ProcessedMod;
 
 static ProcessedMod* g_processed = NULL;
@@ -214,6 +217,72 @@ static int pm_is_class_name(ProcessedMod* pm, const char* name) {
         if(strcmp(pm->class_names[i], name) == 0) return 1;
     return 0;
 }
+/* pm 辅助：判断某符号是否为导出符号（含导出类名，selective 校验用） */
+static int pm_exports_name(ProcessedMod* pm, const char* name) {
+    for(int i = 0; i < pm->nexports_full; i++)
+        if(strcmp(pm->exports_full[i], name) == 0) return 1;
+    return 0;
+}
+
+/* ---------------- class 引用重写映射（extends/implements + alias.Class + selective 类名） ----------------
+ * 主文件与模块内部 import 的映射统一登记到全局收集器（expand_file 递归时逐层登记），
+ * lm_preprocess_main 在全部展开完成后做一次 rewrite_class_refs。 */
+/* alias → module_id 映射 */
+typedef struct { char* alias; int module_id; char** class_names; int nclass_names; } AliasEntry;
+/* new_name → (module_id, old_name) 映射；
+ * is_class=1 表示 selective 类名（任意位置裸引用需重写）；
+ * is_mangled=0 表示原名未被 mangle（no-alias 首处理），重写目标为原名本身 */
+typedef struct { char* new_name; int module_id; char* old_name; int is_class; int is_mangled; } RenameEntry;
+
+static AliasEntry*  g_ext_aliases = NULL;
+static int          g_n_ext_aliases = 0, g_cap_ext_aliases = 0;
+static RenameEntry* g_ext_renames = NULL;
+static int          g_n_ext_renames = 0, g_cap_ext_renames = 0;
+
+/* 登记 alias → 模块（幂等：同名 alias 只登记一次，与 lm_register_alias 一致） */
+static void ext_add_alias(const char* alias, ProcessedMod* pm) {
+    for(int i = 0; i < g_n_ext_aliases; i++)
+        if(strcmp(g_ext_aliases[i].alias, alias) == 0) return;
+    if(g_n_ext_aliases >= g_cap_ext_aliases) {
+        int nc = g_cap_ext_aliases ? g_cap_ext_aliases * 2 : 8;
+        g_ext_aliases = (AliasEntry*)realloc(g_ext_aliases, (size_t)nc * sizeof(AliasEntry));
+        g_cap_ext_aliases = nc;
+    }
+    AliasEntry* e = &g_ext_aliases[g_n_ext_aliases++];
+    e->alias = strdup(alias);
+    e->module_id = pm->module_id;
+    e->class_names = pm->class_names;   /* 引用 pm 持有数组（进程生命周期内稳定） */
+    e->nclass_names = pm->nclass_names;
+}
+
+/* 登记 rename 映射（不幂等：重复项无害，重写扫描首个命中生效） */
+static void ext_add_rename_is(const char* new_name, ProcessedMod* pm,
+                              const char* old_name, int is_class, int is_mangled) {
+    if(g_n_ext_renames >= g_cap_ext_renames) {
+        int nc = g_cap_ext_renames ? g_cap_ext_renames * 2 : 8;
+        g_ext_renames = (RenameEntry*)realloc(g_ext_renames, (size_t)nc * sizeof(RenameEntry));
+        g_cap_ext_renames = nc;
+    }
+    RenameEntry* e = &g_ext_renames[g_n_ext_renames++];
+    e->new_name = strdup(new_name);
+    e->module_id = pm->module_id;
+    e->old_name = strdup(old_name);
+    e->is_class = is_class;
+    e->is_mangled = is_mangled;
+}
+
+/* 释放收集器（alias/class_names 引用 pm 持有数组，不释放） */
+static void ext_free_maps(void) {
+    for(int i = 0; i < g_n_ext_aliases; i++) free(g_ext_aliases[i].alias);
+    free(g_ext_aliases); g_ext_aliases = NULL; g_n_ext_aliases = 0; g_cap_ext_aliases = 0;
+    for(int i = 0; i < g_n_ext_renames; i++) { free(g_ext_renames[i].new_name); free(g_ext_renames[i].old_name); }
+    free(g_ext_renames); g_ext_renames = NULL; g_n_ext_renames = 0; g_cap_ext_renames = 0;
+}
+
+/* no-alias 导出名登记表：跨模块同名导出会静默覆盖 → 无兜底报错 */
+static char** g_noalias_names = NULL;
+static char** g_noalias_paths = NULL;
+static int    g_n_noalias_exports = 0, g_cap_noalias_exports = 0;
 
 /* ---------------- 数据结构 ---------------- */
 typedef struct {
@@ -1289,6 +1358,15 @@ static void emit_shim(SB* out, const char* new_name, int mod_id, const char* old
     sb_puts(out, ";\n");
 }
 
+/* 生成 plain shim 行：新名 = 原名;（用于 no-alias 首处理后的 selective 重命名：
+ * 导出保持原名全局，直接绑定原名即可） */
+static void emit_shim_plain(SB* out, const char* new_name, const char* old_name) {
+    sb_puts(out, new_name);
+    sb_puts(out, " = ");
+    sb_puts(out, old_name);
+    sb_puts(out, ";\n");
+}
+
 /* 递归展开：把 abs_path（已 realpath）模块的完整内联文本（含末尾导出 map + shim）
  * 写入 out，返回导出 map 变量名（malloc'd）。失败返回 NULL。
  *
@@ -1306,14 +1384,38 @@ static char* expand_file(const char* abs_path, SB* out,
     ProcessedMod* hit = find_processed(abs_path);
     if(hit) {
         if(!hit->expvar) return NULL;
-        /* 去重命中：为新的 selective 项发 shim（若符号已被 mangle 且非类名） */
+        /* 去重命中：为新的 selective 项发 shim / 登记类名重写 */
         for(int s = 0; s < nsel; s++) {
             if(pm_has_selective(hit, sel_old[s])) continue;
             const char* new_name = sel_new[s] ? sel_new[s] : sel_old[s];
-            if(pm_was_mangled(hit, sel_old[s]) && !pm_is_class_name(hit, sel_old[s])) {
-                emit_shim(out, new_name, hit->module_id, sel_old[s]);
+            /* 无兜底：selective 仅允许导出符号（含导出类名），私有符号编译期报错 */
+            if(!pm_exports_name(hit, sel_old[s])) {
+                LOG_ERROR("[module] selective 导入 \"%s\" 不是模块的导出符号 / selective import \"%s\" is not an exported symbol of %s\n",
+                          sel_old[s], sel_old[s], hit->path);
+                return NULL;
             }
+            int was_mangled = pm_was_mangled(hit, sel_old[s]);
+            int is_cls = pm_is_class_name(hit, sel_old[s]);
+            if(was_mangled) {
+                if(!is_cls) emit_shim(out, new_name, hit->module_id, sel_old[s]);
+                /* mangle 类名：由 rewrite_class_refs 重写为 __lm_mod_<id>_原名 */
+            } else {
+                /* 首次为 no-alias 模式：导出保持原名全局 */
+                if(!is_cls) emit_shim_plain(out, new_name, sel_old[s]);
+                /* 非 mangle 类名：由 rewrite_class_refs 重写为原名 */
+            }
+            ext_add_rename_is(new_name, hit, sel_old[s], is_cls, was_mangled);
             pm_add_selective(hit, sel_old[s], new_name);
+        }
+        /* 模式混用去重：模块首处理为 alias/selective（导出已 mangle），本次 no-alias 导入
+         * 需把导出函数/变量映射回原名（类名由调用层登记 rename 重写） */
+        if(is_no_alias && !hit->no_alias) {
+            for(int q = 0; q < hit->nexports_full; q++) {
+                const char* en = hit->exports_full[q];
+                if(pm_is_class_name(hit, en)) continue;   /* 类名走 rewrite_class_refs */
+                if(!pm_was_mangled(hit, en)) continue;    /* 已原名可见 */
+                emit_shim(out, en, hit->module_id, en);
+            }
         }
         return strdup(hit->expvar);
     }
@@ -1321,6 +1423,7 @@ static char* expand_file(const char* abs_path, SB* out,
     /* 2) 登记模块，分配 module_id。 */
     ProcessedMod* pm = register_processed(abs_path);
     int mod_id = pm->module_id;
+    pm->no_alias = is_no_alias;
 
     /* 3) 读模块源码 + 条件编译过滤 + transform */
     char* content = slurp_file(abs_path);
@@ -1337,6 +1440,12 @@ static char* expand_file(const char* abs_path, SB* out,
     TransformResult* tr = transform(content);
     free(content);
     if(!tr) return NULL;
+
+    /* 全部导出名（含类名）：selective 校验 + 模式混用映射 */
+    pm->exports_full = (char**)malloc((size_t)(tr->nexports + 1) * sizeof(char*));
+    pm->nexports_full = 0;
+    for(int q = 0; q < tr->nexports; q++)
+        pm->exports_full[pm->nexports_full++] = strdup(tr->exports[q]);
 
     /* 4) build_mangle_set + Name Mangling */
     int mangle_n = 0;
@@ -1439,6 +1548,8 @@ static char* expand_file(const char* abs_path, SB* out,
                     lm_register_alias(isp->alias,
                                       cpm ? (char* const*)cpm->export_names : NULL,
                                       cpm ? cpm->nexport_names : 0);
+                    /* 登记 alias → 模块映射（供 alias.Class 文本重写，含模块内部 import） */
+                    if(cpm) ext_add_alias(isp->alias, cpm);
                     sb_putc(&body, '\n');
                     sb_puts(&body, isp->alias);
                     sb_puts(&body, " = ");
@@ -1464,15 +1575,27 @@ static char* expand_file(const char* abs_path, SB* out,
     sb_puts(out, body.buf);
     free(body.buf);
 
-    /* 7) 生成 selective shim（首次处理：为每个 selective 项发 shim） */
+    /* 7) 生成 selective shim（首次处理：为每个 selective 项发 shim / 登记类名重写） */
     for(int s = 0; s < nsel; s++) {
         const char* old_name = sel_old[s];
         const char* new_name = sel_new[s] ? sel_new[s] : old_name;
-        /* 仅当原名在 mangle 集中且非类名时才需要 shim
-         * （类名通过 rewrite_class_refs 的 extends/implements 文本重写处理） */
-        if(pm_was_mangled(pm, old_name) && !pm_is_class_name(pm, old_name)) {
-            emit_shim(out, new_name, mod_id, old_name);
+        /* 无兜底：selective 仅允许导出符号（含导出类名），私有符号编译期报错 */
+        if(!pm_exports_name(pm, old_name)) {
+            LOG_ERROR("[module] selective 导入 \"%s\" 不是模块的导出符号 / selective import \"%s\" is not an exported symbol of %s\n",
+                      old_name, old_name, abs_path);
+            tr_free(tr);
+            return NULL;
         }
+        int was_mangled = pm_was_mangled(pm, old_name);
+        int is_cls = pm_is_class_name(pm, old_name);
+        if(was_mangled) {
+            if(!is_cls) emit_shim(out, new_name, mod_id, old_name);
+            /* mangle 类名：由 rewrite_class_refs 重写为 __lm_mod_<id>_原名 */
+        } else {
+            if(!is_cls) emit_shim_plain(out, new_name, old_name);
+            /* 非 mangle 类名：由 rewrite_class_refs 重写为原名 */
+        }
+        ext_add_rename_is(new_name, pm, old_name, is_cls, was_mangled);
         pm_add_selective(pm, old_name, new_name);
     }
 
@@ -1512,6 +1635,32 @@ static char* expand_file(const char* abs_path, SB* out,
     }
     sb_puts(out, "};\n");
 
+    /* no-alias 导出保持原名全局：跨模块同名导出会静默覆盖 → 无兜底报错 */
+    if(is_no_alias) {
+        for(int q = 0; q < tr->nexports; q++) {
+            for(int p = 0; p < g_n_noalias_exports; p++) {
+                if(strcmp(g_noalias_names[p], tr->exports[q]) == 0) {
+                    LOG_ERROR("[module] no-alias 导出符号冲突 \"%s\"（%s 与 %s）/ duplicate no-alias export \"%s\" (%s and %s)\n",
+                              tr->exports[q], g_noalias_paths[p], abs_path,
+                              tr->exports[q], g_noalias_paths[p], abs_path);
+                    tr_free(tr);
+                    return NULL;
+                }
+            }
+        }
+        for(int q = 0; q < tr->nexports; q++) {
+            if(g_n_noalias_exports >= g_cap_noalias_exports) {
+                int nc = g_cap_noalias_exports ? g_cap_noalias_exports * 2 : 8;
+                g_noalias_names = (char**)realloc(g_noalias_names, (size_t)nc * sizeof(char*));
+                g_noalias_paths = (char**)realloc(g_noalias_paths, (size_t)nc * sizeof(char*));
+                g_cap_noalias_exports = nc;
+            }
+            g_noalias_names[g_n_noalias_exports] = strdup(tr->exports[q]);
+            g_noalias_paths[g_n_noalias_exports] = strdup(abs_path);
+            g_n_noalias_exports++;
+        }
+    }
+
     /* 9) 回填已处理表的 expvar */
     pm->expvar = strdup(expvar);
     char* ret = strdup(expvar);
@@ -1520,10 +1669,7 @@ static char* expand_file(const char* abs_path, SB* out,
 }
 
 /* ---------------- extends/implements 文本重写 ---------------- */
-/* alias → module_id 映射 */
-typedef struct { char* alias; int module_id; char** class_names; int nclass_names; } AliasEntry;
-/* new_name → (module_id, old_name) 映射；is_class=1 表示 selective 类名（任意位置裸引用需重写） */
-typedef struct { char* new_name; int module_id; char* old_name; int is_class; } RenameEntry;
+/* AliasEntry/RenameEntry 及全局收集器定义见文件头部（expand_file 之前） */
 
 /* 扫描 text，把 extends/implements 后的标识符按映射重写为 mangled 名。
  * alias_map/nalias: alias → module_id（extends alias.Class → extends __lm_mod_<id>_Class）
@@ -1599,19 +1745,26 @@ static char* rewrite_class_refs(const char* text,
                         name[nl] = '\0';
                         int found = -1;
                         const char* old_name = NULL;
+                        int is_mangled = 1;
                         for(int r = 0; r < nrename; r++) {
                             if(strcmp(rename_map[r].new_name, name) == 0) {
                                 found = rename_map[r].module_id;
                                 old_name = rename_map[r].old_name;
+                                is_mangled = rename_map[r].is_mangled;
                                 break;
                             }
                         }
                         if(found >= 0 && old_name) {
-                            sb_puts(&out, "__lm_mod_");
-                            char idstr[16];
-                            snprintf(idstr, sizeof idstr, "%d_", found);
-                            sb_puts(&out, idstr);
-                            sb_puts(&out, old_name);
+                            if(is_mangled) {
+                                sb_puts(&out, "__lm_mod_");
+                                char idstr[16];
+                                snprintf(idstr, sizeof idstr, "%d_", found);
+                                sb_puts(&out, idstr);
+                                sb_puts(&out, old_name);
+                            } else {
+                                /* 非 mangle（no-alias 首处理）：重写为原名 */
+                                sb_puts(&out, old_name);
+                            }
                             i = k;
                             continue;
                         }
@@ -1680,11 +1833,16 @@ static char* rewrite_class_refs(const char* text,
                 name[wl] = '\0';
                 for(int r = 0; r < nrename; r++) {
                     if(rename_map[r].is_class && strcmp(rename_map[r].new_name, name) == 0) {
-                        sb_puts(&out, "__lm_mod_");
-                        char idstr[16];
-                        snprintf(idstr, sizeof idstr, "%d_", rename_map[r].module_id);
-                        sb_puts(&out, idstr);
-                        sb_puts(&out, rename_map[r].old_name);
+                        if(rename_map[r].is_mangled) {
+                            sb_puts(&out, "__lm_mod_");
+                            char idstr[16];
+                            snprintf(idstr, sizeof idstr, "%d_", rename_map[r].module_id);
+                            sb_puts(&out, idstr);
+                            sb_puts(&out, rename_map[r].old_name);
+                        } else {
+                            /* 非 mangle（no-alias 首处理）：重写为原名 */
+                            sb_puts(&out, rename_map[r].old_name);
+                        }
                         i = j;
                         goto next_char;
                     }
@@ -1762,9 +1920,8 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
     char dir[PATH_MAX];
     dir_of(real, dir, sizeof dir);
 
-    /* 收集 alias → module_id 和 rename → (module_id, old_name) 映射 */
-    AliasEntry* alias_map = NULL;  int nalias = 0, cap_alias = 0;
-    RenameEntry* rename_map = NULL; int nrename = 0, cap_rename = 0;
+    /* alias/rename 映射统一登记到全局收集器 g_ext_aliases/g_ext_renames
+     * （expand_file 递归时已登记模块内部 import；此处补主文件自身的 import） */
 
     while(i < tl) {
         if(strncmp(txt + i, "__LMIMP_", 8) == 0) {
@@ -1821,45 +1978,13 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
                 sb_puts(&out, expvar);
                 sb_puts(&out, ";\n");
 
-                /* 记录 alias → module_id + class_names */
-                ProcessedMod* pm = find_processed(mreal);
-                if(pm) {
-                    if(nalias >= cap_alias) {
-                        cap_alias = cap_alias ? cap_alias * 2 : 8;
-                        alias_map = (AliasEntry*)realloc(alias_map, (size_t)cap_alias * sizeof(AliasEntry));
-                    }
-                    alias_map[nalias].alias = strdup(isp->alias);
-                    alias_map[nalias].module_id = pm->module_id;
-                    /* 复制 class_names（用于 alias.ClassName( 构造调用重写） */
-                    alias_map[nalias].nclass_names = pm->nclass_names;
-                    if(pm->nclass_names > 0) {
-                        alias_map[nalias].class_names = (char**)malloc((size_t)pm->nclass_names * sizeof(char*));
-                        for(int c = 0; c < pm->nclass_names; c++)
-                            alias_map[nalias].class_names[c] = strdup(pm->class_names[c]);
-                    } else {
-                        alias_map[nalias].class_names = NULL;
-                    }
-                    nalias++;
-                }
+                /* 登记 alias → module_id + class_names（用于 alias.ClassName( 构造调用重写） */
+                if(apm) ext_add_alias(isp->alias, apm);
             }
 
-            /* 记录 rename → (module_id, old_name) */
             ProcessedMod* pm = find_processed(mreal);
             if(pm) {
-                for(int s = 0; s < isp->nselective; s++) {
-                    const char* new_name = isp->sel_new[s] ? isp->sel_new[s] : isp->sel_old[s];
-                    if(nrename >= cap_rename) {
-                        cap_rename = cap_rename ? cap_rename * 2 : 8;
-                        rename_map = (RenameEntry*)realloc(rename_map, (size_t)cap_rename * sizeof(RenameEntry));
-                    }
-                    rename_map[nrename].new_name = strdup(new_name);
-                    rename_map[nrename].module_id = pm->module_id;
-                    rename_map[nrename].old_name = strdup(isp->sel_old[s]);
-                    /* selective 类名（class/interface/type/struct）：不发 shim，
-                     * 由 rewrite_class_refs 对任意位置裸引用做文本重写 */
-                    rename_map[nrename].is_class = pm_is_class_name(pm, isp->sel_old[s]);
-                    nrename++;
-                }
+                /* selective rename 登记已统一移入 expand_file（去重/首处理两条路径） */
                 /* no-alias 模式：被 mangle 的非导出 class/interface 名需重写
                  * （否则主文件 extends/implements 引用原名，但模块声明的是 mangled 名）
                  * 只对 class_names 中且确实被 mangle 的名字建映射 */
@@ -1867,17 +1992,19 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
                     for(int c = 0; c < pm->nclass_names; c++) {
                         const char* cn = pm->class_names[c];
                         if(pm_was_mangled(pm, cn)) {
-                            if(nrename >= cap_rename) {
-                                cap_rename = cap_rename ? cap_rename * 2 : 8;
-                                rename_map = (RenameEntry*)realloc(rename_map, (size_t)cap_rename * sizeof(RenameEntry));
-                            }
-                            rename_map[nrename].new_name = strdup(cn);
-                            rename_map[nrename].module_id = pm->module_id;
-                            rename_map[nrename].old_name = strdup(cn);
                             /* no-alias 非导出类名：仅 extends/implements 位置重写，
                              * 不做任意位置裸引用重写（避免劫持主文件同名符号） */
-                            rename_map[nrename].is_class = 0;
-                            nrename++;
+                            ext_add_rename_is(cn, pm, cn, 0, 1);
+                        }
+                    }
+                    /* 模式混用去重：模块首处理为 alias/selective（导出类名已 mangle），
+                     * 本次 no-alias 导入需把导出类名映射回原名（任意位置裸引用重写） */
+                    if(pm->no_alias == 0) {
+                        for(int q = 0; q < pm->nexports_full; q++) {
+                            const char* en = pm->exports_full[q];
+                            if(pm_is_class_name(pm, en) && pm_was_mangled(pm, en)) {
+                                ext_add_rename_is(en, pm, en, 1, 1);
+                            }
                         }
                     }
                 }
@@ -1895,26 +2022,20 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
     if(!ok) {
         free(out.buf);
-        for(int a = 0; a < nalias; a++) { free(alias_map[a].alias); for(int c=0;c<alias_map[a].nclass_names;c++) free(alias_map[a].class_names[c]); free(alias_map[a].class_names); }
-        free(alias_map);
-        for(int r = 0; r < nrename; r++) { free(rename_map[r].new_name); free(rename_map[r].old_name); }
-        free(rename_map);
+        ext_free_maps();
         *had_mod_out = -1;
         return NULL;
     }
 
-    /* 所有 import 展开后：重写主文件的 extends/implements 引用 */
-    if(nalias > 0 || nrename > 0) {
-        char* rewritten = rewrite_class_refs(out.buf, alias_map, nalias, rename_map, nrename);
+    /* 所有 import 展开后：统一重写 extends/implements、alias.Class、selective 类名引用
+     * （映射含模块内部 import，登记于全局收集器；is_mangled=0 的项重写为原名） */
+    if(g_n_ext_aliases > 0 || g_n_ext_renames > 0) {
+        char* rewritten = rewrite_class_refs(out.buf, g_ext_aliases, g_n_ext_aliases,
+                                             g_ext_renames, g_n_ext_renames);
         free(out.buf);
         out.buf = rewritten;
     }
-
-    /* 释放映射表 */
-    for(int a = 0; a < nalias; a++) { free(alias_map[a].alias); for(int c=0;c<alias_map[a].nclass_names;c++) free(alias_map[a].class_names[c]); free(alias_map[a].class_names); }
-    free(alias_map);
-    for(int r = 0; r < nrename; r++) { free(rename_map[r].new_name); free(rename_map[r].old_name); }
-    free(rename_map);
+    ext_free_maps();
 
     if(!has_any) {
         free(out.buf);
