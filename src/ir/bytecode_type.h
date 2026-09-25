@@ -478,6 +478,7 @@ typedef enum {
     BUILTIN_BYTES_GET,      // get(b, i)：下标访问（返回 int）
     BUILTIN_BYTES_HEX,      // hex(b)：转十六进制字符串
     BUILTIN_BYTES_TO_STR,  // to_str(b)：转 b"..." 字符串
+    BUILTIN_BYTES_DECODE,  // decode(b)：按 UTF-8 解码为字符串（内容原样，无 b"" 包装）
     BUILTIN_BYTES_FROM_HEX,// from_hex(s)：从十六进制构造
     /* complex（VAL_COMPLEX） */
     BUILTIN_COMPLEX_MAKE,   // complex(re, im)：构造 VAL_COMPLEX

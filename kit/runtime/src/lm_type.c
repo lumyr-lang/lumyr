@@ -420,6 +420,14 @@ Value lumyr_field_get(Value obj, const char* field_name)
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     int cls = lumyr_etype_stackcls(fi->valtype);
 
+    /* VAL_NONE 动态槽（<T> 泛型擦除字段）：槽内为 GC 堆 Value 盒子指针，
+     * 解引用恢复完整 Value（类型身份随盒子保留，与写入侧对称） */
+    if(fi->valtype == VAL_NONE) {
+        void* box = *(void**)field_ptr;
+        if(!box) return val_none();
+        return *(Value*)box;
+    }
+
     if(cls == 1) { /* 整型族：按 size 精确读取，返回正确 ValueType */
         long long ival;
         switch(fi->valtype) {
@@ -525,6 +533,15 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
 
     char* field_ptr = (char*)obj.v.struct_ptr + fi->offset;
     int cls = lumyr_etype_stackcls(fi->valtype);
+
+    /* VAL_NONE 动态槽（<T> 泛型擦除字段）：完整 Value 装箱到 GC 堆，
+     * 槽位存盒子指针——类型身份随盒子保留（标量/引用/容器统一） */
+    if(fi->valtype == VAL_NONE) {
+        Value* box = (Value*)gc_alloc(sizeof(Value), VAL_PTR);
+        *box = value;
+        *(void**)field_ptr = box;
+        return;
+    }
 
     if(cls == 1) { /* 整型族：按 size 精确写入 */
         long long ival = lumyr_extract_ll(value);

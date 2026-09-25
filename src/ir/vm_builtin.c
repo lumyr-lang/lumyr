@@ -2850,6 +2850,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         free(s);
         return 1;
     }
+    case BUILTIN_BYTES_DECODE: {
+        if(recv.type != VAL_BYTES) return bi_type_err("decode", recv);
+        char* s = lumyr_bytes_to_utf8(recv);
+        *out = lumyr_make_string(s ? s : "");
+        free(s);
+        return 1;
+    }
     case BUILTIN_BYTES_FROM_HEX: {
         /* from_hex(s)：全局形式，十六进制字符串 → bytes */
         if(is_method) { runtime_error("from_hex() 不支持方法形式"); return 0; }

@@ -11,6 +11,7 @@
 #include "ir_types.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
+#include "lm_type.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,13 +47,32 @@ static Value ensure_error(Value v) {
     memset(&e, 0, sizeof(e));
     e.type = VAL_ERROR;
     e.v.err.type = strdup("RuntimeError");
+    e.v.err.stack = NULL;
     if (v.type == VAL_STRING) {
         const char* s = lumyr_str_cstr(&v);
         e.v.err.message = strdup(s ? s : "");
+    } else if ((v.type == VAL_CLASS_PTR || v.type == VAL_STRUCT_PTR) && v.v.struct_ptr) {
+        /* Error 类实例（LumyrFunction/Error）：读取 message/errType 字段，
+         * 未捕获打印保留真实错误信息；字段不存在时回退通用描述。
+         * find_field 不查父链（字段已扁平化），不存在返回 NULL 不报错 */
+        RuntimeTypeInfo* info = *(RuntimeTypeInfo**)v.v.struct_ptr;
+        FieldInfo* fm = info ? lumyr_type_find_field(info, "message") : NULL;
+        if (fm && fm->valtype == VAL_STRING) {
+            Value m = lumyr_field_get(v, "message");
+            const char* ms = lumyr_str_cstr(&m);
+            e.v.err.message = strdup(ms ? ms : "exception");
+            FieldInfo* ft = lumyr_type_find_field(info, "errType");
+            if (ft && ft->valtype == VAL_STRING) {
+                Value t = lumyr_field_get(v, "errType");
+                const char* ts = lumyr_str_cstr(&t);
+                if (ts) { free(e.v.err.type); e.v.err.type = strdup(ts); }
+            }
+        } else {
+            e.v.err.message = strdup("exception");
+        }
     } else {
         e.v.err.message = strdup("exception");
     }
-    e.v.err.stack = NULL;
     return e;
 }
 

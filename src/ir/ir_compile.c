@@ -218,6 +218,7 @@ int builtin_id_by_name(const char* name) {
         /* bytes 方法 */
         {"hex", BUILTIN_BYTES_HEX},
         {"toStr", BUILTIN_BYTES_TO_STR},
+        {"decode", BUILTIN_BYTES_DECODE},
         {"fromHex", BUILTIN_BYTES_FROM_HEX},
         /* complex 方法 */
         {"conjugate", BUILTIN_COMPLEX_CONJUGATE},
@@ -1207,7 +1208,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(!td) td = class_lookup(tname);
             if(td && td->runtime_info) {
                 FieldInfo* fi = lumyr_type_find_field(td->runtime_info, field_name);
-                if(fi) {
+                /* VAL_NONE（<T> 泛型擦除动态槽）跳过静态 FIELD 指令：
+                 * 静态路径按裸指针读写会丢类型身份，走下方默认动态路径
+                 * （lumyr_field_get/set 的 Value 盒子语义） */
+                if(fi && fi->valtype != VAL_NONE) {
                     int fi_idx = (int)(fi - td->runtime_info->fields);
                     int cls = lumyr_etype_stackcls(fi->valtype);
                     /* 编译 self 到 PTR 栈（self 是指针，LOAD_PTR_VAR 直接加载） */
@@ -1265,6 +1269,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             c_expr(c, &callee_var);
             emit(c, OPC_CALLV, 0, argc);
             return EXPR_TYPE_NONE;
+        }
+        /* 抽象类禁止实例化：编译期即可确定，直接报错 */
+        if(td->is_abstract) {
+            fprintf(stderr, "错误 / Error: 抽象类 '%s' 不能实例化 / abstract class cannot be instantiated\n", tname);
+            exit(EXIT_FAILURE);
+        }
+        /* 泛型类必须显式提供类型实参（含空擦除 <>）：
+         * 统一在此拦截——覆盖 return/实参/嵌套等 parse 期规则未覆盖的全部表达式语境 */
+        if(td->generic_param_count > 0 && !node->u.class_new.type_args) {
+            fprintf(stderr, "错误 / Error: 泛型类 '%s' 声明了 %d 个泛型形参，实例化必须提供类型实参如 %s<...>(...) / generic type requires type args\n",
+                    tname, td->generic_param_count, tname);
+            exit(EXIT_FAILURE);
         }
         /* 计算实参个数 */
         AstNode** argv = NULL;
@@ -1653,7 +1669,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(!td) td = class_lookup(tname);
             if(td && td->runtime_info) {
                 FieldInfo* fi = lumyr_type_find_field(td->runtime_info, field_name);
-                if(fi) {
+                /* VAL_NONE（<T> 泛型擦除动态槽）跳过静态 FIELD 指令：
+                 * 静态路径按裸指针读写会丢类型身份，走下方默认动态路径
+                 * （lumyr_field_get/set 的 Value 盒子语义） */
+                if(fi && fi->valtype != VAL_NONE) {
                     int fi_idx = (int)(fi - td->runtime_info->fields);
                     /* 声明收敛语义：类型化数组字段 + 数组字面量赋值 →
                      * 按声明元素 CastKind 构造 TypedArray（与 <T>[...] 字面量同构）。

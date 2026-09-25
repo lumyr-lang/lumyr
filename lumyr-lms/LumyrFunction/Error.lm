@@ -1,0 +1,91 @@
+// ============================================================
+// lumyr-Error：ErrorInterface 接口 + AbstractError 抽象基类 + Error 类
+// 所有自定义错误类的统一契约与完整实现：
+//   接口 ErrorInterface 定义契约（type/message/code/打印/抛出）
+//   抽象基类 AbstractError 提供全部字段与默认实现，不能实例化
+//   具体类 Error 完全继承抽象基类，可直接构造抛出
+// 自定义错误类只需 extends AbstractError 并声明为一个空类，
+// 或按需追加自有字段（如 HttpError 加 status）
+//
+// 字段：errType(string) 错误类型名 / message(string) 错误信息 / code(int) 错误码
+// （errType 由构造函数自动取实际类名，无需调用方指定；
+//   字段名 errType：type 为语法关键字，不能用作字段名）
+//
+// 用法（三模式）：
+//   1. alias：import <Function/Error> as err; → throw err.Error("msg");
+//   2. no-alias：import <Function/Error>; → throw Error("msg");
+//   3. rename：import <Function/Error> {Error as XError}; → throw XError("msg");
+//
+//   throw Error("something wrong");        // code 默认 0
+//   throw Error(404, "not found");         // 指定错误码
+//   Error(400, "bad input").raise();       // 构造后抛出
+//   try { ... } catch (e) { print(e.message); print(e.code); }
+//
+//   // 自定义错误类：完全继承（推荐）或追加自有字段
+//   class IOError extends AbstractError { }
+//   throw IOError("disk full");                  // 用父类构造函数，errType 自动为 "IOError"
+// ============================================================
+
+import <Function/Object>;
+
+// 错误统一契约
+public interface ErrorInterface {
+    func getType(): string;
+    func getMessage(): string;
+    func getCode(): int;
+    func toString(): string;
+    func raise();
+}
+
+// 抽象基类：提供全部字段与默认实现，自定义错误类完全继承它
+public abstract class AbstractError extends Object implements ErrorInterface {
+    errType: string;
+    message: string;
+    code: int;
+
+    func AbstractError(message: string) {
+        /* 类型名自动取实际类名：子类完全继承时自动为子类名 */
+        self.errType = type(self);
+        self.message = message;
+        self.code = 0;
+    }
+
+    func AbstractError(code: int, message: string) {
+        self.errType = type(self);
+        self.code = code;
+        self.message = message;
+    }
+
+    // 错误类型名
+    func getType(): string {
+        return self.errType;
+    }
+
+    // 错误信息
+    func getMessage(): string {
+        return self.message;
+    }
+
+    // 错误码（默认 0 = 无错误码）
+    func getCode(): int {
+        return self.code;
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        if (self.code != 0) {
+            return "[" + self.errType + "#" + self.code + "] " + self.message;
+        }
+        return "[" + self.errType + "] " + self.message;
+    }
+
+    // 抛出自身（等价于 throw 实例语句）
+    func raise() {
+        throw self;
+    }
+}
+
+// 通用错误类：完全继承抽象基类，可直接构造抛出
+public class Error extends AbstractError {
+}
