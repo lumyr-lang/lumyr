@@ -1423,7 +1423,16 @@ closed_stmt
                     (g_current_struct_name && strcmp($1, g_current_struct_name) == 0)) {
               /* 已注册 struct/class 名的裸调用语句：构造调用 → ast_class_new。
                * 此前直接 ast_call，import 类（如 ObjectInputStream(b)）不赋值时
-               * 被当普通函数，经模块 map 动态调用失败。与 expr 的 ID LPAREN 规则同路径。 */
+               * 被当普通函数，经模块 map 动态调用失败。与 expr 的 ID LPAREN 规则同路径。
+               * 泛型类必须显式提供类型实参（与 expr 规则 L3020 检查一致） */
+              TypeDef* td_for_gen = class_lookup($1);
+              if(!td_for_gen) td_for_gen = struct_lookup($1);
+              if(td_for_gen && td_for_gen->generic_param_count > 0) {
+                  fprintf(stderr, "parse: \"%s\" 声明了 %d 个泛型形参，实例化必须提供类型实参如 %s<...>(...) / generic type requires type args\n",
+                          $1, td_for_gen->generic_param_count, $1);
+                  free($1);
+                  YYABORT;
+              }
               int argc = 0;
               for(AstNode* p = $3; p; p = (p->type == AST_SEQ) ? p->u.seq.second : NULL) argc++;
               $$ = L(ast_class_new($1, argc, $3, NULL));
@@ -2297,6 +2306,14 @@ closed_stmt
           AstNode* ml = ast_map_lit($5);
           enum_table_register($2, ml);
           $$ = L(ast_assign($2, ml));
+      }
+    | TOK_PUBLIC TOK_ENUM ID LBRACE {
+          /* public enum：public 为显式导出标注（模块 scanner 已记录导出） */
+          g_enum_next_val = 0;
+      } enum_members RBRACE {
+          AstNode* ml = ast_map_lit($6);
+          enum_table_register($3, ml);
+          $$ = L(ast_assign($3, ml));
       }
     | TOK_INTERFACE ID gdecl_opt LBRACE interface_methods RBRACE {
           /* interface Printable { func to_string(): string }：注册接口到符号表 */
@@ -3194,9 +3211,16 @@ primary
                   CastKind kck, vck;
                   parse_two_generic_args(gt, &kck, &vck);
                   $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
+                  free(gt);
+              } else if($2 && $2->type == AST_CLASS_NEW && !$2->u.class_new.type_args) {
+                  /* <string,int>HashMap{...} / <T>Box(...)：内层构造规则拿不到
+                   * 尖括号原文（type_args=NULL），在此回填——否则 IR 期"泛型类
+                   * 必须提供类型实参"检查会误伤前缀形式（擦除语义，仅记录原文） */
+                  $2->u.class_new.type_args = gt;
+              } else {
+                  free(gt);
               }
               $$ = $2;
-              free(gt);
           }
       }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {
@@ -4350,6 +4374,11 @@ expr
 struct_header: TOK_STRUCT ID gdecl_opt LBRACE {
           /* 在 LBRACE 时就设置 g_current_struct_name，这样方法定义时就能获取到 */
           g_current_struct_name = $2;
+          $$ = NULL;
+      }
+    | TOK_PUBLIC TOK_STRUCT ID gdecl_opt LBRACE {
+          /* public struct：public 为显式导出标注（模块 scanner 已记录导出） */
+          g_current_struct_name = $3;
           $$ = NULL;
       }
     ;

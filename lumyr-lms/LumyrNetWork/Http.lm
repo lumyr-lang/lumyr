@@ -1,0 +1,284 @@
+// ============================================================
+// lumyr-Http：RequestInterface / ResponseInterface 接口
+//            + HttpRequest<T, R> / HttpResponse<R> 实现类
+// 面向对象封装内置 requests：链式构造请求、统一响应访问
+//
+// 分层：
+//   RequestInterface / ResponseInterface  请求/响应统一契约
+//   HttpRequest<T, R>  链式构造 + 按方法分派发送（委托内置 requests）
+//   HttpResponse<R>    包装结果 map（status/headers/body），提供类型化访问
+//
+// 泛型 <T, R>：T = 请求体类型，R = 响应体类型，由调用方决定
+// （map/array/string/bytes/标量/class 实例均可），字段为类型
+// 擦除动态槽，完整保留运行时类型身份；send 返回 HttpResponse<R>
+//
+// 常用请求标头以 static const 属性提供（HEADER_*），
+// 常用 Content-Type 值以 CONTENT_* 提供
+//
+// 用法（三模式）：
+//   1. alias：import <NetWork/Http> as net; → net.HttpRequest(url).get();
+//   2. no-alias：import <NetWork/Http>; → HttpRequest(url).get();
+//   3. rename：import <NetWork/Http> {HttpRequest as Req}; → Req(url).get();
+//
+//   resp = HttpRequest("https://api.example.com/items")
+//       .setHeader(HttpRequest.HEADER_ACCEPT, HttpRequest.CONTENT_JSON)
+//       .setParam("page", "1")
+//       .setTimeout(10)
+//       .get();
+//   if (resp.isOk()) { print(resp.json()); }
+//
+//   resp2 = HttpRequest("POST", url).setBody({"a": 1}).send();
+// ============================================================
+
+// HTTP 状态码枚举（RFC 7231 常用项）：成员访问 HttpStatus.OK 为编译期常量
+// 判定用法：resp.isOk() / resp.statusCode() == HttpStatus.NOT_FOUND
+public enum HttpStatus {
+    CONTINUE = 100,
+    SWITCHING_PROTOCOLS = 101,
+
+    OK = 200,
+    CREATED = 201,
+    ACCEPTED = 202,
+    NO_CONTENT = 204,
+
+    MULTIPLE_CHOICES = 300,
+    MOVED_PERMANENTLY = 301,
+    FOUND = 302,
+    NOT_MODIFIED = 304,
+
+    BAD_REQUEST = 400,
+    UNAUTHORIZED = 401,
+    FORBIDDEN = 403,
+    NOT_FOUND = 404,
+    METHOD_NOT_ALLOWED = 405,
+    REQUEST_TIMEOUT = 408,
+    CONFLICT = 409,
+    TOO_MANY_REQUESTS = 429,
+
+    INTERNAL_SERVER_ERROR = 500,
+    BAD_GATEWAY = 502,
+    SERVICE_UNAVAILABLE = 503,
+    GATEWAY_TIMEOUT = 504
+}
+
+// 请求契约：链式设置 + 发送
+public interface RequestInterface {
+    func setHeader(name: string, value: string): RequestInterface;
+    func setParam(name: string, value: string): RequestInterface;
+    func setBody(body): RequestInterface;
+    func setTimeout(seconds: int): RequestInterface;
+    func send();
+}
+
+// 响应契约：状态/标头/正文访问
+public interface ResponseInterface {
+    func statusCode(): int;
+    func header(name: string): string;
+    func body();
+    func json();
+    func text(): string;
+    func isOk(): bool;
+}
+
+// Http 响应：包装内置结果 map（status/headers/body）
+public class HttpResponse<T> implements ResponseInterface {
+    status: int;
+    headers: map;
+    respBody: <T>;
+
+    func HttpResponse(result: map) {
+        self.status = result["status"];
+        self.headers = result["headers"];
+        self.respBody = result["body"];
+    }
+
+    // 状态码
+    func statusCode(): int {
+        return self.status;
+    }
+
+    // 单个响应标头（HTTP 标头大小写不敏感：原样未命中时回退小写键；
+    // 内置 requests 将响应标头键统一转为小写）
+    func header(name: string): string {
+        if (self.headers.has(name)) {
+            return self.headers[name];
+        }
+        lname = name.lower();
+        if (self.headers.has(lname)) {
+            return self.headers[lname];
+        }
+        return "";
+    }
+
+    // 原始正文（类型取决于 Content-Type：map/array/string/bytes）
+    func body(): T {
+        return self.respBody;
+    }
+
+    // JSON 正文（响应已按 Content-Type 自动解析为 map/array）
+    func json(): T {
+        return self.respBody;
+    }
+
+    // 文本正文（bytes 时按 UTF-8 解码）
+    func text(): string {
+        if (type(self.respBody) == "bytes") {
+            return self.respBody.decode();
+        }
+        if (type(self.respBody) == "string") {
+            return self.respBody;
+        }
+        return self.respBody.toJSONString();
+    }
+
+    // 2xx 判定（[HttpStatus.OK, HttpStatus.MULTIPLE_CHOICES) 区间）
+    func isOk(): bool {
+        return self.status >= HttpStatus.OK && self.status < HttpStatus.MULTIPLE_CHOICES;
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "HttpResponse(" + self.status + ")";
+    }
+}
+
+// Http 请求：链式构造，send 委托内置 requests 按方法分派
+// 泛型 <T, R>：T = 请求体类型（setBody 参数），R = 响应体类型（send 返回 HttpResponse<R>）
+public class HttpRequest<T, R> implements RequestInterface {
+    // ========== 常用请求标头（static const） ==========
+    static const HEADER_ACCEPT: string = "Accept";
+    static const HEADER_AUTHORIZATION: string = "Authorization";
+    static const HEADER_CACHE_CONTROL: string = "Cache-Control";
+    static const HEADER_CONTENT_TYPE: string = "Content-Type";
+    static const HEADER_COOKIE: string = "Cookie";
+    static const HEADER_HOST: string = "Host";
+    static const HEADER_USER_AGENT: string = "User-Agent";
+
+    // ========== 常用 Content-Type 值（static const） ==========
+    static const CONTENT_JSON: string = "application/json";
+    static const CONTENT_FORM: string = "application/x-www-form-urlencoded";
+    static const CONTENT_TEXT: string = "text/plain";
+    static const CONTENT_HTML: string = "text/html";
+    static const CONTENT_XML: string = "application/xml";
+    static const CONTENT_OCTET: string = "application/octet-stream";
+
+    method: string;
+    url: string;
+    headers: map;
+    params: map;
+    reqBody: <T>;
+    hasBody: bool;
+    timeoutSec: int;
+    respType: string;
+
+    func HttpRequest(url: string) {
+        self.method = "GET";
+        self.url = url;
+        self.headers = {};
+        self.params = {};
+        self.reqBody = null;
+        self.hasBody = false;
+        self.timeoutSec = 0;
+        self.respType = "";
+    }
+
+    func HttpRequest(method: string, url: string) {
+        self.method = method;
+        self.url = url;
+        self.headers = {};
+        self.params = {};
+        self.reqBody = null;
+        self.hasBody = false;
+        self.timeoutSec = 0;
+        self.respType = "";
+    }
+
+    // 链式设置请求标头
+    func setHeader(name: string, value: string) {
+        self.headers[name] = value;
+        return self;
+    }
+
+    // 链式设置 query 参数
+    func setParam(name: string, value: string) {
+        self.params[name] = value;
+        return self;
+    }
+
+    // 链式设置请求体（map/array 自动 JSON；bytes 原始字节；类型由 T 决定）
+    func setBody(body: T) {
+        self.reqBody = body;
+        self.hasBody = true;
+        return self;
+    }
+
+    // 链式设置超时（秒）
+    func setTimeout(seconds: int) {
+        self.timeoutSec = seconds;
+        return self;
+    }
+
+    // 链式设置响应类型（"json"/"text"/"bytes"，缺省按 Content-Type 自动）
+    func setResponseType(rt: string) {
+        self.respType = rt;
+        return self;
+    }
+
+    // 组装 config：仅放入已设置/非空的项
+    func buildConfig(): map {
+        out = {};
+        if (self.params.len > 0) { out["params"] = self.params; }
+        if (self.headers.len > 0) { out["headers"] = self.headers; }
+        if (self.timeoutSec > 0) { out["timeout"] = self.timeoutSec; }
+        if (self.hasBody) { out["body"] = self.reqBody; }
+        if (self.respType != "") { out["responseType"] = self.respType; }
+        return out;
+    }
+
+    // 按 method 分派发送，返回 HttpResponse
+    func send() {
+        config = self.buildConfig();
+        m = self.method;
+        r = null;
+        if (m == "GET") { r = requests.get(self.url, config); }
+        else if (m == "POST") { r = requests.post(self.url, config); }
+        else if (m == "PUT") { r = requests.put(self.url, config); }
+        else if (m == "DELETE") { r = requests.delete(self.url, config); }
+        else if (m == "HEAD") { r = requests.head(self.url, config); }
+        else if (m == "PATCH") { r = requests.patch(self.url, config); }
+        else { throw "HttpRequest: 不支持的请求方法 / unsupported method: " + m; }
+        return HttpResponse<R>(r);
+    }
+
+    // ========== 方法快捷 ==========
+    func get() {
+        self.method = "GET";
+        return self.send();
+    }
+
+    func post() {
+        self.method = "POST";
+        return self.send();
+    }
+
+    func put() {
+        self.method = "PUT";
+        return self.send();
+    }
+
+    func delete() {
+        self.method = "DELETE";
+        return self.send();
+    }
+
+    func patch() {
+        self.method = "PATCH";
+        return self.send();
+    }
+
+    func head() {
+        self.method = "HEAD";
+        return self.send();
+    }
+}

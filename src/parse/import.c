@@ -818,7 +818,8 @@ static TransformResult* transform(const char* src) {
                         i = ns;
                         continue;
                     } else if(w2len == 4 && strncmp(src + k, "type", 4) == 0) {
-                        /* export type NAME → 记录 export + symbol，输出 "type " */
+                        /* export type NAME → 记录 export + symbol + class_name，输出 "type "
+                         * （type 声明不产生运行时变量，归入 class_names 从导出 map 排除） */
                         int m = k2;
                         while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
                         int ns = m;
@@ -826,6 +827,7 @@ static TransformResult* transform(const char* src) {
                         if(m > ns) {
                             tr_push_export(t, src + ns, m - ns);
                             tr_push_symbol(t, src + ns, m - ns);
+                            tr_push_class_name(t, src + ns, m - ns);
                         }
                         sb_puts(&out, "type ");
                         i = ns;
@@ -843,8 +845,51 @@ static TransformResult* transform(const char* src) {
                         sb_puts(&out, "enum ");
                         i = ns;
                         continue;
+                    } else if(w2len == 6 && strncmp(src + k, "struct", 6) == 0) {
+                        /* export struct NAME → 记录 export + symbol + class_name，输出 "struct " */
+                        int m = k2;
+                        while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
+                        int ns = m;
+                        while(m < n && is_id_char(src[m])) m++;
+                        if(m > ns) {
+                            tr_push_export(t, src + ns, m - ns);
+                            tr_push_symbol(t, src + ns, m - ns);
+                            tr_push_class_name(t, src + ns, m - ns);
+                        }
+                        sb_puts(&out, "struct ");
+                        i = ns;
+                        continue;
+                    } else if(w2len == 8 && strncmp(src + k, "abstract", 8) == 0) {
+                        /* export abstract class/interface NAME → 记录 export + symbol + class_name */
+                        int m = k2;
+                        while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
+                        int m2 = m;
+                        while(m2 < n && is_id_char(src[m2])) m2++;
+                        int w3len = m2 - m;
+                        int is_cls = (w3len == 5 && strncmp(src + m, "class", 5) == 0);
+                        int is_itf = (w3len == 9 && strncmp(src + m, "interface", 9) == 0);
+                        if(is_cls || is_itf) {
+                            int p = m2;
+                            while(p < n && (src[p] == ' ' || src[p] == '\t' || src[p] == '\r' || src[p] == '\n')) p++;
+                            int ns = p;
+                            while(p < n && is_id_char(src[p])) p++;
+                            if(p > ns) {
+                                tr_push_export(t, src + ns, p - ns);
+                                tr_push_symbol(t, src + ns, p - ns);
+                                tr_push_class_name(t, src + ns, p - ns);
+                            }
+                            sb_puts(&out, is_cls ? "abstract class " : "abstract interface ");
+                            i = ns;
+                            continue;
+                        }
+                        /* abstract 后非 class/interface：仅去掉 export */
+                        sb_putc(&out, ' ');
+                        i = k;
+                        continue;
                     } else {
-                        /* export 后跟其他：仅去掉 export 关键字，按普通标识符输出 */
+                        /* export 后跟其他（顶层变量等）：去掉 export 关键字，
+                         * 记录该标识符为导出（赋值检测会补充记录符号） */
+                        tr_push_export(t, src + k, w2len);
                         sb_putc(&out, ' ');
                         i = k;
                         continue;
@@ -858,7 +903,7 @@ static TransformResult* transform(const char* src) {
 
             /* 第二阶段：顶层声明关键字识别（仅 depth==0 && pdepth==0） */
             if(bound_ok && depth == 0 && pdepth == 0) {
-                /* public 修饰符：隐式导出标记（public class/interface/type/enum） */
+                /* public 修饰符：隐式导出标记（class/interface/type/enum/struct/func/变量） */
                 if(wlen == 6 && strncmp(src + i, "public", 6) == 0) {
                     /* 向前看：public 后跟 class/interface/type/enum ?
                      * 也支持 public abstract class/interface/type/enum */
@@ -868,7 +913,8 @@ static TransformResult* transform(const char* src) {
                         int k2 = k;
                         while(k2 < n && is_id_char(src[k2])) k2++;
                         int w2len = k2 - k;
-                        /* 检查是否为 abstract，若是则继续向后看 */
+                        /* 检查是否为 abstract，若是则继续向后看（parser 仅支持
+                         * public abstract class/interface，type/enum 无抽象形式） */
                         if(w2len == 8 && strncmp(src + k, "abstract", 8) == 0) {
                             int k3 = k2;
                             while(k3 < n && (src[k3] == ' ' || src[k3] == '\t' || src[k3] == '\r' || src[k3] == '\n')) k3++;
@@ -877,21 +923,54 @@ static TransformResult* transform(const char* src) {
                                 while(k4 < n && is_id_char(src[k4])) k4++;
                                 int w3len = k4 - k3;
                                 if((w3len == 5 && strncmp(src + k3, "class", 5) == 0) ||
-                                   (w3len == 9 && strncmp(src + k3, "interface", 9) == 0) ||
-                                   (w3len == 4 && strncmp(src + k3, "type", 4) == 0) ||
-                                   (w3len == 4 && strncmp(src + k3, "enum", 4) == 0)) {
+                                   (w3len == 9 && strncmp(src + k3, "interface", 9) == 0)) {
                                     implicit_export = 1;
                                 }
                             }
                         }
                         if((w2len == 5 && strncmp(src + k, "class", 5) == 0) ||
                            (w2len == 9 && strncmp(src + k, "interface", 9) == 0) ||
-                           (w2len == 4 && strncmp(src + k, "type", 4) == 0) ||
+                           (w2len == 6 && strncmp(src + k, "struct", 6) == 0) ||
                            (w2len == 4 && strncmp(src + k, "enum", 4) == 0)) {
                             implicit_export = 1;
                         }
+                        if(w2len == 4 && strncmp(src + k, "func", 4) == 0) {
+                            /* public func：parser 无 public func 规则，剥离 public；
+                             * func 关键字分支设 expect_kind=1，函数名处记录 export */
+                            implicit_export = 1;
+                            sb_putc(&out, ' ');
+                            i = j;
+                            continue;
+                        }
+                        if(w2len == 4 && strncmp(src + k, "type", 4) == 0) {
+                            /* public type：type_prop_list 既有冲突模式不可复制（bison 基线），
+                             * 剥离 public；type 关键字分支设 expect_kind=2，类型名处记录 export */
+                            implicit_export = 1;
+                            sb_putc(&out, ' ');
+                            i = j;
+                            continue;
+                        }
+                        if(w2len == 5 && strncmp(src + k, "const", 5) == 0) {
+                            /* public const NAME = ...：parser 无顶层 const，剥离 public+const；
+                             * 常量名在顶层赋值检测处记录 symbol + export */
+                            int m = k2;
+                            while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
+                            implicit_export = 1;
+                            sb_putc(&out, ' ');
+                            i = m;
+                            continue;
+                        }
+                        if(implicit_export == 0 && bound_ok) {
+                            /* public 顶层变量：public NAME = ...（NAME 非声明关键字）：
+                             * parser 无 public 赋值规则，剥离 public；
+                             * NAME 在顶层赋值检测处记录 symbol + export */
+                            implicit_export = 1;
+                            sb_putc(&out, ' ');
+                            i = j;
+                            continue;
+                        }
                     }
-                    /* 输出 "public"（parser 已支持 public class 语法） */
+                    /* 输出 "public"（parser 已支持 public class/interface/type/enum/struct 语法） */
                     sb_putn(&out, src + i, wlen);
                     i = j;
                     continue;
@@ -930,14 +1009,21 @@ static TransformResult* transform(const char* src) {
                     i = j;
                     continue;
                 }
+                if(wlen == 6 && strncmp(src + i, "struct", 6) == 0) {
+                    expect_kind = 6;   /* struct 名 */
+                    sb_putn(&out, src + i, wlen);
+                    i = j;
+                    continue;
+                }
             }
 
             /* expect_kind：当前标识符即声明名 */
             if(expect_kind && bound_ok) {
                 tr_push_symbol(t, src + i, wlen);
-                /* class/interface 名记录到 class_names（用于从 export map 排除） */
+                /* type/class/interface/struct 名记录到 class_names（用于从 export map 排除：
+                 * 这些声明不产生运行时变量，类名非一等值） */
                 int ek = expect_kind & 0x3F;   /* 低 6 位为实际 kind */
-                if(ek == 4 || ek == 5) {
+                if(ek == 2 || ek == 4 || ek == 5 || ek == 6) {
                     tr_push_class_name(t, src + i, wlen);
                 }
                 /* public 隐式导出：同时记录为 export */
@@ -958,6 +1044,11 @@ static TransformResult* transform(const char* src) {
                 if(k < n && src[k] == '=' && src[k + 1] != '=' && src[k + 1] != '>') {
                     /* 简单赋值：NAME = expr */
                     tr_push_symbol(t, src + i, wlen);
+                    /* public 顶层变量：同时记录为 export */
+                    if(implicit_export) {
+                        tr_push_export(t, src + i, wlen);
+                        implicit_export = 0;
+                    }
                 } else if(k < n && src[k] == ',') {
                     /* 解构赋值：a, b, c = expr
                      * 收集 ident(,ident)* 直到真正的 '='（非 ==/>=）；命中才全部记录。 */
@@ -1404,8 +1495,8 @@ static char* expand_file(const char* abs_path, SB* out,
 /* ---------------- extends/implements 文本重写 ---------------- */
 /* alias → module_id 映射 */
 typedef struct { char* alias; int module_id; char** class_names; int nclass_names; } AliasEntry;
-/* new_name → (module_id, old_name) 映射 */
-typedef struct { char* new_name; int module_id; char* old_name; } RenameEntry;
+/* new_name → (module_id, old_name) 映射；is_class=1 表示 selective 类名（任意位置裸引用需重写） */
+typedef struct { char* new_name; int module_id; char* old_name; int is_class; } RenameEntry;
 
 /* 扫描 text，把 extends/implements 后的标识符按映射重写为 mangled 名。
  * alias_map/nalias: alias → module_id（extends alias.Class → extends __lm_mod_<id>_Class）
@@ -1545,6 +1636,31 @@ static char* rewrite_class_refs(const char* text,
                         }
                     }
                     break;  /* alias 匹配但不是 class name，原样输出 */
+                }
+            }
+        }
+
+        /* 检查 selective 类名裸引用（import {ExpClass} → ExpClass(...) / ExpClass{...}
+         * 重写为 __lm_mod_<id>_ExpClass；仅 is_class 的 rename 项参与，函数等值符号走 shim） */
+        if((i == 0 || (!is_id_char(text[i-1]) && text[i-1] != '.')) &&
+           is_id_start(text[i])) {
+            int j = i;
+            while(j < n && is_id_char(text[j])) j++;
+            int wl = j - i;
+            if(wl < 256) {
+                char name[256];
+                memcpy(name, text + i, (size_t)wl);
+                name[wl] = '\0';
+                for(int r = 0; r < nrename; r++) {
+                    if(rename_map[r].is_class && strcmp(rename_map[r].new_name, name) == 0) {
+                        sb_puts(&out, "__lm_mod_");
+                        char idstr[16];
+                        snprintf(idstr, sizeof idstr, "%d_", rename_map[r].module_id);
+                        sb_puts(&out, idstr);
+                        sb_puts(&out, rename_map[r].old_name);
+                        i = j;
+                        goto next_char;
+                    }
                 }
             }
         }
@@ -1712,6 +1828,9 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
                     rename_map[nrename].new_name = strdup(new_name);
                     rename_map[nrename].module_id = pm->module_id;
                     rename_map[nrename].old_name = strdup(isp->sel_old[s]);
+                    /* selective 类名（class/interface/type/struct）：不发 shim，
+                     * 由 rewrite_class_refs 对任意位置裸引用做文本重写 */
+                    rename_map[nrename].is_class = pm_is_class_name(pm, isp->sel_old[s]);
                     nrename++;
                 }
                 /* no-alias 模式：被 mangle 的非导出 class/interface 名需重写
@@ -1728,6 +1847,9 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
                             rename_map[nrename].new_name = strdup(cn);
                             rename_map[nrename].module_id = pm->module_id;
                             rename_map[nrename].old_name = strdup(cn);
+                            /* no-alias 非导出类名：仅 extends/implements 位置重写，
+                             * 不做任意位置裸引用重写（避免劫持主文件同名符号） */
+                            rename_map[nrename].is_class = 0;
                             nrename++;
                         }
                     }

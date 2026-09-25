@@ -2,6 +2,7 @@
   "frameworks": {
     "Function": "./LumyrFunction",
     "Utils": "./LumyrUtils",
-    "IO": "./LumyrIO"
+    "IO": "./LumyrIO",
+    "NetWork": "./LumyrNetWork"
   }
 }
