@@ -1475,26 +1475,37 @@ int typecheck_expr(AstNode* node)
         case AST_INDEX_ASSIGN: {
             /* Class.prop = v：recv 为类名且命中静态成员表时优先给明确错误
              * （否则 arr 按普通变量检查会报"使用未定义变量 C"，误导）。
-             * const → 不能给静态常量赋值；非 const → 静态成员写入暂不支持。 */
+             * const → 不能给静态常量赋值；非 const → 静态成员写入暂不支持。
+             * 沿继承链查找：子类可写父类静态成员（与实例方法继承语义一致）。 */
             if(node->u.index_assign.arr->type == AST_VAR &&
                node->u.index_assign.idx->type == AST_STRING) {
-                char sfn[300];
-                snprintf(sfn, sizeof sfn, "%s_%s",
-                         node->u.index_assign.arr->u.varname,
-                         node->u.index_assign.idx->u.sval);
-                const char* so = NULL; int sa = 0;
-                if(class_static_member_lookup(sfn, &so, &sa)) {
-                    if(class_static_member_is_const(sfn)) {
-                        LOG_ERROR("语义错误(第%d行)：不能给静态常量 '%s.%s' 赋值\n",
-                                  node->line, node->u.index_assign.arr->u.varname,
-                                  node->u.index_assign.idx->u.sval);
-                    } else {
-                        LOG_ERROR("语义错误(第%d行)：静态成员 '%s.%s' 不支持赋值（静态属性初始化后只读）\n",
-                                  node->line, node->u.index_assign.arr->u.varname,
-                                  node->u.index_assign.idx->u.sval);
+                const char* base = node->u.index_assign.arr->u.varname;
+                TypeDef* btd = class_lookup(base);
+                if(btd) {
+                    const char* cur = base;
+                    int found = 0;
+                    char sfn[300];
+                    while(cur && !found) {
+                        snprintf(sfn, sizeof sfn, "%s_%s", cur,
+                                 node->u.index_assign.idx->u.sval);
+                        const char* so = NULL; int sa = 0;
+                        if(class_static_member_lookup(sfn, &so, &sa)) {
+                            if(class_static_member_is_const(sfn)) {
+                                LOG_ERROR("语义错误(第%d行)：不能给静态常量 '%s.%s' 赋值\n",
+                                          node->line, cur,
+                                          node->u.index_assign.idx->u.sval);
+                            } else {
+                                LOG_ERROR("语义错误(第%d行)：静态成员 '%s.%s' 不支持赋值（静态属性初始化后只读）\n",
+                                          node->line, cur,
+                                          node->u.index_assign.idx->u.sval);
+                            }
+                            err = 1;
+                            found = 1;
+                        }
+                        TypeDef* ctd = class_lookup(cur);
+                        cur = (ctd && ctd->parent) ? ctd->parent : NULL;
                     }
-                    err = 1;
-                    break;
+                    if(found) break;
                 }
             }
             err |= typecheck_expr(node->u.index_assign.arr);

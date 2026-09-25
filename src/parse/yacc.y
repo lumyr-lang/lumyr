@@ -419,20 +419,34 @@ static int static_flat_name_ok(const char* flat) {
 }
 
 /* 编译期静态分派：左标识符是类名时查其静态成员。
- * 返回 1=命中（full_out 填 flat 名 "<类>_<成员>"）；0=是类但无此静态成员；
- * -1=该名不是类。静态方法/属性的访问级别另由 typecheck 校验。 */
+ * 返回 1=命中（full_out 填实际定义者的 flat 名 "<定义类>_<成员>"，
+ * owner_out 返回定义者类名）；0=是类但无此静态成员；-1=该名不是类。
+ * 静态方法/属性的访问级别另由 typecheck 校验。 */
 static int resolve_class_static(const char* cls, const char* member,
-                                char* full_out, int full_sz) {
+                                char* full_out, int full_sz,
+                                const char** owner_out) {
     /* 类体内自引用：当前正在定义的类此时尚未注册（class_register 在成员规则
      * 动作中执行，晚于成员函数体的解析），把 g_current_class_name 视同已注册类，
      * 使方法体内引用本类已声明静态成员（声明序在先）仍走编译期静态分派。 */
     if(!class_lookup(cls)) {
         if(!g_current_class_name || strcmp(cls, g_current_class_name) != 0) return -1;
     }
+    /* 沿继承链向上查找静态成员：子类可访问父类静态成员（与实例方法继承语义一致）。
+     * 返回实际定义者名，保证符号表能查到（静态成员表只注册定义者名）。 */
+    const char* cur = cls;
+    while(cur) {
+        snprintf(full_out, (size_t)full_sz, "%s_%s", cur, member);
+        const char* owner = NULL;
+        int access = 0;
+        if(class_static_member_lookup(full_out, &owner, &access)) {
+            if(owner_out) *owner_out = cur;
+            return 1;
+        }
+        TypeDef* td = class_lookup(cur);
+        cur = (td && td->parent) ? td->parent : NULL;
+    }
+    /* 未命中时 full_out 保留最深层未命中名，供错误信息使用 */
     snprintf(full_out, (size_t)full_sz, "%s_%s", cls, member);
-    const char* owner = NULL;
-    int access = 0;
-    if(class_static_member_lookup(full_out, &owner, &access)) return 1;
     return 0;
 }
 
@@ -3432,7 +3446,8 @@ postfix_expr
           int staticHandled = 0;
           if(recv->type == AST_VAR) {
               char sf[256];
-              int sr = resolve_class_static(recv->u.varname, $3, sf, sizeof sf);
+              const char* sowner = NULL;
+              int sr = resolve_class_static(recv->u.varname, $3, sf, sizeof sf, &sowner);
               if(sr == 1) {
                   $$ = L(ast_call(strdup(sf), margs));
                   free($3);
@@ -3495,9 +3510,10 @@ postfix_expr
               AstNode* v = enum_table_lookup_member($1->u.varname, $3);
               if(v) { $$ = L(v); free($3); }
               else {
-                  /* 编译期静态分派：是类名 → 取 flat 静态属性；无此成员立即报错 */
+                  /* 编译期静态分派：是类名 → 取 flat 静态属性（沿继承链取定义者名）；无此成员立即报错 */
                   char sf[256];
-                  int sr = resolve_class_static($1->u.varname, $3, sf, sizeof sf);
+                  const char* sowner = NULL;
+                  int sr = resolve_class_static($1->u.varname, $3, sf, sizeof sf, &sowner);
                   if(sr == 1) {
                       $$ = L(ast_var(strdup(sf)));
                       free($3);
