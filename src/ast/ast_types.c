@@ -992,6 +992,21 @@ void class_add_method(const char* class_name, const char* method_name, struct As
         int pre_found = 0;
         for(int i = 0; i < td->nmethods; i++) {
             if(strcmp(td->method_names[i], method_name) == 0) {
+                /* 根因修复：同名方法此前静默覆盖（新 AST 顶掉旧 AST），调用方
+                 * 无法察觉签名被换（T31：desc(int) 被 desc(string) 覆盖后
+                 * int 实参静默走 string 版）。按无兜底原则区分两种情况：
+                 *   - 同一 AST 节点（重编译路径 method_recomp 复注册）→ 允许替换
+                 *   - 不同 AST 节点（真重载尝试）→ 编译期报错退出，提示改名 */
+                AstNode* old_node = td->method_nodes[i];
+                if(old_node && old_node != method_node) {
+                    /* 签名相同（同 arity 同形参约束）视为重复定义报错；签名不同
+                     * 视为重载尝试也报错——实例方法重载均不支持（构造函数走
+                     * class_add_constructor 专门机制，自由函数走 ol 组） */
+                    fprintf(stderr,
+                            "IR: 类 \"%s\" 方法 \"%s\" 重复定义（同名方法重载不支持，请改名或合并签名）\n",
+                            class_name, method_name);
+                    exit(EXIT_FAILURE);
+                }
                 td->method_nodes[i] = method_node;
                 pre_found = 1; break;
             }
