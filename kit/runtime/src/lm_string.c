@@ -390,6 +390,15 @@ static char* format_value_with_spec(Value v, const char* spec) {
         FS_ENSURE(strlen(s) + 1);
         strcpy(core, s);
         free(s);
+        /* 根因修复：`{:,}`（仅有千分位、无类型字符）此前 t 落到 's'，
+         * is_numeric=0 使千分位被静默跳过。数值类值按数值语义处理，
+         * 让下方 apply_comma 生效（字符串/容器不受影响）。
+         * 注意：int 字面量是 VAL_INT（运行时核心类型 0-99 区），非 C 区 VAL_INT64。 */
+        if(fs.comma && (v.type == VAL_INT || v.type == VAL_DOUBLE ||
+                        v.type == VAL_BYTE || v.type == VAL_BIGINT ||
+                        v.type == VAL_FLOAT || v.type == VAL_LONG_DOUBLE ||
+                        (v.type >= VAL_INT8 && v.type <= VAL_SSIZE_T)))
+            is_numeric = 1;
     } else if(t == 'c') {
         long long iv = lumyr_extract_ll(v);
         FS_ENSURE(2);

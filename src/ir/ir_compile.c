@@ -4860,6 +4860,23 @@ static OlGroup* ol_find_group(const char* name) {
 
 static int ol_group_exists(const char* name) { return ol_find_group(name) != NULL; }
 
+/* 形参类型签名相同判定：逐位比较 constraint（NULL 相互视为相同）。
+ * 同 arity 且签名一致才允许"重编译替换"；签名不同是**真重载**，必须并存——
+ * 根因修复：此前仅比 arity，f30(x:int) 后定义 f30(x:string)（同 1 参）
+ * 把 int 版挤掉，编译期选中 int 版而运行时裸名查表命中 string 版（T30）。 */
+static int ol_params_same(AstNode* a, AstNode* b) {
+    while(a && b) {
+        const char* ca = a->u.param.constraint;
+        const char* cb = b->u.param.constraint;
+        if((ca && !cb) || (!ca && cb)) return 0;
+        if(ca && strcmp(ca, cb) != 0) return 0;
+        if(a->u.param.is_ellipsis != b->u.param.is_ellipsis) return 0;
+        a = a->u.param.next;
+        b = b->u.param.next;
+    }
+    return a == b;  /* 两边同时走完才算相同 */
+}
+
 /* 分配/登记一个重载版本；first=该组首版本（额外以裸名建别名，兼容函数值/其它裸名查找） */
 static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out) {
     OlGroup* g = ol_find_group(fn->name);
@@ -4875,10 +4892,12 @@ static void ol_add(BytecodeFunc* fn, AstNode* params, int* is_first_out) {
         is_first = 1;
     }
     /* 去重：重编译（func_compile_recompile）会产生同一函数的新 BytecodeFunc，
-     * 替换旧候选而非追加，避免重复计为歧义 */
+     * 替换旧候选而非追加，避免重复计为歧义。同 arity 且形参签名一致才替换；
+     * 签名不同（真重载）落到底部并存追加。 */
     for(int i = 0; i < g->cnt; i++) {
         if(g->cands[i].fn->param_cnt == fn->param_cnt &&
-           g->cands[i].fn->has_variadic == fn->has_variadic) {
+           g->cands[i].fn->has_variadic == fn->has_variadic &&
+           ol_params_same(g->cands[i].def_shell.u.func_def.params, params)) {
             /* 同 arity → 替换（重编译更新） */
             BytecodeFunc* oldFn = g->cands[i].fn;
             g->cands[i].fn = fn;

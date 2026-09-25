@@ -369,14 +369,30 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
     Value arr; stack_vm_pop(g_stack_mgr, STACK_VALUE, &arr);
     if(arr.type == VAL_ARRAY) {
         int64_t i = value_to_index(idx);
-        if(i >= 0 && i < (int64_t)arr.v.array->len)
-            arr.v.array->items[i] = val;
+        /* 根因修复：越界写此前静默丢弃（违反无兜底原则，调用方难排查）。
+         * 走 VM 协作式异常传播（vm_except_raise_str），try/catch 可捕获，
+         * 与 OPC_THROW 同语义；runtime_error 会绕过 try/catch 直接 exit。 */
+        if(i < 0 || i >= (int64_t)arr.v.array->len) {
+            char b[128];
+            snprintf(b, sizeof(b), "数组下标越界: %lld (长度 %d)",
+                     (long long)i, arr.v.array->len);
+            vm_except_raise_str(ctx, "IndexError", b);
+            return 1;  /* 异常已启动（pc 已改写），返回 1=handled */
+        }
+        arr.v.array->items[i] = val;
     } else if(arr.type == VAL_MAP) {
         lumyr_map_set(&arr, idx, val);
     } else if(arr.type == VAL_TYPED_ARRAY && typed_ptr_ok(arr.v.typed_array)) {
         TypedArray* ta = arr.v.typed_array;
         int64_t i = value_to_index(idx);
-        if(i >= 0 && i < (int64_t)ta->len && ta->items) {
+        /* 越界写同数组语义：VM 异常传播，try/catch 可捕获，不再静默丢弃 */
+        if(i < 0 || i >= (int64_t)ta->len || !ta->items) {
+            char b[96];
+            snprintf(b, sizeof b, "typed array set: 下标 %d 越界（长度 %d）", (int)i, ta->len);
+            vm_except_raise_str(ctx, "IndexError", b);
+            return 1;  /* 异常已启动（pc 已改写），返回 1=handled */
+        }
+        {
             ValueType et = ta->elem_type;
             int cls = lumyr_etype_stackcls(et);
             if(cls == 1) {
