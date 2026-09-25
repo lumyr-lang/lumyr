@@ -1406,6 +1406,19 @@ closed_stmt
     | CONST ID COLON map_generic_type QMARK ASSIGN expr SEMI {
           $$ = ast_assign_const($2, $7);
       }
+    /* 顶层 static 兼容修饰符：顶层符号本就全局唯一实例（模块内默认私有、
+     * public/export 管导出），static 不改变语义，仅兼容类 Java/C 习惯写法。
+     * static const x = expr → 常量；static x = expr → 普通变量 */
+    | TOK_STATIC CONST ID ASSIGN expr SEMI {
+          $$ = ast_assign_const($3, $5);
+      }
+    | TOK_STATIC CONST ID COLON map_generic_type ASSIGN expr SEMI {
+          $$ = ast_assign_const($3, ast_type_annotation((CastKind)$5,
+                    ast_unary(OP_NONNULL_ASSERT, $7)));
+      }
+    | TOK_STATIC ID ASSIGN expr SEMI {
+          $$ = ast_assign($2, $4);
+      }
     | destruct_lhs ASSIGN expr SEMI {
         char** names = NULL; int cnt = 0;
         ast_collect_varnames($1, &names, &cnt);

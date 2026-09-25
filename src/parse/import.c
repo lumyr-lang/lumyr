@@ -782,12 +782,41 @@ static TransformResult* transform(const char* src) {
                         i = ns;   /* 继续从函数名处原样输出 */
                         continue;
                     } else if(w2len == 5 && strncmp(src + k, "const", 5) == 0) {
+                        /* export const NAME = ...：剥离 export，保留 const（parser 支持顶层 const，
+                         * 常量不可变语义不丢失）；常量名记录 export，符号由赋值检测记录 */
                         int m = k2;
                         while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
                         int ns = m;
                         while(m < n && is_id_char(src[m])) m++;
                         if(m > ns) tr_push_export(t, src + ns, m - ns);
-                        i = ns;   /* 继续从常量名处原样输出（PI = 3.14;），赋值检测会记录符号 */
+                        sb_putc(&out, ' ');
+                        i = k;   /* 从 const 继续，const 原样保留 */
+                        continue;
+                    } else if(w2len == 6 && strncmp(src + k, "static", 6) == 0) {
+                        /* export static [const] NAME = ...：剥离 export，保留 static/const
+                         *（parser 支持顶层 static 常量/变量）；NAME 记录 export */
+                        int m = k2;
+                        while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
+                        int w3s = m;
+                        while(m < n && is_id_char(src[m])) m++;
+                        int w3len = m - w3s;
+                        if(w3len == 4 && strncmp(src + w3s, "func", 4) == 0) {
+                            /* export static func：parser 无顶层 static func 规则，
+                             * 仅剥离 export，交由 parser 报语法错误（不记录错误导出名） */
+                            sb_putc(&out, ' ');
+                            i = k;
+                            continue;
+                        }
+                        int ns = w3s;
+                        int p = m;
+                        if(w3len == 5 && strncmp(src + w3s, "const", 5) == 0) {
+                            while(p < n && (src[p] == ' ' || src[p] == '\t' || src[p] == '\r' || src[p] == '\n')) p++;
+                            ns = p;
+                            while(p < n && is_id_char(src[p])) p++;
+                        }
+                        if(p > ns) tr_push_export(t, src + ns, p - ns);
+                        sb_putc(&out, ' ');
+                        i = k;   /* 从 static 继续，static/const 原样保留 */
                         continue;
                     } else if(w2len == 5 && strncmp(src + k, "class", 5) == 0) {
                         /* export class NAME → 记录 export + symbol + class_name，输出 "class " */
@@ -951,13 +980,11 @@ static TransformResult* transform(const char* src) {
                             continue;
                         }
                         if(w2len == 5 && strncmp(src + k, "const", 5) == 0) {
-                            /* public const NAME = ...：parser 无顶层 const，剥离 public+const；
-                             * 常量名在顶层赋值检测处记录 symbol + export */
-                            int m = k2;
-                            while(m < n && (src[m] == ' ' || src[m] == '\t' || src[m] == '\r' || src[m] == '\n')) m++;
+                            /* public const NAME = ...：剥离 public，保留 const（parser 支持顶层
+                             * const，常量不可变语义不丢失）；常量名在顶层赋值检测处记录 symbol + export */
                             implicit_export = 1;
                             sb_putc(&out, ' ');
-                            i = m;
+                            i = k;   /* 从 const 继续，const 原样保留 */
                             continue;
                         }
                         if(implicit_export == 0 && bound_ok) {
