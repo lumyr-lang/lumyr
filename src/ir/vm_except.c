@@ -16,14 +16,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* try 上下文节点（TRY 压入，ENDTRY 弹出） */
+/* try 上下文节点（TRY 压入，ENDTRY 弹出）
+ * 全部状态 _Thread_local：每个工作线程独立的 try 栈/展开状态/挂起返回，
+ * 线程内未捕获错误在 vm_except_throw_value 中按本线程 try 栈判定（空则 exit），
+ * 不会跨线程命中主线程的 catch 帧。 */
 typedef struct TryCtxNode {
     StackFrame* frame;      /* try 所在栈帧 */
     int catch_pc;           /* catch 入口 pc（0=无 catch） */
     int fin_pc;             /* finally 入口 pc（0=无 finally，Task 8 后续） */
     struct TryCtxNode* prev;
 } TryCtxNode;
-static TryCtxNode* g_try_stack = NULL;
+static _Thread_local TryCtxNode* g_try_stack = NULL;
 
 /* 协作式展开状态 */
 typedef struct {
@@ -33,12 +36,12 @@ typedef struct {
     StackFrame* target_frame;
     int catch_pc;
 } UnwindState;
-static UnwindState g_unwind;
+static _Thread_local UnwindState g_unwind;
 
 /* 当前已捕获错误（GET_ERR 读取） */
-static Value g_current_error;
+static _Thread_local Value g_current_error;
 /* 原始 throw 值（catch 变量绑定它，而非包装后的 ValueError） */
-static Value g_current_throw_val;
+static _Thread_local Value g_current_throw_val;
 
 /* 把任意抛出值规范化为 VAL_ERROR */
 static Value ensure_error(Value v) {
@@ -215,9 +218,9 @@ int vm_exec_fin_push(VMExecCtx* ctx, Instruction* in) {
 
 /* ========== try 内 return：挂起返回，执行完所有 finally 后才真正返回 ========== */
 
-static RetSlot g_pending_ret;
-static int g_has_pending_ret = 0;   /* PEND_RETURN 设置：有值待返回 */
-static int g_wants_return = 0;      /* FINISH 设置：finally 已走完，请求结束当前帧 */
+static _Thread_local RetSlot g_pending_ret;
+static _Thread_local int g_has_pending_ret = 0;   /* PEND_RETURN 设置：有值待返回 */
+static _Thread_local int g_wants_return = 0;      /* FINISH 设置：finally 已走完，请求结束当前帧 */
 
 /* PEND_RETURN：弹 VALUE 返回值挂起，跳 b=finally 入口；a=1 表示无值返回（不弹栈） */
 int vm_exec_pend_return(VMExecCtx* ctx, Instruction* in) {

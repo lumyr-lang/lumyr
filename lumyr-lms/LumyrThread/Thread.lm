@@ -1,0 +1,207 @@
+// ============================================================
+// lumyr-Thread：Runnable / Callable<T> / FutureInterface<T> 接口
+//             + AbstractThread 抽象基类 + Thread 线程类 + Future<T> 期物类
+// 面向对象封装内置 thread / thread_join：
+//   Runnable / Callable<T>  任务统一契约（无返回值 / 有返回值）
+//   AbstractThread          线程生命周期完整实现，不能实例化
+//   Thread                  可子类化重写 run，亦可直接传 Runnable
+//   Future<T>               提交 Callable<T> 异步执行，get 取类型化结果
+//
+// 跨线程对象语义（实测）：
+//   类实例在共享 GC 堆上为引用语义，子线程对实例字段的修改对主线程可见；
+//   字符串不可变（线程内重绑参数不影响调用方）；
+//   数组为引用共享（add 等原地修改跨线程可见）
+//
+// 用法（三模式）：
+//   1. alias：import <Thread/Thread> as th; → th.Thread(task).start().join();
+//   2. no-alias：import <Thread/Thread>; → Future.submit(task).get();
+//   3. rename：import <Thread/Thread> {Thread as Worker}; → Worker(task);
+//
+//   class CounterThread extends Thread {
+//       func run() { ... return sum; }
+//   }
+//   r = CounterThread("c").start().join();
+//
+//   f = Future.submit(func() { return compute(); });
+//   if (f.isDone()) { print(f.get()); }
+// ============================================================
+
+// 无返回值任务契约：子类化 Thread 重写 run，或传任意实现该接口的对象
+public interface Runnable {
+    func run();
+}
+
+// 有返回值任务契约：call 返回类型 T（由调用方决定）
+public interface Callable<T> {
+    func call(): T;
+}
+
+// 期物契约：阻塞取值 / 是否完成
+public interface FutureInterface<T> {
+    func get(): T;
+    func isDone(): bool;
+}
+
+// 线程抽象基类：提供全部字段与生命周期实现
+// （抽象类豁免接口方法实现检查：run 由具体子类承担）
+public abstract class AbstractThread implements Runnable {
+    name: string;
+    tid: int;
+    started: bool;
+    joined: bool;
+    result: <dynamic>;
+
+    func AbstractThread() {
+        self.name = "";
+        self.tid = 0;
+        self.started = false;
+        self.joined = false;
+        self.result = null;
+    }
+
+    // 启动线程：把 self 作为参数交给内置 thread（类实例引用语义，
+    // 子线程执行 self.run()）；重复启动直接抛出
+    func start() {
+        if (self.started) {
+            throw "线程已启动，禁止重复 start / thread already started, cannot start twice";
+        }
+        self.tid = thread(func(s) { return s.run(); }, self);
+        self.started = true;
+        return self;
+    }
+
+    // 等待线程结束并取回 run 的返回值；未启动抛出；
+    // 可重复 join，后续调用直接返回缓存结果
+    func join() {
+        if (self.started == false) {
+            throw "线程未启动，无法 join / thread not started, cannot join";
+        }
+        if (self.joined == false) {
+            self.result = thread_join(self.tid);
+            self.joined = true;
+        }
+        return self.result;
+    }
+
+    // 是否存活（已启动且尚未 join）
+    func isAlive(): bool {
+        return self.started == true && self.joined == false;
+    }
+
+    // 线程名
+    func getName(): string {
+        return self.name;
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "AbstractThread(name=" + self.name + ", tid=" + self.tid + ")";
+    }
+}
+
+// futureMaker：submit 的构造助手（模块私有）。
+// 泛型类的 static 方法在解析期编译，早于类构造器注册，
+// 直接调用 Future<T>(...) 会丢失实参；改为运行时调用在类注册后
+// 编译的闭包，由顶层语句在模块初始化时赋值
+futureMaker = null;
+
+// 通用线程类：子类化重写 run，或构造时传入 Runnable
+public class Thread extends AbstractThread {
+    target: <dynamic>;
+
+    func Thread() {
+        super();
+        self.target = null;
+    }
+
+    // 单参数构造：按运行时类型分派——string 为线程名，其余为 Runnable 任务
+    // （构造器重载仅按参数个数选择，无法按参数类型区分，故合并为一个构造器）
+    func Thread(first) {
+        super();
+        self.target = null;
+        if (type(first) == "string") {
+            self.name = first;
+        } else {
+            self.target = first;
+        }
+    }
+
+    // 双参数构造：线程名 + Runnable 任务
+    func Thread(threadName: string, task: Runnable) {
+        super();
+        self.name = threadName;
+        self.target = task;
+    }
+
+    // 线程体：挂有 target 时执行 target——函数值直接调用，
+    // 类实例（Runnable）按名分派 run；无 target 为空操作
+    // （子类可重写 run 实现自己的逻辑）
+    func run() {
+        if (self.target != null) {
+            t = self.target;
+            if (type(t) == "func") {
+                return t();
+            }
+            return t.run();
+        }
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "Thread(name=" + self.name + ", tid=" + self.tid + ")";
+    }
+}
+
+// 期物：包装一个 Callable<T>，构造即启动；get 阻塞取类型化结果
+public class Future<T> implements FutureInterface<T> {
+    target: <dynamic>;
+    tid: int;
+    joined: bool;
+    result: <dynamic>;
+
+    // 构造并立即异步执行 task
+    func Future(task: Callable<T>) {
+        self.target = task;
+        self.tid = 0;
+        self.joined = false;
+        self.result = null;
+        self.tid = thread(func(c) {
+            if (type(c) == "func") { return c(); }
+            return c.call();
+        }, self.target);
+    }
+
+    // 取结果：首次调用阻塞等待并缓存，后续直接返回缓存值
+    func get(): T {
+        if (self.joined == false) {
+            self.result = thread_join(self.tid);
+            self.joined = true;
+        }
+        return self.result;
+    }
+
+    // 是否已完成（结果可取）
+    func isDone(): bool {
+        return self.joined;
+    }
+
+    // 提交任务：构造并启动一个 Future（经 futureMaker 闭包构造，
+    // 规避解析期 static 方法中泛型实例化丢参问题）
+    public static func submit(task: Callable<T>): Future<T> {
+        mk = futureMaker;
+        return mk(task);
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "Future(tid=" + self.tid + ", done=" + self.joined + ")";
+    }
+}
+
+// 模块初始化：装配 submit 的构造助手
+futureMaker = func(task) {
+    return Future<dynamic>(task);
+};

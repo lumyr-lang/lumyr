@@ -420,7 +420,7 @@ math.sqrt(16);
 
 ```lumyr
 // 创建线程
-t = thread_create(func() {
+t = thread(func() {
     print("in thread");
 });
 

@@ -951,6 +951,8 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"tryrdlock", 1, 1}, {"trywrlock", 1, 1},
     {"condvar", 0, 0}, {"cond_wait", 2, 2}, {"cond_wait_timeout", 3, 3}, {"cond_signal", 1, 1}, {"cond_broadcast", 1, 1},
     {"threadlocal_get", 1, 1}, {"threadlocal_set", 2, 2},
+    {"sleep", 1, 1},
+    {"timestamp", 0, 0}, {"timestamp_ms", 0, 0},
     {"get", 1, 3}, {"post", 1, 3}, {"put", 1, 3}, {"delete", 1, 3}, {"head", 1, 3}, {"patch", 1, 3},
     {"http_get", 1, 2}, {"http_post", 1, 2}, {"http_put", 1, 2},
     {"http_delete", 1, 2}, {"http_head", 1, 2}, {"http_patch", 1, 2},
@@ -1821,7 +1823,12 @@ int typecheck_expr(AstNode* node)
             int save_in_lambda = in_lambda;
             AstNode* save_params = g_lambda_params;
             int save_lc = lambda_locals_cnt;
-            if(is_lambda) { in_lambda = 1; g_lambda_params = node->u.func_def.params; lambda_locals_cnt = 0; cap_push(); }
+            char** save_ll = lambda_locals;
+            int save_llcap = lambda_locals_cap;
+            if(is_lambda) { in_lambda = 1; g_lambda_params = node->u.func_def.params;
+                /* 独立 locals 表：仅重置计数会让内层局部名覆盖外层同名索引槽，
+                 * 导致 cap_pop 传播误判外层变量被捕获 */
+                lambda_locals = NULL; lambda_locals_cnt = 0; lambda_locals_cap = 0; cap_push(); }
             // 登记参数（覆盖同名全局实现遮蔽；类型动态 → VAL_NONE 占位）
             for(p = node->u.func_def.params; p; p = p->u.param.next) {
                 static_sym_put(p->u.param.name, VAL_NONE);
@@ -1845,6 +1852,10 @@ int typecheck_expr(AstNode* node)
                 err = 1;
             }
             if(is_lambda) {
+                /* 释放本层 locals 后恢复外层表，cap_pop 的传播判定须查外层 locals */
+                for(int li = 0; li < lambda_locals_cnt; li++) free(lambda_locals[li]);
+                free(lambda_locals);
+                lambda_locals = save_ll; lambda_locals_cap = save_llcap;
                 in_lambda = save_in_lambda; g_lambda_params = save_params; lambda_locals_cnt = save_lc;
                 int ncapt = cap_pop_record(node->u.func_def.name);
                 // 该 lambda 捕获了外层局部变量：
@@ -1888,6 +1899,14 @@ int typecheck_expr(AstNode* node)
             g_cur_func_def = save_cur;
             func_depth--;
             node->val_type = VAL_FUNC;
+            break;
+        }
+
+        case AST_CLASS_NEW: {
+            /* 构造调用实参必须检查：嵌套 lambda 的捕获分析依赖遍历，
+             * 漏检会误发 GETFUNC 导致闭包失效；未定义变量等错误也会逃过语义检查 */
+            err |= typecheck_call_args(node->u.class_new.args);
+            node->val_type = VAL_NONE;
             break;
         }
 

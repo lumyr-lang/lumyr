@@ -34,6 +34,9 @@
 #include "lm_io.h"
 #include "vm_serialize.h"
 #include "lm_http.h"
+#include "lm_lock.h"
+#include "lm_tls.h"
+#include "vm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -699,6 +702,35 @@ static int bi_need_args(const char* name, int argc, int need) {
         exit(1);
     }
     return 1;
+}
+
+/* 线程/锁族参数校验（中英双语；不可恢复同 bi_type_err，立即中止） */
+static int bi_need_args_mt(const char* name, int argc, int need) {
+    if(argc < need) {
+        fprintf(stderr, "运行时错误: %s 需要 %d 个参数，实际 %d 个 / %s expects %d args, got %d\n",
+                name, need, argc, name, need, argc);
+        exit(1);
+    }
+    return 1;
+}
+
+static void bi_need_int_mt(const char* name, Value v, int pos) {
+    if(!bi_is_int_et(v.type)) {
+        fprintf(stderr, "运行时错误: %s 第 %d 个参数须为整数 id / %s: argument %d must be an integer id\n",
+                name, pos, name, pos);
+        exit(1);
+    }
+}
+
+/* 返回的 cstr 指向 *v 内部（SSO 内联缓冲区），调用方须保证 v 在使用期间存活
+ * （不能传按值拷贝的局部 Value——返回后其 SSO 指针随栈帧失效） */
+static const char* bi_need_str_mt(const char* name, const Value* v, int pos) {
+    if(v->type != VAL_STRING) {
+        fprintf(stderr, "运行时错误: %s 第 %d 个参数须为字符串 / %s: argument %d must be a string\n",
+                name, pos, name, pos);
+        exit(1);
+    }
+    return lumyr_str_cstr(v);
 }
 
 /* formdata → map：同名聚合（单个=值，多个=数组，保序），file/bytes 值保留原样 */
@@ -3268,6 +3300,90 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
 
+    /* ===== 线程 / 锁 / 条件变量 / 线程本地存储（kit/runtime 机制层直包装，仅函数形式） ===== */
+    case BUILTIN_MUTEX:    *out = lumyr_make_int64(lumyr_mutex_create()); return 1;
+    case BUILTIN_RMUTEX:   *out = lumyr_make_int64(lumyr_rmutex_create()); return 1;
+    case BUILTIN_RWLOCK:   *out = lumyr_make_int64(lumyr_rwlock_create()); return 1;
+    case BUILTIN_SPINLOCK: *out = lumyr_make_int64(lumyr_spinlock_create()); return 1;
+    case BUILTIN_CONDVAR:  *out = lumyr_make_int64(lumyr_condvar_create()); return 1;
+    case BUILTIN_LOCK:
+        bi_need_args_mt("lock", argc, 1); bi_need_int_mt("lock", argv[0], 1);
+        lumyr_lock((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_UNLOCK:
+        bi_need_args_mt("unlock", argc, 1); bi_need_int_mt("unlock", argv[0], 1);
+        lumyr_unlock((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_TRYLOCK:
+        bi_need_args_mt("trylock", argc, 1); bi_need_int_mt("trylock", argv[0], 1);
+        *out = lumyr_make_bool(lumyr_trylock((int)bi_num_i64(argv[0]))); return 1;
+    case BUILTIN_RDLOCK:
+        bi_need_args_mt("rdlock", argc, 1); bi_need_int_mt("rdlock", argv[0], 1);
+        lumyr_rdlock((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_WRLOCK:
+        bi_need_args_mt("wrlock", argc, 1); bi_need_int_mt("wrlock", argv[0], 1);
+        lumyr_wrlock((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_TRYRDLOCK:
+        bi_need_args_mt("tryrdlock", argc, 1); bi_need_int_mt("tryrdlock", argv[0], 1);
+        *out = lumyr_make_bool(lumyr_tryrdlock((int)bi_num_i64(argv[0]))); return 1;
+    case BUILTIN_TRYWRLOCK:
+        bi_need_args_mt("trywrlock", argc, 1); bi_need_int_mt("trywrlock", argv[0], 1);
+        *out = lumyr_make_bool(lumyr_trywrlock((int)bi_num_i64(argv[0]))); return 1;
+    case BUILTIN_COND_WAIT:
+        bi_need_args_mt("cond_wait", argc, 2);
+        bi_need_int_mt("cond_wait", argv[0], 1); bi_need_int_mt("cond_wait", argv[1], 2);
+        lumyr_cond_wait((int)bi_num_i64(argv[0]), (int)bi_num_i64(argv[1]));
+        *out = val_none(); return 1;
+    case BUILTIN_COND_TIMEDWAIT:
+        bi_need_args_mt("cond_wait_timeout", argc, 3);
+        bi_need_int_mt("cond_wait_timeout", argv[0], 1);
+        bi_need_int_mt("cond_wait_timeout", argv[1], 2);
+        bi_need_int_mt("cond_wait_timeout", argv[2], 3);
+        *out = lumyr_make_bool(lumyr_cond_timedwait((int)bi_num_i64(argv[0]),
+                                                    (int)bi_num_i64(argv[1]),
+                                                    (long long)bi_num_i64(argv[2])));
+        return 1;
+    case BUILTIN_COND_SIGNAL:
+        bi_need_args_mt("cond_signal", argc, 1); bi_need_int_mt("cond_signal", argv[0], 1);
+        lumyr_cond_signal((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_COND_BROADCAST:
+        bi_need_args_mt("cond_broadcast", argc, 1); bi_need_int_mt("cond_broadcast", argv[0], 1);
+        lumyr_cond_broadcast((int)bi_num_i64(argv[0])); *out = val_none(); return 1;
+    case BUILTIN_THREADLOCAL_GET:
+        bi_need_args_mt("threadlocal_get", argc, 1);
+        *out = lumyr_tls_get(bi_need_str_mt("threadlocal_get", &argv[0], 1));
+        return 1;
+    case BUILTIN_THREADLOCAL_SET:
+        bi_need_args_mt("threadlocal_set", argc, 2);
+        lumyr_tls_set(bi_need_str_mt("threadlocal_set", &argv[0], 1), argv[1]);
+        *out = argv[1]; return 1;   /* 返回 value（表达式值） */
+    case BUILTIN_THREAD: {
+        bi_need_args_mt("thread", argc, 1);
+        if(argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
+            fprintf(stderr, "运行时错误: thread(f, args...) 首参须为函数 / thread: first argument must be a function\n");
+            exit(1);
+        }
+        /* 函数值堆交接给线程体（函数为引用语义：浅拷贝共享 RuntimeFunc，线程体 free 容器） */
+        Value* fvp = (Value*)malloc(sizeof(Value));
+        if(!fvp) { perror("thread"); exit(EXIT_FAILURE); }
+        *fvp = argv[0];
+        *out = lumyr_make_int64(lumyr_thread_start(vm_thread_body, fvp,
+                                                   argc > 1 ? &argv[1] : NULL, argc - 1));
+        return 1;
+    }
+    case BUILTIN_THREAD_JOIN:
+        bi_need_args_mt("thread_join", argc, 1); bi_need_int_mt("thread_join", argv[0], 1);
+        *out = lumyr_thread_join((int)bi_num_i64(argv[0]));
+        return 1;
+    case BUILTIN_SLEEP:
+        /* sleep(ms)：休眠毫秒；lm_time 内部按 GC 安全点处理阻塞 */
+        bi_need_args_mt("sleep", argc, 1); bi_need_int_mt("sleep", argv[0], 1);
+        lumyr_sleep_ms((long long)bi_num_i64(argv[0]));
+        *out = val_none(); return 1;
+    case BUILTIN_TIMESTAMP:
+        if(argc < 1) { /* 支持无参形式 timestamp() */ }
+        *out = lumyr_make_double(lumyr_timestamp()); return 1;
+    case BUILTIN_TIMESTAMP_MS:
+        *out = lumyr_make_int64(lumyr_timestamp_ms()); return 1;
+
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
         return 0;
@@ -3467,6 +3583,29 @@ const char* builtin_id_name(int id) {
     case BUILTIN_HTTP_DELETE: return "http_delete";
     case BUILTIN_HTTP_HEAD: return "http_head";
     case BUILTIN_HTTP_PATCH: return "http_patch";
+    case BUILTIN_THREAD: return "thread";
+    case BUILTIN_THREAD_JOIN: return "thread_join";
+    case BUILTIN_SLEEP: return "sleep";
+    case BUILTIN_TIMESTAMP: return "timestamp";
+    case BUILTIN_TIMESTAMP_MS: return "timestamp_ms";
+    case BUILTIN_MUTEX: return "mutex";
+    case BUILTIN_RMUTEX: return "rmutex";
+    case BUILTIN_RWLOCK: return "rwlock";
+    case BUILTIN_SPINLOCK: return "spinlock";
+    case BUILTIN_LOCK: return "lock";
+    case BUILTIN_UNLOCK: return "unlock";
+    case BUILTIN_TRYLOCK: return "trylock";
+    case BUILTIN_RDLOCK: return "rdlock";
+    case BUILTIN_WRLOCK: return "wrlock";
+    case BUILTIN_TRYRDLOCK: return "tryrdlock";
+    case BUILTIN_TRYWRLOCK: return "trywrlock";
+    case BUILTIN_CONDVAR: return "condvar";
+    case BUILTIN_COND_WAIT: return "cond_wait";
+    case BUILTIN_COND_TIMEDWAIT: return "cond_wait_timeout";
+    case BUILTIN_COND_SIGNAL: return "cond_signal";
+    case BUILTIN_COND_BROADCAST: return "cond_broadcast";
+    case BUILTIN_THREADLOCAL_GET: return "threadlocal_get";
+    case BUILTIN_THREADLOCAL_SET: return "threadlocal_set";
     case BUILTIN_FORMDATA_NEW: return "__formdata_new";
     case BUILTIN_FORMDATA_APPEND: return "__formdata_append";
     case BUILTIN_FOREACH: return "forEach";

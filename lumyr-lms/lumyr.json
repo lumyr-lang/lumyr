@@ -3,6 +3,7 @@
     "Function": "./LumyrFunction",
     "Utils": "./LumyrUtils",
     "IO": "./LumyrIO",
-    "NetWork": "./LumyrNetWork"
+    "NetWork": "./LumyrNetWork",
+    "Thread": "./LumyrThread"
   }
 }

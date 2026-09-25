@@ -2384,10 +2384,10 @@ closed_stmt
 /* 接口实现列表：Printable, Comparable */
 interface_list : ID { $$ = ast_param($1, 0, NULL); }
                | ID TOK_GENERIC { free($2); $$ = ast_param($1, 0, NULL); }
-               | ID TOK_TYPE_ANNOT { free($2); $$ = ast_param($1, 0, NULL); }
+               | ID TOK_TYPE_ANNOT { $$ = ast_param($1, 0, NULL); }
                | interface_list COMMA ID { $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
                | interface_list COMMA ID TOK_GENERIC { free($4); $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
-               | interface_list COMMA ID TOK_TYPE_ANNOT { free($4); $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
+               | interface_list COMMA ID TOK_TYPE_ANNOT { $$ = ast_param_append($1, ast_param($3, 0, NULL)); }
                ;
 
 /* 接口方法签名列表 */
@@ -2431,7 +2431,7 @@ interface_method : FUNC ID LPAREN param_list RPAREN COLON iface_ret_type SEMI {
 iface_ret_type : builtin_type_name { $$ = strdup(castkind_to_name($1)); }
                | ID                { $$ = $1; }
                | ID TOK_GENERIC    { free($2); $$ = $1; }
-               | ID TOK_TYPE_ANNOT { free($2); $$ = $1; }
+               | ID TOK_TYPE_ANNOT { $$ = $1; }
                ;
 
 /* 运算符重载支持的运算符 */
@@ -2704,7 +2704,7 @@ param
     | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
     | ID COLON ID LBRACKET RBRACKET { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*数组类型 n: E[]（擦除为动态数组） */
     | ID COLON ID TOK_GENERIC   { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*泛型类型 n: Map<K,V>（擦除为 Map） */
-    | ID COLON ID TOK_TYPE_ANNOT { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
+    | ID COLON ID TOK_TYPE_ANNOT { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
     | ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型+默认值 n: int = 5 */
     | ID COLON ID ASSIGN expr   { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup($3); } /*自定义类型+默认值 n: Point = ... */
     | TOK_REF ID COLON builtin_type_name { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型 ref p: int */
