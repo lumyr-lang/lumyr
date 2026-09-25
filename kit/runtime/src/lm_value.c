@@ -1186,6 +1186,8 @@ Value lumyr_eq(Value a, Value b) {
         return lumyr_make_bool(oa == ob);
     }
     if (is_string(a,b)) {
+        /* null 与字符串不相等：value_to_str(VAL_NONE) 得 ""，会与 "" 误判相等 */
+        if(a.type == VAL_NONE || b.type == VAL_NONE) return lumyr_make_bool(0);
         char *sa = value_to_str(a);
         char *sb = value_to_str(b);
         int eq = (strcmp(sa, sb) == 0);

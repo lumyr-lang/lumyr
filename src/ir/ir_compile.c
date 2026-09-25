@@ -2255,18 +2255,29 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
         case OP_GT: case OP_LT: case OP_GE:
         case OP_LE: case OP_EQ: case OP_NE: {
-            /* 字符串（PTR 栈）相等比较：两操作数此时已在 PTR 栈（bottom=left/top=right）。
-               先各自 BOX_PTR 到 VALUE，再走 VEQ/VNE。此前误落到下面的 VEQ 直接弹
-               VALUE 栈（字符串却在 PTR 栈），导致 "a"=="a" 恒 false。
+            /* 字符串（PTR 栈）比较：两操作数此时已在 PTR 栈（bottom=left/top=right）。
+               先各自 BOX_PTR 到 VALUE，再走 V 族比较指令。此前 EQ/NE 已处理；
+               LT/GT/LE/GE fallthrough 到下面的 VLT 直接弹 VALUE 栈（字符串却在
+               PTR 栈），栈错位导致 "abc"<"abd" 恒 false。
+               注意 BOX 顺序：先弹 PTR 栈顶 right，再弹 left，VALUE 栈变为
+               bottom=right/top=left；vbin_exec 弹 b=top、a=bottom 调 fn(a,b)，
+               即 fn(right, left)——操作数反转。EQ/NE 对称无感知；非对称比较
+               必须发反向指令：lumyr_gt(right,left) 等价 left < right。
+               运行时 lumyr_lt/gt/le/ge 的 is_string 分支本就走 strcmp。
                注意 bigint/decimal 比较在前面专用分支已提前 return，不会到达此处。 */
             if(result == EXPR_TYPE_PTR) {
-                if(node->u.bin.op == OP_EQ || node->u.bin.op == OP_NE) {
-                    emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* right */
-                    emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* left */
-                    emit(c, node->u.bin.op == OP_EQ ? OPC_VEQ : OPC_VNE, 0, 0);
-                    return EXPR_TYPE_NONE;
+                emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* right */
+                emit(c, OPC_BOX_PTR, (int)CAST_STRING, 0);   /* left → VALUE:[right,left] */
+                switch(node->u.bin.op) {
+                case OP_EQ: emit(c, OPC_VEQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_VNE, 0, 0); break;
+                case OP_LT: emit(c, OPC_VGT, 0, 0); break;   /* right>left == left<right */
+                case OP_GT: emit(c, OPC_VLT, 0, 0); break;
+                case OP_LE: emit(c, OPC_VGE, 0, 0); break;
+                case OP_GE: emit(c, OPC_VLE, 0, 0); break;
+                default: break;
                 }
-                /* 字符串的大小比较无明确语义，保持原路径不处理 */
+                return EXPR_TYPE_NONE;
             }
             /* 比较结果统一压 INT64 栈（0/1），供条件跳转直接使用 */
             if(result == EXPR_TYPE_DOUBLE) {
