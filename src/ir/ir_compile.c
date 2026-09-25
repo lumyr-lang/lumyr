@@ -865,6 +865,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             else if(child_type == EXPR_TYPE_NONE) {
                 emit(c, OPC_UNBOX_INT64, 0, 0);
             }
+            /* 窄型立即截断：与 AST_TYPE_ANNOTATION 一致，cast 处立即生效 C 截断语义 */
+            if(ir_int_tag_truncates(ct)) {
+                emit(c, OPC_INT64_TRUNC, (int)ct, 0);
+            }
             return EXPR_TYPE_INT;
         }
         /* 转成 double：根据源类型 emit 转换指令 */
@@ -1000,6 +1004,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             /* 动态 Value（VALUE 栈）→ 出箱到 INT64 栈，防止 STORE 弹空栈 */
             else if(child_type == EXPR_TYPE_NONE) {
                 emit(c, OPC_UNBOX_INT64, 0, 0);
+            }
+            /* 窄型立即截断：cast 语义为 C 风格截断，须在标注处立即生效，
+             * 否则仅靠 STORE/BOX 懒惰截断——<byte>256==0 得 false（未截断的 256），
+             * 而 b=<byte>256; b==0 得 true（STORE 截断），同一 cast 两种结果 */
+            if(ir_int_tag_truncates(ct)) {
+                emit(c, OPC_INT64_TRUNC, (int)ct, 0);
             }
             return EXPR_TYPE_INT;
         } else if(ct == CAST_PTR) {
@@ -2915,24 +2925,6 @@ static int cast_is_special_value(CastKind k) {
            k == CAST_DECIMAL || k == CAST_BITDECIMAL;
 }
 
-/* 二元运算符对应的通用 Value 操作码；不可直接走 Value 时返回 -1 */
-static int binop_value_opcode(int op) {
-    switch(op) {
-    case OP_ADD: return OPC_VADD;
-    case OP_SUB: return OPC_VSUB;
-    case OP_MUL: return OPC_VMUL;
-    case OP_DIV: return OPC_VDIV;
-    case OP_MOD: return OPC_VMOD;
-    case OP_GT:  return OPC_VGT;
-    case OP_LT:  return OPC_VLT;
-    case OP_GE:  return OPC_VGE;
-    case OP_LE:  return OPC_VLE;
-    case OP_EQ:  return OPC_VEQ;
-    case OP_NE:  return OPC_VNE;
-    default:     return -1;
-    }
-}
-
 /* 兜底：按自然类型编译，再按需 BOX 到 VALUE（已是 NONE 时 emit_to_dynamic 无操作） */
 static void c_value_fallback(Ctx* c, AstNode* node) {
     ExprType t = c_expr(c, node);
@@ -3039,15 +3031,13 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
                 emit(c, OPC_BOX_DOUBLE, 0, 0);
             return;
         }
-        int vop = binop_value_opcode(bop);
-        CastKind lk = c_expr_cast_type(c, node->u.bin.left);
-        CastKind rk = c_expr_cast_type(c, node->u.bin.right);
-        if(vop >= 0 && !cast_is_special_value(lk) && !cast_is_special_value(rk)) {
-            c_expr_to_value(c, node->u.bin.left);
-            c_expr_to_value(c, node->u.bin.right);
-            emit(c, (OpCode)vop, 0, 0);
-            return;
-        }
+        /* 其余二元运算（ADD/SUB/MUL/比较）：自然编译 + 装箱，不走通用 V 指令快路径。
+         * 根因：lumyr_add/lumyr_sub/lumyr_mul 对非 VAL_INT 整型（uint64/int64/byte 等）
+         * 一律提升为 double（uint64 上限+1 → 2^64 而非环绕 0），bool 甚至被当字符串拼接；
+         * 而语句路径按操作数静态类型发 typed INT64/DOUBLE 指令——同一表达式在实参语境
+         * 与语句语境结果不同（如实参 (u64max+1)==0 得 false，语句路径得 true）。
+         * 动态类型操作数经自然编译本就走 V 指令（result==EXPR_TYPE_NONE），行为不变；
+         * string/bigint/decimal 特殊类型亦本就走自然编译，均不受影响。 */
         c_value_fallback(c, node);
         return;
     }
