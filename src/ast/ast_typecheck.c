@@ -1886,6 +1886,14 @@ int typecheck_expr(AstNode* node)
             }
             int save_in_ctor = g_in_ctor;
             g_in_ctor = this_is_ctor;
+            /* lambda/arrow 参数默认值表达式同样纳入 typecheck：
+             * 其中的外层变量引用须记录为捕获（否则动态调用求默认值时拿不到 cell），
+             * 且形参已先登记遮蔽，默认值引用形参自身不会被误捕获 */
+            if(is_lambda) {
+                for(AstNode* dp = node->u.func_def.params; dp; dp = dp->u.param.next)
+                    if(dp->u.param.default_val)
+                        err |= typecheck_expr(dp->u.param.default_val);
+            }
             err |= typecheck_expr(node->u.func_def.body);
             g_in_ctor = save_in_ctor;
             /* const func：纯函数约束校验（body 只允许 const 声明/return、

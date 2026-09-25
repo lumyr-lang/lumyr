@@ -565,6 +565,145 @@ static Value eval_literal_default(AstNode* dflt) {
     return v;
 }
 
+/* 默认值求值辅助：数值提取（int/bool/char 归一 int64；double 单列） */
+static int dv_num(Value v, int64_t* pi, double* pd, int* is_int) {
+    switch(v.type) {
+    case VAL_INT64:  *pi = v.v.i64; *pd = (double)v.v.i64; *is_int = 1; return 1;
+    case VAL_INT:    *pi = v.v.i;   *pd = (double)v.v.i;   *is_int = 1; return 1;
+    case VAL_BOOL:   *pi = v.v.b ? 1 : 0; *pd = *pi ? 1.0 : 0.0; *is_int = 1; return 1;
+    case VAL_CHAR:   *pi = (int64_t)(unsigned char)v.v.c; *pd = (double)*pi; *is_int = 1; return 1;
+    case VAL_DOUBLE: *pd = v.v.d; *pi = (int64_t)v.v.d; *is_int = 0; return 1;
+    default: return 0;
+    }
+}
+static int dv_truthy(Value v) {
+    switch(v.type) {
+    case VAL_INT64:  return v.v.i64 != 0;
+    case VAL_INT:    return v.v.i != 0;
+    case VAL_BOOL:   return v.v.b != 0;
+    case VAL_CHAR:   return v.v.c != 0;
+    case VAL_DOUBLE: return v.v.d != 0.0;
+    case VAL_NONE:   return 0;
+    default:         return 1;   /* 字符串/容器等引用类型非空即真 */
+    }
+}
+
+/* 动态调用默认参数表达式求值（调用点编译期未知 callee，运行时在 callee 帧上下文求值）。
+ * 支持：字面量 / 变量（闭包捕获 cell 优先=词法作用域，其次沿帧链）/ 一元 / 二元算术与比较。
+ * 返回 1=成功写 *out；0=表达式超出支持范围（调用方按无兜底原则报错中止）。 */
+static int eval_default_expr(AstNode* e, StackFrame* frame, RuntimeFunc* rf, Value* out) {
+    if(!e) { *out = val_none(); return 1; }
+    switch(e->type) {
+    case AST_INT: case AST_NUM: case AST_BOOL:
+    case AST_CHAR: case AST_STRING: case AST_NONE:
+        *out = eval_literal_default(e);
+        return 1;
+    case AST_VAR: {
+        const char* name = e->u.varname;
+        /* 闭包捕获优先（词法作用域）；cells 与捕获名表一一对应 */
+        if(rf && rf->name && rf->captures && rf->capture_count > 0) {
+            Value** cells = (Value**)rf->captures;
+            int ncap = lambda_capture_count(rf->name);
+            for(int i = 0; i < ncap && i < rf->capture_count; i++) {
+                const char* cn = lambda_capture_name(rf->name, i);
+                if(cn && cells[i] && strcmp(cn, name) == 0) { *out = *cells[i]; return 1; }
+            }
+        }
+        _Bool found = 0;
+        Value v = stackframe_get(frame, name, &found);
+        if(found) { *out = v; return 1; }
+        return 0;
+    }
+    case AST_UNARY: {
+        Value a;
+        if(!eval_default_expr(e->u.uny.child, frame, rf, &a)) return 0;
+        int64_t ai; double ad; int aint;
+        switch(e->u.uny.op) {
+        case OP_UNARY_MINUS: case OP_UNARY_PLUS: {
+            if(!dv_num(a, &ai, &ad, &aint)) return 0;
+            int neg = (e->u.uny.op == OP_UNARY_MINUS);
+            if(aint) *out = lumyr_make_int64(neg ? -ai : ai);
+            else     *out = lumyr_make_double(neg ? -ad : ad);
+            return 1;
+        }
+        case OP_LOGIC_NOT:
+            *out = lumyr_make_bool(!dv_truthy(a));
+            return 1;
+        default: return 0;
+        }
+    }
+    case AST_BINOP: {
+        Value a, b;
+        if(!eval_default_expr(e->u.bin.left, frame, rf, &a)) return 0;
+        if(!eval_default_expr(e->u.bin.right, frame, rf, &b)) return 0;
+        BinOp op = e->u.bin.op;
+        if(op == OP_LOGIC_AND || op == OP_LOGIC_OR) {
+            int r = (op == OP_LOGIC_AND) ? (dv_truthy(a) && dv_truthy(b))
+                                         : (dv_truthy(a) || dv_truthy(b));
+            *out = lumyr_make_bool(r);
+            return 1;
+        }
+        int64_t ai, bi; double ad, bd; int aint, bint;
+        if(!dv_num(a, &ai, &ad, &aint) || !dv_num(b, &bi, &bd, &bint)) return 0;
+        switch(op) {
+        case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD: {
+            if(aint && bint) {
+                int64_t r = 0;
+                switch(op) {
+                case OP_ADD: r = ai + bi; break;
+                case OP_SUB: r = ai - bi; break;
+                case OP_MUL: r = ai * bi; break;
+                case OP_DIV: if(bi == 0) return 0; r = ai / bi; break;  /* int/int 整数除法 */
+                case OP_MOD: if(bi == 0) return 0; r = ai % bi; break;
+                default: return 0;
+                }
+                *out = lumyr_make_int64(r);
+            } else {
+                if(op == OP_MOD) return 0;   /* 浮点不支持取模 */
+                double r = 0;
+                switch(op) {
+                case OP_ADD: r = ad + bd; break;
+                case OP_SUB: r = ad - bd; break;
+                case OP_MUL: r = ad * bd; break;
+                case OP_DIV: r = ad / bd; break;
+                default: return 0;
+                }
+                *out = lumyr_make_double(r);
+            }
+            return 1;
+        }
+        case OP_GT: case OP_LT: case OP_GE: case OP_LE: {
+            int r = 0;
+            if(aint && bint) {
+                switch(op) {
+                case OP_GT: r = ai >  bi; break;
+                case OP_LT: r = ai <  bi; break;
+                case OP_GE: r = ai >= bi; break;
+                default:    r = ai <= bi; break;
+                }
+            } else {
+                switch(op) {
+                case OP_GT: r = ad >  bd; break;
+                case OP_LT: r = ad <  bd; break;
+                case OP_GE: r = ad >= bd; break;
+                default:    r = ad <= bd; break;
+                }
+            }
+            *out = lumyr_make_bool(r);
+            return 1;
+        }
+        case OP_EQ: case OP_NE: {
+            int eq = (aint && bint) ? (ai == bi) : (ad == bd);
+            *out = lumyr_make_bool((op == OP_EQ) ? eq : !eq);
+            return 1;
+        }
+        default: return 0;
+        }
+    }
+    default: return 0;
+    }
+}
+
 int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* out) {
     *out = val_none();
     if(fv.type != VAL_FUNC || !fv.v.func.func_obj || !fv.v.func.func_obj->name) {
@@ -669,9 +808,9 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
         }
     }
 
-    /* 默认参数填补：实参数 < 形参数时，从 AST 查默认值并绑定。
-     * 仅支持简单字面量默认值（string/int/double/bool/char/null），
-     * 复杂表达式默认值暂不支持（动态调用上下文无 AST 求值器）。
+    /* 默认参数填补：实参数 < 形参数时，从 AST 求值默认值并绑定。
+     * 支持字面量/变量（含闭包捕获 cell）/一元/二元算术比较表达式；
+     * 超出支持范围的表达式按无兜底原则报错中止，不静默绑 0。
      * 这使 arrow/lambda 函数的默认参数在动态调用时也能生效 */
     if(argc + slot_off < callee->param_cnt) {
         AstNode* def_ast = func_ast_lookup(fname);
@@ -681,7 +820,13 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
             for(int i = 0; i < argc && p; i++) p = p->u.param.next;
             for(int slot = argc + slot_off; slot < callee->param_cnt && p; slot++, p = p->u.param.next) {
                 if(!p->u.param.default_val) continue;
-                Value dv = eval_literal_default(p->u.param.default_val);
+                Value dv;
+                if(!eval_default_expr(p->u.param.default_val, new_frame, fv.v.func.func_obj, &dv)) {
+                    fprintf(stderr, "VM: 动态调用 %s 的默认参数表达式不支持运行时求值 / unsupported default argument expression in dynamic call\n",
+                            fname);
+                    stackframe_destroy(new_frame);
+                    return 0;
+                }
                 int fslot = slot;
                 const char* pname = (fslot < name_slots && callee->params[fslot])
                                     ? callee->params[fslot] : "_";

@@ -2414,11 +2414,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* DUP+null 检查 */
         emit(c, OPC_LOAD_VAR, recv_idx, 0);
         int jfalse = emit_here(c, OPC_JMP_IF_FALSE_V, 0, 0);   /* null 跳 push_null */
-        /* truthy：args 非空=安全方法调用 recv.method(args)；args 为空=安全属性访问 recv["method"] */
+        /* truthy：is_call=安全方法调用 recv.method(args)（含空括号）；否则=安全属性访问 recv["method"] */
         ExprType mt;
         CastKind mt_cast;
         AstNode* member_expr;
-        if(args) {
+        if(node->u.safe_call.is_call) {
             member_expr = ast_method_call(ast_var(strdup(tmp_name)), strdup(method), args);
         } else {
             member_expr = ast_index(ast_var(strdup(tmp_name)), ast_string(strdup(method)));

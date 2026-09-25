@@ -3529,10 +3529,10 @@ postfix_expr
       }
     /* 安全方法调用 a?.b(x,y)：a 为 null 时返回 null */
     | postfix_expr SAFE_CALL ID LPAREN arg_list RPAREN {
-          $$ = L(ast_safe_call($1, $3, $5));
+          $$ = L(ast_safe_call($1, $3, $5, 1));
       }
     /* 安全属性访问 a?.b → a 为 null 时返回 null */
-    | postfix_expr SAFE_CALL ID { $$ = L(ast_safe_call($1, $3, NULL)); }
+    | postfix_expr SAFE_CALL ID { $$ = L(ast_safe_call($1, $3, NULL, 0)); }
     ;
 
 /* 字典字面量 {"k": v, name: 1, ...}；键为字符串字面量（支持模板）或标识符 */

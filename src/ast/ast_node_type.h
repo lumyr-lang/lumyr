@@ -82,6 +82,7 @@ struct AstNode {
             AstNode* obj;
             char* method;
             AstNode* args;
+            int is_call;  /* 1=方法调用 a?.b(c)（含空括号），0=属性访问 a?.b */
         } safe_call;
         struct {
             AstNode* left;

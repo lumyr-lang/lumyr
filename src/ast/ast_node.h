@@ -31,7 +31,7 @@ AstNode* ast_new(AstType type);
 AstNode* ast_while(AstNode* cond, AstNode* body, const char* label);
 AstNode* ast_do_while(AstNode* cond, AstNode* body, const char* label);
 AstNode* ast_annotation(char* name, AstNode* args);
-AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args);
+AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args, int is_call);
 AstNode* ast_null_coalesce(AstNode* left, AstNode* right);
 AstNode* ast_macro_def(char* name, AstNode* params, AstNode* body);
 AstNode* ast_for(AstNode* init, AstNode* cond, AstNode* update, AstNode* body, const char* label);

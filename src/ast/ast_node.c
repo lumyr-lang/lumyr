@@ -283,12 +283,13 @@ AstNode* ast_annotation(char* name, AstNode* args)
     return n;
 }
 
-AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args)
+AstNode* ast_safe_call(AstNode* obj, char* method, AstNode* args, int is_call)
 {
     AstNode* n = ast_new(AST_SAFE_CALL);
     n->u.safe_call.obj = obj;
     n->u.safe_call.method = strdup(method);
     n->u.safe_call.args = args;
+    n->u.safe_call.is_call = is_call;
     return n;
 }
 
