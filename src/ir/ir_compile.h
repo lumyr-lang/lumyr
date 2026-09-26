@@ -34,6 +34,11 @@ void ir_free_deferred_funcs(void);
 // 编译顶层语句为 main 字节码（执行 / -c 生成 C 共用同一 IR）
 BytecodeFunc* ir_compile_main(AstNode* root);
 
+/* 预扫描顶层 变量=箭头 赋值，建立 global 变量→箭头名映射。
+ * 必须在任何函数体编译之前调用（解析完成后即可），因为嵌套函数体
+ * 可能先于 main 顶层语句编译，其调用全局箭头时需据此解析返回类型。 */
+void ir_prescan_global_arrows(AstNode* root);
+
 /* IR 编译是否发生致命错误（调用不存在的方法等）：
  * ir_compile_main 返回后检查，有错则不运行 VM（避免实参残留致栈错位） */
 int ir_compile_had_error(void);

@@ -301,6 +301,109 @@ int builtin_id_by_name(const char* name) {
 
 
 /* ============================================================
+ * 变量 → 箭头内部名 映射侧表
+ * 记录 `v = (args) => ...` 赋值，使后续以该变量为被调的"动态调用"
+ * 能静态解析箭头返回类型（INT/DOUBLE/PTR），避免结果落 VALUE 栈存 vals[]
+ * 而原 int 变量读 int_slots[] 造成的存储分裂、循环内 loop-carried 值丢失。
+ * 分两级：per-function（fn 名 + 变量名）与 global（仅顶层 main 箭头，按变量名）。
+ * ============================================================ */
+typedef struct {
+    char* fnname;     /* 所属函数名（per-function 键），global 条目为 NULL */
+    char* varname;    /* 变量名 */
+    char* arrowname;  /* 箭头 BytecodeFunc 内部名 */
+} VarArrowEntry;
+static VarArrowEntry* g_var_arrow = NULL;
+static int g_var_arrow_cnt = 0, g_var_arrow_cap = 0;
+
+static void var_arrow_set(const char* fnname, const char* varname, const char* arrowname) {
+    for(int i = 0; i < g_var_arrow_cnt; i++) {
+        int fnsame = (fnname == NULL)
+                     ? (g_var_arrow[i].fnname == NULL)
+                     : (g_var_arrow[i].fnname && strcmp(g_var_arrow[i].fnname, fnname) == 0);
+        if(fnsame && g_var_arrow[i].varname
+           && strcmp(g_var_arrow[i].varname, varname) == 0) {
+            free(g_var_arrow[i].arrowname);
+            g_var_arrow[i].arrowname = strdup(arrowname);
+            return;
+        }
+    }
+    if(g_var_arrow_cnt >= g_var_arrow_cap) {
+        g_var_arrow_cap = g_var_arrow_cap ? g_var_arrow_cap * 2 : 16;
+        g_var_arrow = (VarArrowEntry*)realloc(g_var_arrow,
+                        sizeof(VarArrowEntry) * (size_t)g_var_arrow_cap);
+        if(!g_var_arrow) { fprintf(stderr, "变量箭头映射表扩容内存不足\n"); exit(EXIT_FAILURE); }
+    }
+    VarArrowEntry* e = &g_var_arrow[g_var_arrow_cnt++];
+    e->fnname = fnname ? strdup(fnname) : NULL;
+    e->varname = strdup(varname);
+    e->arrowname = strdup(arrowname);
+}
+
+/* 查询：先 per-function（fnname+varname），再 global（varname，fnname=NULL）。
+ * 返回箭头内部名，未找到返回 NULL。 */
+static const char* var_arrow_get(const char* fnname, const char* varname) {
+    /* 第一轮：per-function */
+    for(int pass = 0; pass < 2; pass++) {
+        for(int i = 0; i < g_var_arrow_cnt; i++) {
+            VarArrowEntry* e = &g_var_arrow[i];
+            if(pass == 0) {
+                if(!fnname || !e->fnname || strcmp(e->fnname, fnname) != 0) continue;
+            } else {
+                if(e->fnname != NULL) continue;   /* 仅 global */
+            }
+            if(e->varname && strcmp(e->varname, varname) == 0) return e->arrowname;
+        }
+    }
+    return NULL;
+}
+
+/* 按箭头 BytecodeFunc 的返回类型标注取 ExprType；无标注返回 NONE。
+ * 生成器箭头(gen)排除：CALLV 返回的是生成器对象（不是 ret_type_name 所标的
+ * yield 元素类型），若按 yield 类型 unbox 会把生成器对象强转成数值而报错。 */
+static ExprType arrow_ret_exprtype(const char* arrowname) {
+    if(!arrowname) return EXPR_TYPE_NONE;
+    BytecodeFunc* af = ir_func_table_lookup(arrowname);
+    if(af && !af->is_generator && af->ret_type_name)
+        return castkind_to_exprtype(ir_type_name_to_castkind(af->ret_type_name));
+    return EXPR_TYPE_NONE;
+}
+
+/* 预扫描顶层语句序列：收集所有 顶层变量 = 箭头字面量 的 global 映射。
+ * 必须在编译任何函数体之前运行——嵌套函数体可能先于 main 顶层语句编译，
+ * 否则其调用全局箭头时查不到返回类型。只检查顶层 SEQ 的叶子赋值，
+ * 不下钻非 SEQ 节点（箭头名直接挂在赋值节点上）。 */
+void ir_prescan_global_arrows(AstNode* root) {
+    if(!root) return;
+    int cap = 256;
+    AstNode** stk = (AstNode**)malloc(sizeof(AstNode*) * (size_t)cap);
+    if(!stk) { perror("prescan_global_arrows"); exit(EXIT_FAILURE); }
+    int sp = 0;
+    AstNode* cur = root;
+    while(cur || sp > 0) {
+        while(cur && cur->type == AST_SEQ) {
+            if(sp >= cap) {
+                cap *= 2;
+                stk = (AstNode**)realloc(stk, sizeof(AstNode*) * (size_t)cap);
+                if(!stk) { perror("prescan_global_arrows realloc"); exit(EXIT_FAILURE); }
+            }
+            stk[sp++] = cur;
+            cur = cur->u.seq.first;
+        }
+        if(cur && cur->type == AST_ASSIGN) {
+            AstNode* rhs = cur->u.assign.expr;
+            if(rhs && rhs->type == AST_FUNC_DEF && rhs->u.func_def.name)
+                var_arrow_set(NULL, cur->u.assign.varname, rhs->u.func_def.name);
+        }
+        if(sp > 0) {
+            AstNode* n = stk[--sp];
+            cur = n->u.seq.second;
+        } else cur = NULL;
+    }
+    free(stk);
+}
+
+
+/* ============================================================
  * 表达式编译
  * ============================================================ */
 
@@ -1323,6 +1426,16 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             }
             free(dargv);
             emit(c, OPC_CALLV, 0, dargc);
+            /* 若该变量持有已知返回数值类型的箭头：CALLV 结果在 VALUE 栈，
+             * unbox 到对应数值核心栈，使后续算术/赋值读到正确槽位
+             * （修复 int 箭头结果存 vals[] 与 int_slots[] 分裂、循环内值丢失）。
+             * 注意：仅处理 INT/DOUBLE。字符串/对象(PTR)必须保留 boxed Value——
+             * 其下游（print/比较/动态分派）按 Value 处理，盲目 UNBOX_PTR 会把
+             * 字符串变成裸指针（打印成地址、比较失败）。 */
+            const char* arrown = var_arrow_get(c->fn->name, func_name);
+            ExprType art = arrow_ret_exprtype(arrown);
+            if(art == EXPR_TYPE_INT)      { emit(c, OPC_UNBOX_INT64, 0, 0); return art; }
+            if(art == EXPR_TYPE_DOUBLE)   { emit(c, OPC_UNBOX_DOUBLE, 0, 0); return art; }
             return EXPR_TYPE_NONE;
         }
     }
@@ -2501,6 +2614,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
     }
 
     case AST_ASSIGN: {
+        /* 若右值是箭头字面量：记录 变量名→箭头内部名（per-function；顶层再记 global），
+         * 供后续该变量作被调时静态解析返回类型 */
+        if(node->u.assign.expr && node->u.assign.expr->type == AST_FUNC_DEF
+           && node->u.assign.expr->u.func_def.name) {
+            const char* aname = node->u.assign.expr->u.func_def.name;
+            var_arrow_set(c->fn->name, node->u.assign.varname, aname);
+            if(c->fn->is_main) var_arrow_set(NULL, node->u.assign.varname, aname);
+        }
         /* 赋值语句：编译右值，返回其类型 */
         ExprType rt = c_expr(c, node->u.assign.expr);
         CastKind cast_type = c_expr_cast_type(c, node->u.assign.expr);
@@ -3816,6 +3937,14 @@ void c_stmt(Ctx* c, AstNode* node) {
     case AST_ASSIGN: {
         /* 赋值语句：注册变量，根据表达式类型选择存储指令 */
         const char* var_name = node->u.assign.varname;
+        /* 若右值是箭头字面量：记录 变量名→箭头内部名（per-function；顶层再记 global），
+         * 供后续该变量作被调的动态调用静态解析箭头返回类型，避免存储槽分裂 */
+        if(node->u.assign.expr && node->u.assign.expr->type == AST_FUNC_DEF
+           && node->u.assign.expr->u.func_def.name) {
+            const char* an = node->u.assign.expr->u.func_def.name;
+            var_arrow_set(c->fn->name, var_name, an);
+            if(c->fn->is_main) var_arrow_set(NULL, var_name, an);
+        }
         ExprType rt = c_expr(c, node->u.assign.expr);
         CastKind cast_type = c_expr_cast_type(c, node->u.assign.expr);
         /* 保持变量已有类型：若已声明为 typed，将 RHS 转换到该类型存储，

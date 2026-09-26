@@ -204,6 +204,8 @@ int main(int argc, char** argv) {
 
     int ret = yyparse();
     if(ret == 0 && root != NULL) {
+        /* 预扫描顶层 变量=箭头 赋值，建立 global 映射（须在函数体编译/typecheck 前） */
+        ir_prescan_global_arrows(root);
         if(ast_typecheck(root)) {
             fprintf(stderr, LM_TR(MSG_SEMANTIC_CHECK_FAIL));
             ast_free(root);
