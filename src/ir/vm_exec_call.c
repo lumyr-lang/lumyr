@@ -439,6 +439,15 @@ static Value frame_slot_value_at(StackFrame* f, int slot, int ptrHint) {
         default: v.type = VAL_STRING; v.str_inline = 0; v.v.s = (char*)p; return v;
         }
     }
+    /* class/struct 实例与裸指针：存于 ptr_slots，按精确类型装箱。
+     * 旧代码漏此分支落入 default 读 vals[slot]（空），导致闭包捕获的
+     * 全局类对象在 lambda 内变 none（type(gbox)=none、gbox.method() 失败）。 */
+    case CAST_CLASS_PTR:
+        v.type = VAL_CLASS_PTR; v.v.struct_ptr = f->ptr_slots[slot]; return v;
+    case CAST_STRUCT_PTR:
+        v.type = VAL_STRUCT_PTR; v.v.struct_ptr = f->ptr_slots[slot]; return v;
+    case CAST_PTR:
+        v.type = VAL_PTR; v.v.struct_ptr = f->ptr_slots[slot]; return v;
     default:
         return f->vals[slot];
     }
@@ -464,7 +473,29 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
                 int slot = bf_find_slot(ctx->fn, cname);
                 int localSlot = -1;   /* >=0：捕获自当前函数帧局部槽 */
                 Value boxed;
-                if(slot >= 0) {
+                /* 优先查全局捕获侧表：若 cname 是当前函数的全局占位槽
+                 * （var_is_global，帧槽从未写入），bf_find_slot 会返回占位下标
+                 * 但 frame_slot_value_at 读到空值。全局捕获已由 ir_fixup_global_refs
+                 * 登记 main 槽位，应优先走该路径，否则 lambda 内引用外层全局类对象
+                 * 变 none。 */
+                int ghint = 0;
+                int gslot = func_compile_get_global_cap(lname, cname, &ghint);
+                /* 决定来源：若局部槽是顶层变量占位槽（帧槽从不写入），
+                 * 或变量根本不在当前函数帧（slot<0，如模块/全局变量），
+                 * 走全局捕获；否则优先读当前函数帧的真局部槽。
+                 * 同名全局与局部共存时（如局部 i 与顶层 i 同名），
+                 * 只有占位槽才需全局路径，真局部必须读帧。 */
+                int is_global_ph = (slot >= 0 && slot < ctx->fn->sym_cnt
+                                    && ctx->fn->var_is_global
+                                    && ctx->fn->var_is_global[slot]);
+                if((is_global_ph || slot < 0) && gslot >= 0) {
+                    StackFrame* rootFrame = g_main_root_frame;
+                    if(!rootFrame) {
+                        rootFrame = ctx->frame;
+                        while(rootFrame && rootFrame->parent) rootFrame = rootFrame->parent;
+                    }
+                    boxed = frame_slot_value_at(rootFrame, gslot, ghint);
+                } else if(slot >= 0) {
                     localSlot = slot;
                     stackframe_ensure_slots(ctx->frame, slot + 1);
                     CastKind ltag = (CastKind)((slot < ctx->fn->sym_cnt)
@@ -493,24 +524,8 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
                         else if(ltag == CAST_BITDECIMAL) boxed.type = VAL_BITDECIMAL;
                     }
                 } else {
-                    /* 当前函数帧无此变量：查全局捕获槽侧表（lambda 捕获的顶层变量），
-                     * 从根帧(main)槽位按编译期 hint 取值建 cell；侧表无则真未定义。
-                     * 不能运行时按名沿链找——运行时帧不维护变量名。 */
-                    int ghint = 0;
-                    int gslot = func_compile_get_global_cap(lname, cname, &ghint);
-                    if(gslot >= 0) {
-                        /* 从主线程 main 帧取全局捕获（工作线程根帧无此槽）；
-                         * 未登记时退回沿本线程帧链，兼容旧路径 */
-                        StackFrame* rootFrame = g_main_root_frame;
-                        if(!rootFrame) {
-                            rootFrame = ctx->frame;
-                            while(rootFrame && rootFrame->parent) rootFrame = rootFrame->parent;
-                        }
-                        boxed = frame_slot_value_at(rootFrame, gslot, ghint);
-                    } else {
-                        fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");
-                        free(cells); free(rf); return 0;
-                    }
+                    fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");
+                    free(cells); free(rf); return 0;
                 }
                 cell = (Value*)malloc(sizeof(Value));
                 if(!cell) { perror("mkclosure cell"); free(cells); free(rf); return 0; }

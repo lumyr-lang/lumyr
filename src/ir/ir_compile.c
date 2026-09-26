@@ -774,6 +774,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                  * main 帧槽位索引。 */
                 int sym = c_add_var(c, name, EXPR_TYPE_NONE);
                 c->var_is_global[sym] = 1;
+                {
+                    int bf_idx = bf_sym(c->fn, name);
+                    if(bf_idx >= 0) c->fn->var_is_global[bf_idx] = 1;
+                }
                 emit(c, OPC_LOAD_GLOBAL, sym, -1);
                 return EXPR_TYPE_NONE;
             }
@@ -1931,7 +1935,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     /* VALUE 栈：动态 1 + add/sub */
                     emit(c, OPC_LOAD_VAR, idx, 0);
                     emit(c, OPC_PUSH_INT_VAL, 1, 0);
-                    emit(c, is_inc ? OPC_ADD : OPC_SUB, 0, 0);
+                    emit(c, is_inc ? OPC_VADD : OPC_VSUB, 0, 0);
                     emit(c, OPC_STORE_VAR, idx, 0);
                 }
                 return vt;
@@ -3104,6 +3108,29 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
          * 漏检 var_is_global 会把它当局部发 LOAD_VAR，读到本线程空槽（none） */
         if(idx >= 0 && c->var_is_global[idx]) {
             emit(c, OPC_LOAD_GLOBAL, idx, -1);
+            return;
+        }
+        if(idx < 0) {
+            /* 未声明的变量：函数体内读顶层变量——注册占位槽并发 LOAD_GLOBAL
+             * （与 c_expr AST_VAR 一致；c_expr_to_value 路径此前漏此分支，
+             * 导致 lambda/箭头函数内引用全局对象回退读空局部槽） */
+            BytecodeFunc* fn = ir_func_table_lookup(node->u.varname);
+            if(fn) {
+                int sym = c_add_var(c, node->u.varname, EXPR_TYPE_NONE);
+                emit(c, OPC_GETFUNC, sym, 0);
+                return;
+            }
+            if(!c->fn->is_main) {
+                int sym = c_add_var(c, node->u.varname, EXPR_TYPE_NONE);
+                c->var_is_global[sym] = 1;
+                {
+                    int bf_idx = bf_sym(c->fn, node->u.varname);
+                    if(bf_idx >= 0) c->fn->var_is_global[bf_idx] = 1;
+                }
+                emit(c, OPC_LOAD_GLOBAL, sym, -1);
+                return;
+            }
+            emit(c, OPC_LOAD_VAR, 0, 0);
             return;
         }
         if(idx >= 0 && c->var_types[idx] == EXPR_TYPE_NONE) {

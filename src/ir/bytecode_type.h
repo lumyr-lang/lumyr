@@ -643,6 +643,7 @@ typedef struct {
     int is_generator;          // 是否为生成器函数（gen func）
     int* var_type_tags;        // 变量类型标记（CastKind 枚举，-1 表示无标记），与 syms 平行数组
     char** var_struct_names;    // 变量的 struct 类型名（NULL 表示不是 struct），与 syms 平行数组
+    uint8_t* var_is_global;    // 变量是否为顶层变量占位槽（LOAD_GLOBAL 名字载体，帧槽从不写入），与 syms 平行
     int is_method;              // 是否为结构体方法（self 参数传递指针）
     char* method_self_struct;   // 方法 self 参数的 struct 类型名
     char* class_name;           // 方法所属的 class 名（NULL 表示不是 class 方法）
