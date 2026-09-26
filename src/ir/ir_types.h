@@ -38,6 +38,10 @@ typedef struct {
     int* brk_fin; int brk_fin_cnt, brk_fin_cap;   /* try-finally 内 break 的 FIN_PUSH 位置（patch b） */
     int* cont_fin; int cont_fin_cnt, cont_fin_cap; /* try-finally 内 continue 的 FIN_PUSH 位置（patch b） */
     int cont_target;       /* 已知 continue 目标（while 的 cond 开头）或 -1 */
+    int owner_fin_depth;   /* 该控制层定义点的 fin_depth（词法外围 finally 层数）。
+                            * break/continue 据此计算真正穿越多少层 try-finally：
+                            * depthDiff = 当前 fin_depth - owner_fin_depth；
+                            * =0 时出口仍在同一 try 内，直接 JMP，不触发 finally。 */
 } Layer;
 
 /* ========== 编译上下文结构体 ========== */

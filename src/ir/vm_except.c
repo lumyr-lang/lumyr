@@ -379,9 +379,11 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in) {
     if(g_fin_stack) {
         FinNode* n = g_fin_stack; g_fin_stack = n->next;
         int action = n->action, target = n->target;
+        int kind = action & 0xff;      /* 1=JMP 2=RETHROW 3=BREAK 4=CONT */
+        int levels = action >> 8;      /* 需穿越的 finally 层数（编译期按词法位置计算） */
         free(n);
         pop_current_try();
-        if(action == 2) {
+        if(kind == 2) {
             /* RETHROW：重新走完整 throw 分派。下一个栈顶若带 catch，
              * 必须先给其捕获机会——旧代码见外层 fin_pc 非空就直接跳
              * finally，错误地跨过外层 catch（多层嵌套 try 时 catch 被
@@ -391,6 +393,26 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in) {
             stack_vm_push(g_stack_mgr, STACK_VALUE, &rv);
             return vm_exec_throw(ctx, in);
         }
+        if(levels > 0) {
+            /* 定层链：每执行一层 levels--；到 0 即跳目标（目标仍在 owner try 内，
+             * owner try 未被弹出，其 finally 之后随该 try 正常退出执行）。 */
+            levels--;
+            if(levels > 0) {
+                TryCtxNode* o = same_frame_outer_fin(ctx);
+                if(o) {
+                    FinNode* m = (FinNode*)malloc(sizeof(FinNode));
+                    if(!m){ perror("fin chain"); exit(EXIT_FAILURE); }
+                    m->action = kind | (levels << 8); m->target = target;
+                    m->next = g_fin_stack; g_fin_stack = m;
+                    ctx->pc = o->fin_pc;
+                    return 1;
+                }
+                /* 外层缺失（不应发生）：落到目标避免卡死 */
+            }
+            ctx->pc = target;          /* BREAK / CONT 到位 */
+            return 1;
+        }
+        /* 兼容旧编码（无 levels）：沿所有同帧 finally 链继续 */
         TryCtxNode* o = same_frame_outer_fin(ctx);
         if(o) {
             /* 还有外层 finally：重新压入同一动作，链式继续 */
@@ -401,7 +423,7 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in) {
             ctx->pc = o->fin_pc;
             return 1;
         }
-        switch(action) {
+        switch(kind) {
         case 1: case 3: case 4:           /* JMP / BREAK / CONT：跳到目标 */
             ctx->pc = target;
             break;

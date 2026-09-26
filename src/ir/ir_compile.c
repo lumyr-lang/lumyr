@@ -3148,6 +3148,74 @@ static void emit_value_cast(Ctx* c, ExprType from, ExprType to) {
     /* PTR/string 与数值的其它跨类转换当前不支持，保持原样 */
 }
 
+/* 递归判断表达式树 n 中是否词法出现名为 name 的变量引用。
+ * 用于 typed→NONE 重定型的安全性判定：RHS 若读旧类型槽的自身（累加器
+ * s = gAdd(s, i)），迁移存储后旧槽不再更新，循环重执行时读陈旧值。
+ * 对嵌套函数体内的同名引用保守计为命中（假阳性仅使变量保持原类型）。 */
+static int expr_references_name(AstNode* n, const char* name) {
+    if(!n) return 0;
+    switch(n->type) {
+    case AST_VAR:
+        return n->u.varname && strcmp(n->u.varname, name) == 0;
+    case AST_BINOP:
+        return expr_references_name(n->u.bin.left, name) ||
+               expr_references_name(n->u.bin.right, name);
+    case AST_UNARY:
+        return expr_references_name(n->u.uny.child, name);
+    case AST_ASSIGN:
+        return expr_references_name(n->u.assign.expr, name);
+    case AST_CALL:
+        return expr_references_name(n->u.call.args, name);
+    case AST_DYN_CALL:
+        return expr_references_name(n->u.dyn_call.callee, name) ||
+               expr_references_name(n->u.dyn_call.args, name);
+    case AST_METHOD_CALL:
+        return expr_references_name(n->u.method_call.recv, name) ||
+               expr_references_name(n->u.method_call.args, name);
+    case AST_INDEX:
+        return expr_references_name(n->u.index.arr, name) ||
+               expr_references_name(n->u.index.idx, name);
+    case AST_INDEX_ASSIGN:
+        return expr_references_name(n->u.index_assign.arr, name) ||
+               expr_references_name(n->u.index_assign.idx, name) ||
+               expr_references_name(n->u.index_assign.value, name);
+    case AST_ARRAY_LIT:
+        return expr_references_name(n->u.array_lit.elems, name);
+    case AST_MAP_LIT:
+        return expr_references_name(n->u.map_lit.entries, name);
+    case AST_MAP_ENTRY:
+        return expr_references_name(n->u.map_entry.key, name) ||
+               expr_references_name(n->u.map_entry.value, name);
+    case AST_SEQ:
+        return expr_references_name(n->u.seq.first, name) ||
+               expr_references_name(n->u.seq.second, name);
+    case AST_TERNARY:
+        return expr_references_name(n->u.ternary.cond, name) ||
+               expr_references_name(n->u.ternary.true_expr, name) ||
+               expr_references_name(n->u.ternary.false_expr, name);
+    case AST_CAST:
+        return expr_references_name(n->u.cast.child, name);
+    case AST_FUNC_DEF:
+        return expr_references_name(n->u.func_def.body, name);
+    case AST_TYPE_ANNOTATION:
+        return expr_references_name(n->u.type_annotation.expr, name);
+    case AST_SPREAD:
+        return expr_references_name(n->u.spread.expr, name);
+    case AST_THROW:
+        return expr_references_name(n->u.thrownode.expr, name);
+    case AST_YIELD:
+        return expr_references_name(n->u.yieldnode.value, name);
+    case AST_SAFE_CALL:
+        return expr_references_name(n->u.safe_call.obj, name) ||
+               expr_references_name(n->u.safe_call.args, name);
+    case AST_NULL_COALESCE:
+        return expr_references_name(n->u.null_coalesce.left, name) ||
+               expr_references_name(n->u.null_coalesce.right, name);
+    default:
+        return 0;
+    }
+}
+
 /* 判断表达式是否"数值型"（可能产生数值 VALUE）。
    用于决定赋值给已 typed 变量时是 unbox 还是改类型为 NONE。 */
 static int is_numeric_expr(AstNode* n) {
@@ -3366,6 +3434,7 @@ static void layer_push(Ctx* c, int kind, const char* label) {
     L->brk_fin = NULL; L->brk_fin_cnt = L->brk_fin_cap = 0;
     L->cont_fin = NULL; L->cont_fin_cnt = L->cont_fin_cap = 0;
     L->cont_target = -1;
+    L->owner_fin_depth = c->fin_depth;   /* 定义点词法外围的 finally 层数 */
 }
 
 /* 按 label 向上搜索 layer 栈，找到首个匹配的循环层；NULL=用最近循环层 */
@@ -3947,6 +4016,8 @@ void c_stmt(Ctx* c, AstNode* node) {
         }
         ExprType rt = c_expr(c, node->u.assign.expr);
         CastKind cast_type = c_expr_cast_type(c, node->u.assign.expr);
+        /* RHS 是否引用变量自身：决定 typed→NONE 重定型是否安全 */
+        int selfRef = expr_references_name(node->u.assign.expr, var_name);
         /* 保持变量已有类型：若已声明为 typed，将 RHS 转换到该类型存储，
            避免 load/store 槽位错位（int_slots vs vals）。 */
         int exist_idx = c_find_var(c, var_name);
@@ -3982,14 +4053,23 @@ void c_stmt(Ctx* c, AstNode* node) {
                 emit_to_dynamic(c, rt, cast_type);
             } else if (rt == EXPR_TYPE_NONE) {
                 /* RHS 是动态 VALUE：
-                   - 若 RHS 是数值型表达式（算术/字面量），unbox 到目标 typed
-                   - 否则（函数返回/数组/lambda/字符串/null），变量改类型为 NONE */
-                if (is_numeric_expr(node->u.assign.expr) &&
-                    (target_et == EXPR_TYPE_INT || target_et == EXPR_TYPE_DOUBLE)) {
-                    if (target_et == EXPR_TYPE_INT)
-                        emit(c, OPC_UNBOX_INT64, 0, 0);
-                    else
-                        emit(c, OPC_UNBOX_DOUBLE, 0, 0);
+                 * - RHS 不引用变量自身：允许重定型为 NONE（如 p = makePair()，
+                 *   旧数值变量改持容器）。本语句 RHS 无旧槽读取，后续引用均在
+                 *   重定型之后编译，无陈旧读。
+                 * - RHS 引用自身（累加器 s = gAdd(s, i)）：RHS 内旧 LOAD 已按
+                 *   旧类型发出，重定型后旧槽不再更新，循环重执行恒读陈旧值
+                 *   （动态箭头累加结果每轮退化为 i，s=0+1+.. 得 4；PTR 变量
+                 *   gCat 式拼接同样读到陈旧 ptr 槽，输出损坏）。
+                 *   保持 C 风格粘性类型：按目标类型 unbox 动态结果。 */
+                if (!selfRef) {
+                    target_et = EXPR_TYPE_NONE;
+                    c_add_var(c, var_name, EXPR_TYPE_NONE);
+                } else if (target_et == EXPR_TYPE_INT) {
+                    emit(c, OPC_UNBOX_INT64, 0, 0);
+                } else if (target_et == EXPR_TYPE_DOUBLE) {
+                    emit(c, OPC_UNBOX_DOUBLE, 0, 0);
+                } else if (target_et == EXPR_TYPE_PTR) {
+                    emit(c, OPC_UNBOX_PTR, 0, 0);
                 } else {
                     target_et = EXPR_TYPE_NONE;
                     c_add_var(c, var_name, EXPR_TYPE_NONE);
@@ -4024,8 +4104,13 @@ void c_stmt(Ctx* c, AstNode* node) {
                     c->fn->var_type_tags[bf_idx] = (cast_type == CAST_FLOAT || cast_type == CAST_LONG_DOUBLE)
                                                    ? (int)cast_type : (int)CAST_DOUBLE;
             }
-            else if (target_et == EXPR_TYPE_PTR)
-                c->fn->var_type_tags[bf_idx] = (int)cast_type;
+            else if (target_et == EXPR_TYPE_PTR) {
+                /* RHS 为动态 NONE（如 catch 赋值 err_msg = e）时 cast_type 为
+                 * CAST_NONE，不能覆盖原有精确标签（CAST_STRING 等），否则后续
+                 * BOX_PTR 退化为通用 VAL_PTR（print 输出裸地址、比较失配）。 */
+                if(cast_type != CAST_NONE || prev_tag == CAST_NONE)
+                    c->fn->var_type_tags[bf_idx] = (int)cast_type;
+            }
             else
                 c->fn->var_type_tags[bf_idx] = (int)CAST_NONE;
         }
@@ -4489,7 +4574,10 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_BREAK: {
-        /* break：直接 JMP 出口；在 try-finally 内则 FIN_PUSH(BREAK) 先执行 finally 再跳。
+        /* break：JMP 到循环出口。仅当出口在更外层（跳出若干 try-finally 作用域）
+         * 时才用 FIN_PUSH 先执行被跨越的 finally；出口仍在同一 try 内则直接跳，
+         * finally 由该 try 正常退出时统一执行（旧代码见 fin_depth>0 一律走 FIN，
+         * 导致 try 内循环 break 时 finally 提前执行、try 退出时再执行一次）。
          * 若 break 带 label，向上搜 layer 栈找匹配标签的循环层。 */
         const char* lbl = node->u.jump.label;
         Layer* L = layer_find_labeled(c, lbl);
@@ -4498,8 +4586,10 @@ void c_stmt(Ctx* c, AstNode* node) {
             else    fprintf(stderr, "IR: break outside loop\n");
             break;
         }
-        if(c->fin_depth > 0) {
-            int fp = emit_here(c, OPC_FIN_PUSH, 3, 0);
+        int depthDiff = c->fin_depth - L->owner_fin_depth;
+        if(depthDiff > 0) {
+            /* a: action=3 低8位，穿越层数 levels 在高位（FINISH 逐层递减，到位即跳） */
+            int fp = emit_here(c, OPC_FIN_PUSH, 3 | (depthDiff << 8), 0);
             int_list_add(&L->brk_fin, &L->brk_fin_cnt, &L->brk_fin_cap, fp);
             int j = emit_here(c, OPC_JMP, 0, 0);
             fin_add_jmp(c, j);
@@ -4511,7 +4601,8 @@ void c_stmt(Ctx* c, AstNode* node) {
     }
 
     case AST_CONTINUE: {
-        /* continue：跳 cond/更新头；try-finally 内 FIN_PUSH(CONT) 先执行 finally 再跳。
+        /* continue：跳 cond/更新头。跨越层数判定同 break（depthDiff=0 时目标
+         * 仍在同一 try 内，直接跳，不触发 finally）。
          * 若 continue 带 label，向上搜 layer 栈找匹配标签的循环层。 */
         const char* lbl = node->u.jump.label;
         Layer* L = layer_find_labeled(c, lbl);
@@ -4520,12 +4611,14 @@ void c_stmt(Ctx* c, AstNode* node) {
             else    fprintf(stderr, "IR: continue outside loop\n");
             break;
         }
-        if(c->fin_depth > 0) {
+        int depthDiff = c->fin_depth - L->owner_fin_depth;
+        if(depthDiff > 0) {
             int fp;
+            /* a: action=4 低8位，levels 高位；b=已知目标/0待定 */
             if(L->cont_target >= 0) {
-                fp = emit_here(c, OPC_FIN_PUSH, 4, L->cont_target);
+                fp = emit_here(c, OPC_FIN_PUSH, 4 | (depthDiff << 8), L->cont_target);
             } else {
-                fp = emit_here(c, OPC_FIN_PUSH, 4, 0);
+                fp = emit_here(c, OPC_FIN_PUSH, 4 | (depthDiff << 8), 0);
                 int_list_add(&L->cont_fin, &L->cont_fin_cnt, &L->cont_fin_cap, fp);
             }
             int j = emit_here(c, OPC_JMP, 0, 0);

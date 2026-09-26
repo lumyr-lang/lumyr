@@ -48,9 +48,21 @@ static void ref_unbox(RefDesc* r, Value v) {
     case CAST_STRING:
         if(v.type == VAL_STRING) *(char**)r->ptr = v.str_inline ? strdup(v.v.sso.data) : v.v.s;
         break;
-    default:
-        *(Value*)r->ptr = v;
+    default: {
+        /* CAST_NONE cell 不变量：字符串必须保持非内联表示。
+         * mkclosure 会在定义帧为被捕获变量挂 CAST_NONE cell ref，同帧的 typed
+         * PTR 存取（vm_exec_var_load/store_ptr 的 CAST_NONE 分支）直接读
+         * Value.v.struct_ptr；若 cell 被动态写入 SSO 内联串，typed 读会把内联
+         * 字节误当指针（字符串拼接时 strlen 解引用非法地址 SEGV）。
+         * 动态读写方读到 VAL_STRING 非内联，语义完全等价。 */
+        Value wv = v;
+        if(wv.type == VAL_STRING && wv.str_inline) {
+            wv.str_inline = 0;
+            wv.v.s = strdup(wv.v.sso.data);
+        }
+        *(Value*)r->ptr = wv;
         break;
+    }
     }
 }
 
