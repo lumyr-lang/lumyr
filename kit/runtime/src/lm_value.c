@@ -1428,6 +1428,34 @@ static int value_compare(Value a, Value b) {
                 if(!a.v.bitdecimal || !b.v.bitdecimal)
                     return (a.v.bitdecimal != NULL) - (b.v.bitdecimal != NULL);
                 return lumyr_bitdecimal_cmp(a.v.bitdecimal, b.v.bitdecimal);
+            /* date 族同类型：先比 epoch 秒，再比纳秒（此前落 default 静默按相等） */
+            case VAL_DATE: case VAL_DATETIME: case VAL_TIME: case VAL_TIMEDELTA: {
+                DateObj* da = (DateObj*)a.v.date_obj;
+                DateObj* db = (DateObj*)b.v.date_obj;
+                if(da->epoch != db->epoch)
+                    return (da->epoch > db->epoch) - (da->epoch < db->epoch);
+                return (da->nsec > db->nsec) - (da->nsec < db->nsec);
+            }
+            /* bytes 同类型：按字节字典序（memcmp），前缀短者小（此前静默按相等） */
+            case VAL_BYTES: {
+                BytesObj* ba = (BytesObj*)a.v.bytes_obj;
+                BytesObj* bb = (BytesObj*)b.v.bytes_obj;
+                int common = ba->len < bb->len ? ba->len : bb->len;
+                int c = common > 0 ? memcmp(ba->data, bb->data, (size_t)common) : 0;
+                if(c != 0) return c > 0 ? 1 : -1;
+                return (ba->len > bb->len) - (ba->len < bb->len);
+            }
+            /* tuple 同类型：逐元素字典序（Python 语义），前缀短者小 */
+            case VAL_TUPLE: {
+                TupleObj* ta = (TupleObj*)a.v.tuple_obj;
+                TupleObj* bb = (TupleObj*)b.v.tuple_obj;
+                int common = ta->len < bb->len ? ta->len : bb->len;
+                for(int k = 0; k < common; k++) {
+                    int c = value_compare(ta->items[k], bb->items[k]);
+                    if(c != 0) return c;
+                }
+                return (ta->len > bb->len) - (ta->len < bb->len);
+            }
             default: break;
         }
     }
@@ -1461,7 +1489,12 @@ static int value_compare(Value a, Value b) {
         if(fb) lumyr_decimal_free(bb);
         return r;
     }
-    /* 跨类型：用统一转换 */
+    /* 跨类型数值比较：两侧都必须是数值族（int 族/浮点族；字符串已在调用前由
+     * is_string 处理，高精度已在上方分支处理）。此前 value_as_number 对数组、
+     * map、set、函数、null、error 等 default 返回 0.0，使 [1]>3、map<5 等
+     * 确定错误静默得 false——无兜底，直接 TypeError（try 可捕获）。 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("比较运算要求两侧均为数值（或字符串） / comparison requires numeric operands (or strings) on both sides");
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return (na > nb) - (na < nb);
@@ -1512,9 +1545,10 @@ Value lumyr_le(Value a, Value b) {
         free(sb);
         return lumyr_make_bool(r <= 0);
     }
-    double na = value_as_number(a);
-    double nb = value_as_number(b);
-    return lumyr_make_bool(na <= nb);
+    /* 与 lt/gt/ge 一致走 value_compare：此前直接 value_as_number，高精度
+     * decimal/bigint 落 default 得 0.0，导致动态路径 d1<=d2 恒为相等语义错误，
+     * 非数值也静默（value_compare 内含 TypeError 校验）。 */
+    return lumyr_make_bool(value_compare(a, b) <= 0);
 }
 
 // == 弱相等：一边字符串，全部转字符串比较；两边字符串strcmp；其余数值比较
@@ -1662,13 +1696,39 @@ Value lumyr_eq(Value a, Value b) {
         if(!aNum || !bNum) return lumyr_make_bool(0);
         return lumyr_make_bool(value_compare(a, b) == 0);
     }
-    /* 类型检查：类型不同且不都是数值类型时，直接返回 false */
-    int a_is_num = (a.type >= VAL_INT && a.type <= VAL_LONG_DOUBLE);
-    int b_is_num = (b.type >= VAL_INT && b.type <= VAL_LONG_DOUBLE);
-    if(a.type != b.type && !(a_is_num && b_is_num)) {
+    /* null == null：判空核心写法（此前同类型落 value_compare 被 TypeError 拦截） */
+    if(a.type == VAL_NONE && b.type == VAL_NONE)
+        return lumyr_make_bool(1);
+    /* array 值相等：同长 + 逐元素 lumyr_eq（此前两数组 value_as_number 均得 0.0，
+     * 任意数组恒判相等——静默兜底） */
+    if(a.type == VAL_ARRAY && b.type == VAL_ARRAY) {
+        ValueArray* oa = a.v.array;
+        ValueArray* ob = b.v.array;
+        if(!oa || !ob) return lumyr_make_bool(oa == ob);
+        if(oa->len != ob->len) return lumyr_make_bool(0);
+        for(int i = 0; i < oa->len; i++)
+            if(!lumyr_eq(oa->items[i], ob->items[i]).v.b)
+                return lumyr_make_bool(0);
+        return lumyr_make_bool(1);
+    }
+    /* 数值族判定：用精确白名单（枚举区间 VAL_INT..VAL_LONG_DOUBLE 内夹有
+     * VAL_FUNC 等非数值类型，范围比较会误判）。高精度已由上方分支处理。 */
+    int a_is_num = value_is_numeric(a.type);
+    int b_is_num = value_is_numeric(b.type);
+    if(a.type != b.type) {
+        /* 异类型：两数值走数值比较，其余（如字符串与数值，上方 is_string
+         * 未覆盖的边角）一律不相等 */
+        if(a_is_num && b_is_num)
+            return lumyr_make_bool(value_compare(a, b) == 0);
         return lumyr_make_bool(0);
     }
-    return lumyr_make_bool(value_compare(a, b) == 0);
+    /* 同类型：数值族走 value_compare 精确比较 */
+    if(a_is_num)
+        return lumyr_make_bool(value_compare(a, b) == 0);
+    /* 其余同类型（typed_array/func/generator/formdata 等引用类型）：按内部
+     * 指针身份比较，禁止静默恒 true。联合体指针成员均从 0 偏移，比较首个
+     * 机器字即代表身份 */
+    return lumyr_make_bool(memcmp(&a.v, &b.v, sizeof(void*)) == 0);
 }
 
 Value lumyr_ne(Value a, Value b) {

@@ -783,6 +783,11 @@ static int vtype_is_integer(ValueType t) {
     }
 }
 
+/* 浮点族判定（配合 vtype_is_integer 做数值族校验） */
+static int vtype_is_float(ValueType t) {
+    return t == VAL_FLOAT || t == VAL_DOUBLE || t == VAL_LONG_DOUBLE;
+}
+
 /* 位二元运算通用：弹 b、a，校验整数，调 op，压 int64 结果 */
 static int vbit_bin_exec(VMExecCtx* ctx, int kind) {
     Value a, b;
@@ -834,6 +839,15 @@ int vm_exec_vpow(VMExecCtx* ctx, Instruction* in) {
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &a);
     if(a.type == VAL_NONE || b.type == VAL_NONE) {
         return varith_raise_null(ctx);
+    }
+    /* 无兜底：幂运算两操作数必须是数值（整数族/浮点族）。此前非数值（字符串、
+     * 数组等）经 value_as_number 落 default 得 0.0，"a"**2 静默为 0、2**"a"
+     * 静默为 1。负指数整数走下面 double 路径，合法。 */
+    if((!vtype_is_integer(a.type) && !vtype_is_float(a.type)) ||
+       (!vtype_is_integer(b.type) && !vtype_is_float(b.type))) {
+        vm_except_raise_str(ctx, "TypeError",
+            "幂运算 ** 要求数值操作数 / exponentiation ** requires numeric operands");
+        return 1;
     }
     Value r;
     if(vtype_is_integer(a.type) && vtype_is_integer(b.type) && lumyr_extract_ll(b) >= 0) {

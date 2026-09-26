@@ -64,6 +64,44 @@ static int bi_is_float_et(ValueType et) {
     return et == VAL_DOUBLE || et == VAL_FLOAT || et == VAL_LONG_DOUBLE;
 }
 
+/* 数值类型判定（整数族 + 浮点族；不含字符串/容器/null） */
+static int bi_type_numeric(ValueType t) {
+    switch(t) {
+    case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_SHORT:
+    case VAL_INT32: case VAL_INT64: case VAL_LONG_LONG: case VAL_LONG:
+    case VAL_BYTE: case VAL_UINT8: case VAL_UCHAR: case VAL_UINT16:
+    case VAL_USHORT: case VAL_UINT32: case VAL_UINT: case VAL_UINT64:
+    case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
+    case VAL_BOOL: case VAL_CHAR:
+    case VAL_FLOAT: case VAL_DOUBLE: case VAL_LONG_DOUBLE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* 向量元素分类：1=全部数值，2=全部字符串，3=空，0=混合或含其他不支持类型。
+ * TypedArray 元素同型，直接按 elem_type 判定。 */
+static int bi_len_of(Value v);   /* 前向声明：定义见向量读取抽象区 */
+static int bi_vec_classify(Value recv) {
+    int n = bi_len_of(recv);
+    if(recv.type == VAL_TYPED_ARRAY) {
+        ValueType et = recv.v.typed_array->elem_type;
+        if(et == VAL_STRING) return 2;
+        if(bi_type_numeric(et)) return 1;
+        return 0;
+    }
+    int cls = 3;
+    for(int i = 0; i < n; i++) {
+        ValueType t = recv.v.array->items[i].type;
+        int c = (t == VAL_STRING) ? 2 : (bi_type_numeric(t) ? 1 : 0);
+        if(c == 0) return 0;
+        if(cls == 3) cls = c;
+        else if(cls != c) return 0;
+    }
+    return cls;
+}
+
 static int64_t bi_read_i64_et(ValueType et, const void* items, int i) {
     switch(et) {
     case VAL_INT:       return ((const int*)items)[i];
@@ -1792,9 +1830,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return bi_type_err(id == BUILTIN_SUM ? "sum" : "avg", recv);
         int n = bi_len_of(recv);
         if(n == 0) {
-            *out = (id == BUILTIN_SUM) ? lumyr_make_int64(0)
-                                       : lumyr_make_double(0.0);
-            return 1;
+            if(id == BUILTIN_SUM) { *out = lumyr_make_int64(0); return 1; }
+            /* avg/mean 空数组：与 cgen lumyr_avg 一致报错，不静默返回 0 */
+            runtime_error("avg()/mean() 不能对空数组求平均 / avg()/mean() of an empty array");
+            return 0;
+        }
+        /* 无兜底：元素必须全部是数值（此前 bi_vec_int_only 只排浮点，字符串等
+         * 经 bi_num_i64 静默当 0，sum([1,"a",3]) 错得 4） */
+        if(bi_vec_classify(recv) != 1) {
+            runtime_error("sum()/avg() 数组元素必须全部是数值 / sum()/avg() requires all elements to be numeric");
+            return 0;
         }
         if(bi_vec_int_only(recv)) {
             int64_t s = 0;
@@ -1821,6 +1866,30 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return bi_type_err(nm, recv);
         int n = bi_len_of(recv);
         if(n == 0) { *out = val_none(); return 1; }
+        int cls = bi_vec_classify(recv);
+        /* 无兜底：混合或含数组/map/函数等不可比类型 → TypeError，禁止静默按 0 比。
+         * 全局变参 min/max（上方 argc>=2 分支）仍允许数字/字符串弱比较设计。 */
+        if(cls == 0) {
+            runtime_error("min()/max() 数组元素必须全部是数值或全部是字符串 / min()/max() requires all numeric or all string elements");
+            return 0;
+        }
+        if(cls == 2) {
+            /* 全字符串：字典序（此前字符串经 bi_vec_dbl 静默当 0，恒返回首元素）。
+             * TypedArray 字符串元素（实际不产生）按不支持处理。 */
+            if(recv.type != VAL_ARRAY) {
+                runtime_error("min()/max() 字符串比较仅支持普通数组 / string min()/max() supports only plain arrays");
+                return 0;
+            }
+            int best = 0;
+            const char* bs = lumyr_str_cstr(&recv.v.array->items[0]);
+            for(int i = 1; i < n; i++) {
+                const char* x = lumyr_str_cstr(&recv.v.array->items[i]);
+                int c = strcmp(x, bs);
+                if((id == BUILTIN_MIN) ? (c < 0) : (c > 0)) { bs = x; best = i; }
+            }
+            *out = recv.v.array->items[best];
+            return 1;
+        }
         if(recv.type == VAL_ARRAY) {
             /* 直接返回元素 Value，零拷贝 */
             int best = 0;
@@ -1852,6 +1921,27 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return bi_type_err(id == BUILTIN_ARGMAX ? "argmax" : "argmin", recv);
         int n = bi_len_of(recv);
         if(n == 0) { *out = lumyr_make_int64(-1); return 1; }
+        int cls = bi_vec_classify(recv);
+        if(cls == 0) {
+            runtime_error("argmin()/argmax() 数组元素必须全部是数值或全部是字符串 / argmin()/argmax() requires all numeric or all string elements");
+            return 0;
+        }
+        if(cls == 2) {
+            /* 全字符串字典序（同 min/max），TypedArray 字符串不支持 */
+            if(recv.type != VAL_ARRAY) {
+                runtime_error("argmin()/argmax() 字符串比较仅支持普通数组 / string argmin()/argmax() supports only plain arrays");
+                return 0;
+            }
+            int best = 0;
+            const char* bs = lumyr_str_cstr(&recv.v.array->items[0]);
+            for(int i = 1; i < n; i++) {
+                const char* x = lumyr_str_cstr(&recv.v.array->items[i]);
+                int c = strcmp(x, bs);
+                if((id == BUILTIN_ARGMIN) ? (c < 0) : (c > 0)) { bs = x; best = i; }
+            }
+            *out = lumyr_make_int64(best);
+            return 1;
+        }
         int best = 0;
         double bv = bi_vec_dbl(recv, 0);
         for(int i = 1; i < n; i++) {
@@ -1864,6 +1954,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_NORM: {
         if(recv.type != VAL_ARRAY && recv.type != VAL_TYPED_ARRAY)
             return bi_type_err("norm", recv);
+        /* 无兜底：非数值元素报错（空数组 norm=0 数学成立，保留） */
+        {
+            int cls = bi_vec_classify(recv);
+            if(cls != 1 && cls != 3) {
+                runtime_error("norm() 数组元素必须全部是数值 / norm() requires all elements to be numeric");
+                return 0;
+            }
+        }
         int n = bi_len_of(recv);
         double s = 0.0;
         for(int i = 0; i < n; i++) { double x = bi_vec_dbl(recv, i); s += x * x; }
@@ -1877,6 +1975,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return bi_type_err(nm, recv);
         int n = bi_len_of(recv);
         if(n == 0) { *out = lumyr_make_double(0.0); return 1; }
+        /* 无兜底：非数值元素报错 */
+        if(bi_vec_classify(recv) != 1) {
+            runtime_error("std()/var() 数组元素必须全部是数值 / std()/var() requires all elements to be numeric");
+            return 0;
+        }
         double sum = 0.0;
         for(int i = 0; i < n; i++) sum += bi_vec_dbl(recv, i);
         double mu = sum / (double)n;
@@ -1892,6 +1995,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_NORMALIZE: {
         if(recv.type != VAL_ARRAY && recv.type != VAL_TYPED_ARRAY)
             return bi_type_err("normalize", recv);
+        /* 无兜底：非数值元素报错（空数组返回空，保留） */
+        {
+            int cls = bi_vec_classify(recv);
+            if(cls != 1 && cls != 3) {
+                runtime_error("normalize() 数组元素必须全部是数值 / normalize() requires all elements to be numeric");
+                return 0;
+            }
+        }
         int n = bi_len_of(recv);
         double norm = 0.0;
         for(int i = 0; i < n; i++) { double x = bi_vec_dbl(recv, i); norm += x * x; }
@@ -1908,6 +2019,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return bi_type_err("softmax", recv);
         int n = bi_len_of(recv);
         if(n == 0) { *out = val_array(0); return 1; }
+        /* 无兜底：非数值元素报错 */
+        if(bi_vec_classify(recv) != 1) {
+            runtime_error("softmax() 数组元素必须全部是数值 / softmax() requires all elements to be numeric");
+            return 0;
+        }
         double mx = bi_vec_dbl(recv, 0);
         for(int i = 1; i < n; i++) {
             double x = bi_vec_dbl(recv, i);
@@ -2966,6 +3082,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_COMPLEX_MAKE: {
         /* complex(re, im)：全局形式 */
         if(is_method) { runtime_error("complex() 不支持方法形式"); return 0; }
+        /* 无兜底：参数必须是数值（此前字符串/容器等经 value_as_number 静默当 0，
+         * complex("abc") 错得 (0+0j)）。缺省按 0 合法。 */
+        if((argc >= 1 && !bi_type_numeric(argv[0].type)) ||
+           (argc >= 2 && !bi_type_numeric(argv[1].type))) {
+            runtime_error("complex() 参数必须是数值 / complex() arguments must be numeric");
+            return 0;
+        }
         double re = 0.0, im = 0.0;
         if(argc >= 1) re = value_as_number(argv[0]);
         if(argc >= 2) im = value_as_number(argv[1]);

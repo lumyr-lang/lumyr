@@ -199,18 +199,37 @@ Value lumyr_array_clear(Value* v)
 
 // floor/ceil：向下/向上取整，返回 int
 
+// 数值族判定（整数族 + 浮点族）
+static int elem_is_numeric(ValueType t) {
+    switch(t) {
+    case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_SHORT:
+    case VAL_INT32: case VAL_INT64: case VAL_LONG_LONG: case VAL_LONG:
+    case VAL_BYTE: case VAL_UINT8: case VAL_UCHAR: case VAL_UINT16:
+    case VAL_USHORT: case VAL_UINT32: case VAL_UINT: case VAL_UINT64:
+    case VAL_ULONG: case VAL_SIZE_T: case VAL_SSIZE_T:
+    case VAL_BOOL: case VAL_CHAR:
+    case VAL_FLOAT: case VAL_DOUBLE: case VAL_LONG_DOUBLE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static double array_sum_d(Value arr, long long* isum, int* all_int)
 {
     double dsum = 0;
     *isum = 0; *all_int = 1;
     for(int i = 0; i < arr.v.array->len; i++) {
         Value v = arr.v.array->items[i];
-        if(v.type != VAL_INT && v.type != VAL_DOUBLE)
-            runtime_error("sum()/avg() 数组元素必须是数字");
-        if(v.type == VAL_DOUBLE) *all_int = 0;
+        /* 无兜底：非数值元素报错。此前仅接受 VAL_INT/VAL_DOUBLE，int64 等
+         * 整数族（下方已准备提取）反而被误拒，float 也被误拒。 */
+        if(!elem_is_numeric(v.type))
+            runtime_error("sum()/avg() 数组元素必须是数字 / sum()/avg() elements must be numeric");
+        if(v.type == VAL_FLOAT || v.type == VAL_DOUBLE || v.type == VAL_LONG_DOUBLE)
+            *all_int = 0;
         dsum += value_as_number(v);
-        if(v.type == VAL_INT) *isum += v.v.i;
-        else if(v.type == VAL_INT8 || v.type == VAL_INT16 || v.type == VAL_INT32 || v.type == VAL_INT64 || v.type == VAL_BYTE || v.type == VAL_UINT8 || v.type == VAL_UINT16 || v.type == VAL_UINT32 || v.type == VAL_UINT64 || v.type == VAL_LONG || v.type == VAL_ULONG || v.type == VAL_SIZE_T || v.type == VAL_SSIZE_T || v.type == VAL_BOOL || v.type == VAL_CHAR) *isum += lumyr_extract_ll(v);
+        if(v.type != VAL_FLOAT && v.type != VAL_DOUBLE && v.type != VAL_LONG_DOUBLE)
+            *isum += lumyr_extract_ll(v);
     }
     return dsum;
 }
