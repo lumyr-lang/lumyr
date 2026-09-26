@@ -166,6 +166,7 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in);
 int vm_exec_pend_return(VMExecCtx* ctx, Instruction* in);
 int vm_exec_fin_push(VMExecCtx* ctx, Instruction* in);
 int vm_exec_catch_match(VMExecCtx* ctx, Instruction* in);
+void vm_except_leave_frame(VMExecCtx* ctx);
 
 /* 通用 Value 运算（动态兜底） */
 int vm_exec_vadd(VMExecCtx* ctx, Instruction* in);
@@ -458,12 +459,16 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
                 ret->v = ret_value_detach(ret->v);
                 break;
             }
+            /* try 块内 return 不经过 ENDTRY/FINISH：先清理本帧残留的
+             * try 节点，否则后续 throw 会被死帧处理器错误捕获 */
+            vm_except_leave_frame(ctx);
             return 0;
         }
 
         case OPC_RETURN_NIL:
             ret->et = EXPR_TYPE_NONE;
             ret->v  = val_none();
+            vm_except_leave_frame(ctx);
             return 0;
 
         /* ===== 生成器 yield：弹 yield 值写入线程局部变量，结束 vm_exec_loop =====

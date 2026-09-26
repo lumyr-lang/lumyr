@@ -472,10 +472,19 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
                     /* PTR 族槽的帧 vals 镜像由 bind_ptr 写成通用 VAL_PTR；但闭包内
                      * 字段访问 (INDEX_GET) 只认精确的 VAL_STRUCT_PTR/VAL_CLASS_PTR，
                      * VAL_PTR 落空返回 null（lambda 捕获 self 后 self.base 读空）。
-                     * 按 fn 编译期精确 ltag 修正 Value 类型（裸指针值不变）。 */
+                     * 按编译期 ltag 把 VAL_PTR 重构为精确 Value 类型（裸指针同址）。
+                     * 漏修正则 string/bigint/decimal 形参捕获后变空值：
+                     * union 槽指针在但类型错，拼接/算术按非字符串处理丢弃。 */
                     if(boxed.type == VAL_PTR) {
                         if(ltag == CAST_STRUCT_PTR) boxed.type = VAL_STRUCT_PTR;
                         else if(ltag == CAST_CLASS_PTR) boxed.type = VAL_CLASS_PTR;
+                        else if(ltag == CAST_STRING) {
+                            boxed.type = VAL_STRING;
+                            boxed.str_inline = 0;
+                        }
+                        else if(ltag == CAST_BIGINT) boxed.type = VAL_BIGINT;
+                        else if(ltag == CAST_DECIMAL) boxed.type = VAL_DECIMAL;
+                        else if(ltag == CAST_BITDECIMAL) boxed.type = VAL_BITDECIMAL;
                     }
                 } else {
                     /* 当前函数帧无此变量：查全局捕获槽侧表（lambda 捕获的顶层变量），

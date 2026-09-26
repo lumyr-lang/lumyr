@@ -537,6 +537,18 @@ static void cap_add(const char* name) {
     L->names[L->cnt++] = strdup(name);
 }
 
+/* 登记 lambda 本层局部变量（赋值声明的变量、catch 形参等）。
+ * 未登记的引用会被误判为外层捕获变量，运行时装箱失败。 */
+static void lambda_local_add(const char* vn) {
+    if(lambda_locals_cnt >= lambda_locals_cap) {
+        int nc = lambda_locals_cap > 0 ? lambda_locals_cap * 2 : 64;
+        char** nt = (char**)realloc(lambda_locals, (size_t)nc * sizeof(char*));
+        if(!nt) { LOG_ERROR("lambda 局部表扩容内存不足\n"); exit(EXIT_FAILURE); }
+        lambda_locals = nt; lambda_locals_cap = nc;
+    }
+    lambda_locals[lambda_locals_cnt++] = strdup(vn);
+}
+
 static int is_global_var(const char* n);
 static int is_lambda_local(const char* n);
 static int is_lambda_param(const char* n);
@@ -1437,13 +1449,7 @@ int typecheck_expr(AstNode* node)
             if(in_lambda) {
                 const char* vn = node->u.assign.varname;
                 if(!assign_capture) {
-                    if(lambda_locals_cnt >= lambda_locals_cap) {
-                        int nc = lambda_locals_cap > 0 ? lambda_locals_cap * 2 : 64;
-                        char** nt = (char**)realloc(lambda_locals, (size_t)nc * sizeof(char*));
-                        if(!nt) { LOG_ERROR("lambda 局部表扩容内存不足\n"); exit(EXIT_FAILURE); }
-                        lambda_locals = nt; lambda_locals_cap = nc;
-                    }
-                    lambda_locals[lambda_locals_cnt++] = strdup(vn);
+                    lambda_local_add(vn);
                 } else {
                     cap_add(vn);
                 }
@@ -1591,6 +1597,9 @@ int typecheck_expr(AstNode* node)
             /* catch 变量先注册（作用域：catch 块内）再检查 catch 块 */
             if(node->u.trynode.catch_var) {
                 static_sym_put(node->u.trynode.catch_var, VAL_NONE);
+                /* lambda 内的 catch 形参必须登记为本层局部：否则 catch 块内
+                 * 引用它会被误判为外层捕获变量，运行时 MKCLOSURE 装箱失败 */
+                if(in_lambda) lambda_local_add(node->u.trynode.catch_var);
                 err |= typecheck_expr(node->u.trynode.catch_body);
             }
             err |= typecheck_expr(node->u.trynode.finally_body);

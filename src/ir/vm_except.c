@@ -116,6 +116,17 @@ int vm_exec_try(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* 帧返回时清理本帧注册、尚未弹出的 try 节点（try 内 return 不经过
+ * ENDTRY/FINISH；残留节点会使后续 throw 被死帧处理器错误捕获并静默吞错）。
+ * 同帧节点在链上连续（子帧节点总在父帧节点之上），弹到首个异帧节点即止。 */
+void vm_except_leave_frame(VMExecCtx* ctx) {
+    while(g_try_stack && g_try_stack->frame == ctx->frame) {
+        TryCtxNode* d = g_try_stack;
+        g_try_stack = d->prev;
+        free(d);
+    }
+}
+
 /* ========== ENDTRY：正常路径退出，弹出处理器 ========== */
 int vm_exec_endtry(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;
