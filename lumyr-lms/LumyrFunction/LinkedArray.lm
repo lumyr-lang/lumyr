@@ -1,0 +1,252 @@
+// ============================================================
+// lumyr-LinkedArray：双向链表实现 LinkedArray<E>
+// 与内置 Array（动态数组）的区别：
+//   - 头尾插入/删除 O(1)，中间按位置操作 O(n)
+//   - 适合频繁在两端增删的场景（队列/栈/双端队列）
+//   - 内存非连续，随机访问慢
+//
+// 用法：
+//   import <Function/LinkedArray>;
+//   la = LinkedArray<int>();
+//   la.push(1).push(2).push(3);
+//   print(la.size());    // 3
+//   print(la.pop());     // 3
+//
+// 节点内部类 LinkedNode 仅本文件使用。
+// ============================================================
+
+class LinkedNode<E> {
+    value: E;
+    prev: any;
+    next: any;
+
+    func LinkedNode(v: E) {
+        self.value = v;
+        self.prev = null;
+        self.next = null;
+    }
+}
+
+public class LinkedArray<E> {
+    protected head: any;
+    protected tail: any;
+    protected cnt: int;
+
+    func LinkedArray() {
+        self.head = null;
+        self.tail = null;
+        self.cnt = 0;
+    }
+
+    // ===== 基本信息 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int { return self.cnt; }
+
+    func isEmpty(): bool { return self.cnt == 0; }
+
+    // ===== 尾部操作 =====
+
+    // push, add, append
+    @FuncAlias(["push", "add", "append"])
+    func addLast(val: E) {
+        node = LinkedNode<E>(val);
+        if (self.tail == null) {
+            self.head = node;
+            self.tail = node;
+        } else {
+            node.prev = self.tail;
+            self.tail.next = node;
+            self.tail = node;
+        }
+        self.cnt = self.cnt + 1;
+        return self;
+    }
+
+    // 弹出尾部，空链表返回 null
+    func popLast() {
+        if (self.tail == null) { return null; }
+        node = self.tail;
+        if (node.prev == null) {
+            self.head = null;
+            self.tail = null;
+        } else {
+            self.tail = node.prev;
+            self.tail.next = null;
+        }
+        self.cnt = self.cnt - 1;
+        return node.value;
+    }
+
+    // ===== 头部操作 =====
+
+    // unshift, addFirst
+    @FuncAlias(["unshift", "addFirst"])
+    func addFirst(val: E) {
+        node = LinkedNode<E>(val);
+        if (self.head == null) {
+            self.head = node;
+            self.tail = node;
+        } else {
+            node.next = self.head;
+            self.head.prev = node;
+            self.head = node;
+        }
+        self.cnt = self.cnt + 1;
+        return self;
+    }
+
+    // shift, popFirst
+    @FuncAlias(["shift", "popFirst"])
+    func removeFirst() {
+        if (self.head == null) { return null; }
+        node = self.head;
+        if (node.next == null) {
+            self.head = null;
+            self.tail = null;
+        } else {
+            self.head = node.next;
+            self.head.prev = null;
+        }
+        self.cnt = self.cnt - 1;
+        return node.value;
+    }
+
+    // peek 头部（不删除）
+    @FuncAlias("peekFirst")
+    func first() {
+        if (self.head == null) { return null; }
+        return self.head.value;
+    }
+
+    // peek 尾部（不删除）
+    @FuncAlias("peekLast")
+    func last() {
+        if (self.tail == null) { return null; }
+        return self.tail.value;
+    }
+
+    // ===== 按位置操作 =====
+
+    // 取第 idx 个元素（0-based），越界返回 null
+    func get(idx: int) {
+        if (idx < 0 || idx >= self.cnt) { return null; }
+        node = self.nodeAt(idx);
+        return node.value;
+    }
+
+    // 设置第 idx 个元素，返回旧值；越界返回 null
+    func set(idx: int, val: E) {
+        if (idx < 0 || idx >= self.cnt) { return null; }
+        node = self.nodeAt(idx);
+        old = node.value;
+        node.value = val;
+        return old;
+    }
+
+    // 在 idx 位置插入，后续元素后移
+    func insert(idx: int, val: E) {
+        if (idx <= 0) { self.addFirst(val); return self; }
+        if (idx >= self.cnt) { self.addLast(val); return self; }
+        node = LinkedNode<E>(val);
+        cur = self.nodeAt(idx);
+        node.prev = cur.prev;
+        node.next = cur;
+        cur.prev.next = node;
+        cur.prev = node;
+        self.cnt = self.cnt + 1;
+        return self;
+    }
+
+    // 删除第 idx 个元素，返回被删值；越界返回 null
+    func remove(idx: int) {
+        if (idx < 0 || idx >= self.cnt) { return null; }
+        if (idx == 0) { return self.removeFirst(); }
+        if (idx == self.cnt - 1) { return self.popLast(); }
+        node = self.nodeAt(idx);
+        node.prev.next = node.next;
+        node.next.prev = node.prev;
+        self.cnt = self.cnt - 1;
+        return node.value;
+    }
+
+    // 清空
+    func clear() {
+        self.head = null;
+        self.tail = null;
+        self.cnt = 0;
+        return self;
+    }
+
+    // ===== 查找 =====
+
+    // 按值查找索引，未找到返回 -1
+    func indexOf(val: E): int {
+        node = self.head;
+        i = 0;
+        while (node != null) {
+            if (node.value == val) { return i; }
+            node = node.next;
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    @FuncAlias("includes")
+    func contains(val: E): bool { return self.indexOf(val) >= 0; }
+
+    // ===== 转换 =====
+
+    @FuncAlias("toList")
+    func toArray() {
+        arr = [];
+        node = self.head;
+        while (node != null) {
+            arr.add(node.value);
+            node = node.next;
+        }
+        return arr;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        s = "[";
+        node = self.head;
+        first = true;
+        while (node != null) {
+            if (!first) { s = s + ", "; }
+            s = s + node.value;
+            first = false;
+            node = node.next;
+        }
+        s = s + "]";
+        return s;
+    }
+
+    // clone
+    @FuncAlias("clone")
+    func copy() {
+        r = LinkedArray<E>();
+        node = self.head;
+        while (node != null) {
+            r.addLast(node.value);
+            node = node.next;
+        }
+        return r;
+    }
+
+    // ===== 内部：定位第 idx 个节点 =====
+    protected func nodeAt(idx: int) {
+        if (idx < (self.cnt >> 1)) {
+            node = self.head;
+            i = 0;
+            while (i < idx) { node = node.next; i = i + 1; }
+            return node;
+        } else {
+            node = self.tail;
+            i = self.cnt - 1;
+            while (i > idx) { node = node.prev; i = i - 1; }
+            return node;
+        }
+    }
+}

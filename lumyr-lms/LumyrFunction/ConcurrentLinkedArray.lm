@@ -1,0 +1,151 @@
+// ============================================================
+// lumyr-ConcurrentLinkedArray：线程安全的双向链表
+// 封装 LinkedArray，所有操作经可重入锁（rmutex）串行化。
+//
+// 用法：
+//   import <Function/ConcurrentLinkedArray>;
+//   cla = ConcurrentLinkedArray<int>();
+//   cla.push(1).push(2).push(3);
+//   print(cla.popLast());   // 3
+//
+// 多线程间共享同一实例即可直接并发调用。
+// ============================================================
+
+import <Function/LinkedArray>;
+
+public class ConcurrentLinkedArray<E> extends LinkedArray<E> {
+    lockId: int64;
+
+    func ConcurrentLinkedArray() {
+        super();
+        self.lockId = rmutex();
+    }
+
+    // ===== 基本信息 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        lock(self.lockId);
+        try { return self.cnt; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        lock(self.lockId);
+        try { return self.cnt == 0; } finally { unlock(self.lockId); }
+    }
+
+    // ===== 尾部操作 =====
+
+    @FuncAlias(["push", "add", "append"])
+    func addLast(val: E) {
+        lock(self.lockId);
+        try { super.addLast(val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func popLast() {
+        lock(self.lockId);
+        try { return super.popLast(); } finally { unlock(self.lockId); }
+    }
+
+    // ===== 头部操作 =====
+
+    @FuncAlias(["unshift", "addFirst"])
+    func addFirst(val: E) {
+        lock(self.lockId);
+        try { super.addFirst(val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias(["shift", "popFirst"])
+    func removeFirst() {
+        lock(self.lockId);
+        try { return super.removeFirst(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("peekFirst")
+    func first() {
+        lock(self.lockId);
+        try { return super.first(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("peekLast")
+    func last() {
+        lock(self.lockId);
+        try { return super.last(); } finally { unlock(self.lockId); }
+    }
+
+    // ===== 按位置操作 =====
+
+    func get(idx: int) {
+        lock(self.lockId);
+        try { return super.get(idx); } finally { unlock(self.lockId); }
+    }
+
+    func set(idx: int, val: E) {
+        lock(self.lockId);
+        try { return super.set(idx, val); } finally { unlock(self.lockId); }
+    }
+
+    func insert(idx: int, val: E) {
+        lock(self.lockId);
+        try { super.insert(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func remove(idx: int) {
+        lock(self.lockId);
+        try { return super.remove(idx); } finally { unlock(self.lockId); }
+    }
+
+    func clear() {
+        lock(self.lockId);
+        try { super.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // ===== 查找 =====
+
+    func indexOf(val: E): int {
+        lock(self.lockId);
+        try { return super.indexOf(val); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("includes")
+    func contains(val: E): bool {
+        lock(self.lockId);
+        try { return super.contains(val); } finally { unlock(self.lockId); }
+    }
+
+    // ===== 转换 =====
+
+    @FuncAlias("toList")
+    func toArray() {
+        lock(self.lockId);
+        try { return super.toArray(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        lock(self.lockId);
+        try { return super.toString(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("clone")
+    func copy() {
+        lock(self.lockId);
+        try { return ConcurrentLinkedArray<E>().addAll(super.toArray()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // ===== 批量 =====
+
+    func addAll(arr) {
+        lock(self.lockId);
+        try {
+            i = 0;
+            while (i < arr.len) { super.addLast(arr[i]); i = i + 1; }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+}

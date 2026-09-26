@@ -49,7 +49,7 @@ public abstract class AbstractThread implements Runnable {
     tid: int;
     started: bool;
     joined: bool;
-    result: <dynamic>;
+    result: any;
 
     func AbstractThread() {
         self.name = "";
@@ -102,7 +102,7 @@ public abstract class AbstractThread implements Runnable {
 
 // 通用线程类：子类化重写 run，或构造时传入 Runnable
 public class Thread extends AbstractThread {
-    target: <dynamic>;
+    target: any;
 
     func Thread() {
         super();
@@ -150,10 +150,10 @@ public class Thread extends AbstractThread {
 
 // 期物：包装一个 Callable<T>，构造即启动；get 阻塞取类型化结果
 public class Future<T> implements FutureInterface<T> {
-    target: <dynamic>;
+    target: any;
     tid: int;
     joined: bool;
-    result: <dynamic>;
+    result: any;
 
     // 构造并立即异步执行 task
     func Future(task: Callable<T>) {

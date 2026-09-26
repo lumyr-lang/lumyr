@@ -1,0 +1,145 @@
+// ============================================================
+// lumyr-ReadWriteLinkedArray：读写锁版本的线程安全双向链表
+// 与 ConcurrentLinkedArray 的区别：
+//   - ConcurrentLinkedArray 用 rmutex，所有操作串行；
+//   - ReadWriteLinkedArray 用 rwlock，读操作（get/size/first/last/
+//     indexOf/contains/toArray/toString）共享读锁可并发，写操作独占写锁。
+//   读多写少场景吞吐量更高。
+//
+// 关键约束（rwlock 不可重入）：方法间不互调。
+//
+// 用法：
+//   import <Function/ReadWriteLinkedArray>;
+//   rwla = ReadWriteLinkedArray<int>();
+//   rwla.push(1).push(2).push(3);
+//   print(rwla.popLast());
+// ============================================================
+
+import <Function/LinkedArray>;
+
+public class ReadWriteLinkedArray<E> extends LinkedArray<E> {
+    lockId: int64;
+
+    func ReadWriteLinkedArray() {
+        super();
+        self.lockId = rwlock();
+    }
+
+    // ===== 读操作：共享读锁 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        rdlock(self.lockId);
+        try { return self.cnt; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        rdlock(self.lockId);
+        try { return self.cnt == 0; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("peekFirst")
+    func first() {
+        rdlock(self.lockId);
+        try { return super.first(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("peekLast")
+    func last() {
+        rdlock(self.lockId);
+        try { return super.last(); } finally { unlock(self.lockId); }
+    }
+
+    func get(idx: int) {
+        rdlock(self.lockId);
+        try { return super.get(idx); } finally { unlock(self.lockId); }
+    }
+
+    func indexOf(val: E): int {
+        rdlock(self.lockId);
+        try { return super.indexOf(val); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("includes")
+    func contains(val: E): bool {
+        rdlock(self.lockId);
+        try { return super.contains(val); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toList")
+    func toArray() {
+        rdlock(self.lockId);
+        try { return super.toArray(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        rdlock(self.lockId);
+        try { return super.toString(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("clone")
+    func copy() {
+        rdlock(self.lockId);
+        try { return ReadWriteLinkedArray<E>().addAll(super.toArray()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // ===== 写操作：独占写锁 =====
+
+    @FuncAlias(["push", "add", "append"])
+    func addLast(val: E) {
+        wrlock(self.lockId);
+        try { super.addLast(val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func popLast() {
+        wrlock(self.lockId);
+        try { return super.popLast(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["unshift", "addFirst"])
+    func addFirst(val: E) {
+        wrlock(self.lockId);
+        try { super.addFirst(val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias(["shift", "popFirst"])
+    func removeFirst() {
+        wrlock(self.lockId);
+        try { return super.removeFirst(); } finally { unlock(self.lockId); }
+    }
+
+    func set(idx: int, val: E) {
+        wrlock(self.lockId);
+        try { return super.set(idx, val); } finally { unlock(self.lockId); }
+    }
+
+    func insert(idx: int, val: E) {
+        wrlock(self.lockId);
+        try { super.insert(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func remove(idx: int) {
+        wrlock(self.lockId);
+        try { return super.remove(idx); } finally { unlock(self.lockId); }
+    }
+
+    func clear() {
+        wrlock(self.lockId);
+        try { super.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func addAll(arr) {
+        wrlock(self.lockId);
+        try {
+            i = 0;
+            while (i < arr.len) { super.addLast(arr[i]); i = i + 1; }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+}
