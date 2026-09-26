@@ -1,5 +1,6 @@
 // lm_array.c —— 数组操作内置函数
 #include "lm_array.h"
+#include "lm_container.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,8 +47,10 @@ Value lumyr_del(Value* arr, Value idx)
     long long i = lumyr_extract_ll(idx);
     int n = arr->v.array->len;
     if(i < 0 || i >= n) { char b[96]; snprintf(b, sizeof b, "del() 下标 %lld 越界（长度 %d）", i, n); runtime_error(b); }
+    lumyr_enter_write(&arr->v.array->write_flag);
     for(int k = (int)i; k < n - 1; k++) arr->v.array->items[k] = arr->v.array->items[k + 1];
     arr->v.array->len--;
+    lumyr_leave_write(&arr->v.array->write_flag);
     return *arr;
 }
 
@@ -56,6 +59,7 @@ Value lumyr_array_add(Value* arr, Value val)
 {
     if(arr->type != VAL_ARRAY) runtime_error("add() 第一个参数必须是数组");
     int n = arr->v.array->len;
+    lumyr_enter_write(&arr->v.array->write_flag);
     if(n >= arr->v.array->cap) {
         int newcap = arr->v.array->cap == 0 ? 4 : arr->v.array->cap * 2;
         arr->v.array->items = (Value*)gc_realloc(arr->v.array->items, sizeof(Value) * newcap);
@@ -65,6 +69,7 @@ Value lumyr_array_add(Value* arr, Value val)
     gc_remembered_set_check(*arr, val);  /* 老年代容器引用新生代时加入 remembered set */
     arr->v.array->items[n] = val;
     arr->v.array->len++;
+    lumyr_leave_write(&arr->v.array->write_flag);
     return *arr;
 }
 
@@ -77,6 +82,7 @@ Value lumyr_insert(Value* arr, Value idx, Value val)
     int n = arr->v.array->len;
     if(i < 0 || i > n) { char b[96]; snprintf(b, sizeof b, "insert() 下标 %lld 越界（允许 0..%d）", i, n); runtime_error(b); }
     // 先追加一个元素（扩容）
+    lumyr_enter_write(&arr->v.array->write_flag);
     if(n >= arr->v.array->cap) {
         int newcap = arr->v.array->cap == 0 ? 4 : arr->v.array->cap * 2;
         arr->v.array->items = (Value*)gc_realloc(arr->v.array->items, sizeof(Value) * newcap);
@@ -88,6 +94,7 @@ Value lumyr_insert(Value* arr, Value idx, Value val)
     gc_write_barrier(val);  /* 增量标记写屏障 */
     gc_remembered_set_check(*arr, val);  /* 老年代容器引用新生代时加入 remembered set */
     arr->v.array->items[(int)i] = val;
+    lumyr_leave_write(&arr->v.array->write_flag);
     return *arr;
 }
 
@@ -181,16 +188,20 @@ Value lumyr_array_clear(Value* v)
         if(lumyr_map_has(*v, lumyr_make_string("__mapname__")))
             cnv = lumyr_map_get(*v, lumyr_make_string("__mapname__"));
         // 清空所有桶（entry 由 GC 回收，此处仅从数据结构摘除）
+        lumyr_enter_write(&m->write_flag);
         for(int bi = 0; bi < m->cap; bi++) {
             m->buckets[bi] = NULL;
             m->tree[bi] = 0;
         }
         m->len = 0;
-        if(cnv.type != VAL_NONE) { lumyr_map_set(v, lumyr_make_string("__mapname__"), cnv); }
+        if(cnv.type != VAL_NONE) { lumyr_map_set_nocheck(v, lumyr_make_string("__mapname__"), cnv); }
+        lumyr_leave_write(&m->write_flag);
         return *v;
     }
     if(v->type == VAL_ARRAY) {
+        lumyr_enter_write(&v->v.array->write_flag);
         v->v.array->len = 0;
+        lumyr_leave_write(&v->v.array->write_flag);
         return *v;
     }
     runtime_error("clear() 参数必须是数组或字典");
@@ -352,6 +363,7 @@ Value lumyr_array_flat(Value v, int depth) {
 Value lumyr_array_addall(Value* a, Value b) {
     if(a->type == VAL_ARRAY && b.type == VAL_ARRAY) {
         int na = a->v.array->len, nb = b.v.array->len;
+        lumyr_enter_write(&a->v.array->write_flag);
         // 确保容量
         while(a->v.array->cap < na + nb) {
             int newcap = a->v.array->cap == 0 ? 4 : a->v.array->cap * 2;
@@ -364,6 +376,7 @@ Value lumyr_array_addall(Value* a, Value b) {
             a->v.array->items[na + i] = b.v.array->items[i];
         }
         a->v.array->len = na + nb;
+        lumyr_leave_write(&a->v.array->write_flag);
         return *a;
     }
     if(a->type == VAL_MAP && b.type == VAL_MAP) {

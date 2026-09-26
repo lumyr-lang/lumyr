@@ -2,6 +2,7 @@
 // 初始容量 16，负载因子 0.75；桶链表>8 且总容量>=64 → 红黑树；红黑树<6 → 退化为链表
 #include "lm_map.h"
 #include "lm_value.h"
+#include "lm_container.h"
 #include "lm_json.h"
 #include "gc_runtime.h"
 #include <stdio.h>
@@ -641,7 +642,7 @@ int lumyr_map_find(const ValueMap* m, Value key) {
     }
 }
 
-void lumyr_map_set(Value* map, Value key, Value val) {
+static void map_set_impl(Value* map, Value key, Value val) {
     if(map->type != VAL_MAP) runtime_error("字典下标写需要 字典[键]");
     /* Remembered set 检查：老年代 map 写入新生代 key/val 时加入 rs */
     gc_remembered_set_check(*map, key);
@@ -670,6 +671,17 @@ void lumyr_map_set(Value* map, Value key, Value val) {
         map_resize(m);
 }
 
+void lumyr_map_set(Value* map, Value key, Value val) {
+    if(map->type != VAL_MAP) runtime_error("字典下标写需要 字典[键]");
+    lumyr_enter_write(&map->v.map->write_flag);
+    map_set_impl(map, key, val);
+    lumyr_leave_write(&map->v.map->write_flag);
+}
+
+void lumyr_map_set_nocheck(Value* map, Value key, Value val) {
+    map_set_impl(map, key, val);
+}
+
 Value lumyr_map_get(Value map, Value key) {
     if(map.type != VAL_MAP) runtime_error("字典下标读需要 字典[键]");
     ValueMap* m = map.v.map;
@@ -687,7 +699,7 @@ int lumyr_map_has(Value map, Value key) {
     return lumyr_map_find(map.v.map, key) >= 0;
 }
 
-Value lumyr_map_del(Value* map, Value key) {
+static Value map_del_impl(Value* map, Value key) {
     if(map->type != VAL_MAP) runtime_error("del() 参数必须是数组或字典");
     ValueMap* m = map->v.map;
     uint32_t h = value_hash(key);
@@ -724,6 +736,14 @@ Value lumyr_map_del(Value* map, Value key) {
         }
     }
     return *map;  // 键不存在，无操作
+}
+
+Value lumyr_map_del(Value* map, Value key) {
+    if(map->type != VAL_MAP) runtime_error("del() 参数必须是数组或字典");
+    lumyr_enter_write(&map->v.map->write_flag);
+    Value r = map_del_impl(map, key);
+    lumyr_leave_write(&map->v.map->write_flag);
+    return r;
 }
 
 Value lumyr_map_keys(Value map) {

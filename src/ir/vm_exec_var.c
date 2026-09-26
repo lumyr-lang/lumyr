@@ -95,6 +95,12 @@ static void frame_ensure_slots(StackFrame* f, int need) {
 
 /* ===== 变量存取（VALUE 栈） ===== */
 
+/* 主线程 main 根帧：全局变量的唯一存储位置。工作线程自身根帧 parent=NULL，
+ * 若沿本线程帧链找"根帧"会误把线程根帧当 main 帧（全局槽不存在→读空）。
+ * 主线程启动时由 vm_set_main_root_frame 登记；所有线程共享此指针。 */
+StackFrame* g_main_root_frame = NULL;
+void vm_set_main_root_frame(StackFrame* f) { g_main_root_frame = f; }
+
 /* LOAD_GLOBAL：函数体内读顶层(main 根帧)变量。
  * in->a = 根帧槽位索引（ir_compile_main 末尾 fixup 已按名字解析）；
  * in->b = PTR 族精确类型提示（3 string / 4 bigint / 5 decimal / 6 bitdecimal / 7 裸 ptr），
@@ -103,8 +109,13 @@ static void frame_ensure_slots(StackFrame* f, int need) {
  * PTR 族→按 b 装箱 ptr_slots、其余→vals[a] 原样（动态变量/容器/实例）。 */
 int vm_exec_var_load_global(VMExecCtx* ctx, Instruction* in) {
     int idx = in->a;
-    StackFrame* root = ctx->frame;
-    while(root && root->parent) root = root->parent;
+    /* 优先主线程 main 帧（工作线程读全局）；未登记时（极少数早期路径）
+     * 退回沿本线程帧链找根帧，保持旧行为可用 */
+    StackFrame* root = g_main_root_frame;
+    if(!root) {
+        root = ctx->frame;
+        while(root && root->parent) root = root->parent;
+    }
     if(!root) {
         Value v = val_none();
         stack_vm_push(g_stack_mgr, STACK_VALUE, &v);

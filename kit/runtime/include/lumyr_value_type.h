@@ -167,17 +167,19 @@ typedef struct {
     int cap;  // 预分配容量（>= len），add 时按需 2x 扩容
     uint8_t stack_alloc;        // 0=堆分配，1=编译通道栈分配
     uint8_t items_stack_alloc;  // 0=items堆分配，1=items栈分配（仅 stack_alloc=1 时有效）
+    volatile int write_flag;   // 并发结构修改检测：0=空闲，1=有线程正在修改
 } ValueArray;
 
 // 类型化数组运行时对象，VAL_TYPED_ARRAY 使用（统一处理所有类型化数组，通过 elem_type 区分元素类型）
 // 与 ValueArray 的区别：ValueArray 存储 Value 类型元素，TypedArray 存储精确类型元素（int、double 等）
 // GC 管理：TypedArray* 本身由 gc_alloc(vtype=VAL_TYPED_ARRAY) 分配；items 缓冲区也由 gc_alloc 管理
 typedef struct {
-    void* items;           // 指向具体类型的数组（int*、double*、char** 等）
+    void* items;           // 指向具体类型的数组（int*、double* 等）
     int len;
     int cap;               // 预分配容量（>= len），add 时按需 2x 扩容
     ValueType elem_type;   // 元素类型（VAL_INT、VAL_DOUBLE、VAL_STRING 等）
     uint8_t stack_alloc;   // 0=堆分配，1=编译通道栈分配
+    volatile int write_flag;  // 并发结构修改检测：0=空闲，1=修改中
 } TypedArray;
 
 // 错误对象，VAL_ERROR 使用（type 为错误类别，message 为消息，stack 为调用栈回溯）
@@ -282,6 +284,7 @@ struct ValueMap {
     int len;              // 元素数
     int cap;              // 桶数（2的幂）
     uint8_t stack_alloc;  // 0=堆分配，1=编译通道栈分配
+    volatile int write_flag;  // 并发结构修改检测：0=空闲，1=修改中
 };
 
 // 解释器执行上下文：只负责控制流 break/continue/return，不存局部变量

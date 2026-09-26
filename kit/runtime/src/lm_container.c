@@ -6,6 +6,19 @@
 #include <string.h>
 #include <math.h>
 
+/* ===== 容器并发结构修改检测（误用即显式报错，不静默、不堆损坏）===== */
+
+void lumyr_enter_write(volatile int* flag) {
+    if(!__sync_bool_compare_and_swap(flag, 0, 1))
+        runtime_error("容器并发结构修改：多个线程同时修改同一容器，请用 mutex 同步 / "
+                      "concurrent container structural modification: synchronize with a mutex");
+}
+
+void lumyr_leave_write(volatile int* flag) {
+    __sync_synchronize();  /* 保证全部结构写入先于清标志对其他线程可见 */
+    *flag = 0;
+}
+
 /* ===== tuple（VAL_TUPLE）：不可变固定长度异构序列 ===== */
 
 Value lumyr_tuple_make(int argc, const Value* args) {

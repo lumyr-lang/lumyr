@@ -4,6 +4,14 @@
 
 #include "lm_value.h"
 
+// ===== 容器并发结构修改检测（Go 模型：VM 不加锁，误用即显式报错）=====
+// 写前原子 CAS 抢容器写令牌（0→1），失败说明另一线程正在做结构修改，
+// 立即 runtime_error；正常路径不等待、不串行化。不同容器之间互不影响。
+// 仅用于会改变容器结构的操作（add/insert/remove/clear/addAll 及 map set/del）；
+// 复合逻辑（先查后写等）由用户用 mutex 自行同步。
+void lumyr_enter_write(volatile int* flag);
+void lumyr_leave_write(volatile int* flag);
+
 // ===== tuple（VAL_TUPLE）：不可变固定长度异构序列 =====
 // 构造：tuple(1, "x", 3.14) → 新 tuple；items 拷贝输入
 Value lumyr_tuple_make(int argc, const Value* args);

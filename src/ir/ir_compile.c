@@ -3100,6 +3100,12 @@ static void c_expr_to_value(Ctx* c, AstNode* node) {
     /* 变量：仅当本身就是动态变量时直接 LOAD_VAR；typed 存储无法避免一次 BOX */
     case AST_VAR: {
         int idx = c_find_var(c, node->u.varname);
+        /* 顶层变量占位槽：每次引用必须 LOAD_GLOBAL，占位槽本身运行时从不读写。
+         * 漏检 var_is_global 会把它当局部发 LOAD_VAR，读到本线程空槽（none） */
+        if(idx >= 0 && c->var_is_global[idx]) {
+            emit(c, OPC_LOAD_GLOBAL, idx, -1);
+            return;
+        }
         if(idx >= 0 && c->var_types[idx] == EXPR_TYPE_NONE) {
             emit(c, OPC_LOAD_VAR, idx, 0);
             return;

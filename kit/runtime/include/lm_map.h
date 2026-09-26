@@ -6,6 +6,8 @@
 
 int   lumyr_map_find(const ValueMap* m, Value key); // 线性扫描键位置，-1=无
 void  lumyr_map_set(Value* map, Value key, Value val);      // d[k] = v（原地，传指针，任意类型键）
+// 内部版：跳过并发写检测，仅供调用方已通过 lumyr_enter_write 持令牌的路径使用
+void  lumyr_map_set_nocheck(Value* map, Value key, Value val);
 Value lumyr_map_get(Value map, Value key);                  // d[k]；缺键 → null
 int   lumyr_map_has(Value map, Value key);                  // 键是否存在
 Value lumyr_map_del(Value* map, Value key);                  // 原地删键，返回自身

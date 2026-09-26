@@ -15,6 +15,7 @@
  * 注：不 include vm_exec.h——其 vm_run 旧原型（3 参）与本文件定义（1 参）冲突 */
 Value vm_execute(VMExecCtx* ctx);
 int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* out);
+void vm_set_main_root_frame(StackFrame* f);
 
 /* ============================================================
  * VM 主入口：执行字节码函数
@@ -37,6 +38,9 @@ Value vm_run(BytecodeFunc* fn) {
 
     /* 创建全局栈帧 */
     ctx.frame = stackframe_new(NULL);
+    /* 登记为全局变量主存储帧：供工作线程 LOAD_GLOBAL / 闭包全局捕获读取，
+     * 否则工作线程只看到自己的空根帧，读任何顶层变量都得到空值 */
+    vm_set_main_root_frame(ctx.frame);
 
     /* 执行字节码 */
     Value result = vm_execute(&ctx);

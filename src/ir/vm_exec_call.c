@@ -23,6 +23,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 主线程 main 根帧（vm_exec_var.c 登记）：闭包捕获全局变量时必须从此帧读，
+ * 工作线程沿自身帧链找到的根帧不含全局槽位 */
+extern StackFrame* g_main_root_frame;
+
 /* 暂存一个已弹出的实参（跨 4 核心栈，按形参宽类型解释） */
 typedef struct {
     ExprType et;
@@ -493,8 +497,13 @@ int vm_exec_mkclosure(VMExecCtx* ctx, Instruction* in) {
                     int ghint = 0;
                     int gslot = func_compile_get_global_cap(lname, cname, &ghint);
                     if(gslot >= 0) {
-                        StackFrame* rootFrame = ctx->frame;
-                        while(rootFrame && rootFrame->parent) rootFrame = rootFrame->parent;
+                        /* 从主线程 main 帧取全局捕获（工作线程根帧无此槽）；
+                         * 未登记时退回沿本线程帧链，兼容旧路径 */
+                        StackFrame* rootFrame = g_main_root_frame;
+                        if(!rootFrame) {
+                            rootFrame = ctx->frame;
+                            while(rootFrame && rootFrame->parent) rootFrame = rootFrame->parent;
+                        }
                         boxed = frame_slot_value_at(rootFrame, gslot, ghint);
                     } else {
                         fprintf(stderr, "VM: 闭包无法捕获未定义变量 %s\n", cname ? cname : "?");

@@ -275,11 +275,19 @@ static Value bi_ta_read_value(TypedArray* ta, int i) {
     return r;
 }
 
-/* TypedArray 尾部追加一个 Value（原地修改） */
-static TypedArray* bi_ta_add(TypedArray* ta, Value v) {
+/* TypedArray 尾部追加一个 Value（内部原语，无并发检测） */
+static TypedArray* bi_ta_add_impl(TypedArray* ta, Value v) {
     bi_ta_reserve(ta, ta->len + 1);
     bi_ta_write_value(ta, ta->len, v);
     ta->len++;
+    return ta;
+}
+
+/* TypedArray 尾部追加一个 Value（原地修改，带并发结构修改检测） */
+static TypedArray* bi_ta_add(TypedArray* ta, Value v) {
+    lumyr_enter_write(&ta->write_flag);
+    bi_ta_add_impl(ta, v);
+    lumyr_leave_write(&ta->write_flag);
     return ta;
 }
 
@@ -287,6 +295,7 @@ static TypedArray* bi_ta_add(TypedArray* ta, Value v) {
 static void bi_ta_insert(TypedArray* ta, int idx, Value v) {
     if(idx < 0) idx = 0;
     if(idx > ta->len) idx = ta->len;
+    lumyr_enter_write(&ta->write_flag);
     bi_ta_reserve(ta, ta->len + 1);
     if(idx < ta->len) {
         size_t isz = lumyr_etype_itemsz(ta->elem_type);
@@ -296,6 +305,7 @@ static void bi_ta_insert(TypedArray* ta, int idx, Value v) {
     }
     bi_ta_write_value(ta, idx, v);
     ta->len++;
+    lumyr_leave_write(&ta->write_flag);
 }
 
 /* TypedArray 删除第 idx 个元素并整体前移（remove 语义，与 lumyr_del 同为按下标） */
@@ -306,6 +316,7 @@ static void bi_ta_remove(TypedArray* ta, int idx) {
         runtime_error(b);
         return;
     }
+    lumyr_enter_write(&ta->write_flag);
     if(idx < ta->len - 1) {
         size_t isz = lumyr_etype_itemsz(ta->elem_type);
         char* base = (char*)ta->items;
@@ -313,10 +324,12 @@ static void bi_ta_remove(TypedArray* ta, int idx) {
                 (size_t)(ta->len - idx - 1) * isz);
     }
     ta->len--;
+    lumyr_leave_write(&ta->write_flag);
 }
 
 /* TypedArray 追加 src 的全部元素（addAll 语义：VAL_ARRAY / VAL_TYPED_ARRAY 通用） */
 static void bi_ta_addall(TypedArray* ta, Value src) {
+    lumyr_enter_write(&ta->write_flag);
     if(src.type == VAL_TYPED_ARRAY && src.v.typed_array) {
         TypedArray* o = src.v.typed_array;
         if(o->elem_type == ta->elem_type && o->len > 0) {
@@ -326,18 +339,22 @@ static void bi_ta_addall(TypedArray* ta, Value src) {
             memcpy((char*)ta->items + (size_t)ta->len * isz, o->items,
                    (size_t)o->len * isz);
             ta->len += o->len;
+            lumyr_leave_write(&ta->write_flag);
             return;
         }
         for(int i = 0; i < o->len; i++)
-            bi_ta_add(ta, bi_ta_read_value(o, i));
+            bi_ta_add_impl(ta, bi_ta_read_value(o, i));
+        lumyr_leave_write(&ta->write_flag);
         return;
     }
     if(src.type == VAL_ARRAY && src.v.array) {
         ValueArray* a = src.v.array;
         for(int i = 0; i < a->len; i++)
-            bi_ta_add(ta, a->items[i]);
+            bi_ta_add_impl(ta, a->items[i]);
+        lumyr_leave_write(&ta->write_flag);
         return;
     }
+    lumyr_leave_write(&ta->write_flag);
     runtime_error("typed array addAll: 参数必须是数组或类型化数组");
 }
 
