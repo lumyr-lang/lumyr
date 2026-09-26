@@ -58,7 +58,6 @@ static int is_expr_end(int t)
         case TOK_TUPLE: case TOK_BYTES: case TOK_COMPLEX:
         case TOK_FILE: case TOK_FOLDER:
         case TOK_TYPE_ANNOT:      /* <int> 后的 { 可能是类体（extends C<int> {）或命名构造（C<int>{...}） */
-        case ARROW:                 /* => { → 函数体块 */
             return 1;
         default:
             return 0;
@@ -66,6 +65,12 @@ static int is_expr_end(int t)
 }
 
 #define LEX_RET(t) do { prev4_token = prev_prev_prev_token; prev_prev_prev_token = prev_prev_token; prev_prev_token = prev_token; prev_token = (t); return (t); } while(0)
+
+/* => { 前瞻消歧（实现见规则区之后，需使用 flex 的 input/unput）：
+ * 箭头表达式体允许 map 字面量（(k) => {"v": k}），=> 后的 { 默认是函数体块。
+ * 首个有效 token（字符串/标识符/数字）后紧跟冒号（且非标签 label: while/for/do）→ MAP_OPEN。 */
+static int arrow_brace_ahead_is_map(void);
+
 
 /* ===== 字面量后缀类型推断（数字字面量规则共用，yacc 动作读取） =====
  * 无后缀 = CAST_NONE：编译期按值推断（int32 范围内=int，否则=int64/double）
@@ -524,6 +529,11 @@ f\"([^"\\]|\\.)*\"   {
 "("             { LEX_RET(LPAREN); }
 ")"             { LEX_RET(RPAREN); }
 "{"             {
+                  if(prev_token == ARROW) {
+                      /* => {：前瞻区分函数体块与 map 字面量表达式体 */
+                      if(arrow_brace_ahead_is_map()) { prev_token = MAP_OPEN; return MAP_OPEN; }
+                      LEX_RET(LBRACE);
+                  }
                   if(prev_token == TOK_GENERIC) {
                       /* 泛型标记后的 {：
                        * 声明头 class Box<T> { / class D extends P<K> { / implements I<K> { → LBRACE；
@@ -596,4 +606,67 @@ f\"([^"\\]|\\.)*\"   {
 
 int yywrap(void) {
     return 1;
+}
+
+/* => { 前瞻消歧实现：预读 { 之后字符，判断 map 字面量还是函数体块，
+ * 预读字符全部 unput 回推，不改变后续词法流 */
+static int arrow_brace_ahead_is_map(void) {
+    char cs[512];
+    int n = 0;
+    int c = 0;
+    int is_map = 0;
+#define AHEAD_C() ((n < (int)sizeof(cs) - 1) ? (cs[n++] = (char)input()) : EOF)
+    /* 跳空白与注释 */
+    c = AHEAD_C();
+    for(;;) {
+        while(c == ' ' || c == '\t' || c == '\r' || c == '\n') c = AHEAD_C();
+        if(c == '/') {
+            int c2 = AHEAD_C();
+            if(c2 == '/') { while(c != EOF && c != '\n') c = AHEAD_C(); continue; }
+            if(c2 == '*') { int p = 0; while(c != EOF) { c = AHEAD_C(); if(p == '*' && c == '/') { c = AHEAD_C(); break; } p = c; } continue; }
+        }
+        break;
+    }
+    if(c == '"') {
+        /* 字符串 key：跳到闭引号（处理 \" 转义），再看冒号 */
+        int esc = 0;
+        for(c = AHEAD_C(); c != EOF; c = AHEAD_C()) {
+            if(esc) { esc = 0; continue; }
+            if(c == '\\') { esc = 1; continue; }
+            if(c == '"') { c = AHEAD_C(); break; }
+        }
+        while(c == ' ' || c == '\t') c = AHEAD_C();
+        is_map = (c == ':');
+    } else if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+        /* 标识符：读完后看冒号；冒号后是 while/for/do 则为标签语句（块） */
+        char w[32]; int wl = 0;
+        while((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9')) {
+            if(wl < (int)sizeof(w) - 1) w[wl++] = (char)c;
+            c = AHEAD_C();
+        }
+        w[wl] = 0;
+        while(c == ' ' || c == '\t') c = AHEAD_C();
+        if(c == ':') {
+            is_map = 1;
+            /* 冒号后标签检查：label: while/for/do → 块 */
+            c = AHEAD_C();
+            while(c == ' ' || c == '\t') c = AHEAD_C();
+            char w2[8]; int wl2 = 0;
+            while(c >= 'a' && c <= 'z') {
+                if(wl2 < (int)sizeof(w2) - 1) w2[wl2++] = (char)c;
+                c = AHEAD_C();
+            }
+            w2[wl2] = 0;
+            if(strcmp(w2, "while") == 0 || strcmp(w2, "for") == 0 || strcmp(w2, "do") == 0) is_map = 0;
+        }
+    } else if(c >= '0' && c <= '9') {
+        /* 数字 key：读完后看冒号 */
+        while(c >= '0' && c <= '9') c = AHEAD_C();
+        while(c == ' ' || c == '\t') c = AHEAD_C();
+        is_map = (c == ':');
+    }
+    /* 回推全部预读字符 */
+    while(n > 0) unput(cs[--n]);
+    return is_map;
+#undef AHEAD_C
 }

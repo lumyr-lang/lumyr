@@ -3323,6 +3323,41 @@ primary
           func_val.v.func.is_ffi = 0;
           sym_set(nm, func_val);
       }
+    /* 箭头函数表达式体：(params) => expr / (params): RetType => expr
+     * 脱糖为 => { return expr; }，与块体同路注册编译 */
+    | LPAREN param_list RPAREN ARROW expr {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          AstNode* blk = ast_block(ast_seq(ast_return($5), NULL));
+          $$ = L(ast_func_def(nm, $2, blk));
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
+    | LPAREN param_list RPAREN COLON type_name_str ARROW expr {
+          char nm[64];
+          snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
+          AstNode* blk = ast_block(ast_seq(ast_return($7), NULL));
+          $$ = L(ast_func_def(nm, $2, blk));
+          $$->u.func_def.ret_type_name = $5;
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          sym_set(nm, func_val);
+      }
     /* 箭头生成器函数：gen (params) => { yield ... } / gen (params): RetType => { yield ... }
      * 与 gen func name() 同路：is_generator=1，调用时返回 GeneratorObject 而非直接执行 */
     | TOK_GEN LPAREN param_list RPAREN ARROW block_stmt {

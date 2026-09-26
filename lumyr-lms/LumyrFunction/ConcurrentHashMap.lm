@@ -1,0 +1,270 @@
+// ============================================================
+// lumyr-ConcurrentHashMap：线程安全的 ConcurrentHashMap<K,V>
+// 封装内置 map，所有读写经同一把可重入锁（rmutex）串行化：
+//   - 单操作（get/put/remove/size...）原子
+//   - 复合操作（putIfAbsent/computeIfAbsent/merge/replace...）整段临界区原子
+// 读也持锁：避免与其他线程扩容（resize）并发读到半状态。
+// 用可重入锁：方法之间互相调用（如 copy→toMap）同线程不死锁。
+//
+// 用法：
+//   import <Function/ConcurrentHashMap>;
+//   cm = ConcurrentHashMap<string, int>();
+//   cm.put("a", 1);
+//   cm.putIfAbsent("a", 2);              // 已存在，不覆盖
+//   cm.computeIfAbsent("b", (k) => { return 10; });  // 缺失才计算
+//   cm.merge("a", 5, (oldv, mv) => { return oldv + mv; });
+//
+// 多线程间共享同一实例即可直接并发调用，无需外部加锁。
+// ============================================================
+
+import <Function/HashMap>;
+
+public class ConcurrentHashMap<K, V> extends HashMap<K, V> {
+    rwLockId: int64;
+
+    func ConcurrentHashMap(m: Map<K, V>) {
+        super(m);
+        self.rwLockId = rmutex();
+    }
+
+    // ===== 单操作：全部经锁串行化 =====
+
+    // length, count
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        lock(self.rwLockId);
+        try { return self.value.len; } finally { unlock(self.rwLockId); }
+    }
+
+    func isEmpty(): bool {
+        lock(self.rwLockId);
+        try { return self.value.len == 0; } finally { unlock(self.rwLockId); }
+    }
+
+    func get(key: K): V {
+        lock(self.rwLockId);
+        try { return self.value.get(key); } finally { unlock(self.rwLockId); }
+    }
+
+    // set, setValue
+    @FuncAlias(["set", "setValue"])
+    func put(key: K, val: V) {
+        lock(self.rwLockId);
+        try { self.value[key] = val; } finally { unlock(self.rwLockId); }
+        return self;
+    }
+
+    // delete, pop, removeValue
+    @FuncAlias(["delete", "pop", "removeValue"])
+    func remove(key: K) {
+        lock(self.rwLockId);
+        try { self.value.remove(key); } finally { unlock(self.rwLockId); }
+        return self;
+    }
+
+    // removeAll
+    @FuncAlias("removeAll")
+    func clear() {
+        lock(self.rwLockId);
+        try { self.value.clear(); } finally { unlock(self.rwLockId); }
+        return self;
+    }
+
+    // hasKey
+    @FuncAlias(["hasKey", "contains", "containsKey"])
+    func has(key: K): bool {
+        lock(self.rwLockId);
+        try { return self.value.has(key); } finally { unlock(self.rwLockId); }
+    }
+
+    // hasValue
+    @FuncAlias("hasValue")
+    func containsValue(val: V): bool {
+        lock(self.rwLockId);
+        try {
+            vs = self.value.values();
+            i = 0;
+            while (i < vs.len) {
+                if (vs[i] == val) { return true; }
+                i = i + 1;
+            }
+            return false;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 取键/值快照（内置每次新建数组）：持锁生成后即与后续修改无关
+    // keySet
+    @FuncAlias("keySet")
+    func keys() {
+        lock(self.rwLockId);
+        try { return self.value.keys(); } finally { unlock(self.rwLockId); }
+    }
+
+    func values() {
+        lock(self.rwLockId);
+        try { return self.value.values(); } finally { unlock(self.rwLockId); }
+    }
+
+    // 弱一致遍历：持锁取键快照，释放锁后逐键读最新值回调；
+    // 快照后被删除的键 get 为 null，跳过。回调内可安全调用本映射方法。
+    func forEach(cb: MapCallback<K, V>) {
+        // self.keys() 内部已持锁返回快照；释放锁后逐键读最新值回调，
+        // 快照后被删除的键 get 为 null，跳过。回调内可安全调用本映射方法。
+        ks = self.keys();
+        i = 0;
+        while (i < ks.len) {
+            k = ks[i];
+            v = self.get(k);
+            if (v != null) { cb(k, v); }
+            i = i + 1;
+        }
+        return self;
+    }
+
+    // clone：返回独立的 ConcurrentHashMap（锁独立、内容深拷贝）
+    @FuncAlias("clone")
+    func copy() {
+        return ConcurrentHashMap<K, V>(self.toMap());
+    }
+
+    // toDict
+    @FuncAlias("toDict")
+    func toMap() {
+        lock(self.rwLockId);
+        try { return self.value.copy(); } finally { unlock(self.rwLockId); }
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        lock(self.rwLockId);
+        try { return self.toJSONString(); } finally { unlock(self.rwLockId); }
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        lock(self.rwLockId);
+        try { return self.toJSONString() == other.toJSONString(); } finally { unlock(self.rwLockId); }
+    }
+
+    // 批量导入：整段持锁一次完成，避免逐条加锁
+    // assign, update, merge
+    @FuncAlias(["assign", "update"])
+    func putAll(other: Map<K, V>) {
+        lock(self.rwLockId);
+        try {
+            ks = other.keys();
+            i = 0;
+            while (i < ks.len) {
+                self.value[ks[i]] = other.get(ks[i]);
+                i = i + 1;
+            }
+        } finally { unlock(self.rwLockId); }
+        return self;
+    }
+
+    // ===== 原子复合操作（整段在同一临界区内）=====
+
+    // 仅当键缺失时写入；返回写入后该键的当前值（已存在则返回旧值）
+    func putIfAbsent(key: K, val: V): V {
+        lock(self.rwLockId);
+        try {
+            if (self.value.has(key)) { return self.value.get(key); }
+            self.value[key] = val;
+            return val;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 仅当键缺失时调用 mapper(key) 计算并写入（结果为 null 则不写入）；
+    // 返回当前值；mapper 为函数值 (k: K) => V
+    func computeIfAbsent(key: K, mapper): V {
+        lock(self.rwLockId);
+        try {
+            if (self.value.has(key)) { return self.value.get(key); }
+            nv = mapper(key);
+            if (nv != null) { self.value[key] = nv; return nv; }
+            return null;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 仅当键存在时调用 remapper(key, oldVal)；结果 null 删除键，否则覆盖；
+    // 返回新值（键被删除返回 null）；remapper 为 (k: K, v: V) => V
+    func computeIfPresent(key: K, remapper): V {
+        lock(self.rwLockId);
+        try {
+            if (!self.value.has(key)) { return null; }
+            nv = remapper(key, self.value.get(key));
+            if (nv == null) { self.value.remove(key); return null; }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 无条件调用 remapper(key, oldVal_or_null)；结果 null 删除键，否则覆盖；
+    // 返回新值；remapper 为 (k: K, v: V) => V（缺失时 v 为 null）
+    func compute(key: K, remapper): V {
+        lock(self.rwLockId);
+        try {
+            oldv = null;
+            if (self.value.has(key)) { oldv = self.value.get(key); }
+            nv = remapper(key, oldv);
+            if (nv == null) {
+                if (oldv != null) { self.value.remove(key); }
+                return null;
+            }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 键缺失 → 直接取 val；存在 → 取 remapper(oldVal, val)；
+    // 结果 null 删除键，否则覆盖；返回新值；remapper 为 (oldv: V, mv: V) => V
+    func merge(key: K, val: V, remapper): V {
+        lock(self.rwLockId);
+        try {
+            oldv = null;
+            if (self.value.has(key)) { oldv = self.value.get(key); }
+            nv = val;
+            if (oldv != null) { nv = remapper(oldv, val); }
+            if (nv == null) {
+                if (oldv != null) { self.value.remove(key); }
+                return null;
+            }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 仅当键存在时替换为 val，返回旧值；不存在返回 null
+    func replace(key: K, val: V): V {
+        lock(self.rwLockId);
+        try {
+            if (!self.value.has(key)) { return null; }
+            oldv = self.value.get(key);
+            self.value[key] = val;
+            return oldv;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 仅当键当前值等于 expectVal 时才替换为 newVal；是否替换成功
+    func replaceMatch(key: K, expectVal: V, newVal: V): bool {
+        lock(self.rwLockId);
+        try {
+            if (!self.value.has(key)) { return false; }
+            if (self.value.get(key) != expectVal) { return false; }
+            self.value[key] = newVal;
+            return true;
+        } finally { unlock(self.rwLockId); }
+    }
+
+    // 仅当键当前值等于 expectVal 时才删除；是否删除成功
+    func removeMatch(key: K, expectVal: V): bool {
+        lock(self.rwLockId);
+        try {
+            if (!self.value.has(key)) { return false; }
+            if (self.value.get(key) != expectVal) { return false; }
+            self.value.remove(key);
+            return true;
+        } finally { unlock(self.rwLockId); }
+    }
+}

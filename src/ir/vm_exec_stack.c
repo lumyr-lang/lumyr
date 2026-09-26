@@ -3,6 +3,7 @@
  * 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
  */
 #include "vm_types.h"
+#include "ir_types.h"
 #include "stack_manager.h"
 #include "lumyr_value.h"
 #include "gc_runtime.h"
@@ -277,7 +278,22 @@ static void* value_to_typed_ptr(Value v) {
     }
 }
 
-/* 从裸 items[i] 按 elem_type 装箱为 Value */
+/* 按 callsite 返回栈（want=EXPR_TYPE_*）规范化返回槽。
+ * PEND_RETURN（try 块内 return 经 finally）路径把返回值统一装箱在 ret.v，
+ * et=NONE；声明了 int/double/ptr 返回类型的 callsite 按 typed 栈取结果，
+ * 须在此拆箱，否则 push_call_result 压入 ret.i/d/p 的初值 0。
+ * et 非 NONE（普通 typed RETURN）或 want=NONE（VALUE 栈）时无需处理。 */
+RetSlot vm_ret_slot_for_callstack(RetSlot ret, int want) {
+    if(ret.et != EXPR_TYPE_NONE) return ret;
+    switch(want) {
+    case EXPR_TYPE_INT:    ret.i = value_to_i64_all(ret.v); break;
+    case EXPR_TYPE_DOUBLE: ret.d = value_to_dbl_all(ret.v); break;
+    case EXPR_TYPE_PTR:    ret.p = value_to_typed_ptr(ret.v); break;
+    default: break;
+    }
+    return ret;
+}
+
 static Value typed_box_elem(ValueType et, void* items, int i) {
     Value r = val_none();
     int cls = lumyr_etype_stackcls(et);

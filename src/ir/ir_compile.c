@@ -31,7 +31,7 @@ int ir_compile_had_error(void) { return g_ir_compile_error; }
 void c_stmt(Ctx* c, AstNode* node);
 ExprType c_expr(Ctx* c, AstNode* node);
 static const char* c_expr_type_name(Ctx* c, AstNode* node);
-static CastKind c_expr_cast_type(Ctx* c, AstNode* node);
+CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 static void emit_to_dynamic(Ctx* c, ExprType from, CastKind ck);
 static void c_expr_to_value(Ctx* c, AstNode* node);
 static int emit_cond_jump_if_false(Ctx* c, AstNode* cond);
@@ -2829,7 +2829,7 @@ static int int_cast_rank(CastKind ck, CastKind* out)
 }
 
 /* 获取表达式的精确类型（CastKind），用于打印格式化 */
-static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
+CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(!node) return CAST_NONE;
 
     /* 字面量：带后缀（5L/5u8/5f/5ld/...）→ 后缀精确类型；
@@ -3885,7 +3885,8 @@ void c_stmt(Ctx* c, AstNode* node) {
         } else if(target_et == EXPR_TYPE_DOUBLE) {
             emit(c, OPC_STORE_DOUBLE_VAR, var_idx, 0);
         } else if(target_et == EXPR_TYPE_PTR) {
-            emit(c, OPC_STORE_PTR_VAR, var_idx, 0);
+            /* b 携带精确 CastKind（class/struct/string...），供帧槽 type_tags 与 LOAD_GLOBAL */
+            emit(c, OPC_STORE_PTR_VAR, var_idx, c->fn->var_type_tags[bf_idx]);
         } else {
             emit(c, OPC_STORE_VAR, var_idx, 0);
         }

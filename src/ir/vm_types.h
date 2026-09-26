@@ -88,6 +88,12 @@ int vm_except_check_unwind(VMExecCtx* ctx);
 /* FINISH 后若挂起返回已走完所有 finally：取出返回值（1=有，0=无） */
 int vm_except_take_pending_return(RetSlot* out);
 
+/* 按 callsite 返回栈规范化返回槽（vm_exec_stack.c）：
+   try-finally 内 return 的 PEND_RETURN 路径总把返回值装箱在 ret.v（et=NONE），
+   而声明返回 int/double/ptr 的 callsite 期望从 ret.i/d/p 取值，
+   不拆箱会压入 0。et 已为 typed 栈时原样透传。 */
+RetSlot vm_ret_slot_for_callstack(RetSlot ret, int wantExprType);
+
 /* 内部指令抛出异常（vm_except.c）：以 throw 值走分派；未捕获则 exit(1)。
  * 例外：工作线程根帧模式下，未捕获错误 longjmp 到线程根兜底（不 exit） */
 int vm_except_throw_value(VMExecCtx* ctx, Value v);

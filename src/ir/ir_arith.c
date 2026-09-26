@@ -274,12 +274,17 @@ void arith_handle_assign_result(Ctx* c, AstNode* binop, int var_idx, ExprType re
             c->fn->var_type_tags[var_idx] = CAST_DOUBLE;
             break;
 
-        case EXPR_TYPE_PTR:
-            /* 字符串 → PTR 栈 */
+        case EXPR_TYPE_PTR: {
+            /* PTR 栈承载 string / class 实例 / struct / bigint / decimal 等，
+             * 必须按右值精确 CastKind 标记帧槽，旧代码一律标 CAST_STRING，
+             * 导致工作线程 LOAD_GLOBAL 把类实例指针装箱成字符串 */
+            CastKind pck = c_expr_cast_type(c, binop);
+            if(pck <= 0) pck = CAST_STRING;
             c_expr(c, binop);
-            emit(c, OPC_STORE_PTR_VAR, var_idx, 0);
-            c->fn->var_type_tags[var_idx] = CAST_STRING;
+            emit(c, OPC_STORE_PTR_VAR, var_idx, (int)pck);
+            c->fn->var_type_tags[var_idx] = (int)pck;
             break;
+        }
 
         default:
             /* 动态类型 → Value 栈 */

@@ -133,8 +133,21 @@ int vm_exec_var_load_global(VMExecCtx* ctx, Instruction* in) {
     case CAST_DOUBLE:
         v = lumyr_make_double(root->flt_slots[idx]);
         break;
+    /* PTR 族：帧标签已携带精确类型，按标签装箱。
+     * CAST_STRING 仍兼容编译期 fixup 提示（in.b：bigint/decimal/裸ptr） */
+    case CAST_CLASS_PTR:
+        v.type = VAL_CLASS_PTR; v.v.struct_ptr = root->ptr_slots[idx]; break;
+    case CAST_STRUCT_PTR:
+        v.type = VAL_STRUCT_PTR; v.v.struct_ptr = root->ptr_slots[idx]; break;
+    case CAST_BIGINT:
+        v.type = VAL_BIGINT; v.v.bigint = root->ptr_slots[idx]; break;
+    case CAST_DECIMAL:
+        v.type = VAL_DECIMAL; v.v.decimal = root->ptr_slots[idx]; break;
+    case CAST_BITDECIMAL:
+        v.type = VAL_BITDECIMAL; v.v.bitdecimal = root->ptr_slots[idx]; break;
+    case CAST_PTR:
+        v.type = VAL_PTR; v.v.struct_ptr = root->ptr_slots[idx]; break;
     case CAST_STRING: {
-        /* PTR 族存储：按编译期 fixup 的精确提示装箱 */
         void* p = root->ptr_slots[idx];
         switch(in->b) {
         case 4:  v.type = VAL_BIGINT;     v.v.bigint = p; break;
@@ -146,14 +159,13 @@ int vm_exec_var_load_global(VMExecCtx* ctx, Instruction* in) {
         break;
     }
     default:
-        /* 动态变量（容器/实例/函数/null 等）：vals 原样 */
+        /* 动态变量（容器/函数/null 等）：vals 原样 */
         v = root->vals[idx];
         break;
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }
-
 
 /* LOAD_VAR：从帧槽位加载 Value 到 VALUE 栈；ref 槽 box 调用方存储 */
 int vm_exec_var_load(VMExecCtx* ctx, Instruction* in) {
@@ -278,6 +290,11 @@ int vm_exec_var_store_ptr(VMExecCtx* ctx, Instruction* in) {
         if(r->type == CAST_NONE) ((Value*)r->ptr)->v.struct_ptr = v;  /* 保留 cell Value 类型 */
         else *(void**)r->ptr = v;
     }
-    else { f->ptr_slots[idx] = v; f->type_tags[idx] = (uint8_t)CAST_STRING; }
+    else {
+        /* b=右值精确 CastKind（class/struct/string/bigint...）；
+         * 旧字节码 b=0 时退回 CAST_STRING（绝大多数 PTR 变量是字符串） */
+        f->ptr_slots[idx] = v;
+        f->type_tags[idx] = (uint8_t)(in->b > 0 ? in->b : CAST_STRING);
+    }
     return 1;
 }

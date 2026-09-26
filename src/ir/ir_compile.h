@@ -11,6 +11,10 @@
 /* 编译表达式（递归），返回表达式类型 */
 ExprType c_expr(Ctx* c, AstNode* node);
 
+/* 表达式的精确 CastKind（CAST_INT/STRING/CLASS_PTR/...）；
+ * ir_arith 赋值收口据此为 PTR 栈变量标帧类型标签 */
+CastKind c_expr_cast_type(Ctx* c, AstNode* node);
+
 /* 推断表达式持有的自定义类型名（struct/class 实例）
  * 返回 strdup 的类型名（调用方释放）；非实例或类型未知返回 NULL
  * 供 arith_get_expr_type / c_expr_cast_type 共享方法返回类型解析 */

@@ -149,6 +149,8 @@ static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
 /* push_call_result：表达式语境按 callsite 记录的返回栈压入返回值；语句语境丢弃 */
 static void push_call_result(CallSite* cs, RetSlot ret) {
     if (!cs->keep_result) return;
+    /* PEND_RETURN 路径返回值装箱在 ret.v：按 callsite 返回栈拆箱到 i/d/p */
+    ret = vm_ret_slot_for_callstack(ret, cs->ret_stack);
     switch ((ExprType)cs->ret_stack) {
     case EXPR_TYPE_INT:    PUSH_INT64(ret.i); break;
     case EXPR_TYPE_DOUBLE: PUSH_DOUBLE(ret.d); break;
