@@ -4524,6 +4524,14 @@ void c_stmt(Ctx* c, AstNode* node) {
     /* yield 表达式（生成器函数体内）：编译 yield 值到 VALUE 栈，emit OPC_YIELD。
      * 无值 yield;（仅恢复控制流）：emit OPC_YIELD（值压入 NONE）。 */
     case AST_YIELD: {
+        /* 无兜底：yield 只能在 gen func（含生成器箭头函数）内使用。
+         * 此前普通 func 内写 yield 静默错编译，调用返回 none。 */
+        if(!c->fn || !c->fn->is_generator) {
+            fprintf(stderr,
+                    "IR: yield 只能在生成器函数（gen func）内使用 / yield can only be used inside a generator function (gen func)\n");
+            g_ir_compile_error = 1;
+            return;
+        }
         AstNode* v = node->u.yieldnode.value;
         if(v) {
             ExprType vt = c_expr(c, v);

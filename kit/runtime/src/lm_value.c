@@ -6,6 +6,7 @@
 #include "lm_bitdecimal.h"
 #include "lm_time.h"
 #include "lm_container.h"
+#include "lm_string.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
 #include "lm_formdata.h"
@@ -26,6 +27,8 @@ static BitDecimal* value_promote_bitdecimal(Value v, int* need_free);
 static Decimal* value_promote_decimal(Value v, int* need_free);
 static int value_is_int_family(ValueType t);
 static int value_is_float_family(ValueType t);
+static int value_is_numeric(ValueType t);
+static int64_t value_as_int64_exact(Value x);
 
 Value lumyr_make_int(int i) {
     Value v;
@@ -547,11 +550,20 @@ Value lumyr_add(Value a, Value b) {
         for(int i = 0; i < n2; i++) r.v.array->items[n1 + i] = b.v.array->items[i];
         return r;
     }
-    if(a.type == VAL_INT && b.type == VAL_INT)
-    {
-        return lumyr_make_int(a.v.i + b.v.i);
+    /* 整数族 + 整数族 → int64（与静态 INT64 栈语义一致；此前仅 VAL_INT 同型
+     * 走整数，跨类型（如 VAL_INT64+VAL_INT，len(a)-1 即此情形）落 double，
+     * 把整数结果变成浮点）。bool 已在上方字符串拼接路径处理。
+     * 补码自然回绕，与静态 INT64 加法一致。 */
+    if(value_is_int_family(a.type) && value_is_int_family(b.type)) {
+        int64_t x = value_as_int64_exact(a);
+        int64_t y = value_as_int64_exact(b);
+        return lumyr_make_int64((int64_t)((uint64_t)x + (uint64_t)y));
     }
-    // 算术加法
+    /* 无兜底：到这里的既非字符串/数组/高精度，也非数值族（set/tuple/函数/
+     * 非数值对象/null），加法是确定错误——禁止经 value_as_number 静默按 0.0 算 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("加法要求数值或字符串操作数 / addition requires numeric or string operands");
+    // 含浮点的数值加法
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return lumyr_make_double(na + nb);
@@ -593,10 +605,16 @@ Value lumyr_sub(Value a, Value b) {
         v.type = VAL_DECIMAL; v.v.decimal = r;
         return v;
     }
-    if(a.type == VAL_INT && b.type == VAL_INT)
-    {
-        return lumyr_make_int(a.v.i - b.v.i);
+    /* 整数族 - 整数族 → int64（同 lumyr_add；此前仅 VAL_INT 同型走整数），
+     * 补码自然回绕。 */
+    if(value_is_int_family(a.type) && value_is_int_family(b.type)) {
+        int64_t x = value_as_int64_exact(a);
+        int64_t y = value_as_int64_exact(b);
+        return lumyr_make_int64((int64_t)((uint64_t)x - (uint64_t)y));
     }
+    /* 无兜底：非数值族减法报错，禁止静默按 0.0 算 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("减法要求数值操作数 / subtraction requires numeric operands");
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return lumyr_make_double(na - nb);
@@ -638,10 +656,17 @@ Value lumyr_mul(Value a, Value b) {
         v.type = VAL_DECIMAL; v.v.decimal = r;
         return v;
     }
-    if(a.type == VAL_INT && b.type == VAL_INT)
-    {
-        return lumyr_make_int(a.v.i * b.v.i);
+    /* 整数族 * 整数族 → int64（同 lumyr_add；此前仅 VAL_INT 同型走整数），
+     * 取低 64 位回绕，与静态 INT64 乘法一致。 */
+    if(value_is_int_family(a.type) && value_is_int_family(b.type)) {
+        int64_t x = value_as_int64_exact(a);
+        int64_t y = value_as_int64_exact(b);
+        uint64_t lo = (uint64_t)x * (uint64_t)y;
+        return lumyr_make_int64((int64_t)lo);
     }
+    /* 无兜底：非数值族乘法报错，禁止静默按 0.0 算 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("乘法要求数值操作数 / multiplication requires numeric operands");
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return lumyr_make_double(na * nb);
@@ -682,6 +707,19 @@ Value lumyr_div(Value a, Value b) {
         v.type = VAL_DECIMAL; v.v.decimal = r;
         return v;
     }
+    /* 整数族 / 整数族 → int64（C 截断除法，与静态 INT64_DIV 一致；此前跨类型
+     * 整数除法全部落 double），除零是确定错误；INT64_MIN/-1 补码回绕。 */
+    if(value_is_int_family(a.type) && value_is_int_family(b.type)) {
+        int64_t x = value_as_int64_exact(a);
+        int64_t y = value_as_int64_exact(b);
+        if(y == 0)
+            runtime_error("整数除以零 / integer division by zero");
+        if(x == INT64_MIN && y == -1) return lumyr_make_int64(INT64_MIN);
+        return lumyr_make_int64(x / y);
+    }
+    /* 无兜底：非数值族除法报错，禁止静默按 0.0 算 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("除法要求数值操作数 / division requires numeric operands");
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return lumyr_make_double(na / nb);
@@ -695,12 +733,23 @@ Value lumyr_mod(Value a, Value b) {
        a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
         runtime_error("高精度类型不支持取模运算 % / high-precision types (bigint/decimal/bitdecimal) do not support the % operator");
     }
-    if(a.type == VAL_INT && b.type == VAL_INT) {
-        if(b.v.i == 0) return lumyr_make_double(0.0 / 0.0);  // 除零得 NaN，避免 UB
-        return lumyr_make_int(a.v.i % b.v.i);
+    /* 整数族取模（C 语义，负数规则与 C 一致；此前仅 VAL_INT 同型），
+     * 除零确定报错，不再静默返回 NaN */
+    if(value_is_int_family(a.type) && value_is_int_family(b.type)) {
+        int64_t x = value_as_int64_exact(a);
+        int64_t y = value_as_int64_exact(b);
+        if(y == 0)
+            runtime_error("整数取模除以零 / integer modulo by zero");
+        if(x == INT64_MIN && y == -1) return lumyr_make_int64(0);
+        return lumyr_make_int64(x % y);
     }
+    /* 无兜底：非数值族取模报错 */
+    if(!value_is_numeric(a.type) || !value_is_numeric(b.type))
+        runtime_error("取模要求数值操作数 / modulo requires numeric operands");
     double na = value_as_number(a);
     double nb = value_as_number(b);
+    if(nb == 0.0)
+        runtime_error("浮点取模除以零 / float modulo by zero");
     return lumyr_make_double(fmod(na, nb));
 }
 
@@ -781,6 +830,12 @@ Value lumyr_index_get(Value c, Value idx) {
             if(name && strcmp(name, "len") == 0) return lumyr_make_int((long long)lumyr_tuple_len(c));
         }
         long long i = array_index_of(idx);
+        long long tnLen = (long long)lumyr_tuple_len(c);
+        if(i < 0 || i >= tnLen) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "tuple下标越界: %lld (长度 %lld)", i, tnLen);
+            runtime_error(buf);
+        }
         return lumyr_tuple_get(c, (int)i);
     }
     if(c.type == VAL_BYTES) {
@@ -789,6 +844,12 @@ Value lumyr_index_get(Value c, Value idx) {
             if(name && strcmp(name, "len") == 0) return lumyr_make_int((long long)lumyr_bytes_len(c));
         }
         long long i = array_index_of(idx);
+        long long bnLen = (long long)lumyr_bytes_len(c);
+        if(i < 0 || i >= bnLen) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "bytes下标越界: %lld (长度 %lld)", i, bnLen);
+            runtime_error(buf);
+        }
         return lumyr_bytes_get(c, (int)i);
     }
     /* set 长度属性 */
@@ -796,8 +857,9 @@ Value lumyr_index_get(Value c, Value idx) {
         if(idx.type == VAL_STRING) {
             const char* name = lumyr_str_cstr(&idx);
             if(name && strcmp(name, "len") == 0) return lumyr_make_int((long long)lumyr_set_len(c));
+            runtime_error("set 仅支持 len 属性");
         }
-        return lumyr_make_int(0);
+        runtime_error("set 仅支持按下标取 len 属性");
     }
     /* complex 属性访问：real/imag */
     if(c.type == VAL_COMPLEX) {
@@ -808,7 +870,8 @@ Value lumyr_index_get(Value c, Value idx) {
         const char* name = lumyr_str_cstr(&idx);
         if(name && strcmp(name, "real") == 0) return lumyr_make_double(lumyr_complex_real(c));
         if(name && strcmp(name, "imag") == 0) return lumyr_make_double(lumyr_complex_imag(c));
-        return lumyr_make_double(0.0);
+        runtime_error("complex 仅支持 real/imag 两个属性");
+        return val_none();
     }
     /* calendar 字段访问：year/month/tz/daysInMonth/firstWeekday/weeks/lunar 等 */
     if(c.type == VAL_CALENDAR) {
@@ -939,14 +1002,15 @@ Value lumyr_index_get(Value c, Value idx) {
         return c.v.array->items[i];
     }
     if(c.type == VAL_STRING) {
-        const char* cs = lumyr_str_cstr(&c);
-        long long n = cs ? (long long)strlen(cs) : 0;
-        if(i < 0 || i >= n) {
+        /* 与 VM 路径统一：s[i] 返回 1 个码点的字符串（同 charAt），
+         * 按码点计数判定越界，非按字节；此前返回字节 VAL_CHAR，语义不一致 */
+        long long cnLen = (long long)lumyr_str_ulen(&c);
+        if(i < 0 || i >= cnLen) {
             char buf[128];
-            snprintf(buf, sizeof(buf), "字符串下标越界: %lld (长度 %lld)", i, n);
+            snprintf(buf, sizeof(buf), "字符串下标越界: %lld (码点长度 %lld)", i, cnLen);
             runtime_error(buf);
         }
-        return lumyr_make_char(cs ? cs[i] : '\0');
+        return lumyr_substr(c, idx, lumyr_make_int(1));
     }
     runtime_error("下标访问的对象不是数组、字符串或字典");
     return val_none();
@@ -1220,6 +1284,10 @@ static int value_is_int_family(ValueType t) {
 /* 浮点族判定 */
 static int value_is_float_family(ValueType t) {
     return t == VAL_FLOAT || t == VAL_DOUBLE || t == VAL_LONG_DOUBLE;
+}
+/* 数值族判定（整数族 + 浮点族） */
+static int value_is_numeric(ValueType t) {
+    return value_is_int_family(t) || value_is_float_family(t);
 }
 /* 精确提取整数族 Value 的 int64 值（调用方保证 value_is_int_family 为真） */
 static int64_t value_as_int64_exact(Value x) {

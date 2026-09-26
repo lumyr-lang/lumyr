@@ -146,7 +146,16 @@ Value lumyr_socket_field(Value v, const char* name) {
     if(strcmp(name, "connected") == 0) return lumyr_make_bool(o->is_connected ? 1 : 0);
     if(strcmp(name, "isServer") == 0) return lumyr_make_bool(o->is_server ? 1 : 0);
     if(strcmp(name, "isConnected") == 0) return lumyr_make_bool(o->is_connected ? 1 : 0);
-    return lumyr_make_int(0);
+    /* 无兜底：未知字段/方法名 → AttributeError（方法解析已先完成），
+     * 禁止静默返回 0 */
+    {
+        char buf[256];
+        snprintf(buf, sizeof buf,
+                 "socket 没有字段或方法 \"%s\" / socket has no field or method \"%s\"",
+                 name, name);
+        runtime_error(buf);
+    }
+    return lumyr_make_int(0);   /* 不可达 */
 }
 
 char* lumyr_socket_to_str(Value v) {

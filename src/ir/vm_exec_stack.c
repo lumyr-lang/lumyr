@@ -11,6 +11,7 @@
 #include "lm_formdata.h"
 #include "lm_time.h"
 #include "lm_container.h"
+#include "lm_string.h"
 #include "lm_calendar.h"
 #include "lm_file.h"
 #include "lm_socket.h"
@@ -115,6 +116,41 @@ static int64_t value_to_index(Value v) {
     case VAL_DOUBLE:    return (int64_t)v.v.d;
     default:            return 0;
     }
+}
+
+/* 校验下标值为整数族：1=ok（*out 写值）；非法类型抛 TypeError 返回 0。
+ * 浮点下标不静默截断，须先显式转换（与 Python 下标规则一致）。 */
+static int require_integer_index(VMExecCtx* ctx, Value v, int64_t* out) {
+    switch(v.type) {
+    case VAL_INT:   *out = (int64_t)v.v.i; return 1;
+    case VAL_BOOL:  *out = v.v.b ? 1 : 0;  return 1;
+    case VAL_CHAR:  *out = (int64_t)(unsigned char)v.v.c; return 1;
+    case VAL_BYTE:  *out = (int64_t)v.v.by; return 1;
+    default: break;
+    }
+    /* 定宽整数族（有符号/无符号 8..64 位、short/long、size_t/ssize_t） */
+    if(v.type >= VAL_INT8 && v.type <= VAL_SSIZE_T) {
+        *out = value_to_index(v);
+        return 1;
+    }
+    const char* msg;
+    if(v.type == VAL_DOUBLE || v.type == VAL_FLOAT || v.type == VAL_LONG_DOUBLE)
+        msg = "下标必须是整数，不能使用浮点值 / index must be an integer, not a float";
+    else
+        msg = "下标必须是整数 / index must be an integer";
+    vm_except_raise_str(ctx, "TypeError", msg);
+    return 0;
+}
+
+/* 越界统一报错（IndexError，try/catch 可捕获），构造双语消息后返回 0
+ * 供下标读路径复用，与 INDEX_SET 既有越界处理同语义。 */
+static int raise_index_oob(VMExecCtx* ctx, const char* kindZh, int64_t i, int64_t len) {
+    char buf[192];
+    snprintf(buf, sizeof buf,
+             "%s下标越界: %lld（长度 %lld）/ index out of bounds: %lld (length %lld)",
+             kindZh, (long long)i, (long long)len, (long long)i, (long long)len);
+    vm_except_raise_str(ctx, "IndexError", buf);
+    return 0;
 }
 
 /* ===== TypedArray 元素转换辅助 ===== */
@@ -268,17 +304,28 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
     Value arr; stack_vm_pop(g_stack_mgr, STACK_VALUE, &arr);
     Value r = val_none();
     if(arr.type == VAL_ARRAY) {
-        int64_t i = value_to_index(idx);
-        if(arr.v.array && i >= 0 && i < (int64_t)arr.v.array->len)
-            r = arr.v.array->items[i];
+        int64_t i;
+        if(!require_integer_index(ctx, idx, &i)) return 1;
+        int64_t len = arr.v.array ? (int64_t)arr.v.array->len : 0;
+        if(i < 0 || i >= len) { raise_index_oob(ctx, "数组", i, len); return 1; }
+        r = arr.v.array->items[i];
     } else if(arr.type == VAL_MAP) {
         r = lumyr_map_get(arr, idx);
+    } else if(arr.type == VAL_STRING) {
+        /* 字符串整数下标：返回 1 个码点的字符串（与 charAt 一致）；
+         * 此前无此分支，s[i] 静默返回 null */
+        int64_t i;
+        if(!require_integer_index(ctx, idx, &i)) return 1;
+        int64_t ulen = (int64_t)lumyr_str_ulen(&arr);
+        if(i < 0 || i >= ulen) { raise_index_oob(ctx, "字符串", i, ulen); return 1; }
+        r = lumyr_substr(arr, idx, lumyr_make_int(1));
     } else if(arr.type == VAL_FORMDATA) {
         /* fd["name"] 取第一个同名值；fd[整数] 按序号取值 */
         if(idx.type == VAL_STRING) {
             r = lumyr_formdata_get_by_name(arr, idx);
         } else {
-            int64_t i = value_to_index(idx);
+            int64_t i;
+            if(!require_integer_index(ctx, idx, &i)) return 1;
             r = lumyr_formdata_get(arr, (int)i);
         }
     } else if(arr.type == VAL_DATE || arr.type == VAL_DATETIME ||
@@ -293,7 +340,10 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             const char* name = lumyr_str_cstr(&idx);
             if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_tuple_len(arr)); }
         } else {
-            int64_t i = value_to_index(idx);
+            int64_t i;
+            if(!require_integer_index(ctx, idx, &i)) return 1;
+            int64_t len = (int64_t)lumyr_tuple_len(arr);
+            if(i < 0 || i >= len) { raise_index_oob(ctx, "tuple", i, len); return 1; }
             r = lumyr_tuple_get(arr, (int)i);
         }
     } else if(arr.type == VAL_BYTES) {
@@ -302,28 +352,43 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             const char* name = lumyr_str_cstr(&idx);
             if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_bytes_len(arr)); }
         } else {
-            int64_t i = value_to_index(idx);
+            int64_t i;
+            if(!require_integer_index(ctx, idx, &i)) return 1;
+            int64_t len = (int64_t)lumyr_bytes_len(arr);
+            if(i < 0 || i >= len) { raise_index_oob(ctx, "bytes", i, len); return 1; }
             r = lumyr_bytes_get(arr, (int)i);
         }
     } else if(arr.type == VAL_SET) {
-        /* set len 属性 */
+        /* set len 属性；其余属性非法 */
         if(idx.type == VAL_STRING) {
             const char* name = lumyr_str_cstr(&idx);
             if(name && strcmp(name, "len") == 0) { r = lumyr_make_int((long long)lumyr_set_len(arr)); }
+            else vm_except_raise_str(ctx, "AttributeError",
+                "set 仅支持 len 属性 / set supports only the len property");
+        } else {
+            vm_except_raise_str(ctx, "TypeError",
+                "set 下标只能取 \"len\" / set subscript must be the string \"len\"");
         }
     } else if(arr.type == VAL_COMPLEX) {
-        /* complex 属性访问：real/imag */
+        /* complex 属性访问：real/imag；其余非法 */
         if(idx.type == VAL_STRING) {
             const char* name = lumyr_str_cstr(&idx);
             if(name && strcmp(name, "real") == 0) r = lumyr_make_double(lumyr_complex_real(arr));
             else if(name && strcmp(name, "imag") == 0) r = lumyr_make_double(lumyr_complex_imag(arr));
+            else vm_except_raise_str(ctx, "AttributeError",
+                "complex 仅支持 real/imag 属性 / complex supports only real/imag");
+        } else {
+            vm_except_raise_str(ctx, "TypeError",
+                "complex 属性名必须是字符串 / complex attribute name must be a string");
         }
     } else if(arr.type == VAL_TYPED_ARRAY) {
         TypedArray* ta = arr.v.typed_array;
         if(typed_ptr_ok(ta)) {
-            int64_t i = value_to_index(idx);
-            if(i >= 0 && i < (int64_t)ta->len && ta->items)
-                r = typed_box_elem(ta->elem_type, ta->items, (int)i);
+            int64_t i;
+            if(!require_integer_index(ctx, idx, &i)) return 1;
+            int64_t len = (int64_t)ta->len;
+            if(i < 0 || i >= len || !ta->items) { raise_index_oob(ctx, "typed array", i, len); return 1; }
+            r = typed_box_elem(ta->elem_type, ta->items, (int)i);
         }
     } else if(arr.type == VAL_CALENDAR) {
         /* calendar 字段访问：year/month/daysInMonth/firstWeekday/weeks/lunar 等 */
@@ -356,6 +421,17 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             else if(!vm_make_bound_method(arr, fname, &r))
                 r = lumyr_field_get(arr, fname);
         }
+    } else {
+        /* 无兜底：非容器/不支持下标访问的类型（int/double/null/函数/生成器等）
+         * 抛 TypeError（静态字面量已由 typecheck 拦截，此处兜底动态值），
+         * 禁止静默返回 null 掩盖错误。 */
+        char buf[192];
+        const char* tn = val_typename(arr.type);
+        snprintf(buf, sizeof buf,
+                 "类型 %s 不支持下标访问（不是数组、字符串、字典等容器）/ type %s is not subscriptable (not an array, string, map or other container)",
+                 tn ? tn : "?", tn ? tn : "?");
+        vm_except_raise_str(ctx, "TypeError", buf);
+        return 1;
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;
@@ -368,30 +444,22 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
     Value idx; stack_vm_pop(g_stack_mgr, STACK_VALUE, &idx);
     Value arr; stack_vm_pop(g_stack_mgr, STACK_VALUE, &arr);
     if(arr.type == VAL_ARRAY) {
-        int64_t i = value_to_index(idx);
+        int64_t i;
+        if(!require_integer_index(ctx, idx, &i)) return 1;
         /* 根因修复：越界写此前静默丢弃（违反无兜底原则，调用方难排查）。
-         * 走 VM 协作式异常传播（vm_except_raise_str），try/catch 可捕获，
-         * 与 OPC_THROW 同语义；runtime_error 会绕过 try/catch 直接 exit。 */
-        if(i < 0 || i >= (int64_t)arr.v.array->len) {
-            char b[128];
-            snprintf(b, sizeof(b), "数组下标越界: %lld (长度 %d)",
-                     (long long)i, arr.v.array->len);
-            vm_except_raise_str(ctx, "IndexError", b);
-            return 1;  /* 异常已启动（pc 已改写），返回 1=handled */
-        }
+         * 走 VM 协作式异常传播（IndexError），try/catch 可捕获，与 OPC_THROW 同语义。 */
+        int64_t len = arr.v.array ? (int64_t)arr.v.array->len : 0;
+        if(i < 0 || i >= len) { raise_index_oob(ctx, "数组", i, len); return 1; }
         arr.v.array->items[i] = val;
     } else if(arr.type == VAL_MAP) {
         lumyr_map_set(&arr, idx, val);
     } else if(arr.type == VAL_TYPED_ARRAY && typed_ptr_ok(arr.v.typed_array)) {
         TypedArray* ta = arr.v.typed_array;
-        int64_t i = value_to_index(idx);
-        /* 越界写同数组语义：VM 异常传播，try/catch 可捕获，不再静默丢弃 */
-        if(i < 0 || i >= (int64_t)ta->len || !ta->items) {
-            char b[96];
-            snprintf(b, sizeof b, "typed array set: 下标 %d 越界（长度 %d）", (int)i, ta->len);
-            vm_except_raise_str(ctx, "IndexError", b);
-            return 1;  /* 异常已启动（pc 已改写），返回 1=handled */
-        }
+        int64_t i;
+        if(!require_integer_index(ctx, idx, &i)) return 1;
+        /* 越界写同数组语义：IndexError 传播，try/catch 可捕获，不再静默丢弃 */
+        int64_t len = (int64_t)ta->len;
+        if(i < 0 || i >= len || !ta->items) { raise_index_oob(ctx, "typed array", i, len); return 1; }
         {
             ValueType et = ta->elem_type;
             int cls = lumyr_etype_stackcls(et);
@@ -407,9 +475,24 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
             }
         }
     } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
-        /* 动态字段写：idx 是字段名字符串（struct/class 实例统一处理） */
+        /* 动态字段写：idx 必须是字段名字符串（struct/class 实例统一处理） */
         const char* fname = lumyr_str_cstr(&idx);
-        if(fname) lumyr_field_set(arr, fname, val);
+        if(!fname) {
+            vm_except_raise_str(ctx, "TypeError",
+                "字段名必须是字符串 / field name must be a string");
+            return 1;
+        }
+        lumyr_field_set(arr, fname, val);
+    } else {
+        /* 无兜底：对非可写容器（int/string/tuple/bytes/函数等）按下标赋值，
+         * 抛 TypeError；字符串/tuple/bytes 不可变，禁止静默丢弃写入。 */
+        char buf[192];
+        const char* tn = val_typename(arr.type);
+        snprintf(buf, sizeof buf,
+                 "类型 %s 不支持按下标赋值（字符串/tuple/bytes 等为不可变类型）/ type %s does not support indexed assignment (string/tuple/bytes etc. are immutable)",
+                 tn ? tn : "?", tn ? tn : "?");
+        vm_except_raise_str(ctx, "TypeError", buf);
+        return 1;
     }
     stack_vm_push(g_stack_mgr, STACK_VALUE, &val);
     return 1;

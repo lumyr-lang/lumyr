@@ -49,7 +49,15 @@ int vm_exec_arith_int64_div(VMExecCtx* ctx, Instruction* in) {
     int64_t a, b;
     stack_vm_pop(g_stack_mgr, STACK_INT64, &b);
     stack_vm_pop(g_stack_mgr, STACK_INT64, &a);
-    a = (b != 0) ? a / b : 0;
+    /* 无兜底：除零确定报错（try 可捕获），禁止静默返回 0 */
+    if(b == 0) {
+        vm_except_raise_str(ctx, "ZeroDivisionError",
+            "整数除以零 / integer division by zero");
+        return 1;
+    }
+    /* INT64_MIN/-1 结果超出 int64，按补码回绕为 INT64_MIN（避免有符号溢出 UB） */
+    if(a == INT64_MIN && b == -1) a = INT64_MIN;
+    else a = a / b;
     stack_vm_push(g_stack_mgr, STACK_INT64, &a);
     return 1;
 }
@@ -59,7 +67,15 @@ int vm_exec_arith_int64_mod(VMExecCtx* ctx, Instruction* in) {
     int64_t a, b;
     stack_vm_pop(g_stack_mgr, STACK_INT64, &b);
     stack_vm_pop(g_stack_mgr, STACK_INT64, &a);
-    a = (b != 0) ? a % b : 0;
+    /* 无兜底：取模除零确定报错，禁止静默返回 0 */
+    if(b == 0) {
+        vm_except_raise_str(ctx, "ZeroDivisionError",
+            "整数取模除以零 / integer modulo by zero");
+        return 1;
+    }
+    /* INT64_MIN%-1 → 0（避免有符号溢出 UB） */
+    if(a == INT64_MIN && b == -1) a = 0;
+    else a = a % b;
     stack_vm_push(g_stack_mgr, STACK_INT64, &a);
     return 1;
 }
@@ -188,7 +204,14 @@ int vm_exec_arith_double_div(VMExecCtx* ctx, Instruction* in) {
     double a, b;
     stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &b);
     stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &a);
-    a = (b != 0.0) ? a / b : 0.0;
+    /* 无兜底：浮点除零确定报错（与整数一致；Python 同样抛 ZeroDivisionError），
+     * 禁止静默返回 0.0，也不返回 IEEE 无穷/NaN */
+    if(b == 0.0) {
+        vm_except_raise_str(ctx, "ZeroDivisionError",
+            "浮点除以零 / float division by zero");
+        return 1;
+    }
+    a = a / b;
     stack_vm_push(g_stack_mgr, STACK_DOUBLE, &a);
     return 1;
 }

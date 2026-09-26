@@ -1179,8 +1179,18 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_STRING && recv.type != VAL_ARRAY &&
            recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP &&
            recv.type != VAL_TUPLE && recv.type != VAL_SET &&
-           recv.type != VAL_BYTES && recv.type != VAL_FORMDATA)
-            return bi_type_err("len", recv);
+           recv.type != VAL_BYTES && recv.type != VAL_FORMDATA) {
+            /* 准确语义：len() 是函数不是方法，参数须为容器/字符串，
+             * 不再伪装成「类型不支持方法 .len」误导排查 */
+            Value tn = lumyr_type(recv);
+            const char* tns = lumyr_str_cstr(&tn);
+            char buf[256];
+            snprintf(buf, sizeof buf,
+                     "len() 参数必须是容器或字符串，实际类型 %s / len() argument must be a container or string, got %s",
+                     tns ? tns : "?", tns ? tns : "?");
+            runtime_error(buf);
+            return 0;
+        }
         *out = lumyr_make_int64(bi_len_of(recv));
         return 1;
     }
@@ -1626,11 +1636,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_formdata_get_by_name(recv, argv[1]);
             return 1;
         }
-        /* tuple/bytes.get(i)：下标访问 */
+        /* tuple/bytes.get(i)：下标访问（.get 安全访问器契约：下标非法/越界
+         * 返回 none，禁止返回伪造的 int 0） */
         if(recv.type == VAL_TUPLE || recv.type == VAL_BYTES) {
             if(!bi_need_args("get", argc, 1)) return 0;
+            int isTuple = (recv.type == VAL_TUPLE);
+            int n = isTuple ? lumyr_tuple_len(recv) : lumyr_bytes_len(recv);
+            if(!bi_is_int_et(argv[1].type)) { *out = val_none(); return 1; }
             int idx = (int)bi_num_i64(argv[1]);
-            *out = (recv.type == VAL_TUPLE) ? lumyr_tuple_get(recv, idx) : lumyr_bytes_get(recv, idx);
+            if(idx < 0 || idx >= n) { *out = val_none(); return 1; }
+            *out = isTuple ? lumyr_tuple_get(recv, idx) : lumyr_bytes_get(recv, idx);
             return 1;
         }
         return bi_type_err("get", recv);

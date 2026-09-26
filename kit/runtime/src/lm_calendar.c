@@ -269,7 +269,16 @@ Value lumyr_calendar_field(Value v, const char* name) {
         ganzhi_str(o->year, buf, sizeof(buf));
         return lumyr_make_string(buf);
     }
-    return lumyr_make_int(0);
+    /* 无兜底：未知字段/方法名 → AttributeError（方法解析已先完成），
+     * 禁止静默返回 0 */
+    {
+        char buf[256];
+        snprintf(buf, sizeof buf,
+                 "calendar 没有字段或方法 \"%s\" / calendar has no field or method \"%s\"",
+                 name, name);
+        runtime_error(buf);
+    }
+    return lumyr_make_int(0);   /* 不可达 */
 }
 
 char* lumyr_calendar_to_str(Value v) {

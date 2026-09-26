@@ -375,10 +375,26 @@ Value lumyr_file_field(Value v, const char* name) {
     if (strcmp(name, "mtime") == 0) {
         /* 最后修改时间（epoch 秒） */
         struct stat st;
-        if (stat(o->path, &st) != 0) return lumyr_make_int(0);
+        if (stat(o->path, &st) != 0) {
+            char buf[256];
+            snprintf(buf, sizeof buf,
+                     "file.mtime：无法读取文件状态 \"%s\" / file.mtime: cannot stat \"%s\"",
+                     o->path, o->path);
+            runtime_error(buf);
+            return lumyr_make_int(0);
+        }
         return lumyr_make_int64((int64_t)st.st_mtime);
     }
-    return lumyr_make_int(0);
+    /* 无兜底：未知字段/方法名 → AttributeError（方法解析已先完成），
+     * 禁止静默返回 0 */
+    {
+        char buf[256];
+        snprintf(buf, sizeof buf,
+                 "file 没有字段或方法 \"%s\" / file has no field or method \"%s\"",
+                 name, name);
+        runtime_error(buf);
+    }
+    return lumyr_make_int(0);   /* 不可达 */
 }
 
 char* lumyr_file_to_str(Value v) {
@@ -802,7 +818,15 @@ Value lumyr_folder_field(Value v, const char* name) {
         /* 目录总大小（递归所有文件字节数） */
         return lumyr_make_int64(dir_total_size(o->path));
     }
-    return lumyr_make_int(0);
+    /* 无兜底：未知字段/方法名 → AttributeError（方法解析已先完成） */
+    {
+        char buf[256];
+        snprintf(buf, sizeof buf,
+                 "folder 没有字段或方法 \"%s\" / folder has no field or method \"%s\"",
+                 name, name);
+        runtime_error(buf);
+    }
+    return lumyr_make_int(0);   /* 不可达 */
 }
 
 char* lumyr_folder_to_str(Value v) {

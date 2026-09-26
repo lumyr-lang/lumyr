@@ -155,8 +155,13 @@ def load_pool():
             elif tname == "bool":
                 val = 1 if raw_lit == "true" else 0
             elif tname == "char":
-                val = ord(raw_lit)
-                raw_lit = "'" + raw_lit + "'"   # char 字面量必须单引号
+                # 文件中 char 字面量为单引号形态（'Y'）；剥引号取码点，
+                # 重新发射时保留原引号（此前 ord('Y') 误把引号当字符报错）
+                if len(raw_lit) >= 2 and raw_lit[0] == "'":
+                    val = ord(raw_lit[1:-1])
+                else:
+                    val = ord(raw_lit)
+                    raw_lit = "'" + raw_lit + "'"
             else:
                 val = int(raw_lit)
             pool.append((cat, tname, raw_lit, val))
@@ -560,13 +565,13 @@ def main():
     # (说明, 声明列表[(tname, raw)], 表达式源码, 表达式树或 None)
     edge_cases = []
 
-    def ec(desc, decls, expr_src, tree):
-        edge_cases.append((desc, decls, expr_src, tree))
+    def ec(desc, decls, expr_src, tree, throws=None):
+        edge_cases.append((desc, decls, expr_src, tree, throws))
 
     ec("整数优先级 2+3*4", [], "2 + 3 * 4", N("+", 2, N("*", 3, 4)))
     ec("括号改变优先级 (2+3)*4", [], "(2 + 3) * 4", N("*", N("+", 2, 3), 4))
-    ec("整数除零得 0", [], "10 / 0", N("/", 10, 0))
-    ec("浮点除零得 0", [], "3.0 / 0.0", N("/", 3.0, 0.0))
+    ec("整数除零抛 ZeroDivisionError", [], "10 / 0", N("/", 10, 0), throws="ZeroDivisionError")
+    ec("浮点除零抛 ZeroDivisionError", [], "3.0 / 0.0", N("/", 3.0, 0.0), throws="ZeroDivisionError")
     ec("负数参与链式运算", [("int", "-5")], "v0 + 3 * 4", N("+", 0, N("*", 3, 4)))
     ec("整数向零截断 -7/2", [], "(-7) / 2", N("/", -7, 2))
     ec("decimal 0.1+0.2", [], '<decimal>"0.1" + <decimal>"0.2"',
@@ -732,7 +737,7 @@ def main():
 
     # 手工用例
     base = len(cases)
-    for j, (desc, decls, expr_src, tree) in enumerate(edge_cases):
+    for j, (desc, decls, expr_src, tree, throws) in enumerate(edge_cases):
         cid = base + j + 1
         decls_out = list(decls)
 
@@ -767,8 +772,20 @@ def main():
             op, l, r = n
             return "(" + src_walk2(l) + " " + op + " " + src_walk2(r) + ")"
 
+        expr_text = src_walk2(tree)
         lines.append("/* E%d: %s */" % (j + 1, desc))
-        emit_case(cid, decls_out, src_walk2(tree))
+        if throws:
+            # 无兜底语义：除零抛错。try 捕获后置标记，输出 throws=true（不校验
+            # 错误对象字段——原生 error Value 无 errType 字段，语义由 oracle 保证）
+            for i, (tname, raw) in enumerate(decls_out):
+                lines.append("v%d_%d = <%s>%s;" % (cid, i, tname, raw))
+            lines.append("z%d = false;" % cid)
+            lines.append("try { r%d = %s; } catch (e) { z%d = true; }"
+                         % (cid, expr_text, cid))
+            lines.append('print("C%d:throws=" + z%d);' % (cid, cid))
+            lines.append("")
+        else:
+            emit_case(cid, decls_out, expr_text)
 
         # oracle 期望
         operands_eval = {}
@@ -835,13 +852,18 @@ def main():
                 dl = float(to_int64(vl)) if cl == CAT_INT else vl
                 dr = float(to_int64(vr)) if cr == CAT_INT else vr
                 if op == "/" and dr == 0.0:
-                    return CAT_DOUBLE, 0.0   # VM double 除零返回 0
+                    raise ZeroDivisionError   # VM 无兜底：除零抛错（生成抽样时跳过）
                 return CAT_DOUBLE, {"+": dl + dr, "-": dl - dr, "*": dl * dr, "/": dl / dr}[op]
+            if op == "/" and vr == 0:
+                raise ZeroDivisionError
             return CAT_INT, to_int64({"+": vl + vr, "-": vl - vr, "*": vl * vr,
-                             "/": (0 if vr == 0 else trunc_div(vl, vr))}[op])
+                             "/": trunc_div(vl, vr)}[op])
 
-        cat3, v3 = eval_with_const(tree)
-        expected.append("C%d:%s=%s" % (cid, cat3, result_str(cat3, v3)))
+        if throws:
+            expected.append("C%d:throws=true" % cid)
+        else:
+            cat3, v3 = eval_with_const(tree)
+            expected.append("C%d:%s=%s" % (cid, cat3, result_str(cat3, v3)))
 
     with open(OUT_LM, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

@@ -265,6 +265,12 @@ static int ce_binop(BinOp op, const CEVal* a, const CEVal* b, CEVal* out) {
     switch(op) {
         case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD: {
             if(!ce_is_num(a) || !ce_is_num(b)) return 0;
+            /* 除零不折叠：返回"非常量"，保留原表达式交运行时抛 ZeroDivisionError，
+             * 禁止编译期静默产生 0（整数 x/0 此前还是有符号除零 UB） */
+            if(op == OP_DIV || op == OP_MOD) {
+                if(b->kind == CEK_FLOAT && b->d == 0.0) return 0;
+                if(b->kind == CEK_INT   && b->i == 0)   return 0;
+            }
             if(a->kind == CEK_FLOAT || b->kind == CEK_FLOAT) {
                 if(op == OP_MOD) return 0;   /* 浮点不支持取模 */
                 double x = ce_as_double(a), y = ce_as_double(b), r = 0;

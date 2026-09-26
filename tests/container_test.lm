@@ -172,10 +172,14 @@ assert ts.len == 2;
 assert ts[0].has(1);
 assert ts[1].has(4);
 
-// bytes 下标越界返回 0
-assert bytes("ab")[10] == 0;
+// bytes 下标越界抛 IndexError（无兜底，不再静默返回 0）
+bytesOob = false;
+try { bo = bytes("ab")[10]; } catch (e) { bytesOob = true; }
+assert bytesOob;
 
-// tuple 下标越界
-assert tuple(1, 2)[5] == 0;
+// tuple 下标越界抛 IndexError
+tupleOob = false;
+try { to = tuple(1, 2)[5]; } catch (e) { tupleOob = true; }
+assert tupleOob;
 
 print("container_test 全部通过 / All container tests passed");

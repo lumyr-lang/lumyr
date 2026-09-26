@@ -299,7 +299,21 @@ Value lumyr_date_field(Value v, const char* name) {
             return lumyr_make_double(total);
         }
     }
-    return lumyr_make_int(0);
+    /* 无兜底：未知字段/方法名 → AttributeError（方法解析已先于本函数完成，
+     * 走到这里说明名字既不是方法也不是字段），禁止静默返回 0 */
+    const char* kind;
+    switch(v.type) {
+    case VAL_DATETIME: kind = "datetime"; break;
+    case VAL_TIME:     kind = "time"; break;
+    case VAL_TIMEDELTA: kind = "timedelta"; break;
+    default:           kind = "date"; break;
+    }
+    char buf[192];
+    snprintf(buf, sizeof buf,
+             "%s 没有字段或方法 \"%s\" / %s has no field or method \"%s\"",
+             kind, name, kind, name);
+    runtime_error(buf);
+    return lumyr_make_int(0);   /* 不可达 */
 }
 
 // ISO 字符串（malloc，调用者需 free）
