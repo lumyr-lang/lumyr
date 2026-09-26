@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* 前置声明：field_set 访问控制需判断继承关系 */
+static int lumyr_is_type_subclass_of(const char* derived, const char* base);
+
 /* ==================== 红黑树（类型注册表） ==================== */
 
 typedef struct TypeRBNode {
@@ -520,10 +523,15 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
         return;
     }
 
-    /* 访问修饰符运行时检查（仅 class 动态路径；受信写入跳过） */
+    /* 访问修饰符运行时检查（仅 class 动态路径；受信写入跳过）。
+     * protected 允许三种访问者：
+     *   1. 同类（g_current_class == info->name）
+     *   2. 当前类是字段所有者的子类（子类访问父类 protected 字段）
+     *   3. 字段所有者是当前类的子类（父类方法经 super 调子类实例的继承字段） */
     if(check_access && info->kind == TYPE_KIND_CLASS && fi->access != ACCESS_PUBLIC) {
         if(!lumyr_is_accessor_inside_class(info->name) &&
-           !lumyr_is_accessor_subclass_of(info->name)) {
+           !lumyr_is_accessor_subclass_of(info->name) &&
+           !lumyr_is_type_subclass_of(info->name, lumyr_get_current_class())) {
             char buf[256];
             snprintf(buf, sizeof(buf), "field_set: 字段 '%s.%s' 不可访问", info->name, field_name);
             runtime_error(buf);
@@ -656,6 +664,20 @@ int lumyr_is_accessor_subclass_of(const char* class_name)
     RuntimeTypeInfo* info = lumyr_type_lookup(g_current_class);
     while(info) {
         if(info->name && strcmp(info->name, class_name) == 0) return 1;
+        info = info->parent;
+    }
+    return 0;
+}
+
+/* 检查 derived 是否是 base 的子类（含自身）。
+ * 用于 protected 访问：父类方法通过 super 调子类实例的继承字段时，
+ * 字段所有者（子类）是当前执行类（父类）的子类，应允许访问。 */
+static int lumyr_is_type_subclass_of(const char* derived, const char* base)
+{
+    if(!derived || !base) return 0;
+    RuntimeTypeInfo* info = lumyr_type_lookup(derived);
+    while(info) {
+        if(info->name && strcmp(info->name, base) == 0) return 1;
         info = info->parent;
     }
     return 0;

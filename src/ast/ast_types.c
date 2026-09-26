@@ -965,14 +965,25 @@ void class_add_method(const char* class_name, const char* method_name, struct As
     /* 前置设置构造函数：方法体内自构造（如 return Counter(v)）需要 td->constructor
      * 已就绪才能在 IR 编译时生成 __init__ 调用。class_set_constructor 幂等，后续重复调用安全跳过 */
     if(!td->constructor && g_class_constructor && g_class_constructor->type == AST_FUNC_DEF) {
-        RuntimeFunc* ctor_rf = compile_func_from_ast(g_class_constructor);
+        RuntimeFunc* ctor_rf = compile_func_from_ast_with_class(g_class_constructor, class_name);
         class_set_constructor(class_name, g_class_constructor, ctor_rf);
     }
     /* 跳过构造函数：构造函数已经通过 class_set_constructor 单独设置，
-       不需要再作为普通方法添加，否则会导致 class_name 重复设置和函数名冲突 */
+       不需要再作为普通方法添加，否则会导致 class_name 重复设置和函数名冲突。
+       但仍需给 self 参数设置 class constraint，让编译期能确定 self 类型，
+       字段访问走编译期快路径（OPC_FIELD_SET）而非运行时动态检查。 */
     if(method_node && method_node->type == AST_FUNC_DEF && method_node->u.func_def.name) {
-        size_t name_len = strlen(method_node->u.func_def.name);
-        if(name_len >= 9 && strcmp(method_node->u.func_def.name + name_len - 9, "___init__") == 0) {
+        if(is_constructor_name(method_node->u.func_def.name)) {
+            // 给构造函数的 self 打上 class 类型标记
+            if(method_node->u.func_def.params) {
+                AstNode* self_param = method_node->u.func_def.params;
+                if(self_param->u.param.name && strcmp(self_param->u.param.name, "self") == 0) {
+                    if(self_param->u.param.constraint) free(self_param->u.param.constraint);
+                    size_t marked_len = strlen(class_name) + 7;
+                    self_param->u.param.constraint = (char*)malloc(marked_len);
+                    snprintf(self_param->u.param.constraint, marked_len, "class:%s", class_name);
+                }
+            }
             return;
         }
     }

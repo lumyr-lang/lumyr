@@ -462,6 +462,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
             /* try 块内 return 不经过 ENDTRY/FINISH：先清理本帧残留的
              * try 节点，否则后续 throw 会被死帧处理器错误捕获 */
             vm_except_leave_frame(ctx);
+            lumyr_set_current_class(prev_class);
             return 0;
         }
 
@@ -469,6 +470,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
             ret->et = EXPR_TYPE_NONE;
             ret->v  = val_none();
             vm_except_leave_frame(ctx);
+            lumyr_set_current_class(prev_class);
             return 0;
 
         /* ===== 生成器 yield：弹 yield 值写入线程局部变量，结束 vm_exec_loop =====
@@ -487,6 +489,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
             if(s_current_gen) {
                 s_current_gen->pc = ctx->pc;  /* 下次 resume 从 yield 下一条指令开始 */
             }
+            lumyr_set_current_class(prev_class);
             return 0;
         }
 
@@ -519,6 +522,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
     /* 函数自然走到末尾（无显式 return）：返回 nil */
     ret->et = EXPR_TYPE_NONE;
     ret->v  = val_none();
+    lumyr_set_current_class(prev_class);
     return 0;
 }
 

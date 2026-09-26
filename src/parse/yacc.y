@@ -325,7 +325,7 @@ static void compile_class_ctors(const char* cls) {
         if(!ctor || ctor->type != AST_FUNC_DEF) continue;
         /* 已在静态方法解析期提前编译（ensure_ctors_compiled）则跳过 */
         if(ir_func_table_lookup(ctor->u.func_def.name)) continue;
-        RuntimeFunc* rf = compile_func_from_ast(ctor);
+        RuntimeFunc* rf = compile_func_from_ast_with_class(ctor, cls);
         class_add_constructor(cls, ctor, rf);
     }
 }
@@ -342,7 +342,7 @@ static void ensure_ctors_compiled(void) {
     for(int ci = 0; ci < g_class_ctor_cnt; ci++) {
         AstNode* ctorNode = g_class_ctor_list[ci];
         if(!ctorNode || ctorNode->type != AST_FUNC_DEF) continue;
-        RuntimeFunc* rfC = compile_func_from_ast(ctorNode);
+        RuntimeFunc* rfC = compile_func_from_ast_with_class(ctorNode, g_current_class_name);
         class_add_constructor(g_current_class_name, ctorNode, rfC);
     }
 }
@@ -3638,16 +3638,25 @@ type_prop
     /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT）
      * 元素 CastKind 一并收集（$3）：声明收敛赋值依赖（[] → TypedArray(elem)） */
     | ID COLON TOK_TYPE_ANNOT SEMI {
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
-        type_prop_set_elem((int)$3);
+        /* <any>/<dynamic>（CAST_NONE）为动态类型字段，非类型化数组 */
+        if($3 == CAST_NONE) {
+            type_prop_push($1, VAL_NONE, 0, 0, NULL);
+        } else {
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem((int)$3);
+        }
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID SEMI {
         if(strcmp($4, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
-        type_prop_set_elem((int)$3);
+        if($3 == CAST_NONE) {
+            type_prop_push($1, VAL_NONE, 0, 0, NULL);  /* <any>array = 动态数组 */
+        } else {
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem((int)$3);
+        }
         free($4);
         $$ = ast_none();
     }
@@ -4161,16 +4170,25 @@ class_prop
     /* 泛型数组字段：<int> 或 <int>array（TOK_TYPE_ANNOT，带分号变体）
      * 元素 CastKind 一并收集：声明收敛赋值依赖 */
     | ID COLON TOK_TYPE_ANNOT SEMI {
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
-        type_prop_set_elem((int)$3);
+        /* <any>/<dynamic>（CAST_NONE）为动态类型字段，非类型化数组 */
+        if($3 == CAST_NONE) {
+            type_prop_push($1, VAL_NONE, 0, 0, NULL);
+        } else {
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem((int)$3);
+        }
         $$ = ast_none();
     }
     | ID COLON TOK_TYPE_ANNOT ID SEMI {
         if(strcmp($4, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
-        type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
-        type_prop_set_elem((int)$3);
+        if($3 == CAST_NONE) {
+            type_prop_push($1, VAL_NONE, 0, 0, NULL);  /* <any>array = 动态数组 */
+        } else {
+            type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
+            type_prop_set_elem((int)$3);
+        }
         free($4);
         $$ = ast_none();
     }
@@ -4201,16 +4219,24 @@ class_prop
     }
     /* 带访问修饰符的泛型数组字段：private items: <int> */
     | access_modifier ID COLON TOK_TYPE_ANNOT SEMI {
-        type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
-        type_prop_set_elem((int)$4);
+        if($4 == CAST_NONE) {
+            type_prop_push($2, VAL_NONE, $1, 0, NULL);
+        } else {
+            type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+            type_prop_set_elem((int)$4);
+        }
         $$ = ast_none();
     }
     | access_modifier ID COLON TOK_TYPE_ANNOT ID SEMI {
         if(strcmp($5, "array") != 0) {
             yyerror("泛型数组字段后缀须为 'array'");
         }
-        type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
-        type_prop_set_elem((int)$4);
+        if($4 == CAST_NONE) {
+            type_prop_push($2, VAL_NONE, $1, 0, NULL);
+        } else {
+            type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);
+            type_prop_set_elem((int)$4);
+        }
         free($5);
         $$ = ast_none();
     }

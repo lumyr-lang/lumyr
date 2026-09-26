@@ -1910,12 +1910,10 @@ int typecheck_expr(AstNode* node)
             for(p = node->u.func_def.params; p; p = p->u.param.next) {
                 static_sym_put(p->u.param.name, VAL_NONE);
             }
-            /* 是否构造函数：处于方法上下文且名字以 ___init__ 结尾 */
+            /* 是否构造函数：处于方法上下文且名字为 <Class>___init__[/N] */
             int this_is_ctor = 0;
             if(g_method_owner) {
-                const char* fnm = node->u.func_def.name;
-                size_t fnl = strlen(fnm);
-                this_is_ctor = (fnl >= 9 && strcmp(fnm + fnl - 9, "___init__") == 0);
+                this_is_ctor = is_constructor_name(node->u.func_def.name);
             }
             int save_in_ctor = g_in_ctor;
             g_in_ctor = this_is_ctor;

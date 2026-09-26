@@ -5012,7 +5012,8 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     char* internal_name = NULL;
     if(class_name && name) {
         size_t nl = strlen(name);
-        int is_ctor = (nl >= 9 && strcmp(name + nl - 9, "___init__") == 0);
+        /* 构造函数名 <Class>___init__ 或重载 <Class>___init__2/3... */
+        int is_ctor = is_constructor_name(name);
         if(!is_ctor) {
             size_t need = strlen(class_name) + nl + 6;  /* "__m__"(4) + \0 */
             internal_name = (char*)malloc(need);
@@ -5034,7 +5035,7 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     if(!class_name && name) {
         if(strncmp(name, "_lambda_", 8) != 0 &&
            strncmp(name, "_arrow_", 7) != 0 &&
-           !(strlen(name) >= 9 && strcmp(name + strlen(name) - 9, "___init__") == 0)) {
+           !is_constructor_name(name)) {
             is_free_for_overload = 1;
             size_t need = strlen(name) + 16;
             char* key = (char*)malloc(need);

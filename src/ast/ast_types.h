@@ -89,6 +89,15 @@ int valuetype_to_castkind(int vt);
 char* castkind_to_name(int ck);
 int name_to_castkind(const char* tname);
 
+/* 判断函数名是否为构造函数（<Class>___init__ 或重载 <Class>___init__2/3...）。
+ * 用 strstr 匹配 ___init__ 并校验其后为结尾或数字，避免重载版本被误判为普通方法。 */
+static inline int is_constructor_name(const char* name) {
+    if(!name) return 0;
+    const char* p = strstr(name, "___init__");
+    if(!p) return 0;
+    return (p[9] == '\0' || (p[9] >= '0' && p[9] <= '9'));
+}
+
 /* ===== 接口/trait 系统 ===== */
 // interface Printable { func to_string(): string }
 // 接口表为编译期全局注册表：yacc 声明时注册，typecheck 校验类型是否实现接口

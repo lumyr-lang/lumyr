@@ -454,6 +454,8 @@ f\"([^"\\]|\\.)*\"   {
 "<bigint>"         { yylval.ll = CAST_BIGINT; LEX_RET(TOK_TYPE_ANNOT); }
 "<decimal>"        { yylval.ll = CAST_DECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
 "<bitdecimal>"     { yylval.ll = CAST_BITDECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
+"<any>"            { yylval.ll = CAST_NONE; LEX_RET(TOK_TYPE_ANNOT); }  /* 动态类型：<any> 等价 any */
+"<dynamic>"        { yylval.ll = CAST_NONE; LEX_RET(TOK_TYPE_ANNOT); }  /* 动态类型别名（兼容旧写法） */
 "<ptr>"            { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<pointer>"        { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
 "<handle>"         { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }
