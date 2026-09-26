@@ -1,0 +1,183 @@
+// ============================================================
+// lumyr-ConcurrentSet：线程安全的 ConcurrentSet<E>
+// 封装内置 map（键=元素，值=占位 true），所有操作经可重入锁（rmutex）串行化。
+// 用可重入锁：方法之间互相调用同线程不死锁（addAll→add 等）。
+//
+// 用法：
+//   import <Function/ConcurrentSet>;
+//   cs = ConcurrentSet<int>();
+//   cs.add(1).add(2).add(3);
+//   print(cs.size());        // 3
+//   print(cs.contains(2));   // true
+//
+// 多线程间共享同一实例即可直接并发调用。
+// ============================================================
+
+import <Function/HashSet>;
+
+public class ConcurrentSet<E> extends HashSet<E> {
+    lockId: int64;
+
+    func ConcurrentSet(arr: E[]) {
+        super(arr);
+        self.lockId = rmutex();
+    }
+
+    // ===== 读操作 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        lock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        lock(self.lockId);
+        try { return self.value.len == 0; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["includes", "contains"])
+    func has(elem: E): bool {
+        lock(self.lockId);
+        try { return self.value.has(elem); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toList")
+    func toArray() {
+        lock(self.lockId);
+        try { return self.value.keys(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toDict")
+    func toMap() {
+        lock(self.lockId);
+        try { return self.value.copy(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        lock(self.lockId);
+        try { return self.toJSONString(); } finally { unlock(self.lockId); }
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        lock(self.lockId);
+        try {
+            if (self.value.len != other.size()) { return false; }
+            ks = self.value.keys();
+            i = 0;
+            while (i < ks.len) {
+                if (!other.has(ks[i])) { return false; }
+                i = i + 1;
+            }
+            return true;
+        } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("hashValue")
+    func hashCode(): int {
+        lock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getClassName")
+    func className(): string { return type(self); }
+
+    // 持锁遍历回调（rmutex 可重入，回调内可安全调用 self 方法）
+    func forEach(cb: SetCallback<E>) {
+        lock(self.lockId);
+        try {
+            ks = self.value.keys();
+            i = 0;
+            while (i < ks.len) { cb(ks[i]); i = i + 1; }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // clone：返回独立的 ConcurrentSet（锁独立、内容深拷贝）
+    @FuncAlias("clone")
+    func copy() {
+        lock(self.lockId);
+        try { return ConcurrentSet<E>(self.value.keys()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // ===== 写操作 =====
+
+    @FuncAlias(["put", "insert", "append"])
+    func add(elem: E) {
+        lock(self.lockId);
+        try { self.value[elem] = true; } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias(["delete", "discard"])
+    func remove(elem: E) {
+        lock(self.lockId);
+        try { self.value.remove(elem); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func clear() {
+        lock(self.lockId);
+        try { self.value.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // 批量添加：整段持锁，直接操作 value（避免 addAll→add 重入虽安全但减少锁开销）
+    @FuncAlias(["assign", "update", "merge"])
+    func addAll(other) {
+        lock(self.lockId);
+        try {
+            if (type(other) == "array") {
+                i = 0;
+                while (i < other.len) { self.value[other[i]] = true; i = i + 1; }
+            } else {
+                ks = other.toArray();
+                i = 0;
+                while (i < ks.len) { self.value[ks[i]] = true; i = i + 1; }
+            }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // 批量移除
+    @FuncAlias(["removeAllElements"])
+    func removeAll(other) {
+        lock(self.lockId);
+        try {
+            if (type(other) == "array") {
+                i = 0;
+                while (i < other.len) { self.value.remove(other[i]); i = i + 1; }
+            } else {
+                ks = other.toArray();
+                i = 0;
+                while (i < ks.len) { self.value.remove(ks[i]); i = i + 1; }
+            }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // 保留同时存在于 other 的元素（交集 in-place）
+    @FuncAlias(["retain", "retainAllElements"])
+    func retainAll(other) {
+        lock(self.lockId);
+        try {
+            isArr = (type(other) == "array");
+            ks = self.value.keys();
+            i = 0;
+            while (i < ks.len) {
+                drop = false;
+                if (isArr) {
+                    if (other.indexOf(ks[i]) < 0) { drop = true; }
+                } else {
+                    if (!other.has(ks[i])) { drop = true; }
+                }
+                if (drop) { self.value.remove(ks[i]); }
+                i = i + 1;
+            }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+}
