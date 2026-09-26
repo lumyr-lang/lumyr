@@ -1763,6 +1763,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_make_int(found);
             return 1;
         }
+        if(recv.type == VAL_STRING) {
+            if(!bi_need_args("indexOf", argc, 1)) return 0;
+            if(argv[1].type != VAL_STRING) runtime_error("indexOf() 字符串查找需要字符串参数");
+            const char* hay = lumyr_str_cstr(&recv);
+            const char* needle = lumyr_str_cstr(&argv[1]);
+            const char* p = strstr(hay, needle);
+            *out = lumyr_make_int64(p ? (int64_t)(p - hay) : -1);
+            return 1;
+        }
         if(recv.type != VAL_ARRAY) return bi_type_err("indexOf", recv);
         if(!bi_need_args("indexOf", argc, 1)) return 0;
         *out = lumyr_index_of(recv, argv[1]); /* 按值相等 */

@@ -1,0 +1,179 @@
+// ============================================================
+// lumyr-ReadWriteStringBuffer：读写锁版本的线程安全字符串构建器
+// 与 ConcurrentStringBuffer 的区别：
+//   - ConcurrentStringBuffer 用 rmutex，所有操作串行；
+//   - ReadWriteStringBuffer 用 rwlock，读操作（toString/size/get 等）
+//     共享读锁可并发，写操作（append 系列）独占写锁。
+//   读多写少（如频繁 toString 检查）场景吞吐量更高。
+//
+// 关键约束（rwlock 不可重入）：方法间不互调，直接操作 self.value。
+//
+// 用法：
+//   import <Function/ReadWriteStringBuffer>;
+//   sb = ReadWriteStringBuffer();
+//   sb.append("hello").append(" world");
+//   print(sb.toString());
+// ============================================================
+
+import <Function/StringBuffer>;
+
+public class ReadWriteStringBuffer extends StringBuffer {
+    lockId: int64;
+
+    func ReadWriteStringBuffer(s) {
+        super(s);
+        self.lockId = rwlock();
+    }
+
+    // ===== 读操作：共享读锁 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        rdlock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        rdlock(self.lockId);
+        try { return self.value.len == 0; } finally { unlock(self.lockId); }
+    }
+
+    func get(idx: int): string {
+        rdlock(self.lockId);
+        try { return self.value.get(idx); } finally { unlock(self.lockId); }
+    }
+
+    func indexOf(val: string): int {
+        rdlock(self.lockId);
+        try { return self.value.indexOf(val); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("includes")
+    func contains(val: string): bool {
+        rdlock(self.lockId);
+        try { return self.value.indexOf(val) >= 0; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getFirst")
+    func first(): string {
+        rdlock(self.lockId);
+        try { return self.value.first(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getLast")
+    func last(): string {
+        rdlock(self.lockId);
+        try { return self.value.last(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toList")
+    func toArray() {
+        rdlock(self.lockId);
+        try { return self.value.copy(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        rdlock(self.lockId);
+        try {
+            if (self.value.len == 0) { return ""; }
+            return self.value.join("");
+        } finally { unlock(self.lockId); }
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        rdlock(self.lockId);
+        try { return self.toString() == other.toString(); }
+        finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("hashValue")
+    func hashCode(): int {
+        rdlock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getClassName")
+    func className(): string { return type(self); }
+
+    func charAt(idx: int): int {
+        rdlock(self.lockId);
+        try {
+            s = "";
+            if (self.value.len > 0) { s = self.value.join(""); }
+            if (idx < 0 || idx >= s.len) { return 0; }
+            sb = bytes(s);
+            return sb[idx];
+        } finally { unlock(self.lockId); }
+    }
+
+    // clone：返回独立的 ReadWriteStringBuffer
+    @FuncAlias("clone")
+    func copy() {
+        rdlock(self.lockId);
+        try { return ReadWriteStringBuffer(self.toString()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // ===== 写操作：独占写锁 =====
+
+    func set(idx: int, val: string) {
+        wrlock(self.lockId);
+        try { self.value.set(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func insert(idx: int, val: string) {
+        wrlock(self.lockId);
+        try { self.value.insert(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func remove(idx: int) {
+        wrlock(self.lockId);
+        try { self.value.remove(idx); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func clear() {
+        wrlock(self.lockId);
+        try { self.value.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // push, add
+    @FuncAlias(["push", "add"])
+    func append(s) {
+        wrlock(self.lockId);
+        try { self.value.add(s); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func appendChar(c) {
+        wrlock(self.lockId);
+        try { self.value.add("" + c); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func appendInt(n) {
+        wrlock(self.lockId);
+        try { self.value.add("" + n); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func appendDouble(d) {
+        wrlock(self.lockId);
+        try { self.value.add("" + d); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func appendLine(s) {
+        wrlock(self.lockId);
+        try {
+            self.value.add(s);
+            self.value.add("\n");
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+}
