@@ -517,6 +517,49 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
     return 0;
 }
 
+/* ============================================================
+ * 受防护执行循环：接通 kit/runtime 的 runtime_error 与 VM 协作式异常机制
+ * ============================================================
+ * 背景：VM 异常是协作式跨帧展开（throw 只设状态、沿 C 调用链返回），
+ * 而 kit/runtime 库（lumyr_index_get/len 等）检测到错误时不持有
+ * VMExecCtx，只能经 g_err_jmp 非局部跳出深层 C 调用链——此前 VM 从不
+ * 设置 g_err_jmp，导致这类错误 try/catch 接不住、直接退出进程。
+ *
+ * 机制：
+ *   1) 保存外层 g_err_jmp，压入本层 jmp_buf 着陆垫
+ *      （嵌套调用天然成栈：函数调用在指令处理器内重入本函数）
+ *   2) setjmp 首次返回 → 跑现有 vm_exec_loop，结束后恢复外层着陆垫
+ *   3) runtime_error 长跳落地 → 恢复外层着陆垫，把 g_err_type/g_err_msg
+ *      包成 VAL_ERROR，交回 VM 协作式分派 vm_except_throw_value：
+ *      - 同帧 catch / finally：pc 已重定位 → 重入本函数继续执行
+ *      - 跨帧：g_unwind 激活 → 返回 VM_LOOP_UNWIND 向上传播
+ *      - 无处理器：throw_value 内部打印未捕获错误并 exit(1)
+ * 注：长跳会泄漏 C malloc 的临时对象（与 cgen 通道同一取舍）；
+ * GC 管理对象不受影响。
+ * 返回码与 vm_exec_loop 完全一致。 */
+int vm_exec_guarded(VMExecCtx* ctx, RetSlot* ret) {
+    jmp_buf pad;
+    jmp_buf* prevJmp = g_err_jmp;   /* setjmp 前赋值，长跳后值仍有效 */
+    g_err_jmp = &pad;
+    if(setjmp(pad) == 0) {
+        int status = vm_exec_loop(ctx, ret);
+        g_err_jmp = prevJmp;
+        return status;
+    }
+    /* runtime_error 着陆：恢复外层着陆垫，改经协作式异常分派 */
+    g_err_jmp = prevJmp;
+    Value e;
+    memset(&e, 0, sizeof(e));
+    e.type = VAL_ERROR;
+    e.v.err.type = strdup((g_err_type && g_err_type[0]) ? g_err_type : "RuntimeError");
+    e.v.err.message = strdup(g_err_msg ? g_err_msg : "");
+    e.v.err.stack = NULL;
+    vm_except_throw_value(ctx, e);
+    if(vm_except_unwind_active()) return VM_LOOP_UNWIND;
+    /* 同帧捕获或 finally 路径：pc 已重定位，重入继续执行 */
+    return vm_exec_guarded(ctx, ret);
+}
+
 /* ========== 顶层入口：初始化栈管理器并进入执行循环 ========== */
 Value vm_execute(VMExecCtx* ctx) {
     if (!g_stack_mgr) {
@@ -524,7 +567,7 @@ Value vm_execute(VMExecCtx* ctx) {
     }
     ctx->pc = 0;
     RetSlot ret;
-    vm_exec_loop(ctx, &ret);
+    vm_exec_guarded(ctx, &ret);
     /* 顶层 main 一般无 typed 返回值；有则退化为 nil（主流程不消费） */
     return ret.et == EXPR_TYPE_NONE ? ret.v : val_none();
 }

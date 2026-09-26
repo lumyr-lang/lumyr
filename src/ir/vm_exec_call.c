@@ -14,6 +14,7 @@
 #include "ast/lumyr_types.h"
 #include "vm_generator.h"
 #include "lumyr_value_type.h"
+#include "lumyr_value.h"
 #include "lm_value.h"
 #include "lm_type.h"
 #include "vm_exec.h"
@@ -123,8 +124,8 @@ static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
     ctx->const_cnt  = callee->const_cnt;
     ctx->sym_cnt    = callee->sym_cnt;
 
-    /* 可重入执行 callee（嵌套调用会再次进入 vm_exec_loop） */
-    int status = vm_exec_loop(ctx, ret);
+    /* 可重入执行 callee（嵌套调用会再次进入 vm_exec_guarded） */
+    int status = vm_exec_guarded(ctx, ret);
 
     /* 恢复调用方执行状态 */
     ctx->fn         = save.fn;
@@ -160,8 +161,12 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
 
     BytecodeFunc* callee = ir_func_table_lookup(cs->callee);
     if (!callee) {
-        fprintf(stderr, "VM: 调用未定义函数 %s\n", cs->callee);
-        return 0;
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "VM: 调用未定义函数 %s / call to undefined function %s",
+                 cs->callee, cs->callee);
+        runtime_error(buf);
+        return 0;   /* 不可达 */
     }
 
     /* 逆序弹实参（栈顶是最后一个实参），暂存以便顺序绑定 */
@@ -234,9 +239,9 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
     /* 3. 实例偏移 0 取 RuntimeTypeInfo → 按方法名查实际 RuntimeFunc */
     RuntimeTypeInfo* ri = recv_ptr ? *(RuntimeTypeInfo**)recv_ptr : NULL;
     if (!ri) {
-        fprintf(stderr, "VM: 方法接收者缺少类型信息\n");
         free(args);
-        return 0;
+        runtime_error("VM: 不能对 null 调用方法（方法接收者缺少类型信息）/ cannot call a method on null (receiver has no type info)");
+        return 0;   /* 不可达 */
     }
 
     /* 方法名：从静态内部名解析 "__m__" 后缀 */
@@ -301,10 +306,14 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
         Value fv;
         if (!vm_make_bound_method(recv, mname, &fv)) {
             Value tn = lumyr_type(recv);
-            fprintf(stderr, "运行时错误: 类型 %s 没有方法 \"%s\" 的可执行实现\n",
-                    lumyr_str_cstr(&tn), mname);
+            const char* tns = lumyr_str_cstr(&tn);
+            char buf[512];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误: 类型 %s 没有方法 \"%s\" 的可执行实现 / runtime error: type %s has no executable implementation of method \"%s\"",
+                     tns ? tns : "?", mname, tns ? tns : "?", mname);
             free(argv);
-            return 0;
+            runtime_error(buf);
+            return 0;   /* 不可达 */
         }
         Value outv;
         int status = vm_call_func_value(ctx, fv, argc - 1, &argv[1], &outv);
@@ -354,12 +363,16 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
         return status;
     }
 
-    /* 4. 其余：标准类型错误 */
+    /* 4. 其余：标准类型错误（经 runtime_error 走协作式 throw，try 可捕获） */
     Value tn = lumyr_type(recv);
-    fprintf(stderr, "运行时错误: 类型 %s 不支持方法 .%s\n",
-            lumyr_str_cstr(&tn), mname);
+    const char* tns = lumyr_str_cstr(&tn);
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "运行时错误: 类型 %s 不支持方法 .%s / runtime error: type %s does not support method .%s",
+             tns ? tns : "?", mname, tns ? tns : "?", mname);
     free(argv);
-    return 0;
+    runtime_error(buf);
+    return 0;   /* 不可达 */
 }
 
 /* ========== 获取函数值（裸函数名引用） ========== */
@@ -918,7 +931,7 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
     ctx->const_cnt = callee->const_cnt; ctx->sym_cnt = callee->sym_cnt;
 
     RetSlot ret;
-    int status = vm_exec_loop(ctx, &ret);
+    int status = vm_exec_guarded(ctx, &ret);
 
     ctx->fn = save.fn; ctx->code = save.code; ctx->pc = save.pc; ctx->frame = save.frame;
     ctx->const_pool = save.const_pool; ctx->syms = save.syms;

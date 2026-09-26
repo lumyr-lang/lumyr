@@ -38,8 +38,12 @@ void vm_set_gen_yielded(int y) { s_gen_yielded = y; }
 
 /* ========== runtime_undefined ========== */
 void runtime_undefined(const char* what, const char* name) {
-    fprintf(stderr, "运行时错误：未定义%s %s\n", what, name ? name : "?");
-    /* 不直接 exit，让 VM 主流程自然终止 */
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "运行时错误：未定义%s %s / runtime error: undefined %s %s",
+             what, name ? name : "?", what, name ? name : "?");
+    /* 经 runtime_error 走协作式 throw：try 可捕获；无 try 由 VM 退出 */
+    runtime_error(buf);
 }
 
 /* ========== GC 标记 ========== */
@@ -243,11 +247,11 @@ int generator_resume(GeneratorObject* gen, Value* result, Value* send_val,
     gen_ctx.syms       = (const char**)gen->bf->syms;
     gen_ctx.const_cnt  = gen->bf->const_cnt;
     gen_ctx.sym_cnt    = gen->bf->sym_cnt;
-    /* stacks 字段未使用（vm_exec_loop 走 g_stack_mgr 全局） */
+    /* stacks 字段未使用（vm_exec_guarded 走 g_stack_mgr 全局） */
 
     RetSlot ret;
     memset(&ret, 0, sizeof(ret));
-    int status = vm_exec_loop(&gen_ctx, &ret);
+    int status = vm_exec_guarded(&gen_ctx, &ret);
     (void)status;
 
     /* 恢复当前生成器指针 */

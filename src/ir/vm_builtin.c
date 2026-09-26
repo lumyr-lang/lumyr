@@ -688,47 +688,63 @@ static int bi_cmp_str(const void* pa, const void* pb) {
     return strcmp(a, b);
 }
 
-/* 类型错误提示（无兜底：不可恢复，立即中止进程） */
+/* 类型错误提示（无兜底：经 runtime_error 长跳到受防护循环，再走协作式
+ * throw——try 内可捕获；无 try 由 VM 打印「未捕获错误」并退出） */
 static int bi_type_err(const char* name, Value recv) {
     Value tn = lumyr_type(recv);
-    fprintf(stderr, "运行时错误: 类型 %s 不支持方法 .%s\n",
-            lumyr_str_cstr(&tn), name);
-    exit(1);
+    const char* tns = lumyr_str_cstr(&tn);
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+             "运行时错误: 类型 %s 不支持方法 .%s / runtime error: type %s does not support method .%s",
+             tns ? tns : "?", name, tns ? tns : "?", name);
+    runtime_error(buf);
+    return 0;   /* 不可达：runtime_error 已长跳/退出 */
 }
 
 static int bi_need_args(const char* name, int argc, int need) {
     if(argc < need) {
-        fprintf(stderr, "运行时错误: .%s 需要 %d 个参数，实际 %d 个\n", name, need, argc);
-        exit(1);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: .%s 需要 %d 个参数，实际 %d 个 / runtime error: .%s requires %d args, got %d",
+                 name, need, argc, name, need, argc);
+        runtime_error(buf);
     }
     return 1;
 }
 
-/* 线程/锁族参数校验（中英双语；不可恢复同 bi_type_err，立即中止） */
+/* 线程/锁族参数校验（中英双语；经 runtime_error 走协作式 throw，可被捕获） */
 static int bi_need_args_mt(const char* name, int argc, int need) {
     if(argc < need) {
-        fprintf(stderr, "运行时错误: %s 需要 %d 个参数，实际 %d 个 / %s expects %d args, got %d\n",
-                name, need, argc, name, need, argc);
-        exit(1);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: %s 需要 %d 个参数，实际 %d 个 / %s expects %d args, got %d",
+                 name, need, argc, name, need, argc);
+        runtime_error(buf);
     }
     return 1;
 }
 
 static void bi_need_int_mt(const char* name, Value v, int pos) {
     if(!bi_is_int_et(v.type)) {
-        fprintf(stderr, "运行时错误: %s 第 %d 个参数须为整数 id / %s: argument %d must be an integer id\n",
-                name, pos, name, pos);
-        exit(1);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: %s 第 %d 个参数须为整数 id / %s: argument %d must be an integer id",
+                 name, pos, name, pos);
+        runtime_error(buf);
     }
 }
 
 /* 返回的 cstr 指向 *v 内部（SSO 内联缓冲区），调用方须保证 v 在使用期间存活
- * （不能传按值拷贝的局部 Value——返回后其 SSO 指针随栈帧失效） */
+ * （不能传按值拷贝的局部 Value——返回后其 SSO 指针随栈帧失效）。
+ * 类型不符经 runtime_error 长跳（不可达返回 NULL）。 */
 static const char* bi_need_str_mt(const char* name, const Value* v, int pos) {
     if(v->type != VAL_STRING) {
-        fprintf(stderr, "运行时错误: %s 第 %d 个参数须为字符串 / %s: argument %d must be a string\n",
-                name, pos, name, pos);
-        exit(1);
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: %s 第 %d 个参数须为字符串 / %s: argument %d must be a string",
+                 name, pos, name, pos);
+        runtime_error(buf);
+        return NULL;   /* 不可达 */
     }
     return lumyr_str_cstr(v);
 }
@@ -1321,9 +1337,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int64_t i = bi_num_i64(argv[1]);
         int clen = lumyr_str_ulen(&recv);
         if(i < 0 || i >= clen) {
-            fprintf(stderr, "运行时错误 / Runtime error: char_at(%lld) 越界（长度 %d）/ char_at(%lld) out of bounds (length %d)\n",
-                    (long long)i, clen, (long long)i, clen);
-            exit(EXIT_FAILURE);
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误 / Runtime error: char_at(%lld) 越界（长度 %d）/ char_at(%lld) out of bounds (length %d)",
+                     (long long)i, clen, (long long)i, clen);
+            runtime_error(buf);
         }
         /* 字符语义：定位第 i 个码点的字节范围，返回该字符（1 码点字符串） */
         const unsigned char* p = (const unsigned char*)s;
@@ -1911,8 +1929,8 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 } else if(ta->elem_type == VAL_STRING) {
                     qsort(ta->items, (size_t)ta->len, isz, bi_cmp_str);
                 } else {
-                    fprintf(stderr, "运行时错误: TypedArray 元素类型不支持 sort\n");
-                    return 0;
+                    runtime_error("运行时错误: TypedArray 元素类型不支持 sort / runtime error: TypedArray element type does not support sort");
+                    return 0;   /* 不可达 */
                 }
             }
             *out = recv;
@@ -2125,14 +2143,14 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int dims[BI_MAX_DIMS];
         int nd = bi_shape_of(recv, dims);
         if(nd < 0) {
-            fprintf(stderr, "运行时错误: shape 嵌套超限或元素非数值\n");
+            runtime_error("运行时错误: shape 嵌套超限或元素非数值 / runtime error: shape nesting too deep or non-numeric elements");
             return 0;
         }
         Value r = val_array(nd);
         for(int i = 0; i < nd; i++) r.v.array->items[i] = lumyr_make_int64(dims[i]);
         /* 递归校验规则性 */
         if(nd > 0 && !bi_check_shape(recv, dims, 0, nd)) {
-            fprintf(stderr, "运行时错误: shape 数组维度不规则\n");
+            runtime_error("运行时错误: shape 数组维度不规则 / runtime error: ragged shape dimensions");
             return 0;
         }
         *out = r;
@@ -2147,19 +2165,28 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(argc == 1 && argv[1].type == VAL_ARRAY) {
             ValueArray* da = argv[1].v.array;
             nd = da ? da->len : 0;
-            if(nd > BI_MAX_DIMS) { fprintf(stderr, "运行时错误: reshape 维度过深\n"); return 0; }
+            if(nd > BI_MAX_DIMS) {
+                runtime_error("运行时错误: reshape 维度过深 / runtime error: reshape has too many dimensions");
+                return 0;
+            }
             for(int i = 0; i < nd; i++) dims[i] = (int)bi_num_i64(da->items[i]);
         } else {
             nd = argc;
-            if(nd > BI_MAX_DIMS) { fprintf(stderr, "运行时错误: reshape 维度过深\n"); return 0; }
+            if(nd > BI_MAX_DIMS) {
+                runtime_error("运行时错误: reshape 维度过深 / runtime error: reshape has too many dimensions");
+                return 0;
+            }
             for(int i = 0; i < nd; i++) dims[i] = (int)bi_num_i64(argv[1 + i]);
         }
-        if(nd == 0) { fprintf(stderr, "运行时错误: reshape 需要至少一个维度\n"); return 0; }
+        if(nd == 0) {
+            runtime_error("运行时错误: reshape 需要至少一个维度 / runtime error: reshape requires at least one dimension");
+            return 0;
+        }
         /* 原形状校验 + 展平 */
         int od[BI_MAX_DIMS];
         int ond = bi_shape_of(recv, od);
         if(ond < 0 || (ond > 0 && !bi_check_shape(recv, od, 0, ond))) {
-            fprintf(stderr, "运行时错误: reshape 数组维度不规则\n");
+            runtime_error("运行时错误: reshape 数组维度不规则 / runtime error: ragged reshape input dimensions");
             return 0;
         }
         int total = 1;
@@ -2168,8 +2195,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int k = 0;
         bi_flatten(recv, flat, &k);
         if(k != total) {
-            fprintf(stderr, "运行时错误: reshape 元素数不匹配（%d 个元素 vs 新形状 %d）\n", k, total);
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误: reshape 元素数不匹配（%d 个元素 vs 新形状 %d）/ runtime error: reshape element count mismatch (%d elements vs new shape %d)",
+                     k, total, k, total);
             free(flat);
+            runtime_error(buf);
             return 0;
         }
         int fk = 0;
@@ -2215,7 +2246,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         /* TypedArray：裸缓冲拷贝（仅数值元素类型） */
         TypedArray* ta = recv.v.typed_array;
         if(!bi_is_int_et(ta->elem_type) && !bi_is_float_et(ta->elem_type)) {
-            fprintf(stderr, "运行时错误: slice 仅支持数值 TypedArray\n");
+            runtime_error("运行时错误: slice 仅支持数值 TypedArray / runtime error: slice supports only numeric TypedArrays");
             return 0;
         }
         size_t isz = lumyr_etype_itemsz(ta->elem_type);
@@ -2245,7 +2276,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             TypedArray* a = recv.v.typed_array;
             TypedArray* b = other.v.typed_array;
             if(!bi_is_int_et(a->elem_type) && !bi_is_float_et(a->elem_type)) {
-                fprintf(stderr, "运行时错误: concat 仅支持数值 TypedArray\n");
+                runtime_error("运行时错误: concat 仅支持数值 TypedArray / runtime error: concat supports only numeric TypedArrays");
                 return 0;
             }
             size_t isz = lumyr_etype_itemsz(a->elem_type);
@@ -2257,7 +2288,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             free(buf);
             return 1;
         }
-        fprintf(stderr, "运行时错误: concat 两边数组种类/元素类型不一致\n");
+        runtime_error("运行时错误: concat 两边数组种类/元素类型不一致 / runtime error: concat operands have different array kinds or element types");
         return 0;
     }
     case BUILTIN_DOT: {
@@ -2266,12 +2297,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(!bi_need_args("dot", argc, 1)) return 0;
         Value other = argv[1];
         if(other.type != VAL_ARRAY && other.type != VAL_TYPED_ARRAY) {
-            fprintf(stderr, "运行时错误: dot 参数必须是数组\n");
+            runtime_error("运行时错误: dot 参数必须是数组 / runtime error: dot argument must be an array");
             return 0;
         }
         int n = bi_len_of(recv);
         if(n != bi_len_of(other)) {
-            fprintf(stderr, "运行时错误: dot 维度不匹配（%d vs %d）\n", n, bi_len_of(other));
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误: dot 维度不匹配（%d vs %d）/ runtime error: dot dimension mismatch (%d vs %d)",
+                     n, bi_len_of(other), n, bi_len_of(other));
+            runtime_error(buf);
             return 0;
         }
         if(bi_vec_int_only(recv) && bi_vec_int_only(other)) {
@@ -2292,11 +2327,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         Value B = argv[1];
         int m, k1, k2, p;
         if(!bi_mat_dims(recv, &m, &k1) || !bi_mat_dims(B, &k2, &p)) {
-            fprintf(stderr, "运行时错误: matmul 需要 2D 矩阵\n");
+            runtime_error("运行时错误: matmul 需要 2D 矩阵 / runtime error: matmul requires 2D matrices");
             return 0;
         }
         if(k1 != k2) {
-            fprintf(stderr, "运行时错误: matmul 内维不匹配（%d vs %d）\n", k1, k2);
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误: matmul 内维不匹配（%d vs %d）/ runtime error: matmul inner dimension mismatch (%d vs %d)",
+                     k1, k2, k1, k2);
+            runtime_error(buf);
             return 0;
         }
         int int_only = bi_vec_int_only(recv) && bi_vec_int_only(B);
@@ -2326,7 +2365,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_ARRAY) return bi_type_err("transpose", recv);
         int rows, cols;
         if(!bi_mat_dims(recv, &rows, &cols)) {
-            fprintf(stderr, "运行时错误: transpose 需要 2D 矩阵\n");
+            runtime_error("运行时错误: transpose 需要 2D 矩阵 / runtime error: transpose requires a 2D matrix");
             return 0;
         }
         Value r = val_array(cols);
@@ -2346,7 +2385,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_ARRAY) return bi_type_err("det", recv);
         int n, m;
         if(!bi_mat_dims(recv, &n, &m) || n != m) {
-            fprintf(stderr, "运行时错误: det 需要方阵\n");
+            runtime_error("运行时错误: det 需要方阵 / runtime error: det requires a square matrix");
             return 0;
         }
         /* 高斯消元（部分主元），double */
@@ -2381,7 +2420,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type != VAL_ARRAY) return bi_type_err("inv", recv);
         int n, m;
         if(!bi_mat_dims(recv, &n, &m) || n != m) {
-            fprintf(stderr, "运行时错误: inv 需要方阵\n");
+            runtime_error("运行时错误: inv 需要方阵 / runtime error: inv requires a square matrix");
             return 0;
         }
         /* Gauss-Jordan 消元求逆 */
@@ -2419,8 +2458,8 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             }
         }
         if(!ok) {
-            fprintf(stderr, "运行时错误: inv 矩阵奇异（不可逆）\n");
             free(a); free(iv);
+            runtime_error("运行时错误: inv 矩阵奇异（不可逆）/ runtime error: inv matrix is singular (not invertible)");
             return 0;
         }
         Value r = val_array(n);
@@ -2534,7 +2573,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         /* receive()：在生成器内获取 send() 发送的值 */
         GeneratorObject* gen = vm_get_current_generator();
         if(!gen) {
-            fprintf(stderr, "VM: receive() 必须在生成器函数内调用\n");
+            runtime_error("VM: receive() 必须在生成器函数内调用 / receive() must be called inside a generator function");
             return 0;
         }
         *out = gen->send_value;
@@ -3370,8 +3409,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_THREAD: {
         bi_need_args_mt("thread", argc, 1);
         if(argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
-            fprintf(stderr, "运行时错误: thread(f, args...) 首参须为函数 / thread: first argument must be a function\n");
-            exit(1);
+            runtime_error("运行时错误: thread(f, args...) 首参须为函数 / thread: first argument must be a function");
         }
         /* 函数值堆交接给线程体（函数为引用语义：浅拷贝共享 RuntimeFunc，线程体 free 容器） */
         Value* fvp = (Value*)malloc(sizeof(Value));

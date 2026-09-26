@@ -204,6 +204,11 @@ void vm_except_raise_str(VMExecCtx* ctx, const char* type, const char* msg) {
     vm_except_throw_value(ctx, e);
 }
 
+/* 跨帧展开是否激活（供 runtime_error 长跳落地后的受防护循环判定走向） */
+int vm_except_unwind_active(void) {
+    return g_unwind.active ? 1 : 0;
+}
+
 /* ========== GET_ERR：把原始 throw 值压 VALUE 栈（catch 变量绑定它） ========== */
 int vm_exec_get_err(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;

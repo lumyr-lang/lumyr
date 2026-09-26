@@ -77,6 +77,9 @@ typedef void (*VMInstrHandler)(VMExecCtx* ctx, Instruction* in);
 #define VM_LOOP_NORMAL 0   /* 正常结束（RETURN/RETURN_NIL/自然末尾） */
 #define VM_LOOP_UNWIND 1   /* 异常跨帧展开中，调用者须继续向外传播 */
 int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret);
+/* 受防护执行循环（vm_exec.c）：接通 kit/runtime runtime_error 与 VM 协作式异常，
+   返回码与 vm_exec_loop 相同（VM_LOOP_NORMAL / VM_LOOP_UNWIND） */
+int vm_exec_guarded(VMExecCtx* ctx, RetSlot* ret);
 
 /* 异常展开检测（vm_except.c）：
    0=无展开；1=当前帧是捕获目标（已设置 current_error 并重定位 pc）；-1=需向外传播 */
@@ -88,6 +91,8 @@ int vm_except_take_pending_return(RetSlot* out);
 /* 内部指令抛出异常（vm_except.c）：以 throw 值走分派；未捕获则 exit(1) */
 int vm_except_throw_value(VMExecCtx* ctx, Value v);
 void vm_except_raise_str(VMExecCtx* ctx, const char* type, const char* msg);
+/* 跨帧展开是否激活（vm_except.c）：runtime_error 长跳落地后判定走向 */
+int vm_except_unwind_active(void);
 
 /* 返回值独立化（字符串堆值深拷贝），定义在 vm_exec.c */
 Value ret_value_detach(Value v);
