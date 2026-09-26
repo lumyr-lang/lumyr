@@ -144,31 +144,31 @@ public class ReadWriteStringBuffer extends StringBuffer {
 
     // push, add
     @FuncAlias(["push", "add"])
-    func append(s) {
+    func append(s: string) {
         wrlock(self.lockId);
         try { self.value.add(s); } finally { unlock(self.lockId); }
         return self;
     }
 
-    func appendChar(c) {
+    func appendChar(c: char) {
         wrlock(self.lockId);
         try { self.value.add("" + c); } finally { unlock(self.lockId); }
         return self;
     }
 
-    func appendInt(n) {
+    func appendInt(n: int) {
         wrlock(self.lockId);
         try { self.value.add("" + n); } finally { unlock(self.lockId); }
         return self;
     }
 
-    func appendDouble(d) {
+    func appendDouble(d: double) {
         wrlock(self.lockId);
         try { self.value.add("" + d); } finally { unlock(self.lockId); }
         return self;
     }
 
-    func appendLine(s) {
+    func appendLine(s: string) {
         wrlock(self.lockId);
         try {
             self.value.add(s);
