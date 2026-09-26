@@ -1883,6 +1883,12 @@ int typecheck_expr(AstNode* node)
                              strncmp(node->u.func_def.name, "_arrow_", 7) == 0);
             if(func_depth > 0 && !is_lambda) {
                 // 嵌套具名函数：codegen 不支持，语义检查同样跳过（保持一致）
+                /* 但函数名必须登记为当前 lambda 的局部变量：否则箭头体内
+                 * 对该函数名的引用会被误判为外层捕获变量，运行时 mkclosure
+                 * 找不到该槽位报"闭包无法捕获未定义变量"。func 内嵌套 func
+                 * 走静态符号表 + CALL 无此问题；箭头走闭包捕获机制，缺少此
+                 * 登记会把局部 func 名加入捕获列表。 */
+                if(in_lambda) lambda_local_add(node->u.func_def.name);
                 node->val_type = VAL_FUNC;
                 break;
             }
