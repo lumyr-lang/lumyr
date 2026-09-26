@@ -330,10 +330,70 @@ Decimal* lumyr_decimal_div(Decimal* a, Decimal* b) {
     return result;
 }
 
-/* 比较 */
+/* ===== 数值比较辅助 ===== */
+/* 拆分十进制字符串为 符号/整数段/小数段（段指针指向原串，不分配） */
+static void decimal_split(const char* s, int* sign, const char** intPart, int* intLen,
+                          const char** fracPart, int* fracLen) {
+    *sign = 1;
+    if(*s == '-') { *sign = -1; s++; }
+    else if(*s == '+') { s++; }
+    const char* dot = strchr(s, '.');
+    if(dot) {
+        *intPart = s; *intLen = (int)(dot - s);
+        *fracPart = dot + 1; *fracLen = (int)strlen(dot + 1);
+    } else {
+        *intPart = s; *intLen = (int)strlen(s);
+        *fracPart = ""; *fracLen = 0;
+    }
+}
+
+/* 整数段去前导零 */
+static void decimal_strip_int(const char** p, int* len) {
+    while(*len > 1 && **p == '0') { (*p)++; (*len)--; }
+}
+
+/* 是否为零（整数段与小数段全为 0） */
+static int decimal_is_zero(const char* ip, int il, const char* fp, int fl) {
+    int i;
+    for(i = 0; i < il; i++) if(ip[i] != '0') return 0;
+    for(i = 0; i < fl; i++) if(fp[i] != '0') return 0;
+    return 1;
+}
+
+/* 绝对值比较 |a| vs |b|：-1/0/1。调用前已拆分 */
+static int decimal_abs_cmp(const char* ai, int ail, const char* af, int afl,
+                           const char* bi, int bil, const char* bf, int bfl) {
+    decimal_strip_int(&ai, &ail);
+    decimal_strip_int(&bi, &bil);
+    if(ail != bil) return ail > bil ? 1 : -1;   /* 整数位数多者大（已无先导零） */
+    int r = strncmp(ai, bi, ail);
+    if(r != 0) return r > 0 ? 1 : -1;
+    /* 整数部分相等：小数部分逐位比，短侧补零 */
+    int mf = afl > bfl ? afl : bfl;
+    for(int i = 0; i < mf; i++) {
+        char ca = i < afl ? af[i] : '0';
+        char cb = i < bfl ? bf[i] : '0';
+        if(ca != cb) return ca > cb ? 1 : -1;
+    }
+    return 0;
+}
+
+/* 比较：真数值比较（此前是 strcmp 的 TODO，"0.25000000000000000000" != "0.25"） */
 int lumyr_decimal_cmp(Decimal* a, Decimal* b) {
-    /* TODO: 实现真正的比较 */
-    return strcmp(a->str, b->str);
+    if(!a || !b) return (a != NULL) - (b != NULL);
+    int as, bs, ail, afl, bil, bfl;
+    const char *ai, *af, *bi, *bf;
+    decimal_split(a->str, &as, &ai, &ail, &af, &afl);
+    decimal_split(b->str, &bs, &bi, &bil, &bf, &bfl);
+    /* -0 == 0 */
+    int aZero = decimal_is_zero(ai, ail, af, afl);
+    int bZero = decimal_is_zero(bi, bil, bf, bfl);
+    if(aZero && bZero) return 0;
+    if(aZero) return bs > 0 ? -1 : 1;
+    if(bZero) return as > 0 ? 1 : -1;
+    if(as != bs) return as > 0 ? 1 : -1;
+    int r = decimal_abs_cmp(ai, ail, af, afl, bi, bil, bf, bfl);
+    return as > 0 ? r : -r;
 }
 
 /* 打印 */

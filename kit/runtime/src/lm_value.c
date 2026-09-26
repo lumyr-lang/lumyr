@@ -20,6 +20,13 @@
 #include <ctype.h>
 
 // 字典辅助（VAL_MAP）前向声明：lumyr_eq 等在定义之前引用
+// 高精度提升辅助（value_compare/lumyr_add 等在定义之前引用，定义见 value_compare 前）
+static BigInt* value_promote_bigint(Value v, int* need_free);
+static BitDecimal* value_promote_bitdecimal(Value v, int* need_free);
+static Decimal* value_promote_decimal(Value v, int* need_free);
+static int value_is_int_family(ValueType t);
+static int value_is_float_family(ValueType t);
+
 Value lumyr_make_int(int i) {
     Value v;
     v.type = VAL_INT;
@@ -461,6 +468,43 @@ Value lumyr_add(Value a, Value b) {
     }
     // complex 运算（complex + complex → complex）
     if(a.type == VAL_COMPLEX && b.type == VAL_COMPLEX) return lumyr_complex_add(a, b);
+    /* 高精度算术：与编译期静态路径同优先级 bigint > bitdecimal > decimal。
+       静态路径（typed 操作数）发 OPC_BIGINT_ADD 等专用指令；动态路径（无标注
+       形参/动态变量）经 VADD 到此——此前落入 value_as_number 得 0.0+0.0，
+       bigint 加法恒为 0。提升规则与静态一致（浮点经 %f 字符串截断）。 */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT) {
+        int fa, fb;
+        BigInt* ba = value_promote_bigint(a, &fa);
+        BigInt* bb = value_promote_bigint(b, &fb);
+        BigInt* r = lumyr_bigint_add(ba, bb);
+        if(fa) lumyr_bigint_free(ba);
+        if(fb) lumyr_bigint_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BIGINT; v.v.bigint = r;
+        return v;
+    }
+    if(a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        int fa, fb;
+        BitDecimal* ba = value_promote_bitdecimal(a, &fa);
+        BitDecimal* bb = value_promote_bitdecimal(b, &fb);
+        BitDecimal* r = lumyr_bitdecimal_add(ba, bb);
+        if(fa) lumyr_bitdecimal_free(ba);
+        if(fb) lumyr_bitdecimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BITDECIMAL; v.v.bitdecimal = r;
+        return v;
+    }
+    if(a.type == VAL_DECIMAL || b.type == VAL_DECIMAL) {
+        int fa, fb;
+        Decimal* ba = value_promote_decimal(a, &fa);
+        Decimal* bb = value_promote_decimal(b, &fb);
+        Decimal* r = lumyr_decimal_add(ba, bb);
+        if(fa) lumyr_decimal_free(ba);
+        if(fb) lumyr_decimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_DECIMAL; v.v.decimal = r;
+        return v;
+    }
     /* 数组拼接：VAL_ARRAY + VAL_ARRAY → 新数组（元素浅拷贝，与 concat 一致） */
     if(a.type == VAL_ARRAY && b.type == VAL_ARRAY) {
         int n1 = a.v.array ? (int)a.v.array->len : 0;
@@ -482,6 +526,40 @@ Value lumyr_add(Value a, Value b) {
 
 Value lumyr_sub(Value a, Value b) {
     if(a.type == VAL_COMPLEX && b.type == VAL_COMPLEX) return lumyr_complex_sub(a, b);
+    /* 高精度减法：同 lumyr_add 的分派与优先级 */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT) {
+        int fa, fb;
+        BigInt* ba = value_promote_bigint(a, &fa);
+        BigInt* bb = value_promote_bigint(b, &fb);
+        BigInt* r = lumyr_bigint_sub(ba, bb);
+        if(fa) lumyr_bigint_free(ba);
+        if(fb) lumyr_bigint_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BIGINT; v.v.bigint = r;
+        return v;
+    }
+    if(a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        int fa, fb;
+        BitDecimal* ba = value_promote_bitdecimal(a, &fa);
+        BitDecimal* bb = value_promote_bitdecimal(b, &fb);
+        BitDecimal* r = lumyr_bitdecimal_sub(ba, bb);
+        if(fa) lumyr_bitdecimal_free(ba);
+        if(fb) lumyr_bitdecimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BITDECIMAL; v.v.bitdecimal = r;
+        return v;
+    }
+    if(a.type == VAL_DECIMAL || b.type == VAL_DECIMAL) {
+        int fa, fb;
+        Decimal* ba = value_promote_decimal(a, &fa);
+        Decimal* bb = value_promote_decimal(b, &fb);
+        Decimal* r = lumyr_decimal_sub(ba, bb);
+        if(fa) lumyr_decimal_free(ba);
+        if(fb) lumyr_decimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_DECIMAL; v.v.decimal = r;
+        return v;
+    }
     if(a.type == VAL_INT && b.type == VAL_INT)
     {
         return lumyr_make_int(a.v.i - b.v.i);
@@ -493,6 +571,40 @@ Value lumyr_sub(Value a, Value b) {
 
 Value lumyr_mul(Value a, Value b) {
     if(a.type == VAL_COMPLEX && b.type == VAL_COMPLEX) return lumyr_complex_mul(a, b);
+    /* 高精度乘法：同 lumyr_add 的分派与优先级 */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT) {
+        int fa, fb;
+        BigInt* ba = value_promote_bigint(a, &fa);
+        BigInt* bb = value_promote_bigint(b, &fb);
+        BigInt* r = lumyr_bigint_mul(ba, bb);
+        if(fa) lumyr_bigint_free(ba);
+        if(fb) lumyr_bigint_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BIGINT; v.v.bigint = r;
+        return v;
+    }
+    if(a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        int fa, fb;
+        BitDecimal* ba = value_promote_bitdecimal(a, &fa);
+        BitDecimal* bb = value_promote_bitdecimal(b, &fb);
+        BitDecimal* r = lumyr_bitdecimal_mul(ba, bb);
+        if(fa) lumyr_bitdecimal_free(ba);
+        if(fb) lumyr_bitdecimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BITDECIMAL; v.v.bitdecimal = r;
+        return v;
+    }
+    if(a.type == VAL_DECIMAL || b.type == VAL_DECIMAL) {
+        int fa, fb;
+        Decimal* ba = value_promote_decimal(a, &fa);
+        Decimal* bb = value_promote_decimal(b, &fb);
+        Decimal* r = lumyr_decimal_mul(ba, bb);
+        if(fa) lumyr_decimal_free(ba);
+        if(fb) lumyr_decimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_DECIMAL; v.v.decimal = r;
+        return v;
+    }
     if(a.type == VAL_INT && b.type == VAL_INT)
     {
         return lumyr_make_int(a.v.i * b.v.i);
@@ -503,6 +615,40 @@ Value lumyr_mul(Value a, Value b) {
 }
 
 Value lumyr_div(Value a, Value b) {
+    /* 高精度除法：bigint 为整数除法（与静态 OPC_BIGINT_DIV 一致），decimal/bitdecimal 高精度除 */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT) {
+        int fa, fb;
+        BigInt* ba = value_promote_bigint(a, &fa);
+        BigInt* bb = value_promote_bigint(b, &fb);
+        BigInt* r = lumyr_bigint_div(ba, bb);
+        if(fa) lumyr_bigint_free(ba);
+        if(fb) lumyr_bigint_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BIGINT; v.v.bigint = r;
+        return v;
+    }
+    if(a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        int fa, fb;
+        BitDecimal* ba = value_promote_bitdecimal(a, &fa);
+        BitDecimal* bb = value_promote_bitdecimal(b, &fb);
+        BitDecimal* r = lumyr_bitdecimal_div(ba, bb);
+        if(fa) lumyr_bitdecimal_free(ba);
+        if(fb) lumyr_bitdecimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_BITDECIMAL; v.v.bitdecimal = r;
+        return v;
+    }
+    if(a.type == VAL_DECIMAL || b.type == VAL_DECIMAL) {
+        int fa, fb;
+        Decimal* ba = value_promote_decimal(a, &fa);
+        Decimal* bb = value_promote_decimal(b, &fb);
+        Decimal* r = lumyr_decimal_div(ba, bb);
+        if(fa) lumyr_decimal_free(ba);
+        if(fb) lumyr_decimal_free(bb);
+        Value v; memset(&v, 0, sizeof v);
+        v.type = VAL_DECIMAL; v.v.decimal = r;
+        return v;
+    }
     double na = value_as_number(a);
     double nb = value_as_number(b);
     return lumyr_make_double(na / nb);
@@ -510,6 +656,12 @@ Value lumyr_div(Value a, Value b) {
 
 // % 取模：int%int → int（C 语义，负数与 C 一致）；任一 double → fmod
 Value lumyr_mod(Value a, Value b) {
+    /* 高精度类型无取模运算（静态路径编译期已拦截；动态路径运行期报错，无兜底） */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT ||
+       a.type == VAL_DECIMAL || b.type == VAL_DECIMAL ||
+       a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        runtime_error("高精度类型不支持取模运算 % / high-precision types (bigint/decimal/bitdecimal) do not support the % operator");
+    }
     if(a.type == VAL_INT && b.type == VAL_INT) {
         if(b.v.i == 0) return lumyr_make_double(0.0 / 0.0);  // 除零得 NaN，避免 UB
         return lumyr_make_int(a.v.i % b.v.i);
@@ -1019,6 +1171,119 @@ Value lumyr_array_set(Value arr, Value idx, Value val) {
 }
 
 // > 弱类型：任意一方为字符串 → 字典序strcmp；否则数值比较
+/* ===== 高精度类型（bigint/decimal/bitdecimal）动态比较支持 ===== */
+/* 整数族判定（可精确提取 int64 位值） */
+static int value_is_int_family(ValueType t) {
+    switch(t) {
+        case VAL_INT: case VAL_INT8: case VAL_INT16: case VAL_SHORT: case VAL_INT32:
+        case VAL_INT64: case VAL_LONG_LONG: case VAL_LONG:
+        case VAL_BYTE: case VAL_UINT8: case VAL_UCHAR: case VAL_UINT16: case VAL_USHORT:
+        case VAL_UINT32: case VAL_UINT: case VAL_UINT64: case VAL_ULONG:
+        case VAL_SIZE_T: case VAL_SSIZE_T: case VAL_BOOL: case VAL_CHAR:
+            return 1;
+        default: return 0;
+    }
+}
+/* 浮点族判定 */
+static int value_is_float_family(ValueType t) {
+    return t == VAL_FLOAT || t == VAL_DOUBLE || t == VAL_LONG_DOUBLE;
+}
+/* 精确提取整数族 Value 的 int64 值（调用方保证 value_is_int_family 为真） */
+static int64_t value_as_int64_exact(Value x) {
+    switch(x.type) {
+        case VAL_INT:       return x.v.i;
+        case VAL_INT8:      return x.v.i8;
+        case VAL_INT16:     return x.v.i16;
+        case VAL_SHORT:     return x.v.sh;
+        case VAL_INT32:     return x.v.i32;
+        case VAL_INT64:     return x.v.i64;
+        case VAL_LONG_LONG: return x.v.ll;
+        case VAL_LONG:      return (int64_t)x.v.l;
+        case VAL_BYTE:      return x.v.by;
+        case VAL_UINT8:     return x.v.u8;
+        case VAL_UCHAR:     return x.v.uc;
+        case VAL_UINT16:    return x.v.u16;
+        case VAL_USHORT:    return x.v.us;
+        case VAL_UINT32:    return x.v.u32;
+        case VAL_UINT:      return x.v.ui;
+        case VAL_UINT64:    return (int64_t)x.v.u64;  /* 位模式 reinterpret，与 INT64 栈存储一致 */
+        case VAL_ULONG:     return (int64_t)x.v.ul;
+        case VAL_SIZE_T:    return (int64_t)x.v.st;
+        case VAL_SSIZE_T:   return x.v.sst;
+        case VAL_BOOL:      return x.v.b ? 1 : 0;
+        case VAL_CHAR:      return (int64_t)(unsigned char)x.v.c;
+        default:            return 0;
+    }
+}
+static double value_as_float_family(Value x) {
+    if(x.type == VAL_FLOAT) return (double)x.v.f;
+    if(x.type == VAL_LONG_DOUBLE) return (double)x.v.ld;
+    return x.v.d;
+}
+/* 把 Value 提升为 BigInt：整数族精确 from_int64；浮点/decimal/bitdecimal 经字符串
+   （与编译期静态路径 *_TO_STRING + BIGINT_FROM_STRING 链一致，%f 截断小数）；
+   非数值按 0（与 value_as_number 的 default 语义一致）。
+   *need_free=1 时返回对象为临时对象，调用方比较后须 lumyr_bigint_free。 */
+static BigInt* value_promote_bigint(Value v, int* need_free) {
+    *need_free = 1;
+    if(v.type == VAL_BIGINT) {
+        if(v.v.bigint) { *need_free = 0; return v.v.bigint; }
+        return lumyr_bigint_from_int64(0);
+    }
+    if(value_is_int_family(v.type)) return lumyr_bigint_from_int64(value_as_int64_exact(v));
+    if(value_is_float_family(v.type)) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "%f", value_as_float_family(v));
+        return lumyr_bigint_from_string(buf);
+    }
+    if(v.type == VAL_DECIMAL) {
+        char* s = lumyr_decimal_to_string(v.v.decimal);
+        BigInt* r = lumyr_bigint_from_string(s ? s : "0");
+        free(s);
+        return r;
+    }
+    if(v.type == VAL_BITDECIMAL) {
+        char* s = lumyr_bitdecimal_to_string(v.v.bitdecimal);
+        BigInt* r = lumyr_bigint_from_string(s ? s : "0");
+        free(s);
+        return r;
+    }
+    return lumyr_bigint_from_int64(0);
+}
+/* 把 Value 提升为 BitDecimal：整数族 from_int64；浮点 from_double（精确二进制值）；
+   decimal 经字符串；非数值按 0。*need_free 语义同上。 */
+static BitDecimal* value_promote_bitdecimal(Value v, int* need_free) {
+    *need_free = 1;
+    if(v.type == VAL_BITDECIMAL) {
+        if(v.v.bitdecimal) { *need_free = 0; return v.v.bitdecimal; }
+        return lumyr_bitdecimal_from_int64(0);
+    }
+    if(value_is_int_family(v.type)) return lumyr_bitdecimal_from_int64(value_as_int64_exact(v));
+    if(value_is_float_family(v.type)) return lumyr_bitdecimal_from_double(value_as_float_family(v));
+    if(v.type == VAL_DECIMAL) {
+        char* s = lumyr_decimal_to_string(v.v.decimal);
+        BitDecimal* r = lumyr_bitdecimal_from_string(s ? s : "0");
+        free(s);
+        return r;
+    }
+    return lumyr_bitdecimal_from_int64(0);
+}
+/* 把 Value 提升为 Decimal：整数族 from_int64；浮点经 %f 字符串（与静态路径一致）；
+   非数值按 0。*need_free 语义同上。 */
+static Decimal* value_promote_decimal(Value v, int* need_free) {
+    *need_free = 1;
+    if(v.type == VAL_DECIMAL) {
+        if(v.v.decimal) { *need_free = 0; return v.v.decimal; }
+        return lumyr_decimal_from_int64(0);
+    }
+    if(value_is_int_family(v.type)) return lumyr_decimal_from_int64(value_as_int64_exact(v));
+    if(value_is_float_family(v.type)) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "%f", value_as_float_family(v));
+        return lumyr_decimal_from_string(buf);
+    }
+    return lumyr_decimal_from_int64(0);
+}
 /* 数值比较辅助：同类型直接读字段，跨类型用统一转换 */
 static int value_compare(Value a, Value b) {
     if(a.type == b.type) {
@@ -1049,8 +1314,51 @@ static int value_compare(Value a, Value b) {
             case VAL_BOOL:         return (a.v.b > b.v.b) - (a.v.b < b.v.b);
             case VAL_CHAR:         return ((unsigned char)a.v.c > (unsigned char)b.v.c) -
                                          ((unsigned char)a.v.c < (unsigned char)b.v.c);
+            /* 高精度同类型：专用 cmp 精确比较（NULL 防护：空指针小于非空） */
+            case VAL_BIGINT:
+                if(!a.v.bigint || !b.v.bigint)
+                    return (a.v.bigint != NULL) - (b.v.bigint != NULL);
+                return lumyr_bigint_cmp(a.v.bigint, b.v.bigint);
+            case VAL_DECIMAL:
+                if(!a.v.decimal || !b.v.decimal)
+                    return (a.v.decimal != NULL) - (b.v.decimal != NULL);
+                return lumyr_decimal_cmp(a.v.decimal, b.v.decimal);
+            case VAL_BITDECIMAL:
+                if(!a.v.bitdecimal || !b.v.bitdecimal)
+                    return (a.v.bitdecimal != NULL) - (b.v.bitdecimal != NULL);
+                return lumyr_bitdecimal_cmp(a.v.bitdecimal, b.v.bitdecimal);
             default: break;
         }
+    }
+    /* 高精度跨类型比较：与编译期静态路径同优先级 bigint > bitdecimal > decimal，
+       另一方为数值族时提升为同种高精度精确比较（此前落 value_as_number 得 0.0，
+       导致 bigint > 5 判 false、bigint == bigint 恒相等） */
+    if(a.type == VAL_BIGINT || b.type == VAL_BIGINT) {
+        int fa, fb;
+        BigInt* ba = value_promote_bigint(a, &fa);
+        BigInt* bb = value_promote_bigint(b, &fb);
+        int r = (ba && bb) ? lumyr_bigint_cmp(ba, bb) : (ba ? 1 : (bb ? -1 : 0));
+        if(fa) lumyr_bigint_free(ba);
+        if(fb) lumyr_bigint_free(bb);
+        return r;
+    }
+    if(a.type == VAL_BITDECIMAL || b.type == VAL_BITDECIMAL) {
+        int fa, fb;
+        BitDecimal* ba = value_promote_bitdecimal(a, &fa);
+        BitDecimal* bb = value_promote_bitdecimal(b, &fb);
+        int r = (ba && bb) ? lumyr_bitdecimal_cmp(ba, bb) : (ba ? 1 : (bb ? -1 : 0));
+        if(fa) lumyr_bitdecimal_free(ba);
+        if(fb) lumyr_bitdecimal_free(bb);
+        return r;
+    }
+    if(a.type == VAL_DECIMAL || b.type == VAL_DECIMAL) {
+        int fa, fb;
+        Decimal* ba = value_promote_decimal(a, &fa);
+        Decimal* bb = value_promote_decimal(b, &fb);
+        int r = (ba && bb) ? lumyr_decimal_cmp(ba, bb) : (ba ? 1 : (bb ? -1 : 0));
+        if(fa) lumyr_decimal_free(ba);
+        if(fb) lumyr_decimal_free(bb);
+        return r;
     }
     /* 跨类型：用统一转换 */
     double na = value_as_number(a);
@@ -1240,6 +1548,18 @@ Value lumyr_eq(Value a, Value b) {
             if(!eq.v.b) return lumyr_make_bool(0);
         }
         return lumyr_make_bool(1);
+    }
+    /* 高精度数值相等：同类型 cmp / 跨类型提升比较（经 value_compare）。
+       一方高精度、另一方非数值族（map/array/none 等）→ 不相等；
+       此前 bigint == int 被类型检查拦为 false、bigint == bigint 按 0.0==0.0 恒 true */
+    if(a.type == VAL_BIGINT || a.type == VAL_DECIMAL || a.type == VAL_BITDECIMAL ||
+       b.type == VAL_BIGINT || b.type == VAL_DECIMAL || b.type == VAL_BITDECIMAL) {
+        int aNum = a.type == VAL_BIGINT || a.type == VAL_DECIMAL || a.type == VAL_BITDECIMAL ||
+                   value_is_int_family(a.type) || value_is_float_family(a.type);
+        int bNum = b.type == VAL_BIGINT || b.type == VAL_DECIMAL || b.type == VAL_BITDECIMAL ||
+                   value_is_int_family(b.type) || value_is_float_family(b.type);
+        if(!aNum || !bNum) return lumyr_make_bool(0);
+        return lumyr_make_bool(value_compare(a, b) == 0);
     }
     /* 类型检查：类型不同且不都是数值类型时，直接返回 false */
     int a_is_num = (a.type >= VAL_INT && a.type <= VAL_LONG_DOUBLE);

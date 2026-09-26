@@ -4,6 +4,7 @@
  * 基于 GMP mpf_t 实现
  */
 #include "lm_bitdecimal.h"
+#include "lm_decimal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -93,12 +94,8 @@ static void bd_round_digits(char* digits, int* e_ptr, int p) {
     }
 }
 
-/* 转字符串：按 d->precision 输出固定小数位（半偶舍入），precision=0 输出整数 */
-char* lumyr_bitdecimal_to_string(BitDecimal* d) {
-    if (!d) return strdup("");
-
-    int p = d->precision > 0 ? d->precision : 0;
-
+/* 按指定小数位 p 转字符串（半偶舍入），p=0 输出整数 */
+static char* bitdecimal_to_string_p(BitDecimal* d, int p) {
     /* 取全部有效数字：value = 0.digits × 10^exp（digits 可带 '-'） */
     mp_exp_t exp;
     char* str = mpf_get_str(NULL, &exp, 10, 0, d->value);
@@ -143,6 +140,12 @@ char* lumyr_bitdecimal_to_string(BitDecimal* d) {
 
     free(str);
     return result;
+}
+
+/* 转字符串：按 d->precision 输出固定小数位（半偶舍入），precision=0 输出整数 */
+char* lumyr_bitdecimal_to_string(BitDecimal* d) {
+    if (!d) return strdup("");
+    return bitdecimal_to_string_p(d, d->precision > 0 ? d->precision : 0);
 }
 
 /* 四则运算 */
@@ -190,9 +193,23 @@ BitDecimal* lumyr_bitdecimal_div(BitDecimal* a, BitDecimal* b) {
     return d;
 }
 
-/* 比较 */
+/* 比较：十进制数值语义。二进制 mpf 对 0.1 类十进制值不能精确表示，
+   直接 mpf_cmp 会让 1.2+0.3 != 1.5；统一按两者较大小数位做半偶舍入
+   （复用 to_string 的舍入），再按十进制字符串做数值比较（复用 decimal_cmp，
+   自动处理 -0 == 0 与精度对齐） */
 int lumyr_bitdecimal_cmp(BitDecimal* a, BitDecimal* b) {
-    return mpf_cmp(a->value, b->value);
+    if (!a || !b) return (a != NULL) - (b != NULL);
+    int p = a->precision > b->precision ? a->precision : b->precision;
+    char* as = bitdecimal_to_string_p(a, p);
+    char* bs = bitdecimal_to_string_p(b, p);
+    Decimal* da = lumyr_decimal_from_string(as);
+    Decimal* db = lumyr_decimal_from_string(bs);
+    int r = lumyr_decimal_cmp(da, db);
+    lumyr_decimal_free(da);
+    lumyr_decimal_free(db);
+    free(as);
+    free(bs);
+    return r;
 }
 
 /* 打印 */

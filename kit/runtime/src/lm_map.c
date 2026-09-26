@@ -98,6 +98,18 @@ static uint32_t value_hash(Value v) {
             }
             break;
         }
+        /* tuple 键：逐元素递归哈希再组合（hash_combine），元素 key_eq ⇒ 元素哈希相等
+           ⇒ 整组哈希相等，满足「相等 ⇒ 同哈希」契约；顺序敏感（tuple 有序） */
+        case VAL_TUPLE: {
+            TupleObj* to = (TupleObj*)v.v.tuple_obj;
+            if(to) {
+                for(int i = 0; i < to->len; i++) {
+                    uint32_t eh = value_hash(to->items[i]);
+                    h ^= eh + 0x9e3779b9u + (h << 6) + (h >> 2);
+                }
+            }
+            break;
+        }
         /* struct/class 实例：引用身份哈希（同一实例引用才作同一键，引用身份语义） */
         case VAL_STRUCT_PTR:
         case VAL_CLASS_PTR: {
@@ -162,6 +174,19 @@ static int key_compare(Value a, Value b) {
             int c = strcmp(sa ? sa : "", sb ? sb : "");
             free(sa); free(sb);
             return (c > 0) - (c < 0);
+        }
+        /* tuple 键：字典序（逐元素 key_compare，全部相等再比长度），
+           与 key_eq 契约一致（compare==0 ⇒ 逐元素 key_eq ⇒ 整体 key_eq） */
+        case VAL_TUPLE: {
+            TupleObj* ta = (TupleObj*)a.v.tuple_obj;
+            TupleObj* tb = (TupleObj*)b.v.tuple_obj;
+            if(!ta || !tb) return (ta > tb) - (ta < tb);
+            int n = ta->len < tb->len ? ta->len : tb->len;
+            for(int i = 0; i < n; i++) {
+                int c = key_compare(ta->items[i], tb->items[i]);
+                if(c) return c;
+            }
+            return (ta->len > tb->len) - (ta->len < tb->len);
         }
         /* 实例键：引用身份排序（保持严格弱序） */
         case VAL_STRUCT_PTR:
@@ -228,6 +253,17 @@ static int key_eq(Value a, Value b) {
         case VAL_STRUCT_PTR:
         case VAL_CLASS_PTR:
             return a.v.struct_ptr == b.v.struct_ptr;
+        /* tuple 键：逐元素 key_eq（递归沿用数值族跨子类型按值相等规则），
+           与 value_hash 的逐元素组合契约一致 */
+        case VAL_TUPLE: {
+            TupleObj* ta = (TupleObj*)a.v.tuple_obj;
+            TupleObj* tb = (TupleObj*)b.v.tuple_obj;
+            if(!ta || !tb) return ta == tb;
+            if(ta->len != tb->len) return 0;
+            for(int i = 0; i < ta->len; i++)
+                if(!key_eq(ta->items[i], tb->items[i])) return 0;
+            return 1;
+        }
         default: return 0;
     }
 }

@@ -307,8 +307,10 @@ static int c_find_var(Ctx* c, const char* name) {
 static int c_add_var(Ctx* c, const char* name, ExprType type) {
     int idx = c_find_var(c, name);
     if(idx >= 0) {
-        /* 已存在，更新类型 */
+        /* 已存在，更新类型；若原是顶层变量占位槽（LOAD_GLOBAL 名字载体），
+         * 显式注册即转为真局部（如函数体内对同名全局的赋值遮蔽） */
         c->var_types[idx] = type;
+        c->var_is_global[idx] = 0;
         return idx;
     }
     /* 新增到 Ctx 符号表 */
@@ -316,10 +318,12 @@ static int c_add_var(Ctx* c, const char* name, ExprType type) {
         c->var_cap = c->var_cap ? c->var_cap * 2 : 16;
         c->var_names = realloc(c->var_names, c->var_cap * sizeof(char*));
         c->var_types = realloc(c->var_types, c->var_cap * sizeof(ExprType));
+        c->var_is_global = realloc(c->var_is_global, c->var_cap * sizeof(uint8_t));
     }
     idx = c->var_cnt++;
     c->var_names[idx] = strdup(name);
     c->var_types[idx] = type;
+    c->var_is_global[idx] = 0;
     /* 登记 Ctx 变量哈希（var_names[idx] 已就绪） */
     symhash_insert(&c->var_idx, c->var_names, c->var_cnt, idx);
     /* 同步到 BytecodeFunc 符号表（供 arith_get_expr_type 使用） */
@@ -741,6 +745,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
         int idx = c_find_var(c, name);
+        if(idx >= 0 && c->var_is_global[idx]) {
+            /* 顶层变量占位槽：每次引用都发 LOAD_GLOBAL（占位 a=槽位即名字下标，
+             * fixup 改写为 main 帧槽位）；占位槽本身运行时从不读写 */
+            emit(c, OPC_LOAD_GLOBAL, idx, -1);
+            return EXPR_TYPE_NONE;
+        }
         if(idx < 0) {
             /* 未声明的局部变量：若是函数名，作为函数值引用 */
             BytecodeFunc* fn = ir_func_table_lookup(name);
@@ -750,10 +760,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 return EXPR_TYPE_NONE;
             }
             if(!c->fn->is_main) {
-                /* 函数体内读顶层变量：名字记入本函数符号表，发 LOAD_GLOBAL 占位；
-                 * ir_compile_main 末尾 fixup 按名字解析为 main 帧槽位索引。
-                 * 顶层变量在 main 编译前不可知（函数体在 parse 期编译），必须延迟绑定。 */
-                int sym = bf_sym(c->fn, name);
+                /* 函数体内读顶层变量：注册占位槽（保持 Ctx 与 fn->syms 下标一致，
+                 * 否则后续局部变量槽位整体偏移，MKCLOSURE 按名捕获读到错槽位），
+                 * 发 LOAD_GLOBAL 占位；ir_compile_main 末尾 fixup 按名字解析为
+                 * main 帧槽位索引。 */
+                int sym = c_add_var(c, name, EXPR_TYPE_NONE);
+                c->var_is_global[sym] = 1;
                 emit(c, OPC_LOAD_GLOBAL, sym, -1);
                 return EXPR_TYPE_NONE;
             }
@@ -1991,8 +2003,13 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         CastKind lt_cast = c_expr_cast_type(c, node->u.bin.left);
         CastKind rt_cast = c_expr_cast_type(c, node->u.bin.right);
 
-        /* bigint 运算：至少一个操作数是 bigint */
-        if((lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
+        /* bigint 运算：至少一个操作数是 bigint。
+           动态侧（CAST_NONE，如无标注函数返回值）不进此分支——其值在 VALUE 栈，
+           这里的 PTR 栈转换链会弹错栈；比较交动态 V 族（运行时 lumyr_gt/eq 已支持
+           bigint 精确比较），四则按既有设计走字符串拼接路径（arith_get_expr_type
+           对 NONE+PTR 归 PTR）。 */
+        if((lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) && lt_cast != CAST_STRING && rt_cast != CAST_STRING
+           && lt_cast != CAST_NONE && rt_cast != CAST_NONE) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 bigint，转成 bigint */
@@ -2028,13 +2045,40 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_BIGINT_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_BIGINT_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_BIGINT_DIV, 0, 0); break;
-            default: break;
+            /* 比较运算：两操作数已在 PTR 栈（bottom=left/top=right），BOX 到 VALUE 走 V 族比较。
+               BOX 顺序先弹 right 再弹 left → VALUE 栈 bottom=right/top=left，
+               vbin_exec 弹 b=top、a=bottom 调 fn(a,b)=fn(right,left)——操作数反转，
+               非对称比较必须发反向指令（同字符串比较路径）。
+               此前 default 静默 break：两操作数残留栈、右操作数指针被当比较结果。 */
+            case OP_EQ: case OP_NE: case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
+                emit(c, OPC_BOX_PTR, (int)CAST_BIGINT, 0);   /* right */
+                emit(c, OPC_BOX_PTR, (int)CAST_BIGINT, 0);   /* left → VALUE:[right,left] */
+                switch(node->u.bin.op) {
+                case OP_EQ: emit(c, OPC_VEQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_VNE, 0, 0); break;
+                case OP_LT: emit(c, OPC_VGT, 0, 0); break;   /* right>left == left<right */
+                case OP_GT: emit(c, OPC_VLT, 0, 0); break;
+                case OP_LE: emit(c, OPC_VGE, 0, 0); break;
+                case OP_GE: emit(c, OPC_VLE, 0, 0); break;
+                default: break;
+                }
+                return EXPR_TYPE_NONE;   /* bool 在 VALUE 栈，条件跳转走 JMP_IF_FALSE_V */
+            }
+            default:
+                fprintf(stderr,
+                        "IR: bigint 仅支持 + - * / 与比较运算，不支持运算符 %d / "
+                        "bigint supports only + - * / and comparisons, not operator %d\n",
+                        node->u.bin.op, node->u.bin.op);
+                g_ir_compile_error = 1;
+                return EXPR_TYPE_NONE;
             }
             return EXPR_TYPE_PTR;
         }
 
-        /* bitdecimal 运算：至少一个操作数是 bitdecimal（吸收 int/double/decimal） */
-        if((lt_cast == CAST_BITDECIMAL || rt_cast == CAST_BITDECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
+        /* bitdecimal 运算：至少一个操作数是 bitdecimal（吸收 int/double/decimal）。
+           动态侧（CAST_NONE）排除，同 bigint 分支注释。 */
+        if((lt_cast == CAST_BITDECIMAL || rt_cast == CAST_BITDECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING
+           && lt_cast != CAST_NONE && rt_cast != CAST_NONE) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 bitdecimal，转成 bitdecimal */
@@ -2066,13 +2110,36 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_BITDECIMAL_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_BITDECIMAL_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_BITDECIMAL_DIV, 0, 0); break;
-            default: break;
+            /* 比较运算：BOX 到 VALUE 走 V 族（操作数反转→非对称发反向指令，同 bigint 分支） */
+            case OP_EQ: case OP_NE: case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
+                emit(c, OPC_BOX_PTR, (int)CAST_BITDECIMAL, 0);   /* right */
+                emit(c, OPC_BOX_PTR, (int)CAST_BITDECIMAL, 0);   /* left */
+                switch(node->u.bin.op) {
+                case OP_EQ: emit(c, OPC_VEQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_VNE, 0, 0); break;
+                case OP_LT: emit(c, OPC_VGT, 0, 0); break;
+                case OP_GT: emit(c, OPC_VLT, 0, 0); break;
+                case OP_LE: emit(c, OPC_VGE, 0, 0); break;
+                case OP_GE: emit(c, OPC_VLE, 0, 0); break;
+                default: break;
+                }
+                return EXPR_TYPE_NONE;
+            }
+            default:
+                fprintf(stderr,
+                        "IR: bitdecimal 仅支持 + - * / 与比较运算，不支持运算符 %d / "
+                        "bitdecimal supports only + - * / and comparisons, not operator %d\n",
+                        node->u.bin.op, node->u.bin.op);
+                g_ir_compile_error = 1;
+                return EXPR_TYPE_NONE;
             }
             return EXPR_TYPE_PTR;
         }
     
-        /* decimal 运算：至少一个操作数是 decimal */
-        if((lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING) {
+        /* decimal 运算：至少一个操作数是 decimal。
+           动态侧（CAST_NONE）排除，同 bigint 分支注释。 */
+        if((lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING
+           && lt_cast != CAST_NONE && rt_cast != CAST_NONE) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 decimal，转成 decimal */
@@ -2104,7 +2171,28 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             case OP_SUB: emit(c, OPC_DECIMAL_SUB, 0, 0); break;
             case OP_MUL: emit(c, OPC_DECIMAL_MUL, 0, 0); break;
             case OP_DIV: emit(c, OPC_DECIMAL_DIV, 0, 0); break;
-            default: break;
+            /* 比较运算：BOX 到 VALUE 走 V 族（操作数反转→非对称发反向指令，同 bigint 分支） */
+            case OP_EQ: case OP_NE: case OP_LT: case OP_GT: case OP_LE: case OP_GE: {
+                emit(c, OPC_BOX_PTR, (int)CAST_DECIMAL, 0);   /* right */
+                emit(c, OPC_BOX_PTR, (int)CAST_DECIMAL, 0);   /* left */
+                switch(node->u.bin.op) {
+                case OP_EQ: emit(c, OPC_VEQ, 0, 0); break;
+                case OP_NE: emit(c, OPC_VNE, 0, 0); break;
+                case OP_LT: emit(c, OPC_VGT, 0, 0); break;
+                case OP_GT: emit(c, OPC_VLT, 0, 0); break;
+                case OP_LE: emit(c, OPC_VGE, 0, 0); break;
+                case OP_GE: emit(c, OPC_VLE, 0, 0); break;
+                default: break;
+                }
+                return EXPR_TYPE_NONE;
+            }
+            default:
+                fprintf(stderr,
+                        "IR: decimal 仅支持 + - * / 与比较运算，不支持运算符 %d / "
+                        "decimal supports only + - * / and comparisons, not operator %d\n",
+                        node->u.bin.op, node->u.bin.op);
+                g_ir_compile_error = 1;
+                return EXPR_TYPE_NONE;
             }
             return EXPR_TYPE_PTR;
         }
@@ -3655,6 +3743,8 @@ void c_stmt(Ctx* c, AstNode* node) {
         /* 保持变量已有类型：若已声明为 typed，将 RHS 转换到该类型存储，
            避免 load/store 槽位错位（int_slots vs vals）。 */
         int exist_idx = c_find_var(c, var_name);
+        /* 顶层变量占位槽不算"已存在"：对同名全局的赋值创建真局部遮蔽 */
+        if(exist_idx >= 0 && c->var_is_global[exist_idx]) exist_idx = -1;
         ExprType target_et;
         if (exist_idx >= 0) {
             target_et = c->var_types[exist_idx];
@@ -4521,10 +4611,12 @@ static void ctx_register_param(Ctx* c, const char* name, ExprType t) {
         c->var_cap = c->var_cap ? c->var_cap * 2 : 16;
         c->var_names = realloc(c->var_names, c->var_cap * sizeof(char*));
         c->var_types = realloc(c->var_types, c->var_cap * sizeof(ExprType));
+        c->var_is_global = realloc(c->var_is_global, c->var_cap * sizeof(uint8_t));
     }
     int idx = c->var_cnt++;
     c->var_names[idx] = strdup(name);
     c->var_types[idx] = t;
+    c->var_is_global[idx] = 0;   /* 形参是真局部 */
     /* 形参直接写 var_names（不经 c_add_var），须同步哈希 */
     symhash_insert(&c->var_idx, c->var_names, c->var_cnt, idx);
 }
@@ -4534,8 +4626,9 @@ static void ctx_cleanup(Ctx* c) {
     for(int i = 0; i < c->var_cnt; i++) free(c->var_names[i]);
     free(c->var_names);
     free(c->var_types);
+    free(c->var_is_global);
     symhash_reset(&c->var_idx);
-    c->var_names = NULL; c->var_types = NULL;
+    c->var_names = NULL; c->var_types = NULL; c->var_is_global = NULL;
     c->var_cnt = c->var_cap = 0;
     /* defer 栈：只释放指针数组（body 节点由 AST 全局释放，不重复 free） */
     free(c->deferred);

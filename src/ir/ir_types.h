@@ -68,6 +68,9 @@ typedef struct {
     /* 简单符号表：变量名 → 索引 + 类型 */
     char** var_names;
     ExprType* var_types;
+    /* var_is_global[i]=1：该名字是函数体内引用的顶层变量（占位槽，保持
+     * Ctx 下标与 fn->syms 槽位一致）；读它发 LOAD_GLOBAL，赋值它转为真局部 */
+    uint8_t* var_is_global;
     int var_cnt;
     int var_cap;
     SymHash var_idx;            /* var_names → 下标哈希（编译期 O(1) 查找） */
