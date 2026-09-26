@@ -175,6 +175,12 @@ int builtin_id_by_name(const char* name) {
         {"threadlocal_set", BUILTIN_THREADLOCAL_SET},
         {"sleep", BUILTIN_SLEEP},
         {"timestamp", BUILTIN_TIMESTAMP}, {"timestamp_ms", BUILTIN_TIMESTAMP_MS},
+        /* GC 手动控制与统计（typecheck 已认这 4 个内置，原映射缺失导致
+         * 被编译成动态函数调用 → "动态调用的值不是函数"） */
+        {"gc_collect", BUILTIN_GC_COLLECT},
+        {"gc_count", BUILTIN_GC_COUNT},
+        {"gc_bytes", BUILTIN_GC_BYTES},
+        {"gc_stw_ns", BUILTIN_GC_STW_NS},
         /* 迭代/转换通用（keys/values/has/delete 见上；delete 映射见文件组） */
         {"forEach", BUILTIN_FOREACH}, {"each", BUILTIN_FOREACH},
         {"getAll", BUILTIN_GETALL},

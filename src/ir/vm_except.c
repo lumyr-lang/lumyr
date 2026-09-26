@@ -25,6 +25,9 @@ typedef struct TryCtxNode {
     StackFrame* frame;      /* try 所在栈帧 */
     int catch_pc;           /* catch 入口 pc（0=无 catch） */
     int fin_pc;             /* finally 入口 pc（0=无 finally，Task 8 后续） */
+    int caught;             /* 已进入 catch 块（节点保留至 ENDTRY）：
+                             * catch 内再 throw 时本层 finally 仍须执行，
+                             * 且同一 catch 不得重复捕获 */
     struct TryCtxNode* prev;
 } TryCtxNode;
 static _Thread_local TryCtxNode* g_try_stack = NULL;
@@ -58,7 +61,10 @@ typedef struct FinNode {
     int target;
     struct FinNode* next;
 } FinNode;
-static FinNode* g_fin_stack = NULL;
+/* 必须 _Thread_local：finally 完成动作栈每线程独立。旧声明为普通全局，
+ * 多线程并发时一个线程的 FINISH 会消费并 free 另一线程压入的节点
+ * → double-free / 动作错乱。 */
+static _Thread_local FinNode* g_fin_stack = NULL;
 
 /* 把任意抛出值规范化为 VAL_ERROR */
 static Value ensure_error(Value v) {
@@ -103,6 +109,8 @@ int vm_exec_try(VMExecCtx* ctx, Instruction* in) {
     n->frame    = ctx->frame;
     n->catch_pc = in->a;
     n->fin_pc   = in->b;
+    n->caught   = 0;   /* 必须显式初始化：malloc 残留非零会使 catch
+                        * 被误判"已使用"而静默跳过（多线程高频暴露） */
     n->prev     = g_try_stack;
     g_try_stack = n;
     return 1;
@@ -133,6 +141,27 @@ int vm_exec_throw(VMExecCtx* ctx, Instruction* in) {
 int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     Value err = ensure_error(v);
 
+    /* catch 块内 throw：栈顶 try 节点已标记 caught（同层捕获时保留节点）。
+     * 本 try 有 finally 则先压 RETHROW 跳 finally——finally 跑完由 FINISH
+     * 重抛向外（同时弹出节点），保证 catch 内抛错时本层 finally 不丢失；
+     * 无 finally 则节点随下面的处理器搜索被当作"target 之上"节点释放。 */
+    if(g_try_stack && g_try_stack->frame == ctx->frame &&
+       g_try_stack->caught) {
+        if(g_try_stack->fin_pc != 0) {
+            FinNode* fn = (FinNode*)malloc(sizeof(FinNode));
+            if(!fn) { perror("caught fin"); exit(EXIT_FAILURE); }
+            fn->action = 2;    /* RETHROW */
+            fn->target = 0;
+            fn->next   = g_fin_stack;
+            g_fin_stack = fn;
+            g_current_error     = err;
+            g_current_throw_val = v;
+            ctx->pc = g_try_stack->fin_pc;
+            return 1;
+        }
+        /* 无 finally：落到搜索逻辑，caught 节点会被跳过并随之外抛 */
+    }
+
     /* 异常首先穿过同帧「仅 finally」try（catch_pc==0, fin_pc!=0）：
      * 压入 RETHROW 完成动作并跳到 finally 入口；finally 执行完由 FINISH
      * 重新抛出（继续向外搜真正的 catch）。不弹/不 free 该 try 节点
@@ -161,9 +190,10 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
         }
     }
 
-    /* 沿 try 栈找第一个有 catch 的处理器 */
+    /* 沿 try 栈找第一个有 catch 且未被使用过的处理器（caught 节点的
+     * catch 块已在执行，不得重复捕获其再抛出的错误） */
     TryCtxNode* t = g_try_stack;
-    while (t && t->catch_pc == 0) t = t->prev;
+    while (t && (t->catch_pc == 0 || t->caught)) t = t->prev;
 
     if (!t) {
         /* 未捕获 */
@@ -200,12 +230,12 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     }
 
     if (t->frame == ctx->frame) {
-        /* 同层捕获：先弹出当前 try 处理器，避免 catch 块内 throw 被同一 catch 重复捕获 */
+        /* 同层捕获：保留 try 节点并标记 caught（不释放）。
+         * catch 块正常完成由 ENDTRY 弹出；catch 内 throw 时上面的
+         * caught 分支保证本层 finally 先执行，且同一 catch 不会
+         * 重复捕获。 */
         int cpc = t->catch_pc;
-        if (g_try_stack == t) {
-            g_try_stack = t->prev;
-            free(t);
-        }
+        t->caught = 1;
         g_current_error = err;
         g_current_throw_val = v;
         ctx->pc = cpc;
@@ -249,11 +279,11 @@ int vm_exec_get_err(VMExecCtx* ctx, Instruction* in) {
 int vm_except_check_unwind(VMExecCtx* ctx) {
     if (!g_unwind.active) return 0;
     if (g_unwind.target_frame == ctx->frame) {
-        /* 到达捕获帧：弹出当前 try 处理器，避免 catch 块内 throw 被同一 catch 重复捕获 */
-        if (g_try_stack) {
-            TryCtxNode* n = g_try_stack;
-            g_try_stack = n->prev;
-            free(n);
+        /* 到达捕获帧：定位栈顶属于捕获帧的 try 节点，保留并标记 caught
+         * （与同层捕获一致：catch 内 throw 时本层 finally 不丢失，同一
+         * catch 不重复捕获；catch 正常完成由 ENDTRY 弹出）。 */
+        if (g_try_stack && g_try_stack->frame == ctx->frame) {
+            g_try_stack->caught = 1;
         }
         g_current_error = g_unwind.error;
         g_current_throw_val = g_unwind.throw_val;
@@ -340,6 +370,16 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in) {
         int action = n->action, target = n->target;
         free(n);
         pop_current_try();
+        if(action == 2) {
+            /* RETHROW：重新走完整 throw 分派。下一个栈顶若带 catch，
+             * 必须先给其捕获机会——旧代码见外层 fin_pc 非空就直接跳
+             * finally，错误地跨过外层 catch（多层嵌套 try 时 catch 被
+             * 静默跳过）；栈顶若为 finally-only 节点，throw_value
+             * 开头的同帧 fin 分支会自行链式跳转其 finally。 */
+            Value rv = g_current_error;
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &rv);
+            return vm_exec_throw(ctx, in);
+        }
         TryCtxNode* o = same_frame_outer_fin(ctx);
         if(o) {
             /* 还有外层 finally：重新压入同一动作，链式继续 */
@@ -354,11 +394,7 @@ int vm_exec_finish(VMExecCtx* ctx, Instruction* in) {
         case 1: case 3: case 4:           /* JMP / BREAK / CONT：跳到目标 */
             ctx->pc = target;
             break;
-        case 2: {                          /* RETHROW：压回错误，复用 THROW 搜外层 */
-            stack_vm_push(g_stack_mgr, STACK_VALUE, &g_current_error);
-            vm_exec_throw(ctx, in);
-            break;
-        }}
+        }
         return 1;
     }
 

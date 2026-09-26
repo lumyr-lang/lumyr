@@ -3572,6 +3572,20 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_TIMESTAMP_MS:
         *out = lumyr_make_int64(lumyr_timestamp_ms()); return 1;
 
+    case BUILTIN_GC_COLLECT:
+        bi_need_args_mt("gc_collect", argc, 0);
+        gc_collect_now();
+        *out = val_none(); return 1;
+    case BUILTIN_GC_COUNT:
+        bi_need_args_mt("gc_count", argc, 0);
+        *out = lumyr_make_int64((long long)gc_count()); return 1;
+    case BUILTIN_GC_BYTES:
+        bi_need_args_mt("gc_bytes", argc, 0);
+        *out = lumyr_make_int64((long long)gc_bytes()); return 1;
+    case BUILTIN_GC_STW_NS:
+        bi_need_args_mt("gc_stw_ns", argc, 0);
+        *out = lumyr_make_int64((long long)gc_stw_time_ns()); return 1;
+
     default:
         fprintf(stderr, "VM: 未实现的内置函数 id=%d\n", id);
         return 0;
@@ -3776,6 +3790,10 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SLEEP: return "sleep";
     case BUILTIN_TIMESTAMP: return "timestamp";
     case BUILTIN_TIMESTAMP_MS: return "timestamp_ms";
+    case BUILTIN_GC_COLLECT: return "gc_collect";
+    case BUILTIN_GC_COUNT: return "gc_count";
+    case BUILTIN_GC_BYTES: return "gc_bytes";
+    case BUILTIN_GC_STW_NS: return "gc_stw_ns";
     case BUILTIN_MUTEX: return "mutex";
     case BUILTIN_RMUTEX: return "rmutex";
     case BUILTIN_RWLOCK: return "rwlock";
