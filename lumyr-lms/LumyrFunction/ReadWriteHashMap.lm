@@ -1,0 +1,291 @@
+// ============================================================
+// lumyr-ReadWriteHashMap：读写锁版本的线程安全 Map<K,V>
+// 与 ConcurrentHashMap 的区别：
+//   - ConcurrentHashMap 用 rmutex（可重入互斥锁），所有操作串行；
+//   - ReadWriteHashMap 用 rwlock（读写锁），读操作共享读锁可并发，
+//     写操作独占写锁。读多写少场景吞吐量更高。
+//
+// 关键约束（rwlock 不可重入）：
+//   1. 本类所有方法内部直接操作 self.value，不调用本类其他公开方法
+//      （避免同一线程重复加锁死锁）。
+//   2. 读操作（get/has/size/keys/values/containsValue）用 rdlock；
+//      写操作（put/remove/clear/putAll）与复合操作用 wrlock。
+//   3. forEach 持读锁取键快照后释放，再逐键回调（回调内可安全调用本类方法，
+//      因为此时无锁）。
+//   4. 迭代过程中 map 被并发修改不影响已取的快照（keys()/values() 每次新建数组）。
+//
+// 用法：
+//   import <Function/ReadWriteHashMap>;
+//   rm = ReadWriteHashMap<string, int>();
+//   rm.put("a", 1).put("b", 2);
+//   print(rm.get("a"));
+// ============================================================
+
+import <Function/HashMap>;
+
+public class ReadWriteHashMap<K, V> extends HashMap<K, V> {
+    lockId: int64;
+
+    func ReadWriteHashMap(m: Map<K, V>) {
+        super(m);
+        self.lockId = rwlock();
+    }
+
+    // ===== 读操作：共享读锁 =====
+
+    // length, count
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        rdlock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        rdlock(self.lockId);
+        try { return self.value.len == 0; } finally { unlock(self.lockId); }
+    }
+
+    func get(key: K): V {
+        rdlock(self.lockId);
+        try { return self.value.get(key); } finally { unlock(self.lockId); }
+    }
+
+    // hasKey, contains, containsKey
+    @FuncAlias(["hasKey", "contains", "containsKey"])
+    func has(key: K): bool {
+        rdlock(self.lockId);
+        try { return self.value.has(key); } finally { unlock(self.lockId); }
+    }
+
+    // hasValue
+    @FuncAlias("hasValue")
+    func containsValue(val: V): bool {
+        rdlock(self.lockId);
+        try {
+            vs = self.value.values();
+            i = 0;
+            while (i < vs.len) {
+                if (vs[i] == val) { return true; }
+                i = i + 1;
+            }
+            return false;
+        } finally { unlock(self.lockId); }
+    }
+
+    // keySet
+    @FuncAlias("keySet")
+    func keys() {
+        rdlock(self.lockId);
+        try { return self.value.keys(); } finally { unlock(self.lockId); }
+    }
+
+    func values() {
+        rdlock(self.lockId);
+        try { return self.value.values(); } finally { unlock(self.lockId); }
+    }
+
+    // toList
+    @FuncAlias("toList")
+    func toArray() {
+        rdlock(self.lockId);
+        try { return self.value.toArray(); } finally { unlock(self.lockId); }
+    }
+
+    // 弱一致遍历：持读锁取键快照，释放锁后逐键读最新值回调。
+    // 释放锁后回调，回调内可安全调用本类方法（无重入死锁）。
+    func forEach(cb: MapCallback<K, V>) {
+        ks = self.keys();     // 内部持读锁取快照
+        i = 0;
+        while (i < ks.len) {
+            k = ks[i];
+            v = self.get(k);  // 重新加读锁，安全
+            if (v != null) { cb(k, v); }
+            i = i + 1;
+        }
+        return self;
+    }
+
+    // ===== 写操作：独占写锁 =====
+
+    // set, setValue
+    @FuncAlias(["set", "setValue"])
+    func put(key: K, val: V) {
+        wrlock(self.lockId);
+        try { self.value[key] = val; } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // delete, pop, removeValue
+    @FuncAlias(["delete", "pop", "removeValue"])
+    func remove(key: K) {
+        wrlock(self.lockId);
+        try { self.value.remove(key); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // removeAll
+    @FuncAlias("removeAll")
+    func clear() {
+        wrlock(self.lockId);
+        try { self.value.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // 批量导入：整段持写锁一次完成
+    // assign, update, merge
+    @FuncAlias(["assign", "update"])
+    func putAll(other: Map<K, V>) {
+        wrlock(self.lockId);
+        try {
+            ks = other.keys();
+            i = 0;
+            while (i < ks.len) {
+                self.value[ks[i]] = other.get(ks[i]);
+                i = i + 1;
+            }
+        } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // ===== 复合操作：读+写原子，整段持写锁 =====
+
+    // 仅当键缺失时写入；返回写入后该键的当前值（已存在则返回旧值）
+    func putIfAbsent(key: K, val: V): V {
+        wrlock(self.lockId);
+        try {
+            if (self.value.has(key)) { return self.value.get(key); }
+            self.value[key] = val;
+            return val;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 仅当键缺失时调用 mapper(key) 计算并写入（结果为 null 则不写入）；
+    // 返回当前值；mapper 为 FunctionMapper<K, V>
+    func computeIfAbsent(key: K, mapper: FunctionMapper<K, V>): V {
+        wrlock(self.lockId);
+        try {
+            if (self.value.has(key)) { return self.value.get(key); }
+            nv = mapper(key);
+            if (nv != null) { self.value[key] = nv; return nv; }
+            return null;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 仅当键存在时调用 remapper(key, oldVal)；结果 null 删除键，否则覆盖；
+    // 返回新值（键被删除返回 null）；remapper 为 BiFunctionMapper<K, V>
+    func computeIfPresent(key: K, remapper: BiFunctionMapper<K, V>): V {
+        wrlock(self.lockId);
+        try {
+            if (!self.value.has(key)) { return null; }
+            nv = remapper(key, self.value.get(key));
+            if (nv == null) { self.value.remove(key); return null; }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 无条件调用 remapper(key, oldVal_or_null)；结果 null 删除键，否则覆盖；
+    // 返回新值；remapper 为 BiFunctionMapper<K, V>（缺失时 v 为 null）
+    func compute(key: K, remapper: BiFunctionMapper<K, V>): V {
+        wrlock(self.lockId);
+        try {
+            oldv = null;
+            if (self.value.has(key)) { oldv = self.value.get(key); }
+            nv = remapper(key, oldv);
+            if (nv == null) {
+                if (oldv != null) { self.value.remove(key); }
+                return null;
+            }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 键缺失 → 直接取 val；存在 → 取 remapper(oldVal, val)；
+    // 结果 null 删除键，否则覆盖；返回新值；remapper 为 MergeMapper<V>
+    func merge(key: K, val: V, remapper: MergeMapper<V>): V {
+        wrlock(self.lockId);
+        try {
+            oldv = null;
+            if (self.value.has(key)) { oldv = self.value.get(key); }
+            nv = val;
+            if (oldv != null) { nv = remapper(oldv, val); }
+            if (nv == null) {
+                if (oldv != null) { self.value.remove(key); }
+                return null;
+            }
+            self.value[key] = nv;
+            return nv;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 仅当键存在时替换为 val，返回旧值；不存在返回 null
+    func replace(key: K, val: V): V {
+        wrlock(self.lockId);
+        try {
+            if (!self.value.has(key)) { return null; }
+            oldv = self.value.get(key);
+            self.value[key] = val;
+            return oldv;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 仅当键当前值等于 expectVal 时才替换为 newVal；是否替换成功
+    func replaceMatch(key: K, expectVal: V, newVal: V): bool {
+        wrlock(self.lockId);
+        try {
+            if (!self.value.has(key)) { return false; }
+            if (self.value.get(key) != expectVal) { return false; }
+            self.value[key] = newVal;
+            return true;
+        } finally { unlock(self.lockId); }
+    }
+
+    // 仅当键当前值等于 expectVal 时才删除；是否删除成功
+    func removeMatch(key: K, expectVal: V): bool {
+        wrlock(self.lockId);
+        try {
+            if (!self.value.has(key)) { return false; }
+            if (self.value.get(key) != expectVal) { return false; }
+            self.value.remove(key);
+            return true;
+        } finally { unlock(self.lockId); }
+    }
+
+    // ===== 整体快照/序列化：读锁（不修改内部状态） =====
+
+    // clone：返回独立的 ReadWriteHashMap（锁独立、内容深拷贝）
+    @FuncAlias("clone")
+    func copy() {
+        rdlock(self.lockId);
+        try { return ReadWriteHashMap<K, V>(self.value.copy()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // toDict
+    @FuncAlias("toDict")
+    func toMap() {
+        rdlock(self.lockId);
+        try { return self.value.copy(); } finally { unlock(self.lockId); }
+    }
+
+    // toStr
+    @FuncAlias("toStr")
+    func toString(): string {
+        rdlock(self.lockId);
+        try { return self.toJSONString(); } finally { unlock(self.lockId); }
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        rdlock(self.lockId);
+        try { return self.toJSONString() == other.toJSONString(); }
+        finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("hashValue")
+    func hashCode(): int {
+        rdlock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+}

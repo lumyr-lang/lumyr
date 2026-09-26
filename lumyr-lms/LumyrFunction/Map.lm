@@ -16,6 +16,23 @@ public interface MapCallback<K, V> {
     (key: K, val: V);
 }
 
+// 复合操作的回调接口（供 ConcurrentHashMap / ReadWriteHashMap 等公用）
+
+// 仅键缺失时的计算函数：接收 key，返回要写入的值
+public interface FunctionMapper<K, V> {
+    (key: K): V;
+}
+
+// 键存在时的重映射函数：接收 key 与当前值，返回新值（null 表示删除）
+public interface BiFunctionMapper<K, V> {
+    (key: K, val: V): V;
+}
+
+// merge 的合并函数：接收旧值与新值，返回合并结果（null 表示删除）
+public interface MergeMapper<V> {
+    (oldVal: V, val: V): V;
+}
+
 public interface Map<K, V> {
     func size(): int;
     func isEmpty(): bool;

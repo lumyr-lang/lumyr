@@ -176,8 +176,8 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> {
     }
 
     // 仅当键缺失时调用 mapper(key) 计算并写入（结果为 null 则不写入）；
-    // 返回当前值；mapper 为函数值 (k: K) => V
-    func computeIfAbsent(key: K, mapper): V {
+    // 返回当前值；mapper 为 FunctionMapper<K, V>
+    func computeIfAbsent(key: K, mapper: FunctionMapper<K, V>): V {
         lock(self.rwLockId);
         try {
             if (self.value.has(key)) { return self.value.get(key); }
@@ -188,8 +188,8 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> {
     }
 
     // 仅当键存在时调用 remapper(key, oldVal)；结果 null 删除键，否则覆盖；
-    // 返回新值（键被删除返回 null）；remapper 为 (k: K, v: V) => V
-    func computeIfPresent(key: K, remapper): V {
+    // 返回新值（键被删除返回 null）；remapper 为 BiFunctionMapper<K, V>
+    func computeIfPresent(key: K, remapper: BiFunctionMapper<K, V>): V {
         lock(self.rwLockId);
         try {
             if (!self.value.has(key)) { return null; }
@@ -201,8 +201,8 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> {
     }
 
     // 无条件调用 remapper(key, oldVal_or_null)；结果 null 删除键，否则覆盖；
-    // 返回新值；remapper 为 (k: K, v: V) => V（缺失时 v 为 null）
-    func compute(key: K, remapper): V {
+    // 返回新值；remapper 为 BiFunctionMapper<K, V>（缺失时 v 为 null）
+    func compute(key: K, remapper: BiFunctionMapper<K, V>): V {
         lock(self.rwLockId);
         try {
             oldv = null;
@@ -218,8 +218,8 @@ public class ConcurrentHashMap<K, V> extends HashMap<K, V> {
     }
 
     // 键缺失 → 直接取 val；存在 → 取 remapper(oldVal, val)；
-    // 结果 null 删除键，否则覆盖；返回新值；remapper 为 (oldv: V, mv: V) => V
-    func merge(key: K, val: V, remapper): V {
+    // 结果 null 删除键，否则覆盖；返回新值；remapper 为 MergeMapper<V>
+    func merge(key: K, val: V, remapper: MergeMapper<V>): V {
         lock(self.rwLockId);
         try {
             oldv = null;

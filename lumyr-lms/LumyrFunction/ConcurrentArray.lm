@@ -1,0 +1,241 @@
+// ============================================================
+// lumyr-ConcurrentArray：线程安全的动态数组 ConcurrentArray<E>
+// 封装内置 array，所有读写经同一把可重入锁（rmutex）串行化：
+//   - 单操作（get/set/push/pop...）原子
+//   - 复合操作（pop/shift/splice 等读+写）整段临界区原子
+// 用可重入锁：方法之间互相调用同线程不死锁。
+//
+// 用法：
+//   import <Function/ConcurrentArray>;
+//   ca = ConcurrentArray<int>();
+//   ca.push(1).push(2).push(3);
+//   print(ca.pop());         // 3
+//   print(ca.size());        // 2
+//
+// 多线程间共享同一实例即可直接并发调用，无需外部加锁。
+// ============================================================
+
+import <Function/Array>;
+
+public class ConcurrentArray<E> extends Array<E> {
+    lockId: int64;
+
+    func ConcurrentArray(arr: E[]) {
+        super(arr);
+        self.lockId = rmutex();
+    }
+
+    // ===== 读操作 =====
+
+    @FuncAlias(["length", "count"])
+    func size(): int {
+        lock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    func isEmpty(): bool {
+        lock(self.lockId);
+        try { return self.value.len == 0; } finally { unlock(self.lockId); }
+    }
+
+    func get(idx: int): E {
+        lock(self.lockId);
+        try { return self.value.get(idx); } finally { unlock(self.lockId); }
+    }
+
+    func indexOf(val: E): int {
+        lock(self.lockId);
+        try { return self.value.indexOf(val); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("includes")
+    func contains(val: E): bool {
+        lock(self.lockId);
+        try { return self.value.indexOf(val) >= 0; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getFirst")
+    func first(): E {
+        lock(self.lockId);
+        try { return self.value.first(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getLast")
+    func last(): E {
+        lock(self.lockId);
+        try { return self.value.last(); } finally { unlock(self.lockId); }
+    }
+
+    func sum() {
+        lock(self.lockId);
+        try { return self.value.sum(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["mean", "average"])
+    func avg(): double {
+        lock(self.lockId);
+        try { return self.value.avg(); } finally { unlock(self.lockId); }
+    }
+
+    func min(): E {
+        lock(self.lockId);
+        try { return self.value.min(); } finally { unlock(self.lockId); }
+    }
+
+    func max(): E {
+        lock(self.lockId);
+        try { return self.value.max(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("subList")
+    func slice(start: int, end: int) {
+        lock(self.lockId);
+        try { return self.value.slice(start, end); } finally { unlock(self.lockId); }
+    }
+
+    func concat(other) {
+        lock(self.lockId);
+        try { return self.value.concat(other.value); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toList")
+    func toArray() {
+        lock(self.lockId);
+        try { return self.value.copy(); } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        lock(self.lockId);
+        try { return self.toJSONString(); } finally { unlock(self.lockId); }
+    }
+
+    func equals(other): bool {
+        if (type(other) != type(self)) { return false; }
+        lock(self.lockId);
+        try { return self.toJSONString() == other.toJSONString(); }
+        finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("hashValue")
+    func hashCode(): int {
+        lock(self.lockId);
+        try { return self.value.len; } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("getClassName")
+    func className(): string { return type(self); }
+
+    // clone：返回独立的 ConcurrentArray（锁独立、内容深拷贝）
+    @FuncAlias("clone")
+    func copy() {
+        lock(self.lockId);
+        try { return ConcurrentArray<E>(self.value.copy()); }
+        finally { unlock(self.lockId); }
+    }
+
+    // ===== 写操作 =====
+
+    func set(idx: int, val: E) {
+        lock(self.lockId);
+        try { self.value.set(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func insert(idx: int, val: E) {
+        lock(self.lockId);
+        try { self.value.insert(idx, val); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func remove(idx: int) {
+        lock(self.lockId);
+        try { self.value.remove(idx); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias("removeAll")
+    func clear() {
+        lock(self.lockId);
+        try { self.value.clear(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func sort() {
+        lock(self.lockId);
+        try { self.value.sort(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    func reverse() {
+        lock(self.lockId);
+        try { self.value.reverse(); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    // ===== Array 子类方法 =====
+
+    @FuncAlias(["append", "add"])
+    func push(v: E) {
+        lock(self.lockId);
+        try { self.value.add(v); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias(["removeLast", "popLast"])
+    func pop() {
+        lock(self.lockId);
+        try {
+            if (self.value.len == 0) { return; }
+            last = self.value.last();
+            self.value.remove(self.value.len - 1);
+            return last;
+        } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["shiftLeft", "removeFirst"])
+    func shift(): E {
+        lock(self.lockId);
+        try {
+            if (self.value.len == 0) { return; }
+            first = self.value.first();
+            self.value.remove(0);
+            return first;
+        } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["prepend", "addFirst"])
+    func unshift(v: E) {
+        lock(self.lockId);
+        try { self.value.insert(0, v); } finally { unlock(self.lockId); }
+        return self;
+    }
+
+    @FuncAlias("popAt")
+    func removeAt(idx: int) {
+        lock(self.lockId);
+        try {
+            removed = self.value.get(idx);
+            self.value.remove(idx);
+            return removed;
+        } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias("sliceAssign")
+    func splice(start: int, count: int) {
+        lock(self.lockId);
+        try {
+            removed = self.value.slice(start, start + count);
+            i = start + count - 1;
+            while (i >= start) { self.value.remove(i); i = i - 1; }
+            return ConcurrentArray<E>(removed);
+        } finally { unlock(self.lockId); }
+    }
+
+    @FuncAlias(["extend", "appendContents"])
+    func addAll(other: E[]) {
+        lock(self.lockId);
+        try { self.value.addAll(other.value); } finally { unlock(self.lockId); }
+        return self;
+    }
+}
