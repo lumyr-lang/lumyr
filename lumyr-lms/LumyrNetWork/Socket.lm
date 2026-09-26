@@ -1,0 +1,175 @@
+// ============================================================
+// lumyr-Socket：SocketInterface / ServerSocketInterface / ClientSocketInterface
+//              + ServerSocket / ClientSocket 实现类
+// 面向对象封装内置 TcpSocket：bind/listen/accept/connect/send/recv/close
+//
+// 分层：
+//   SocketInterface          通用套接字契约（send/recv/close/选项/fileno）
+//   ServerSocketInterface    服务端契约（bind/listen/accept）
+//   ClientSocketInterface    客户端契约（connect）
+//   ServerSocket             TCP 服务端：bind+listen 后 accept 取连接
+//   ClientSocket             TCP 客户端：connect 后收发数据
+//
+// 用法：
+//   import <NetWork/Socket>;
+//   // 服务端
+//   srv = ServerSocket("0.0.0.0", 8080);
+//   while (true) {
+//       conn = srv.accept();
+//       conn.send("hello");
+//       conn.close();
+//   }
+//   // 客户端
+//   cli = ClientSocket("127.0.0.1", 8080);
+//   data = cli.recv(1024);
+//   cli.close();
+// ============================================================
+
+// 通用套接字契约：所有 socket 均支持的收发与生命周期操作
+public interface SocketInterface {
+    func send(data): int;
+    func recv(maxLen: int);
+    func close();
+    func setOption(name: string, value);
+    func getOption(name: string);
+    func fileno(): int;
+}
+
+// 服务端套接字契约：在通用能力上增加绑定、监听、接受连接
+public interface ServerSocketInterface extends SocketInterface {
+    func bind(host: string, port: int);
+    func listen(backlog: int);
+    func accept();
+}
+
+// 客户端套接字契约：在通用能力上增加连接
+public interface ClientSocketInterface extends SocketInterface {
+    func connect(host: string, port: int);
+}
+
+// TCP 服务端套接字：构造即 bind+listen，accept 返回对端连接（raw socket）
+public class ServerSocket implements ServerSocketInterface {
+    sock: any;
+    host: string;
+    port: int;
+    closed: bool;
+
+    // 默认 backlog=128
+    func ServerSocket(host: string, port: int) {
+        self.host = host;
+        self.port = port;
+        self.closed = false;
+        self.sock = TcpSocket();
+        self.bind(host, port);
+        self.listen(128);
+    }
+
+    func ServerSocket(host: string, port: int, backlog: int) {
+        self.host = host;
+        self.port = port;
+        self.closed = false;
+        self.sock = TcpSocket();
+        self.bind(host, port);
+        self.listen(backlog);
+    }
+
+    func bind(host: string, port: int) {
+        self.sock.bind(host, port);
+        return self;
+    }
+
+    func listen(backlog: int) {
+        self.sock.listen(backlog);
+        return self;
+    }
+
+    // 接受一个新连接，返回对端 socket（可直接 send/recv/close）
+    func accept() {
+        return self.sock.accept();
+    }
+
+    func send(data): int {
+        return self.sock.send(data);
+    }
+
+    func recv(maxLen: int) {
+        return self.sock.recv(maxLen);
+    }
+
+    func setOption(name: string, value) {
+        return self.sock.setOption(name, value);
+    }
+
+    func getOption(name: string) {
+        return self.sock.getOption(name);
+    }
+
+    func fileno(): int {
+        return self.sock.fileno();
+    }
+
+    func close() {
+        if (!self.closed) {
+            self.sock.close();
+            self.closed = true;
+        }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "ServerSocket(" + self.host + ":" + self.port + ")";
+    }
+}
+
+// TCP 客户端套接字：构造即 connect 到服务端
+public class ClientSocket implements ClientSocketInterface {
+    sock: any;
+    host: string;
+    port: int;
+    closed: bool;
+
+    func ClientSocket(host: string, port: int) {
+        self.host = host;
+        self.port = port;
+        self.closed = false;
+        self.sock = TcpSocket();
+        self.connect(host, port);
+    }
+
+    func connect(host: string, port: int) {
+        self.sock.connect(host, port);
+        return self;
+    }
+
+    func send(data): int {
+        return self.sock.send(data);
+    }
+
+    func recv(maxLen: int) {
+        return self.sock.recv(maxLen);
+    }
+
+    func setOption(name: string, value) {
+        return self.sock.setOption(name, value);
+    }
+
+    func getOption(name: string) {
+        return self.sock.getOption(name);
+    }
+
+    func fileno(): int {
+        return self.sock.fileno();
+    }
+
+    func close() {
+        if (!self.closed) {
+            self.sock.close();
+            self.closed = true;
+        }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "ClientSocket(" + self.host + ":" + self.port + ")";
+    }
+}
