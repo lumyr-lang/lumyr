@@ -439,8 +439,15 @@ Value lumyr_unary_minus(Value v) {
         out.type = VAL_BITDECIMAL; out.v.bitdecimal = neg;
         return out;
     }
-    double num = value_as_number(v);
-    return lumyr_make_double(-num);
+    /* 无兜底：数值族（int/浮点/整型族/bigint/decimal/bitdecimal）已在上方分支
+       全部处理；落到这里的是字符串、数组、map、set、tuple、函数、对象及 null，
+       取负是确定错误：抛运行时错误（try 可捕获），禁止经 value_as_number
+       静默按 0.0 处理得 -0（即使数字串 "123" 也须先 int() 转换）。 */
+    runtime_error("一元负号要求数值操作数，不能用于字符串等非数值类型 / unary minus requires a numeric operand, cannot apply to non-numeric types such as string");
+    {
+        Value dummy; memset(&dummy, 0, sizeof(dummy));
+        return dummy;   /* 不可达：runtime_error 已 longjmp/退出 */
+    }
 }
 
 Value lumyr_add(Value a, Value b) {

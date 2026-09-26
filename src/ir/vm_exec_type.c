@@ -77,6 +77,18 @@ int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* 一元负号可处理的类型白名单：全部数值族 + 三种高精度类型。
+ * VAL_INT8(101)..VAL_SSIZE_T(118) 连续（VAL_VOID=100 不在范围）。
+ * 其余类型（string/array/map/set/tuple/func/generator/bytes/对象等）取负非法。 */
+static int vneg_is_numeric(ValueType t) {
+    if(t == VAL_INT || t == VAL_DOUBLE || t == VAL_BOOL ||
+       t == VAL_CHAR || t == VAL_BYTE ||
+       t == VAL_FLOAT || t == VAL_LONG_DOUBLE ||
+       t == VAL_BIGINT || t == VAL_DECIMAL || t == VAL_BITDECIMAL) return 1;
+    if(t >= VAL_INT8 && t <= VAL_SSIZE_T) return 1;
+    return 0;
+}
+
 /* VNEG：通用 Value 一元负（动态兜底：VALUE 栈） */
 int vm_exec_vneg(VMExecCtx* ctx, Instruction* in) {
     Value val;
@@ -86,6 +98,13 @@ int vm_exec_vneg(VMExecCtx* ctx, Instruction* in) {
         /* 无兜底：-null 抛 TypeError，不再静默得 -0.0 */
         vm_except_raise_str(ctx, "TypeError",
             "null 不能参与算术运算 / null cannot participate in arithmetic");
+        return 1;
+    }
+    if(!vneg_is_numeric(val.type)) {
+        /* 无兜底：字符串等非数值取负抛 TypeError（可被 try/catch 捕获），
+         * 与 lumyr_unary_minus 库层 runtime_error 防线消息一致 */
+        vm_except_raise_str(ctx, "TypeError",
+            "一元负号要求数值操作数，不能用于字符串等非数值类型 / unary minus requires a numeric operand, cannot apply to non-numeric types such as string");
         return 1;
     }
     Value r = lumyr_unary_minus(val);
