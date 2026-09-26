@@ -80,19 +80,47 @@ void vm_thread_body(ThreadLaunch* t) {
     VMExecCtx ctx = {0};
     ctx.frame = stackframe_new(NULL);
 
+    /* 根帧兜底：VM 协作式异常（throw_value 空 try 栈）与 kit runtime_error
+     * 未被用户代码捕获时，longjmp 到这里——只终止本线程：错误作为结果
+     * 存入线程槽，join 时在调用线程重新抛出，不再 exit 整个进程。
+     * vm_call_func_value 内部的 vm_exec_guarded 会嵌套压各自的 jmp_buf，
+     * 未捕获错误最终一路 longjmp 到本根垫。 */
+    jmp_buf rootpad;
+    jmp_buf* volatile prevJmp = g_err_jmp;
+    g_err_jmp = &rootpad;
+    vm_except_enter_thread_root();
+
     Value result = val_none();
-    int rc = vm_call_func_value(&ctx, fv, t->argc, t->args, &result);
-    if(rc != 1) {
-        /* 硬错误（错误详情已打印）：与主执行循环 handled==0 语义一致，中止进程 */
-        stackframe_destroy(ctx.frame);
-        stack_global_destroy();
-        fprintf(stderr, "VM: 线程函数执行失败 / thread function failed\n");
-        exit(1);
+    int jumped = 0;
+    if(setjmp(rootpad) == 0) {
+        int rc = vm_call_func_value(&ctx, fv, t->argc, t->args, &result);
+        g_err_jmp = prevJmp;
+        vm_except_leave_thread_root();
+        if(rc != 1) {
+            /* 非异常类硬错误（指令 not handled 等，详情已打印）：
+             * 进程级致命，维持旧行为 */
+            stackframe_destroy(ctx.frame);
+            stack_global_destroy();
+            fprintf(stderr, "VM: 线程函数执行失败 / thread function failed\n");
+            exit(1);
+        }
+    } else {
+        /* 未捕获错误着陆：g_err 状态/root_err 已由异常机制设置 */
+        jumped = 1;
+        g_err_jmp = prevJmp;
+        vm_except_leave_thread_root();
     }
 
-    gc_protect_push(result);
-    lumyr_thread_set_result_protected(t, result);
-    gc_protect_pop();
+    if(jumped) {
+        Value err = vm_except_take_thread_root_error();
+        gc_protect_push(err);
+        lumyr_thread_set_result_protected(t, err);
+        gc_protect_pop();
+    } else {
+        gc_protect_push(result);
+        lumyr_thread_set_result_protected(t, result);
+        gc_protect_pop();
+    }
 
     stackframe_destroy(ctx.frame);
     stack_global_destroy();

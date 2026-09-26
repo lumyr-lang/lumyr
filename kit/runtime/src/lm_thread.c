@@ -165,13 +165,26 @@ void lumyr_thread_set_result_protected(ThreadLaunch* t, Value r)
 static void lm_c_thread_body(ThreadLaunch* t)
 {
     Value (*cf)(Value*, int) = (Value(*)(Value*, int))t->data;
-    /* 先 push 一个 dummy protect entry，再调用 cf。
-     * cf 返回后立即 gc_protect_set(r) 更新 protect 值，
-     * 确保 r 始终有 GC 根保护，无 pop→push 窗口。 */
+    /* 根帧兜底：cf 内未捕获的 runtime_error（g_err_jmp 此前为 NULL 直接
+     * exit 整个进程）longjmp 到这里——只终止本线程，错误作为结果交给
+     * join 重抛。先压 dummy protect 保证返回值始终有 GC 根。 */
+    jmp_buf rootpad;
+    jmp_buf* volatile prevJmp = g_err_jmp;
+    g_err_jmp = &rootpad;
     gc_protect_push(val_none());
-    Value r = cf(t->args, t->argc);
-    gc_protect_set(r);
-    lumyr_thread_set_result(t, r);
+    if(setjmp(rootpad) == 0) {
+        Value r = cf(t->args, t->argc);
+        g_err_jmp = prevJmp;
+        gc_protect_set(r);
+        lumyr_thread_set_result(t, r);
+    } else {
+        g_err_jmp = prevJmp;
+        Value err = lumyr_make_error(
+            (g_err_type && g_err_type[0]) ? g_err_type : "RuntimeError",
+            g_err_msg ? g_err_msg : "", NULL);
+        gc_protect_set(err);
+        lumyr_thread_set_result(t, err);
+    }
     gc_protect_pop();
     gc_unregister_cframe_thread();
 }
@@ -217,5 +230,8 @@ Value lumyr_thread_join(int id)
     g_slots[slot].used = 0;
     g_slots[slot].done = 0;
     pthread_mutex_unlock(&g_lock);
+    /* 子线程未捕获错误：join 时在调用线程重新抛出（try 可捕获）。
+     * 槽位已释放再跳，longjmp 不泄漏线程表资源。 */
+    if(cloned.type == VAL_ERROR) lumyr_rethrow_error(cloned);
     return cloned;
 }

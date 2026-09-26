@@ -421,6 +421,25 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             else if(!vm_make_bound_method(arr, fname, &r))
                 r = lumyr_field_get(arr, fname);
         }
+    } else if(arr.type == VAL_ERROR) {
+        /* 错误对象字段访问：type/message/stack（与 kit lumyr_index_get 对齐） */
+        if(idx.type != VAL_STRING) {
+            vm_except_raise_str(ctx, "TypeError",
+                "错误对象下标必须是字符串键 / error subscript must be a string key");
+            return 1;
+        }
+        const char* name = lumyr_str_cstr(&idx);
+        if(name && strcmp(name, "type") == 0)
+            r = lumyr_make_string(arr.v.err.type ? arr.v.err.type : "");
+        else if(name && strcmp(name, "message") == 0)
+            r = lumyr_make_string(arr.v.err.message ? arr.v.err.message : "");
+        else if(name && strcmp(name, "stack") == 0)
+            r = lumyr_make_string(arr.v.err.stack ? arr.v.err.stack : "");
+        else {
+            vm_except_raise_str(ctx, "AttributeError",
+                "错误对象只有 type/message/stack 三个字段 / error has only type/message/stack fields");
+            return 1;
+        }
     } else {
         /* 无兜底：非容器/不支持下标访问的类型（int/double/null/函数/生成器等）
          * 抛 TypeError（静态字面量已由 typecheck 拦截，此处兜底动态值），

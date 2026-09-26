@@ -7,6 +7,9 @@
 
 // runtime错误抛出
 void runtime_error(const char* msg);
+// 重新抛出 VAL_ERROR（join 子线程错误）：当前线程有 try 着陆点则 longjmp，
+// 否则按未捕获错误打印并退出进程
+void lumyr_rethrow_error(Value err);
 
 // try/catch 全局错误状态：当前错误跳转点（NULL=无 try，直接退出）与错误消息
 // 错误机制全部动态化（g_err_msg/g_err_type/g_trace/__g_* 按需扩容，无硬上限）

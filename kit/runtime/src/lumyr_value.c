@@ -116,6 +116,20 @@ void runtime_error(const char* msg) {
     exit(EXIT_FAILURE);
 }
 
+// 重新抛出已构造的 VAL_ERROR（用于 thread_join 传播子线程未捕获错误）
+void lumyr_rethrow_error(Value err) {
+    if(err.type != VAL_ERROR) return;
+    const char* et = (err.v.err.type && err.v.err.type[0]) ? err.v.err.type : "RuntimeError";
+    const char* em = err.v.err.message ? err.v.err.message : "";
+    if(g_err_jmp) {
+        g_err_type_set(et);
+        g_err_msg_set(em);
+        longjmp(*g_err_jmp, 1);
+    }
+    fprintf(stderr, "未捕获错误 [%s]: %s\n", et, em);
+    exit(EXIT_FAILURE);
+}
+
 // 错误对象构造：type/message/stack（stack 可为空，内部复制；字符串由 GC 管理）
 Value lumyr_make_error(const char* type, const char* msg, const char* stack) {
     Value v;

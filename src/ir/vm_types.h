@@ -88,11 +88,19 @@ int vm_except_check_unwind(VMExecCtx* ctx);
 /* FINISH 后若挂起返回已走完所有 finally：取出返回值（1=有，0=无） */
 int vm_except_take_pending_return(RetSlot* out);
 
-/* 内部指令抛出异常（vm_except.c）：以 throw 值走分派；未捕获则 exit(1) */
+/* 内部指令抛出异常（vm_except.c）：以 throw 值走分派；未捕获则 exit(1)。
+ * 例外：工作线程根帧模式下，未捕获错误 longjmp 到线程根兜底（不 exit） */
 int vm_except_throw_value(VMExecCtx* ctx, Value v);
 void vm_except_raise_str(VMExecCtx* ctx, const char* type, const char* msg);
 /* 跨帧展开是否激活（vm_except.c）：runtime_error 长跳落地后判定走向 */
 int vm_except_unwind_active(void);
+
+/* 工作线程根帧模式（vm.c vm_thread_body）：未捕获错误只终止本线程。
+ * enter/leave 包裹整个线程函数调用；take 取回记录的错误（VM 错误已
+ * ensure_error；runtime_error 路径按 g_err_type/message 构造） */
+void vm_except_enter_thread_root(void);
+void vm_except_leave_thread_root(void);
+Value vm_except_take_thread_root_error(void);
 
 /* 返回值独立化（字符串堆值深拷贝），定义在 vm_exec.c */
 Value ret_value_detach(Value v);

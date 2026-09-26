@@ -362,12 +362,14 @@ static const char* castkind_canonical_name(CastKind ck) {
 }
 
 /* 在两个分支类型名之间选统一目标，优先级与类型吸收规则一致：
- * string > bigint > bitdecimal > decimal > double > int（ptr 最低） */
+ * string > bitdecimal > decimal > bigint > double > int（ptr 最低）。
+ * 高精度混合必须向"能保留小数"的类型提升：此前 bigint 最高，
+ * decimal(10.5)+bigint(10) 把 decimal 截断成 10，确定错误。 */
 static const char* ternary_target_name(const char* a, const char* b) {
     /* 任一分支为动态（unknown/null）→ 整体走 VALUE 栈（NONE），另一分支 box */
     if(strcmp(a, "unknown") == 0 || strcmp(a, "null") == 0 ||
        strcmp(b, "unknown") == 0 || strcmp(b, "null") == 0) return "unknown";
-    static const char* order[] = {"string", "bigint", "bitdecimal", "decimal", "double", "int", "ptr"};
+    static const char* order[] = {"string", "bitdecimal", "decimal", "bigint", "double", "int", "ptr"};
     for(int i = 0; i < 7; i++) {
         if(strcmp(a, order[i]) == 0 || strcmp(b, order[i]) == 0) return order[i];
     }
@@ -2021,7 +2023,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
            bigint 精确比较），四则按既有设计走字符串拼接路径（arith_get_expr_type
            对 NONE+PTR 归 PTR）。 */
         if((lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) && lt_cast != CAST_STRING && rt_cast != CAST_STRING
-           && lt_cast != CAST_NONE && rt_cast != CAST_NONE) {
+           && lt_cast != CAST_NONE && rt_cast != CAST_NONE
+           /* 无损提升：另一方是小数类型时由 bitdecimal/decimal 分支处理，
+            * 禁止把小数截断成 bigint（此前 bigint(10)+decimal(10.5) 错得 20） */
+           && lt_cast != CAST_BITDECIMAL && rt_cast != CAST_BITDECIMAL
+           && lt_cast != CAST_DECIMAL && rt_cast != CAST_DECIMAL
+           && !cast_is_floatfamily(lt_cast) && !cast_is_floatfamily(rt_cast)) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 bigint，转成 bigint */
@@ -2102,6 +2109,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_DECIMAL) {
                     emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
                     emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+                } else if(lt == EXPR_TYPE_PTR && lt_cast == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
+                    emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
                 }
             }
             /* 编译右操作数 */
@@ -2114,6 +2124,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_BITDECIMAL_FROM_DOUBLE, 0, 0);
                 } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_DECIMAL) {
                     emit(c, OPC_DECIMAL_TO_STRING, 0, 0);
+                    emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
+                } else if(rt == EXPR_TYPE_PTR && rt_cast == CAST_BIGINT) {
+                    emit(c, OPC_BIGINT_TO_STRING, 0, 0);
                     emit(c, OPC_BITDECIMAL_FROM_STRING, 0, 0);
                 }
             }
@@ -2148,10 +2161,16 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_PTR;
         }
     
-        /* decimal 运算：至少一个操作数是 decimal。
+        /* decimal 运算：至少一个操作数是 decimal；或 bigint + 浮点族（提升
+           decimal 以同时保留 bigint 整数与小数，禁止互相截断）。
            动态侧（CAST_NONE）排除，同 bigint 分支注释。 */
-        if((lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) && lt_cast != CAST_STRING && rt_cast != CAST_STRING
-           && lt_cast != CAST_NONE && rt_cast != CAST_NONE) {
+        {
+        int dec_mix = (lt_cast == CAST_DECIMAL || rt_cast == CAST_DECIMAL) ||
+                      ((lt_cast == CAST_BIGINT || rt_cast == CAST_BIGINT) &&
+                       (cast_is_floatfamily(lt_cast) || cast_is_floatfamily(rt_cast)));
+        if(dec_mix && lt_cast != CAST_STRING && rt_cast != CAST_STRING
+           && lt_cast != CAST_NONE && rt_cast != CAST_NONE
+           && lt_cast != CAST_BITDECIMAL && rt_cast != CAST_BITDECIMAL) {
             /* 编译左操作数 */
             ExprType lt = c_expr(c, node->u.bin.left);
             /* 如果左操作数不是 decimal，转成 decimal */
@@ -2207,6 +2226,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 return EXPR_TYPE_NONE;
             }
             return EXPR_TYPE_PTR;
+        }
         }
 
         if(result == EXPR_TYPE_PTR && (node->u.bin.op == OP_ADD || node->u.bin.op == OP_MUL || node->u.bin.op == OP_DIV || node->u.bin.op == OP_SUB)) {
@@ -2922,14 +2942,21 @@ static CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
         /* 1. string 优先级最高：任何类型 + string 都是字符串拼接 */
         if(lt == CAST_STRING || rt == CAST_STRING) return CAST_STRING;
         
-        /* 2. bigint 次之：bigint 吸收所有类型（除 string） */
-        if(lt == CAST_BIGINT || rt == CAST_BIGINT) return CAST_BIGINT;
-
-        /* 2.5 bitdecimal 再次之：bitdecimal 吸收所有类型（除 string/bigint） */
+        /* 2. bitdecimal：向能保留小数的高精度浮点提升，吸收 bigint/decimal/int/double */
         if(lt == CAST_BITDECIMAL || rt == CAST_BITDECIMAL) return CAST_BITDECIMAL;
 
-        /* 3. decimal 再次之：decimal 吸收所有类型（除 string/bigint/bitdecimal） */
-        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL) return CAST_DECIMAL;
+        /* 3. decimal：任一方 decimal；或 bigint 与浮点族混合（decimal 同时
+         *    精确容纳 bigint 整数与小数）。此前 bigint 优先级更高，
+         *    bigint(10)+decimal(10.5) 把小数截断，结果类型也错判 bigint。 */
+        {
+        int hi_float = cast_is_floatfamily(lt) || cast_is_floatfamily(rt);
+        int hi_bigint = (lt == CAST_BIGINT || rt == CAST_BIGINT);
+        if(lt == CAST_DECIMAL || rt == CAST_DECIMAL || (hi_bigint && hi_float))
+            return CAST_DECIMAL;
+
+        /* 4. bigint：bigint + 整数族（含 bigint+bigint），结果仍 bigint */
+        if(hi_bigint) return CAST_BIGINT;
+        }
         
         /* 4. 浮点类型提升（C/C++ 规则：float 自动提升为 double） */
         if(lt == CAST_LONG_DOUBLE || rt == CAST_LONG_DOUBLE) return CAST_LONG_DOUBLE;

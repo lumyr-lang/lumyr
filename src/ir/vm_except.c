@@ -11,6 +11,7 @@
 #include "ir_types.h"
 #include "lumyr_value_type.h"
 #include "lm_value.h"
+#include "gc_runtime.h"
 #include "lm_type.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,13 @@ static _Thread_local UnwindState g_unwind;
 static _Thread_local Value g_current_error;
 /* 原始 throw 值（catch 变量绑定它，而非包装后的 ValueError） */
 static _Thread_local Value g_current_throw_val;
+
+/* 工作线程根帧模式：1=当前执行体是工作线程根帧，未捕获错误不再 exit
+ * 进程，记录错误后 longjmp 到 vm_thread_body 的根兜底。 */
+static _Thread_local int g_thread_root = 0;
+static _Thread_local Value g_thread_root_err;
+/* 错误已压入 protect 栈（防跨线程并发 GC 回收）；重入不重复压 */
+static _Thread_local int g_thread_root_pushed = 0;
 
 /* finally 完成动作节点（FIN_PUSH 压入，FINISH 消费）。
  * 前置于 throw_value：异常穿过仅 finally 的 try 时需压入 RETHROW 动作。 */
@@ -158,7 +166,26 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
     while (t && t->catch_pc == 0) t = t->prev;
 
     if (!t) {
-        /* 未捕获：打印错误信息并终止 */
+        /* 未捕获 */
+        if(g_thread_root) {
+            /* 工作线程根帧：只终止本线程。记录错误、设置 g_err 状态后
+             * longjmp 到 vm_thread_body 根兜底（g_err_jmp 由其设置）。
+             * 不能直接返回：出错指令状态已污染，执行链必须中止。
+             * 首次记录把错误压 protect（跨线程并发 GC 保护）；异常逐帧
+             * 重抛经过本分支时不重复压。 */
+            if(!g_thread_root_pushed) {
+                g_thread_root_err = err;
+                gc_protect_push(err);
+                g_thread_root_pushed = 1;
+            }
+            if(g_err_jmp) {
+                g_err_type_set(err.v.err.type ? err.v.err.type : "RuntimeError");
+                g_err_msg_set(err.v.err.message ? err.v.err.message : "");
+                longjmp(*g_err_jmp, 1);
+            }
+            /* 根兜底未设置（不应发生）：退回致命退出 */
+        }
+        /* 主线程（或无兜底）：打印错误信息并终止进程 */
         fprintf(stderr, "未捕获错误 [%s]: %s\n",
                 err.v.err.type ? err.v.err.type : "Error",
                 err.v.err.message ? err.v.err.message : "");
@@ -361,4 +388,32 @@ int vm_exec_catch_match(VMExecCtx* ctx, Instruction* in) {
     }
     ctx->pc = in->b;
     return 1;
+}
+
+/* ========== 工作线程根帧模式 ========== */
+void vm_except_enter_thread_root(void) {
+    g_thread_root = 1;
+    g_thread_root_err = val_none();
+    g_thread_root_pushed = 0;
+}
+
+void vm_except_leave_thread_root(void) {
+    g_thread_root = 0;
+}
+
+Value vm_except_take_thread_root_error(void) {
+    /* VM 协作式 throw 路径：throw_value 已记录 ensure_error 的 VAL_ERROR，
+     * 取出时解除其 protect（调用方随即自行 protect_push，中间无 GC 点） */
+    if(g_thread_root_err.type == VAL_ERROR) {
+        if(g_thread_root_pushed) {
+            gc_protect_pop();
+            g_thread_root_pushed = 0;
+        }
+        return g_thread_root_err;
+    }
+    /* kit runtime_error 路径（longjmp 直接到根垫，未记录 Value）：
+     * 按 g_err_type/message 构造 */
+    return lumyr_make_error(
+        (g_err_type && g_err_type[0]) ? g_err_type : "RuntimeError",
+        g_err_msg ? g_err_msg : "", NULL);
 }
