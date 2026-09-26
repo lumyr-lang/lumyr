@@ -1949,6 +1949,18 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         if(op == OP_UNARY_MINUS) {
             if(child_type == EXPR_TYPE_NONE) {
                 emit(c, OPC_VNEG, 0, 0);   /* 动态 Value 一元负 */
+            } else if(child_type == EXPR_TYPE_PTR) {
+                /* 高精度 PTR（bigint/decimal/bitdecimal）：b 带精确 CastKind，
+                   vm_exec_type_neg 在 PTR 栈按类型取负（普通字符串取负不应发生） */
+                CastKind childCast = c_expr_cast_type(c, node->u.uny.child);
+                if(childCast != CAST_BIGINT && childCast != CAST_DECIMAL
+                   && childCast != CAST_BITDECIMAL) {
+                    /* 字符串等非数值 PTR 取负是确定错误：编译期报错，禁止静默压 NULL */
+                    fprintf(stderr, "IR: 一元负号不支持字符串等非数值类型 / unary minus does not support non-numeric types such as string\n");
+                    g_ir_compile_error = 1;
+                    return EXPR_TYPE_NONE;
+                }
+                emit(c, OPC_NEG, (int)EXPR_TYPE_PTR, (int)childCast);
             } else {
                 emit(c, OPC_NEG, (int)child_type, 0);
             }

@@ -6,6 +6,9 @@
 #include "stack_manager.h"
 #include "ir_types.h"
 #include "lm_value.h"
+#include "lm_bigint.h"
+#include "lm_decimal.h"
+#include "lm_bitdecimal.h"
 #include "gc_runtime.h"
 #include <string.h>
 
@@ -29,13 +32,42 @@ int vm_exec_type_double_to_int64(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
-/* NEG：负号，a 字段存表达式类型（INT 或 DOUBLE） */
+/* NEG：负号，a 字段存表达式类型（INT / DOUBLE / PTR）。
+ * PTR 时 b 字段存精确 CastKind（bigint/decimal/bitdecimal），
+ * 值在 PTR 栈：此前误从 INT64 栈弹，高精度取负静默失效。 */
 int vm_exec_type_neg(VMExecCtx* ctx, Instruction* in) {
     if(in->a == (int)EXPR_TYPE_DOUBLE) {
         double val;
         stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &val);
         val = -val;
         stack_vm_push(g_stack_mgr, STACK_DOUBLE, &val);
+    } else if(in->a == (int)EXPR_TYPE_PTR) {
+        void* p;
+        stack_vm_pop(g_stack_mgr, STACK_PTR, &p);
+        void* neg = NULL;
+        switch((CastKind)in->b) {
+        case CAST_BIGINT: {
+            BigInt* zero = lumyr_bigint_from_int64(0);
+            neg = lumyr_bigint_sub(zero, (BigInt*)p);
+            lumyr_bigint_free(zero);
+            break;
+        }
+        case CAST_DECIMAL: {
+            Decimal* zero = lumyr_decimal_from_int64(0);
+            neg = lumyr_decimal_sub(zero, (Decimal*)p);
+            lumyr_decimal_free(zero);
+            break;
+        }
+        case CAST_BITDECIMAL: {
+            BitDecimal* zero = lumyr_bitdecimal_from_int64(0);
+            neg = lumyr_bitdecimal_sub(zero, (BitDecimal*)p);
+            lumyr_bitdecimal_free(zero);
+            break;
+        }
+        default:
+            break;
+        }
+        stack_vm_push(g_stack_mgr, STACK_PTR, &neg);
     } else {
         int64_t val;
         stack_vm_pop(g_stack_mgr, STACK_INT64, &val);

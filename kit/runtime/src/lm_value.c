@@ -413,6 +413,32 @@ Value lumyr_unary_minus(Value v) {
         if(n == INT64_MIN) return lumyr_make_int64(INT64_MIN);  /* -INT64_MIN 溢出，按补码回绕保持值 */
         return lumyr_make_int64(-n);
     }
+    /* 高精度类型：按 0 - x 取负，保持原高精度类型（此前落空 value_as_number
+       得 -0.0 double，类型与精度全失）。零对象临时使用后立即释放。 */
+    if(v.type == VAL_BIGINT && v.v.bigint) {
+        BigInt* zero = lumyr_bigint_from_int64(0);
+        BigInt* neg = lumyr_bigint_sub(zero, v.v.bigint);
+        lumyr_bigint_free(zero);
+        Value out; memset(&out, 0, sizeof(out));
+        out.type = VAL_BIGINT; out.v.bigint = neg;
+        return out;
+    }
+    if(v.type == VAL_DECIMAL && v.v.decimal) {
+        Decimal* zero = lumyr_decimal_from_int64(0);
+        Decimal* neg = lumyr_decimal_sub(zero, v.v.decimal);
+        lumyr_decimal_free(zero);
+        Value out; memset(&out, 0, sizeof(out));
+        out.type = VAL_DECIMAL; out.v.decimal = neg;
+        return out;
+    }
+    if(v.type == VAL_BITDECIMAL && v.v.bitdecimal) {
+        BitDecimal* zero = lumyr_bitdecimal_from_int64(0);
+        BitDecimal* neg = lumyr_bitdecimal_sub(zero, v.v.bitdecimal);
+        lumyr_bitdecimal_free(zero);
+        Value out; memset(&out, 0, sizeof(out));
+        out.type = VAL_BITDECIMAL; out.v.bitdecimal = neg;
+        return out;
+    }
     double num = value_as_number(v);
     return lumyr_make_double(-num);
 }
