@@ -1126,7 +1126,10 @@ static AstNode* wrap_struct_named(const char* tname, AstNode* items)
     AstNode* out = NULL;
     for(int i = 0; i < td->nprops; i++) {
         if(!values[i]) continue;
-        CastKind ck = td->ptypes ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
+        /* any/动态字段（VAL_NONE）不包 cast（valuetype_to_castkind 的 default
+         * 会落 CAST_LONGLONG，把容器/嵌套值销毁），与类字段修复一致 */
+        CastKind ck = (td->ptypes && td->ptypes[i] != VAL_NONE)
+            ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
         AstNode* v = (ck != CAST_NONE) ? new_cast_node(ck, values[i]) : values[i];
         AstNode* entry = ast_map_entry(ast_string(strdup(td->props[i])), v);
         out = out ? ast_seq(out, entry) : entry;
@@ -1157,7 +1160,9 @@ static AstNode* wrap_type_positional(const char* tname, AstNode* args)
     }
     AstNode* out = NULL;
     for(int i = 0; i < pn; i++) {
-        CastKind ck = td->ptypes ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
+        /* any/动态字段（VAL_NONE）不包 cast（同 wrap_type_named 的修复） */
+        CastKind ck = (td->ptypes && td->ptypes[i] != VAL_NONE)
+            ? valuetype_to_castkind((int)td->ptypes[i]) : CAST_NONE;
         AstNode* v = (ck != CAST_NONE) ? new_cast_node(ck, pos[i]) : pos[i];
         AstNode* entry = ast_map_entry(ast_string(strdup(td->props[i])), v);
         out = out ? ast_seq(out, entry) : entry;

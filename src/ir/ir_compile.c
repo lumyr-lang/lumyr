@@ -2594,6 +2594,21 @@ ExprType c_expr(Ctx* c, AstNode* node) {
          * 导致 cond=false 仍走 true 分支（字符串==/方法返回等动态条件触发此 bug） */
         int jfalse = emit_cond_jump_if_false(c, node->u.ternary.cond);
 
+        if(strcmp(name_target, "unknown") == 0) {
+            /* 目标动态 VALUE：两分支直接按 VALUE 目标编译（c_expr_to_value
+             * 统一处理字面量直推/typed 装箱）。不得走 c_expr + ternary_cast_to：
+             * 后者对 "string"→unknown 假设"已在 VALUE 栈"零操作，而字符串字面量
+             * 经 c_expr 压 PTR 栈（PUSH_CONST_IDX），字面量分支跳过装匣 →
+             * 消费者从 VALUE 栈弹空下溢（INDEX_SET 拿 unknown 容器崩溃）。
+             * 字符串 typed 局部变量同受影响（LOAD_PTR_VAR 落 PTR 栈）。 */
+            c_expr_to_value(c, node->u.ternary.true_expr);
+            int jend = emit_here(c, OPC_JMP, 0, 0);
+            patch_to(c, jfalse);
+            c_expr_to_value(c, node->u.ternary.false_expr);
+            patch_to(c, jend);
+            return EXPR_TYPE_NONE;
+        }
+
         /* true 分支：编译后按目标类型转换 */
         c_expr(c, node->u.ternary.true_expr);
         ternary_cast_to(c, name_t, name_target);

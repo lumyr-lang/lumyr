@@ -219,6 +219,16 @@ public class RequestBinder {
         return (string)v;
     }
 
+    // bytes：JSON 无字节字面量，字符串按 UTF-8 编码转入（bytes(s)）；
+    // bytes 直通；其余类型拒绝。此前 bytes 字段无 binder 直接赋值，
+    // 字符串裸指针存入 bytes 槽，读取时被当 BytesObj 解引用段错误
+    static func asBytes(v) {
+        t = type(v);
+        if (t == "bytes") { return v; }
+        if (t == "string") { return bytes(v); }
+        return null;
+    }
+
     // map：map 直通；字符串 trim 后须为合法 JSON 对象
     // （解析失败或解析结果非 map 一律 null，json() 抛错也被拦为 null）
     static func asMap(v) {

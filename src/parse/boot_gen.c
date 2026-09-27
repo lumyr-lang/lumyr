@@ -77,8 +77,19 @@ static const char* binder_name_for_cast(CastKind ck);
 static AstNode* build_model_builder(const char* cls) {
     TypeDef* td = class_lookup(cls);
     if(!td) return NULL;
-    AstNode* body = ast_assign(strdup("inst"),
-                               ast_class_new(strdup(cls), 0, NULL, NULL));
+    /* 入口校验：m 必须是 map（JSON 对象）。数组/标量流入时统一抛 TypeError
+     * → 适配层异常 → 500；否则数组/字符串因自带 contains 静默产出空实例、
+     * 整数直接崩溃，三种子场景行为分裂（无兜底：显式报错） */
+    AstNode* typechk = ast_if(
+        ast_binop(OP_NE,
+                  ast_call(strdup("type"), ast_var(strdup("m"))),
+                  ast_string(strdup("map"))),
+        ast_throw(ast_string(strdup(
+            "模型绑定要求 JSON 对象 / model binding requires a JSON object"))),
+        NULL, NULL);
+    AstNode* body = ast_seq(typechk,
+                            ast_assign(strdup("inst"),
+                                       ast_class_new(strdup(cls), 0, NULL, NULL)));
     for(int i = 0; i < td->nprops; i++) {
         if(!td->props || !td->props[i]) continue;
         /* 仅映射公开字段（0=public；访问修饰表缺失视为全公开） */
@@ -161,6 +172,7 @@ static const char* binder_name_for_cast(CastKind ck) {
     case CAST_BITDECIMAL:                          return "RequestBinder_asBitDecimal";
     case CAST_MAP:                                 return "RequestBinder_asMap";
     case CAST_ARRAY:                               return "RequestBinder_asArray";
+    case CAST_BYTES:                               return "RequestBinder_asBytes";
     default:                                       return NULL;
     }
 }
@@ -398,8 +410,11 @@ AstNode* boot_gen_inject(AstNode* root, int print_only) {
                     continue;
                 }
 
-                if(!dp->type || strlen(dp->type) == 0) {
-                    /* 无类型标注：按名绑定原始值（路径→query→表单），不校验 */
+                if(!dp->type || strlen(dp->type) == 0
+                   || strcmp(dp->type, "any") == 0) {
+                    /* 无类型标注/显式 any：按名绑定原始值（路径→query→表单），不校验。
+                     * any 不是已注册类，落入类模型分支会编译报错；
+                     * 其语义与未标注一致（动态类型，原样直通） */
                     AstNode* bind = ast_assign(strdup(abuf),
                         ast_method_call(ast_var(strdup("req")), strdup("param"),
                                         ast_string(strdup(dp->name))));

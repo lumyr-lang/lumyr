@@ -28,6 +28,43 @@ class UserIn {
     addr: AddrIn;
 }
 
+// 深嵌套实体类 DTO：Company → Dept → Team → Member（四级）
+class Member {
+    name: string = "";
+    age: int = 0;
+    salary: long = 0;
+}
+
+class Team {
+    title: string = "";
+    lead: Member;      // 二级嵌套对象
+    members: array;    // 数组字段（元素保留 JSON 原结构）
+}
+
+class Dept {
+    name: string = "";
+    team: Team;        // 三级嵌套
+    tags: array;       // 数组字段
+    meta: map;         // map 字段
+}
+
+class CompanyIn {
+    company: string = "";
+    dept: Dept;        // 四级深嵌套
+    extra: any;        // 未标注字段：JSON 原结构保留
+    founded: bigint;
+    score: double = 0.0;
+    active: bool = false;
+    bin: bytes;
+}
+
+// any 场景专项 DTO：payload 任意 JSON 值、m map 混合值、a array 混合元素
+class AnyIn {
+    payload: any;    // 未标注：任意 JSON 值原样保留（编译期选 CAST_VOID 直通）
+    m: map;          // map 字段：各值类型逐个保留
+    a: array;        // array 字段：各元素类型逐个保留
+}
+
 // 超限数字 body DTO：各整数/高精度类型字段
 class NumIn {
     i: int = 0;
@@ -185,6 +222,144 @@ class ParamController {
             "dect": type(n.dec), "decs": (string)n.dec,
             "dt": type(n.d), "ds": (string)n.d
         });
+        return r;
+    }
+
+    // 深嵌套 DTO body 端点：逐层回显类型 + 值（含容器/未标注字段）
+    @Post("/t/dto")
+    func tDto(req, c: CompanyIn) {
+        out = {};
+        out["companyType"] = type(c.company); out["company"] = c.company;
+        out["foundedType"] = type(c.founded);
+        if (c.founded != null) { out["founded"] = (string)c.founded; }
+        out["score"] = c.score;
+        out["activeType"] = type(c.active); out["active"] = c.active;
+        out["binType"] = type(c.bin);
+        if (c.bin != null) { out["bin"] = (string)c.bin; }
+        out["extraType"] = type(c.extra);
+        d = c.dept;
+        out["deptNull"] = (d == null);
+        if (d != null) {
+            out["deptName"] = d.name;
+            t = d.team;
+            out["teamNull"] = (t == null);
+            if (t != null) {
+                out["teamTitle"] = t.title;
+                lead = t.lead;
+                out["leadNull"] = (lead == null);
+                if (lead != null) {
+                    out["leadType"] = type(lead);
+                    out["leadName"] = lead.name;
+                    out["leadAgeType"] = type(lead.age);
+                    out["leadAge"] = lead.age;
+                    out["leadSalary"] = (string)lead.salary;
+                }
+                ms = t.members;
+                out["membersType"] = (ms == null) ? "null" : type(ms);
+                if (ms != null) {
+                    out["membersLen"] = ms.len;
+                    if (ms.len > 0) {
+                        m0 = ms[0];
+                        out["m0Type"] = type(m0);
+                        if (type(m0) == "map" && m0.contains("name")) {
+                            out["m0Name"] = m0["name"];
+                        }
+                    }
+                }
+            }
+            tags = d.tags;
+            out["tagsType"] = (tags == null) ? "null" : type(tags);
+            if (tags != null) {
+                out["tagsLen"] = tags.len;
+                if (tags.len > 0) { out["tag0"] = tags[0]; }
+            }
+            meta = d.meta;
+            out["metaType"] = (meta == null) ? "null" : type(meta);
+            if (meta != null && meta.contains("k")) {
+                out["metaK"] = meta["k"];
+            }
+        }
+        r = ServerResponse(200);
+        r.json(out);
+        return r;
+    }
+
+    // query 通道容器参数：map/array 走 JSON 串解析（asMap/asArray）
+    @Get("/t/coll")
+    func tColl(req, m: map, a: array) {
+        r = ServerResponse(200);
+        r.json({
+            "mt": type(m),
+            "mk": m.contains("k") ? m["k"] : null,
+            "at": type(a),
+            "a0": a.len > 0 ? a[0] : null
+        });
+        return r;
+    }
+
+    // any 场景专项端点：回显 payload/m/a 各层类型与值
+    @Post("/t/any")
+    func tAny(req, c: AnyIn) {
+        out = {};
+        p = c.payload;
+        out["pt"] = type(p);
+        if (p != null) {
+            pt = type(p);
+            if (pt == "array") {
+                out["plen"] = p.len;
+                if (p.len > 0) { out["p0"] = p[0]; out["p0t"] = type(p[0]); }
+                if (p.len > 1) { out["p1"] = p[1]; out["p1t"] = type(p[1]); }
+                if (p.len > 2) { out["p2"] = p[2]; out["p2t"] = type(p[2]); }
+                if (p.len > 3) { out["p3"] = p[3]; out["p3t"] = type(p[3]); }
+            }
+            if (pt == "map") {
+                if (p.contains("k")) { out["pk"] = p["k"]; out["pkt"] = type(p["k"]); }
+                if (p.contains("name")) { out["pname"] = p["name"]; }
+                if (p.contains("deep")) {
+                    out["pdeept"] = type(p["deep"]);
+                    out["pdeep"] = p["deep"];
+                }
+            }
+            if (pt != "array" && pt != "map") { out["pv"] = p; }
+        }
+        m = c.m;
+        out["mt"] = (m == null) ? "null" : type(m);
+        if (m != null) {
+            if (m.contains("s")) { out["mst"] = type(m["s"]); out["ms"] = m["s"]; }
+            if (m.contains("i")) { out["mit"] = type(m["i"]); out["mi"] = m["i"]; }
+            if (m.contains("b")) { out["mbt"] = type(m["b"]); out["mb"] = m["b"]; }
+            if (m.contains("arr")) { out["marrt"] = type(m["arr"]); }
+            if (m.contains("obj")) { out["mobjt"] = type(m["obj"]); }
+            if (m.contains("nul")) { out["mnult"] = type(m["nul"]); }
+        }
+        a = c.a;
+        out["at"] = (a == null) ? "null" : type(a);
+        if (a != null) {
+            out["alen"] = a.len;
+            if (a.len > 0) { out["a0t"] = type(a[0]); out["a0"] = a[0]; }
+            if (a.len > 1) { out["a1t"] = type(a[1]); out["a1"] = a[1]; }
+            if (a.len > 2) { out["a2t"] = type(a[2]); }
+            if (a.len > 3) { out["a3t"] = type(a[3]); }
+            if (a.len > 4) { out["a4t"] = type(a[4]); }
+        }
+        r = ServerResponse(200);
+        r.json(out);
+        return r;
+    }
+
+    // query 通道 any：未标注参数按名绑定原始字符串（不校验，缺失为 null）
+    @Get("/t/qany")
+    func tQAny(req, q) {
+        r = ServerResponse(200);
+        r.json({"qt": (q == null) ? "null" : type(q), "qv": q});
+        return r;
+    }
+
+    // 显式 any 标注参数：预期与未标注同语义（原样绑定）
+    @Get("/t/qany2")
+    func tQAny2(req, q: any) {
+        r = ServerResponse(200);
+        r.json({"qt": (q == null) ? "null" : type(q), "qv": q});
         return r;
     }
 }
@@ -643,6 +818,279 @@ r_i = postResp(base + "/api/t/num", {"i": 12345678901234567890123456789012345678
 check(r_i.statusCode() == 200 && r_i.json()["is"] == "0",
       "B26 int 收 39 位数字（升档 bigint）应拒绝落 0，实际: "
       + r_i.statusCode() + "/" + r_i.json()["is"]);
+
+// ============================================================
+// 深嵌套实体类 DTO · 容器字段 · 未标注字段（B27-B36）
+// ============================================================
+
+// ---------- B27: 四级深嵌套 + 容器 + 未标注字段，全链路精确 ----------
+b27 = postResp(base + "/api/t/dto", {
+    "company": "ACME", "score": 3.25, "active": true,
+    "founded": big200,
+    "extra": {"z": [1, 2, {"w": null}]},
+    "dept": {
+        "name": "RD",
+        "team": {
+            "title": "Core",
+            "lead": {"name": "Lee", "age": 30, "salary": 12345678901234},
+            "members": [{"name": "A", "age": 1}]
+        },
+        "tags": ["x", "y", 1, 2],
+        "meta": {"k": {"deep": true}}
+    }
+});
+check(b27.statusCode() == 200, "B27 深嵌套合法 body 应 200，实际: " + b27.statusCode());
+j27 = b27.json();
+check(j27["companyType"] == "string" && j27["company"] == "ACME",
+      "B27 company 应 string=ACME，实际: " + j27["companyType"] + "/" + j27["company"]);
+check(j27["deptNull"] == false && j27["deptName"] == "RD",
+      "B27 一级 dept 应绑定 name=RD，实际: " + j27["deptNull"] + "/" + j27["deptName"]);
+check(j27["teamNull"] == false && j27["teamTitle"] == "Core",
+      "B27 二级 team 应绑定 title=Core，实际: " + j27["teamNull"] + "/" + j27["teamTitle"]);
+check(j27["leadNull"] == false && j27["leadName"] == "Lee",
+      "B27 三级 lead 应绑定 name=Lee，实际: " + j27["leadNull"] + "/" + j27["leadName"]);
+check(j27["leadAgeType"] == "int" && j27["leadAge"] == 30,
+      "B27 lead.age 应 int=30，实际: " + j27["leadAgeType"] + "/" + j27["leadAge"]);
+check(j27["leadSalary"] == "12345678901234",
+      "B27 lead.salary 应 long 精确收 14 位，实际: " + j27["leadSalary"]);
+check(j27["membersType"] == "array" && j27["membersLen"] == 1,
+      "B27 members 数组字段应原样绑定，实际: " + j27["membersType"] + "/" + j27["membersLen"]);
+check(j27["m0Type"] == "map" && j27["m0Name"] == "A",
+      "B27 数组元素应保留 JSON 原结构（map），实际: " + j27["m0Type"] + "/" + j27["m0Name"]);
+check(j27["tagsType"] == "array" && j27["tagsLen"] == 4 && j27["tag0"] == "x",
+      "B27 tags 数组字段应原样绑定 4 元素，实际: "
+      + j27["tagsType"] + "/" + j27["tagsLen"] + "/" + j27["tag0"]);
+check(j27["metaType"] == "map" && j27["metaK"] != null
+      && type(j27["metaK"]) == "map" && j27["metaK"]["deep"] == true,
+      "B27 meta map 字段应原样绑定（嵌套值保留），实际: " + j27["metaType"]);
+check(j27["extraType"] == "map",
+      "B27 未标注字段应保留 JSON 原结构，实际: " + j27["extraType"]);
+check(j27["foundedType"] == "bigint" && j27["founded"].len == 200,
+      "B27 嵌套外 bigint 字段应精确收 200 位，实际: "
+      + j27["foundedType"] + "/" + j27["founded"].len);
+check(j27["score"] == 3.25 && j27["activeType"] == "bool" && j27["active"] == true,
+      "B27 score/active 应精确，实际: " + j27["score"] + "/" + j27["active"]);
+
+// ---------- B28: 嵌套标量字段越界/非法/类型不符 → 落默认值（不报错）----------
+b28 = postResp(base + "/api/t/dto", {
+    "company": 123,
+    "score": "abc", "active": "yes",
+    "dept": {
+        "name": "RD",
+        "team": {
+            "title": "T",
+            "lead": {"name": "Lee", "age": big50, "salary": "abc"}
+        }
+    }
+});
+check(b28.statusCode() == 200, "B28 应 200（嵌套字段越界不报错），实际: " + b28.statusCode());
+j28 = b28.json();
+check(j28["company"] == "123" && j28["companyType"] == "string",
+      "B28 string 字段收数字应尽力转串 \"123\"，实际: "
+      + j28["companyType"] + "/" + j28["company"]);
+check(j28["score"] == 0 && j28["active"] == false,
+      "B28 double/bool 字段收非法串应落默认，实际: " + j28["score"] + "/" + j28["active"]);
+check(j28["leadAge"] == 0,
+      "B28 嵌套 int 字段收 56 位应拒绝落 0，实际: " + j28["leadAge"]);
+check(j28["leadSalary"] == "0",
+      "B28 嵌套 long 字段收 \"abc\" 应拒绝落 0，实际: " + j28["leadSalary"]);
+
+// ---------- B29: 嵌套 bigint 字段字符串非法 → null（无初始化器不落默认）----------
+b29 = postResp(base + "/api/t/dto", {"company": "ACME", "founded": "xyz"});
+check(b29.statusCode() == 200, "B29 应 200，实际: " + b29.statusCode());
+j29 = b29.json();
+check(j29["foundedType"] == "none",
+      "B29 bigint 字段收非法串应 null（none），实际: " + j29["foundedType"]);
+
+// ---------- B30: bytes 字段：JSON 字符串编码转入 / 非字符串拒绝落默认 ----------
+b30 = postResp(base + "/api/t/dto", {"company": "ACME", "bin": "hello"});
+check(b30.statusCode() == 200, "B30 bin 字符串应 200，实际: " + b30.statusCode());
+j30 = b30.json();
+check(j30["binType"] == "bytes", "B30 bin 应为 bytes 类型，实际: " + j30["binType"]);
+q30 = (char)34;
+check(j30["bin"] == "b" + q30 + "hello" + q30,
+      "B30 bin 应编码为 b\"hello\" 形态，实际: " + j30["bin"]);
+b30b = postResp(base + "/api/t/dto", {"company": "ACME", "bin": 123});
+check(b30b.statusCode() == 200, "B30b 应 200，实际: " + b30b.statusCode());
+check(b30b.json()["binType"] == "none",
+      "B30b bin 收数字应拒绝落默认（none），实际: " + b30b.json()["binType"]);
+
+// ---------- B31: 嵌套字段收非 map 值 → 模型构建器入口校验统一抛错 500 ----------
+b31a = postResp(base + "/api/t/dto", {
+    "company": "ACME", "dept": {"team": {"lead": 123}}
+});
+check(b31a.statusCode() == 500, "B31a lead=123 应 500，实际: " + b31a.statusCode());
+b31b = postResp(base + "/api/t/dto", {
+    "company": "ACME", "dept": {"team": {"lead": [1, 2]}}
+});
+check(b31b.statusCode() == 500, "B31b lead=数组 应 500，实际: " + b31b.statusCode());
+b31c = postResp(base + "/api/t/dto", {
+    "company": "ACME", "dept": {"team": {"lead": "str"}}
+});
+check(b31c.statusCode() == 500, "B31c lead=字符串 应 500，实际: " + b31c.statusCode());
+
+// ---------- B32: 顶层 body 收非对象 → 统一抛错 500 ----------
+b32a = postResp(base + "/api/t/dto", [1, 2]);
+check(b32a.statusCode() == 500, "B32a body=数组 应 500，实际: " + b32a.statusCode());
+b32b = postResp(base + "/api/t/dto", 12345);
+check(b32b.statusCode() == 500, "B32b body=数字 应 500，实际: " + b32b.statusCode());
+
+// ---------- B33: 中层嵌套缺失/显式 null → 深层不可达不报错 ----------
+b33 = postResp(base + "/api/t/dto", {"company": "ACME", "dept": {"name": "RD"}});
+check(b33.statusCode() == 200, "B33 应 200（中层缺失），实际: " + b33.statusCode());
+j33 = b33.json();
+check(j33["teamNull"] == true && j33["leadNull"] == null
+      && j33["membersType"] == null,
+      "B33 team 缺失应 teamNull=true 且深层键缺席，实际: "
+      + j33["teamNull"] + "/" + j33["leadNull"]);
+b33b = postResp(base + "/api/t/dto", {"company": "ACME", "dept": null});
+check(b33b.statusCode() == 200, "B33b 应 200（dept=null），实际: " + b33b.statusCode());
+j33b = b33b.json();
+check(j33b["deptNull"] == true && j33b["deptName"] == null,
+      "B33b dept=null 应 deptNull=true，实际: " + j33b["deptNull"]);
+
+// ---------- B34: 嵌套字段显式 null 逐层直通 ----------
+b34 = postResp(base + "/api/t/dto", {
+    "company": "ACME",
+    "dept": {"name": "RD", "team": {"title": "T", "lead": null}}
+});
+check(b34.statusCode() == 200, "B34 应 200，实际: " + b34.statusCode());
+j34 = b34.json();
+check(j34["teamNull"] == false && j34["leadNull"] == true,
+      "B34 lead=null 应直通 null，实际: " + j34["teamNull"] + "/" + j34["leadNull"]);
+
+// ---------- B35: 嵌套外高精度字段收 JSON 数字（升档）与字符串双形态 ----------
+b35 = postResp(base + "/api/t/dto", {"company": "ACME", "founded": big200});
+check(b35.statusCode() == 200 && b35.json()["foundedType"] == "bigint"
+      && b35.json()["founded"].len == 200,
+      "B35 bigint 字段收 200 位字符串应精确，实际: "
+      + b35.statusCode() + "/" + b35.json()["foundedType"]);
+
+// ---------- B36: query 通道 map/array 容器参数（JSON 串解析）----------
+qch = (char)34;
+mj = "{" + qch + "k" + qch + ":5}";
+aj = "[1,2,3]";
+q36 = getResp(base + "/api/t/coll?m=" + mj + "&a=" + aj);
+check(q36.statusCode() == 200, "B36 合法容器 query 应 200，实际: " + q36.statusCode());
+j36 = q36.json();
+check(j36["mt"] == "map" && j36["mk"] == 5,
+      "B36 map 参数应按 JSON 解析，实际: " + j36["mt"] + "/" + j36["mk"]);
+check(j36["at"] == "array" && j36["a0"] == 1,
+      "B36 array 参数应按 JSON 解析，实际: " + j36["at"] + "/" + j36["a0"]);
+check(getResp(base + "/api/t/coll?m=notjson&a=[1]").statusCode() == 400,
+      "B36 m 收非 JSON 串应 400");
+check(getResp(base + "/api/t/coll?m=[1,2]&a=[1]").statusCode() == 400,
+      "B36 m 收数组 JSON（非对象）应 400");
+check(getResp(base + "/api/t/coll?m=" + mj + "&a=123").statusCode() == 400,
+      "B36 a 收数字串应 400");
+check(getResp(base + "/api/t/coll?m=" + mj + "&a=" + qch + "x" + qch).statusCode() == 400,
+      "B36 a 收字符串 JSON（非数组）应 400");
+
+// ---------- B37-B47: any 字段全场景矩阵 ----------
+// B37: any 收 array（混合元素 int/string/bool/map）→ 原样保留
+b37 = postResp(base + "/api/t/any", {"payload": [1, "x", true, {"k": 9}]});
+check(b37.statusCode() == 200, "B37 any 收数组应 200，实际: " + b37.statusCode());
+j37 = b37.json();
+check(j37["pt"] == "array" && j37["plen"] == 4,
+      "B37 payload 应保留 array 身份 4 元素，实际: " + j37["pt"] + "/" + j37["plen"]);
+check(j37["p0"] == 1 && j37["p0t"] == "int"
+      && j37["p1"] == "x" && j37["p1t"] == "string"
+      && j37["p2"] == true && j37["p2t"] == "bool",
+      "B37 数组元素类型应各自保留，实际: "
+      + j37["p0t"] + "/" + j37["p1t"] + "/" + j37["p2t"]);
+check(j37["p3t"] == "map" && j37["p3"]["k"] == 9,
+      "B37 嵌套 map 元素应保留，实际: " + j37["p3t"]);
+
+// B38: any 收 string（含空格/中文）→ string 原样
+b38 = postResp(base + "/api/t/any", {"payload": "hello 世界"});
+j38 = b38.json();
+check(j38["pt"] == "string" && j38["pv"] == "hello 世界",
+      "B38 any 收字符串应原样，实际: " + j38["pt"] + "/" + j38["pv"]);
+
+// B39: any 收 int 双形态：int32 内 → int，超 int32 → long long（JSON 按值域分档，值均精确）
+b39a = postResp(base + "/api/t/any", {"payload": 42});
+b39b = postResp(base + "/api/t/any", {"payload": 1234567890123});
+j39a = b39a.json(); j39b = b39b.json();
+check(j39a["pt"] == "int" && j39a["pv"] == 42,
+      "B39 any 收 int32 内整数应 int 精确，实际: " + j39a["pt"] + "/" + j39a["pv"]);
+check(j39b["pt"] == "long long" && j39b["pv"] == 1234567890123,
+      "B39 any 收超 int32 整数应 long long 精确，实际: " + j39b["pt"] + "/" + j39b["pv"]);
+
+// B40: any 收 double → double 精确
+b40 = postResp(base + "/api/t/any", {"payload": 3.14159});
+j40 = b40.json();
+check(j40["pt"] == "double" && j40["pv"] == 3.14159,
+      "B40 any 收小数应精确，实际: " + j40["pt"] + "/" + j40["pv"]);
+
+// B41: any 收 bool → true/false 双形态
+b41a = postResp(base + "/api/t/any", {"payload": true});
+b41b = postResp(base + "/api/t/any", {"payload": false});
+check(b41a.json()["pt"] == "bool" && b41a.json()["pv"] == true
+      && b41b.json()["pt"] == "bool" && b41b.json()["pv"] == false,
+      "B41 any 收 bool 双形态应精确，实际: "
+      + b41a.json()["pv"] + "/" + b41b.json()["pv"]);
+
+// B42: any 收显式 null → none 直通
+b42 = postResp(base + "/api/t/any", {"payload": null});
+j42 = b42.json();
+check(j42["pt"] == "none", "B42 any 收显式 null 应 none，实际: " + j42["pt"]);
+
+// B43: any 收深度嵌套混合结构（map→map→array→map + 中文）→ 递归保留
+b43 = postResp(base + "/api/t/any",
+               {"payload": {"deep": {"x": [1, {"y": 2}], "z": "末"}}});
+j43 = b43.json();
+check(j43["pt"] == "map" && j43["pdeept"] == "map"
+      && j43["pdeep"]["x"][1]["y"] == 2 && j43["pdeep"]["z"] == "末",
+      "B43 any 深嵌套应递归保留，实际: " + j43["pt"]);
+
+// B44: any 收类同构 map（Member 形状）→ 保持 map 身份，不自动实例化
+b44 = postResp(base + "/api/t/any", {"payload": {"name": "Lee", "age": 30}});
+j44 = b44.json();
+check(j44["pt"] == "map" && j44["pname"] == "Lee",
+      "B44 any 收类同构对象应保持 map（不实例化），实际: " + j44["pt"]);
+
+// B45: any 缺失（body 无 payload 键）→ none 不落默认
+b45 = postResp(base + "/api/t/any", {"m": {"s": "x"}});
+j45 = b45.json();
+check(j45["pt"] == "none", "B45 payload 缺失应 none，实际: " + j45["pt"]);
+
+// B46: map 字段混合值类型 → 各值类型保留（map any 场景）
+b46 = postResp(base + "/api/t/any", {
+    "m": {"s": "str", "i": 42, "b": true, "arr": [1], "obj": {"k": 1}, "nul": null}
+});
+j46 = b46.json();
+check(j46["mt"] == "map" && j46["mst"] == "string" && j46["ms"] == "str",
+      "B46 map 字符串值应保留，实际: " + j46["mst"]);
+check(j46["mit"] == "int" && j46["mi"] == 42
+      && j46["mbt"] == "bool" && j46["mb"] == true,
+      "B46 map int/bool 值应保留，实际: " + j46["mit"] + "/" + j46["mbt"]);
+check(j46["marrt"] == "array" && j46["mobjt"] == "map" && j46["mnult"] == "none",
+      "B46 map 容器/null 值应保留，实际: "
+      + j46["marrt"] + "/" + j46["mobjt"] + "/" + j46["mnult"]);
+
+// B47: array 字段混合元素（int/string/map/array/null）→ 元素类型各自保留（array any 场景）
+b47 = postResp(base + "/api/t/any", {"a": [7, "s", {"k": 1}, [2], null]});
+j47 = b47.json();
+check(j47["at"] == "array" && j47["alen"] == 5
+      && j47["a0t"] == "int" && j47["a1t"] == "string"
+      && j47["a2t"] == "map" && j47["a3t"] == "array" && j47["a4t"] == "none",
+      "B47 array 混合元素类型应各自保留，实际: "
+      + j47["a0t"] + "/" + j47["a1t"] + "/" + j47["a2t"]
+      + "/" + j47["a3t"] + "/" + j47["a4t"]);
+
+// ---------- B48: query 通道 any（未标注 / 显式 any 标注）----------
+j48a = getResp(base + "/api/t/qany?q=hello").json();
+check(j48a["qt"] == "string" && j48a["qv"] == "hello",
+      "B48 未标注参数应原样字符串，实际: " + j48a["qt"] + "/" + j48a["qv"]);
+j48b = getResp(base + "/api/t/qany?q=123").json();
+check(j48b["qt"] == "string" && j48b["qv"] == "123",
+      "B48 未标注参数收数字串应保持 string（不推断），实际: "
+      + j48b["qt"] + "/" + j48b["qv"]);
+check(getResp(base + "/api/t/qany").json()["qt"] == "null",
+      "B48 未标注参数缺失应 null");
+j48c = getResp(base + "/api/t/qany2?q=abc").json();
+check(j48c["qt"] == "string" && j48c["qv"] == "abc",
+      "B48 显式 any 标注应与未标注同语义，实际: " + j48c["qt"] + "/" + j48c["qv"]);
 
 // ---- 关闭服务 ----
 app.stop();

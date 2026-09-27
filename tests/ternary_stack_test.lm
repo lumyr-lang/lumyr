@@ -1,0 +1,41 @@
+// 断言辅助（失败抛错中止）
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 三元动态目标栈平衡回归：字符串字面量/typed string 局部变量作分支时
+// 曾被 ternary_cast_to 误当"已在 VALUE 栈"零操作（实际字面量压 PTR 栈），
+// 字面量分支被选中时消费者（INDEX_SET 等）从 VALUE 栈下溢崩溃
+func t1(v) { out = {}; out["t"] = (v == null) ? "abc" : type(v); return out; }
+func t2(v) { out = {}; out["t"] = (v == null) ? -1 : type(v); return out; }
+func t3(v) { out = {}; out["t"] = (v == null) ? "abc" : "def"; return out; }
+func t4(v) { out = {}; out["t"] = (v == null) ? type(v) : "abc"; return out; }
+func t5(v) { out = {}; out["t"] = (v == null) ? null : type(v); return out; }
+func t6(v) {
+    s: string = "typed";
+    out = {};
+    out["t"] = (v == null) ? s : type(v);
+    return out;
+}
+func t7(v) {
+    out = {};
+    out["t"] = (v == null) ? ((v == null) ? "inner-null" : "inner-x") : type(v);
+    return out;
+}
+
+x = {};
+check(t1(x)["t"] == "map" && t1(null)["t"] == "abc",
+      "T1 字符串字面量分支两向，实际: " + t1(x)["t"] + "/" + t1(null)["t"]);
+check(t2(x)["t"] == "map" && t2(null)["t"] == "-1",
+      "T2 int 字面量分支两向，实际: " + t2(x)["t"] + "/" + t2(null)["t"]);
+check(t3(x)["t"] == "def" && t3(null)["t"] == "abc",
+      "T3 双字符串字面量分支，实际: " + t3(x)["t"] + "/" + t3(null)["t"]);
+check(t4(x)["t"] == "abc" && t4(null)["t"] == "none",
+      "T4 反转字面量/null 分支，实际: " + t4(x)["t"] + "/" + t4(null)["t"]);
+check(t5(x)["t"] == "map" && t5(null)["t"] == null,
+      "T5 null 字面量分支，实际: " + t5(x)["t"] + "/" + t5(null)["t"]);
+check(t6(x)["t"] == "map" && t6(null)["t"] == "typed",
+      "T6 typed string 局部变量分支，实际: " + t6(x)["t"] + "/" + t6(null)["t"]);
+check(t7(x)["t"] == "map" && t7(null)["t"] == "inner-null",
+      "T7 嵌套三元分支，实际: " + t7(x)["t"] + "/" + t7(null)["t"]);
+print("ternary_stack_test ALL PASS");

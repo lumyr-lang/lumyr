@@ -837,7 +837,12 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
             td->field_generic_indices[offset + k] = g_prop_generic_indices[k];
     }
     for(int k = 0; k < merged_nprops; k++) {
-        td->field_cast_kinds[k] = valuetype_to_castkind(merged_ptypes[k]);
+        /* any/动态字段（VAL_NONE）不参与标量 cast 归并：valuetype_to_castkind
+         * 对 VAL_NONE 无映射（default 落 CAST_LONGLONG），会让 JSON 模型绑定
+         * 把任意值送进 asLongLong 静默销毁；置 CAST_VOID 让绑定层按
+         * "无精确类型"直接赋值（binder_name_for_cast 对 CAST_VOID 返回 NULL） */
+        td->field_cast_kinds[k] = (merged_ptypes[k] == VAL_NONE)
+            ? CAST_VOID : valuetype_to_castkind(merged_ptypes[k]);
         /* 类型化数组字段元素 CastKind：无继承信息时按声明 valtype 反推兜底 */
         if(merged_elem_kinds) {
             td->field_elem_kinds[k] = merged_elem_kinds[k];
