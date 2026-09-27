@@ -1,0 +1,53 @@
+// ============================================================
+// lumyr-Controller：控制器便利基类（可选）
+//
+// @Controller 类无需继承本类即可被扫描注册；继承它只是获得
+// 构造响应的快捷方法，减少每个控制器重复 new ServerResponse(...)。
+//
+// 依赖：<NetWork/HttpServer>（ServerRequest/ServerResponse）
+//
+// 用法：
+//   import <App/Controller>;
+//
+//   @Controller("/api")
+//   class UserController extends Controller {
+//       @Get("/ping")
+//       func ping(req): ServerResponse {
+//           return self.textResp("pong");
+//       }
+//   }
+// ============================================================
+
+import <NetWork/HttpServer>;
+
+public class Controller {
+
+    func Controller() {
+    }
+
+    /* 200 text/plain */
+    func textResp(body: string): ServerResponse {
+        r = ServerResponse(200);
+        r.text(body);
+        return r;
+    }
+
+    /* 200 text/html */
+    func htmlResp(body: string): ServerResponse {
+        r = ServerResponse(200);
+        r.html(body);
+        return r;
+    }
+
+    /* 200 application/json（对象/数组均可） */
+    func jsonResp(obj: any): ServerResponse {
+        r = ServerResponse(200);
+        r.json(obj);
+        return r;
+    }
+
+    /* 指定状态码的空响应，供调用方继续 .text()/.json() 等 */
+    func respWith(status: int): ServerResponse {
+        return ServerResponse(status);
+    }
+}

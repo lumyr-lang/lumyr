@@ -161,6 +161,7 @@ public class ServerRequest {
     headers: Headers;
     body: any;
     raw: string;
+    pathParams: map;   // 模式路由命中后的路径参数（:name / *name）
 
     func ServerRequest() {
         self.method = "";
@@ -170,6 +171,7 @@ public class ServerRequest {
         self.headers = Headers();
         self.body = "";
         self.raw = "";
+        self.pathParams = {};
     }
 
     // ---- 请求报文解析规范（RequestParser 抽象）----
@@ -270,6 +272,27 @@ public class ServerRequest {
     // 查询参数 map（委托 HttpSpec.parseQuery 公共实现）
     func queryParams(): map {
         return HttpSpec.parseQuery(self.queryString);
+    }
+
+    // 统一参数访问：路径参数 → query → 表单 body；均未取到返回 null
+    func param(name: string) {
+        if (self.pathParams != null && self.pathParams.contains(name)) {
+            return self.pathParams[name];
+        }
+        q = self.queryParams();
+        if (q.contains(name)) { return q[name]; }
+        if (self.isForm()) {
+            f = self.form();
+            if (f.contains(name)) { return f[name]; }
+        }
+        return null;
+    }
+
+    // 统一整型参数：缺失时返回默认值 def（值存在但非整数会抛转换错误）
+    func paramInt(name: string, def: int): int {
+        v = self.param(name);
+        if (v == null) { return def; }
+        return (int)v;
     }
 
     // body 统一按 string 返回（bytes 时按 UTF-8 解码；供文本类解析器使用）

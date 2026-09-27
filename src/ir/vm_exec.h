@@ -40,6 +40,19 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
 /* 实例 obj 的方法 mname → bound method Value；无方法返回 0 */
 int vm_make_bound_method(Value obj, const char* mname, Value* out);
 
+/* 按声明类型把机器 int64 装箱为 Value（BOX_INT64 指令与动态分派返回共用）：
+ * CAST_INT → VAL_INT（"int"）、CAST_BOOL/CHAR/INT8.../ULONG → 对应子类型、
+ * CAST_NONE/未列出 → VAL_INT64 */
+Value vm_box_int64_as(int64_t val, CastKind ck);
+
+/* Value → int64 通用解箱：整型族/bool/char/byte 直接取，string 按数值解析，
+ * 其余经 lumyr_cast_int64 兜底。动态调用实参绑定（vm_call_func_value）
+ * 与 UNBOX_INT64 指令共用，保证整型宽类型（long/short/uint 族等）不漏 */
+int64_t vm_value_to_i64(Value v);
+
+/* Value → double 通用解箱：浮点/整型族直接取，string 按浮点解析 */
+double vm_value_to_f64(Value v);
+
 /* BuiltinId 的反汇编名（bytecode.c 名表用） */
 const char* builtin_id_name(int id);
 

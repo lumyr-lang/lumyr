@@ -804,25 +804,15 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
         ExprType et = castkind_to_exprtype(pck);
         switch(et) {
         case EXPR_TYPE_INT: {
-            int64_t iv = 0;
-            if(args[slot].type == VAL_INT64) iv = args[slot].v.i64;
-            else if(args[slot].type == VAL_INT) iv = (int64_t)args[slot].v.i;
-            else if(args[slot].type == VAL_BOOL) iv = args[slot].v.b ? 1 : 0;
-            else if(args[slot].type == VAL_CHAR) iv = (int64_t)(unsigned char)args[slot].v.c;
-            else if(args[slot].type == VAL_DOUBLE) iv = (int64_t)args[slot].v.d;
+            /* 通用解箱：整型宽类型（long/short/uint 族等）全覆盖，
+             * 此前内联分支漏掉它们导致动态调用传 long 被静默绑 0 */
+            int64_t iv = vm_value_to_i64(args[slot]);
             stackframe_bind_int64(new_frame, pname, iv);
             break;
         }
-        case EXPR_TYPE_DOUBLE: {
-            double dv = 0;
-            if(args[slot].type == VAL_DOUBLE) dv = args[slot].v.d;
-            else if(args[slot].type == VAL_INT64) dv = (double)args[slot].v.i64;
-            else if(args[slot].type == VAL_INT) dv = (double)args[slot].v.i;
-            else if(args[slot].type == VAL_BOOL) dv = args[slot].v.b ? 1.0 : 0.0;
-            else if(args[slot].type == VAL_CHAR) dv = (double)(unsigned char)args[slot].v.c;
-            stackframe_bind_double(new_frame, pname, dv);
+        case EXPR_TYPE_DOUBLE:
+            stackframe_bind_double(new_frame, pname, vm_value_to_f64(args[slot]));
             break;
-        }
         case EXPR_TYPE_PTR: {
             /* PTR 类型形参（string/bigint/decimal/struct/class 等）：
              * 从 Value 中提取裸指针，绑定到 ptr_slots（LOAD_PTR_VAR 读取）。
@@ -976,9 +966,20 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
 
     if(status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;
 
-    /* 返回值统一 box */
+    /* 返回值统一 box。
+     * INT 返回按被调方 ret 标注装箱（ir_type_name_to_castkind）：
+     * `: int` 方法经动态分派返回 VAL_INT（"int"），与静态分派路径一致；
+     * 此前一律 lumyr_make_int64，导致 type(带标注方法返回值)=="int64"、
+     * 且该值作实参传入含 if 块的函数时上层逻辑（如 == "int" 判断）失配。
+     * 无标注 → 保持 VAL_INT64 兜底（宽度未知，不截断）。 */
     switch((ExprType)ret.et) {
-    case EXPR_TYPE_INT:    *out = lumyr_make_int64(ret.i); break;
+    case EXPR_TYPE_INT: {
+        CastKind rck = CAST_INT64;
+        if(callee->ret_type_name)
+            rck = ir_type_name_to_castkind(callee->ret_type_name);
+        *out = vm_box_int64_as(ret.i, rck);
+        break;
+    }
     case EXPR_TYPE_DOUBLE: *out = lumyr_make_double(ret.d); break;
     case EXPR_TYPE_PTR:
         out->type = VAL_STRING; out->str_inline = 0; out->v.s = (char*)ret.p;

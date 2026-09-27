@@ -128,45 +128,115 @@ int vm_exec_assert_nonnull(VMExecCtx* ctx, Instruction* in) {
 
 /* ===== typed 栈 -> VALUE 栈装箱（实参 typed、形参动态 NONE 时绑定用） ===== */
 
+/* ===== Value 通用解箱助手（动态调用实参绑定与 UNBOX 指令共用） ===== */
+
+/* Value → int64：整型族/bool/char/byte 直接取，string 按数值解析，
+ * 其余经 lumyr_cast_int64 兜底（long/long long/short/int8/int16/int32/
+ * uint 族/size_t 等整型宽类型全覆盖）。
+ * 此前 vm_call_func_value 实参绑定内联分支漏掉整型宽类型，
+ * 动态调用传 long 值给带类型形参被静默绑 0。 */
+int64_t vm_value_to_i64(Value v) {
+    /* 全部整型族按 union 成员直接取值：禁止经 lumyr_cast_int64 兜底——
+     * 其对 VAL_LONG 等宽整型返回 VAL_INT（32 位截断），9007199254740993 → 1 */
+    if (v.type == VAL_INT64) return v.v.i64;
+    if (v.type == VAL_LONG) return (int64_t)v.v.l;
+    if (v.type == VAL_LONG_LONG) return v.v.ll;
+    if (v.type == VAL_INT) return (int64_t)v.v.i;
+    if (v.type == VAL_INT8) return (int64_t)v.v.i8;
+    if (v.type == VAL_INT16) return (int64_t)v.v.i16;
+    if (v.type == VAL_SHORT) return (int64_t)v.v.sh;
+    if (v.type == VAL_INT32) return (int64_t)v.v.i32;
+    if (v.type == VAL_UINT8) return (int64_t)v.v.u8;
+    if (v.type == VAL_UCHAR) return (int64_t)v.v.uc;
+    if (v.type == VAL_BYTE) return (int64_t)v.v.by;
+    if (v.type == VAL_UINT16) return (int64_t)v.v.u16;
+    if (v.type == VAL_USHORT) return (int64_t)v.v.us;
+    if (v.type == VAL_UINT32) return (int64_t)v.v.u32;
+    if (v.type == VAL_UINT) return (int64_t)v.v.ui;
+    if (v.type == VAL_UINT64) return (int64_t)v.v.u64;
+    if (v.type == VAL_ULONG) return (int64_t)v.v.ul;
+    if (v.type == VAL_SIZE_T) return (int64_t)v.v.st;
+    if (v.type == VAL_SSIZE_T) return (int64_t)v.v.sst;
+    if (v.type == VAL_BOOL) return (int64_t)(v.v.b ? 1 : 0);
+    if (v.type == VAL_CHAR) return (int64_t)(unsigned char)v.v.c;
+    if (v.type == VAL_DOUBLE) return (int64_t)v.v.d;
+    if (v.type == VAL_FLOAT) return (int64_t)v.v.f;
+    if (v.type == VAL_LONG_DOUBLE) return (int64_t)v.v.ld;
+    if (v.type == VAL_NONE) return 0;
+    if (v.type == VAL_STRING) {
+        const char* s = v.str_inline ? v.v.sso.data : v.v.s;
+        return s ? strtoll(s, NULL, 10) : 0;
+    }
+    /* 非数值类型维持原兜底（其余 Value 种类不属于整型族） */
+    Value c = lumyr_cast_int64(v);
+    if (c.type == VAL_INT64) return c.v.i64;
+    if (c.type == VAL_INT) return (int64_t)c.v.i;
+    return 0;
+}
+
+/* Value → double：浮点/整型族直接取，string 按浮点解析 */
+double vm_value_to_f64(Value v) {
+    if (v.type == VAL_DOUBLE) return v.v.d;
+    if (v.type == VAL_FLOAT) return (double)v.v.f;
+    if (v.type == VAL_LONG_DOUBLE) return (double)v.v.ld;
+    if (v.type == VAL_INT64) return (double)v.v.i64;
+    if (v.type == VAL_INT) return (double)v.v.i;
+    if (v.type == VAL_BOOL) return (double)(v.v.b ? 1 : 0);
+    if (v.type == VAL_CHAR) return (double)(unsigned char)v.v.c;
+    if (v.type == VAL_BYTE) return (double)v.v.by;
+    if (v.type == VAL_NONE) return 0.0;
+    if (v.type == VAL_STRING) {
+        const char* s = v.str_inline ? v.v.sso.data : v.v.s;
+        return s ? strtod(s, NULL) : 0.0;
+    }
+    return (double)vm_value_to_i64(v);
+}
+
+
+/* 按声明类型把机器 int64 装箱为 Value（BOX_INT64 与动态分派返回共用）。
+ * ck 决定整型子类型标签：CAST_INT → VAL_INT（"int"）、CAST_BOOL → VAL_BOOL...
+ * CAST_NONE/未列出 → VAL_INT64。动态分派若不看被调方 ret 标注一律 make_int64，
+ * 会造成同一 `: int` 返回值静态路径报 "int"、动态路径报 "int64" 的不一致。 */
+Value vm_box_int64_as(int64_t val, CastKind ck) {
+    switch (ck) {
+    case CAST_BOOL: return lumyr_make_bool(val);
+    case CAST_CHAR:    return lumyr_make_char((char)val);
+    case CAST_BYTE:    return lumyr_make_byte((unsigned char)val);
+    case CAST_INT8:    return lumyr_make_int8((int8_t)val);
+    case CAST_INT16:   return lumyr_make_int16((int16_t)val);
+    case CAST_SHORT:   return lumyr_make_short((int16_t)val);
+    case CAST_INT32:   return lumyr_make_int32((int32_t)val);
+    case CAST_INT_INFER:
+        /* 推断软 int：溢出 int32 时装箱为 int64（重赋值类型迁移，大值不被截断） */
+        return (val >= INT32_MIN && val <= INT32_MAX) ? lumyr_make_int((int)val)
+                                                      : lumyr_make_int64(val);
+    case CAST_INT:
+    case CAST_ASCII:
+        /* 显式 int：严格 C 风格截断（即使溢出也保持 VAL_INT） */
+        return lumyr_make_int((int)val);
+    case CAST_UINT8:   return lumyr_make_uint8((uint8_t)val);
+    case CAST_UCHAR:   return lumyr_make_uchar((unsigned char)val);
+    case CAST_UINT16:  return lumyr_make_uint16((uint16_t)val);
+    case CAST_USHORT:  return lumyr_make_ushort((unsigned short)val);
+    case CAST_UINT32:  return lumyr_make_uint32((uint32_t)val);
+    case CAST_UINT:    return lumyr_make_uint((unsigned int)val);
+    case CAST_UINT64:  return lumyr_make_uint64((uint64_t)val);
+    case CAST_SIZE_T:  return lumyr_make_size_t((size_t)val);
+    case CAST_SSIZE_T: return lumyr_make_ssize_t((ssize_t)val);
+    case CAST_LONG:    return lumyr_make_long((long)val);
+    case CAST_LONGLONG: return lumyr_make_long_long(val);
+    case CAST_ULONG:   return lumyr_make_ulong((unsigned long)val);
+    default:           return lumyr_make_int64(val);
+    }
+}
+
 /* BOX_INT64：INT64 栈弹 1 -> Value -> VALUE 栈
-   a=CastKind 决定整型子类型（uint/char/bool/byte/...）；CAST_NONE 或未列出 → int64 */
+   a=CastKind 决定整型子类型（bool/char/byte/int8.../uint64） */
 int vm_exec_box_int64(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;
     int64_t val;
     stack_vm_pop(g_stack_mgr, STACK_INT64, &val);
-    Value v;
-    switch ((CastKind)in->a) {
-    case CAST_BOOL: v = lumyr_make_bool(val); break;
-    case CAST_CHAR:    v = lumyr_make_char((char)val); break;
-    case CAST_BYTE:    v = lumyr_make_byte((unsigned char)val); break;
-    case CAST_INT8:    v = lumyr_make_int8((int8_t)val); break;
-    case CAST_INT16:   v = lumyr_make_int16((int16_t)val); break;
-    case CAST_SHORT:   v = lumyr_make_short((int16_t)val); break;
-    case CAST_INT32:   v = lumyr_make_int32((int32_t)val); break;
-    case CAST_INT_INFER:
-        /* 推断软 int：溢出 int32 时装箱为 int64（重赋值类型迁移，大值不被截断） */
-        v = (val >= INT32_MIN && val <= INT32_MAX) ? lumyr_make_int((int)val)
-                                                   : lumyr_make_int64(val);
-        break;
-    case CAST_INT:
-    case CAST_ASCII:
-        /* 显式 int：严格 C 风格截断（即使溢出也保持 VAL_INT） */
-        v = lumyr_make_int((int)val);
-        break;
-    case CAST_UINT8:   v = lumyr_make_uint8((uint8_t)val); break;
-    case CAST_UCHAR:   v = lumyr_make_uchar((unsigned char)val); break;
-    case CAST_UINT16:  v = lumyr_make_uint16((uint16_t)val); break;
-    case CAST_USHORT:  v = lumyr_make_ushort((unsigned short)val); break;
-    case CAST_UINT32:  v = lumyr_make_uint32((uint32_t)val); break;
-    case CAST_UINT:    v = lumyr_make_uint((unsigned int)val); break;
-    case CAST_UINT64:  v = lumyr_make_uint64((uint64_t)val); break;
-    case CAST_SIZE_T:  v = lumyr_make_size_t((size_t)val); break;
-    case CAST_SSIZE_T: v = lumyr_make_ssize_t((ssize_t)val); break;
-    case CAST_LONG:    v = lumyr_make_long((long)val); break;
-    case CAST_LONGLONG: v = lumyr_make_long_long(val); break;
-    case CAST_ULONG:   v = lumyr_make_ulong((unsigned long)val); break;
-    default:           v = lumyr_make_int64(val); break;
-    }
+    Value v = vm_box_int64_as(val, (CastKind)in->a);
     stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
     return 1;
 }
@@ -238,28 +308,13 @@ int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in) {
 }
 
 /* UNBOX_INT64：VALUE 栈弹 1 -> 取 i64 -> INT64 栈
- * 字符串走数值解析（如 (int)"5" -> 5），与 INT64_FROM_STRING 语义一致 */
+ * 字符串走数值解析（如 (int)"5" -> 5），与 INT64_FROM_STRING 语义一致。
+ * 整型族统一走 vm_value_to_i64（直接按 union 成员取值，无 32 位截断） */
 int vm_exec_unbox_int64(VMExecCtx* ctx, Instruction* in) {
     (void)ctx; (void)in;
     Value v;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
-    int64_t val = 0;
-    if (v.type == VAL_INT64) val = v.v.i64;
-    else if (v.type == VAL_INT) val = (int64_t)v.v.i;
-    else if (v.type == VAL_BOOL) val = (int64_t)(v.v.b ? 1 : 0);
-    else if (v.type == VAL_CHAR) val = (int64_t)(unsigned char)v.v.c;
-    else if (v.type == VAL_BYTE) val = (int64_t)v.v.by;
-    else if (v.type == VAL_DOUBLE) val = (int64_t)v.v.d;
-    else if (v.type == VAL_NONE) val = 0;
-    else if (v.type == VAL_STRING) {
-        const char* s = v.str_inline ? v.v.sso.data : v.v.s;
-        val = s ? strtoll(s, NULL, 10) : 0;
-    }
-    else {
-        Value c = lumyr_cast_int64(v);
-        if (c.type == VAL_INT64) val = c.v.i64;
-        else if (c.type == VAL_INT) val = (int64_t)c.v.i;
-    }
+    int64_t val = vm_value_to_i64(v);
     stack_vm_push(g_stack_mgr, STACK_INT64, &val);
     return 1;
 }
@@ -270,18 +325,7 @@ int vm_exec_unbox_double(VMExecCtx* ctx, Instruction* in) {
     (void)ctx; (void)in;
     Value v;
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
-    double val = 0.0;
-    if (v.type == VAL_DOUBLE) val = v.v.d;
-    else if (v.type == VAL_INT64) val = (double)v.v.i64;
-    else if (v.type == VAL_INT) val = (double)v.v.i;
-    else if (v.type == VAL_BOOL) val = (double)(v.v.b ? 1 : 0);
-    else if (v.type == VAL_CHAR) val = (double)(unsigned char)v.v.c;
-    else if (v.type == VAL_BYTE) val = (double)v.v.by;
-    else if (v.type == VAL_NONE) val = 0.0;
-    else if (v.type == VAL_STRING) {
-        const char* s = v.str_inline ? v.v.sso.data : v.v.s;
-        val = s ? strtod(s, NULL) : 0.0;
-    }
+    double val = vm_value_to_f64(v);
     stack_vm_push(g_stack_mgr, STACK_DOUBLE, &val);
     return 1;
 }

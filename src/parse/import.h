@@ -49,4 +49,13 @@ int  lm_is_module_alias(const char* name);
 /* 返回 1=是别名且有此导出成员；0=是别名但无此成员；-1=不是别名 */
 int  lm_alias_export_lookup(const char* alias, const char* member);
 
+/*
+ * 展开按绝对路径指定的模块（用于 scanDirs 的隐式模块）。
+ * 模块按 mangled 待遇展开并参与全局去重；main_real 用于循环检测。
+ * 成功返回 module_id（>=0），展开文本写入 *out_body（malloc'd，调用方 free）；
+ * 失败返回 -1（错误已打印）。
+ */
+int lm_expand_scanned_module(const char* abs_path, const char* main_real,
+                             char** out_body);
+
 #endif

@@ -75,4 +75,7 @@ int annotation_has_class_annotation(const char* class_name, const char* annotati
 /* 遍历所有注解 */
 void annotation_foreach(void (*callback)(AnnotationInfo* info, void* user_data), void* user_data);
 
+/* 判断节点是否为字面量表达式（字符串/整数/数值/布尔/字符）；返回 1=是 */
+int annotation_node_is_literal(AstNode* node);
+
 #endif /* LM_ANNOTATION_H */

@@ -1110,20 +1110,21 @@ void* class_find_method_func(const char* class_name, const char* method_name)
 }
 
 // 设置 class 构造函数（__init__ 方法）
+// 统一委托 class_add_constructor：确保任何路径都填充 ctor_overload_nodes（DI 选择用）
 void class_set_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func)
 {
-    TypeDef* td = class_lookup(class_name);
-    if(!td) return;
-    if(td->constructor) return;  /* 已设置：幂等跳过，避免重复编译 */
-    td->constructor = constructor_node;
-    td->constructor_func = constructor_func;
-    td->nctor_overloads = 1;
+    class_add_constructor(class_name, constructor_node, constructor_func);
 }
 
 void class_add_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func)
 {
     TypeDef* td = class_lookup(class_name);
     if(!td) return;
+
+    /* 同节点重复提交幂等保护（class_set_constructor 也走这里） */
+    for(int k = 0; k < td->nctor_overload_nodes; k++)
+        if(td->ctor_overload_nodes[k] == constructor_node) return;
+
     if(!td->constructor) {
         /* 首个重载成为主构造：super() 链、ctor_owner 上溯、
          * apply_field_initializers 的父类参数检查都依赖主构造 */
@@ -1131,6 +1132,15 @@ void class_add_constructor(const char* class_name, struct AstNode* constructor_n
         td->constructor_func = constructor_func;
     }
     td->nctor_overloads++;
+
+    /* 记录全部重载 AST（DI 编译期构造器选择用） */
+    if(td->nctor_overload_nodes > 0 && td->nctor_overload_nodes % 8 == 0) {
+        td->ctor_overload_nodes = (struct AstNode**)realloc(td->ctor_overload_nodes,
+            (size_t)(td->nctor_overload_nodes + 8) * sizeof(struct AstNode*));
+    } else if(td->nctor_overload_nodes == 0) {
+        td->ctor_overload_nodes = (struct AstNode**)malloc(8 * sizeof(struct AstNode*));
+    }
+    td->ctor_overload_nodes[td->nctor_overload_nodes++] = constructor_node;
 }
 
 // 获取 class 构造函数的 RuntimeFunc（支持继承链查找）

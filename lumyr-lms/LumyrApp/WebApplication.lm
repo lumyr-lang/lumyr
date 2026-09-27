@@ -7,6 +7,7 @@
 //                          stop 唤醒全部复用 ServiceApplication
 //
 // 依赖：<App/ServiceApplication>（服务骨架：生命周期/配置/连接线程管理）
+//       <App/Container>（IoC 容器 + 应用引导表）
 //       <NetWork/HttpServer>（ServerRequest/ServerResponse/HttpMethod）
 //       <Thread/Thread>（HttpConnectionHandler 线程基类）
 //
@@ -16,9 +17,17 @@
 //   → resp.sendTo(conn) 分段回写 → conn.close()
 //
 // 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
-//   host    string  默认 "0.0.0.0"
-//   port    int     默认 8080
-//   backlog int     默认 128
+//   host     string  默认 "0.0.0.0"
+//   port     int     默认 8080
+//   backlog  int     默认 128
+//   autoScan bool   默认 true；false 时不执行编译期生成的引导函数，
+//                    需手动 app.scan()
+//
+// 注解驱动通道（@Controller / @Service）：
+//   编译期生成的引导函数在 run 开始时执行（autoScan 未关闭）：
+//   服务依依赖拓扑实例化、注册进 IoC 容器（单例），控制器实例化后挂载。
+//   也可编程式注册：app.service(inst) / app.service("name", inst)、
+//   app.controller(inst)；app.scan() 手动执行引导。
 //
 // 扩展方式（两选一或叠加）：
 //   1. 注册路由：app.get("/hello", handler)（handler 为实现 RequestHandler
@@ -39,6 +48,8 @@
 // ============================================================
 
 import <App/ServiceApplication>;
+import <App/Container>;
+import <App/RequestBinder>;
 import <NetWork/HttpServer>;
 import <Thread/Thread>;
 
@@ -88,32 +99,222 @@ class HttpConnectionHandler extends Thread {
     }
 }
 
+// 请求适配器绑定：把编译期生成的顶层适配函数与控制器实例绑定
+// （serve 时以 (instance, req) 调用适配函数，用对象绑定替代闭包捕获实例）
+public class BoundAdapter {
+    instance: any;
+    adapterFn: any;
+
+    func BoundAdapter(instance, adapterFn) {
+        if (instance == null) {
+            throw "适配目标实例不能为空 / adapter target instance must not be null";
+        }
+        if (type(adapterFn) != "func") {
+            throw "适配函数必须是 func / adapter function must be a func";
+        }
+        self.instance = instance;
+        self.adapterFn = adapterFn;
+    }
+
+    func serve(req: ServerRequest): ServerResponse {
+        // self["adapterFn"](...)：字段持有的函数须用下标取值后动态调用，
+        // 点语法 self.adapterFn(...) 会被当作方法名分派而找不到实现
+        return self["adapterFn"](self.instance, req);
+    }
+
+    // 400 参数错误双语响应
+    static func badRequest(msg: string): ServerResponse {
+        r = ServerResponse(400);
+        r.text(msg);
+        return r;
+    }
+
+    // 返回值包装：ServerResponse 直用；string→200 text；map/array→200 json；
+    // 整型/bool→对应状态码空响应；null→200 空响应；其余原样返回
+    // （VM 动态分派返回装箱已按被调方 ret 标注归一，此处用自然早返回形状）
+    static func wrapResult(result): ServerResponse {
+        t = type(result);
+        if (t == "string") {
+            r = ServerResponse(200);
+            r.text(result);
+            return r;
+        }
+        if (t == "map" || t == "array") {
+            r = ServerResponse(200);
+            r.json(result);
+            return r;
+        }
+        if (t == "int" || t == "bool" || t == "long" || t == "int64") {
+            return ServerResponse((int)result);
+        }
+        if (t == "none") {
+            return ServerResponse(200);
+        }
+        return result;
+    }
+}
+
 // HTTP Web 应用基类
 public class WebApplication extends ServiceApplication {
-    routes: map;
+    exactRoutes: map;    // 精确路由："METHOD path" → handler（O(1)）
+    patternRoutes: array; // 模式路由（注册有序）：:name 参数 / *name 通配
+    container: any;      // IoC 服务容器（scan 或编程式注册时创建）
+    controllers: array;  // 已挂载控制器实例
+    scanned: bool;       // 引导函数是否已执行（幂等保护）
 
     func WebApplication() {
         super();
-        self.routes = {};
+        self.initBootFields();
     }
 
     // 单参构造：int 为端口；string 为配置文件路径（立即加载）；map 为配置表
     // （构造器重载仅按参数个数选择，无法按参数类型区分，故合并为一个构造器）
     func WebApplication(first) {
         super(first);
-        self.routes = {};
+        self.initBootFields();
     }
 
     // 双参构造：监听地址 + 端口
     func WebApplication(host: string, port: int) {
         super(host, port);
-        self.routes = {};
+        self.initBootFields();
+    }
+
+    // 初始化引导相关字段（容器延迟到 scan / 注册服务时创建）
+    private func initBootFields() {
+        self.exactRoutes = {};
+        self.patternRoutes = [];
+        self.container = null;
+        self.controllers = [];
+        self.scanned = false;
+    }
+
+    // ---- 编程式注册（start 前或 onStart 内调用）----
+
+    // 注册服务单例（普通方法不支持同名重载，用默认参数合并两种形态）：
+    //   service(inst)          单参：以实例类名为服务名
+    //   service(name, inst)    双参：首参为显式服务名
+    func service(first, second = null) {
+        inst = null;
+        serviceName = "";
+        if (second == null) {
+            // 单参形态
+            inst = first;
+        } else {
+            // 双参形态：首参必须是名字字符串
+            if (type(first) != "string") {
+                throw "服务名必须是字符串 / service name must be a string";
+            }
+            serviceName = first;
+            inst = second;
+        }
+        if (inst == null) {
+            throw "服务实例不能为空 / service instance must not be null";
+        }
+        if (serviceName == "") {
+            serviceName = type(inst);
+            // type 退化为类别名时无法当作唯一名，必须显式提供（无兜底）
+            if (serviceName == "class" || serviceName == "struct" ||
+                serviceName == "map" || serviceName == "array") {
+                throw "无法推断服务名，请显式传入名称 / cannot infer service name, please pass it explicitly";
+            }
+        }
+        if (self.container == null) { self.container = Container(); }
+        self.container.register(serviceName, inst);
+        return self;
+    }
+
+    // 挂载控制器实例（注解驱动的方法路由解析在后续注册阶段完成）
+    func controller(inst) {
+        if (inst == null) {
+            throw "控制器实例不能为空 / controller instance must not be null";
+        }
+        self.controllers.add(inst);
+        return self;
+    }
+
+    // ---- 应用扫描：执行编译期生成的引导函数 ----
+
+    // scan 是否应自动执行：配置 autoScan 缺省为 true；值必须是布尔值
+    func autoScanEnabled(): bool {
+        v = self.config("autoScan");
+        if (v == null) { return true; }
+        if (type(v) == "bool") { return v; }
+        throw "autoScan 配置必须是布尔值 / autoScan config must be a boolean";
+    }
+
+    // 执行全部已登记引导函数：服务实例化注册进容器，控制器实例化后挂载。
+    // 幂等：重复调用直接返回，避免服务/控制器重复注册。
+    func scan() {
+        if (self.scanned) { return self; }
+        self.scanned = true;
+        if (self.container == null) { self.container = Container(); }
+        count = __lm_boot_count();
+        i = 0;
+        while (i < count) {
+            boot = __lm_boot_at(i);
+            boot(self, self.container);
+            i = i + 1;
+        }
+        return self;
+    }
+
+    // 主循环：进入 accept 循环前按配置执行引导（autoScan=false 时跳过，
+    // 由用户在合适时机手动 scan），随后复用 ServiceApplication 的 accept 骨架
+    func run() {
+        if (self.autoScanEnabled()) { self.scan(); }
+        super.run();
     }
 
     // ---- 路由注册（start 前完成注册；handler 为 RequestHandler 对象或 func）----
+    // 全字面量路径进精确表（O(1)）；含 :name / 末段 *name 进模式表（注册有序）。
+
+    // 两段数组逐元素比较（模式去重判定）
+    private func sameSegments(a: array, b: array): bool {
+        if (a.len != b.len) { return false; }
+        i = 0;
+        while (i < a.len) {
+            if (a[i] != b[i]) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
 
     func route(method: string, path: string, handler) {
-        self.routes[method.upper() + " " + path] = handler;
+        m = method.upper();
+        isPattern = (path.indexOf(":") >= 0 || path.indexOf("*") >= 0);
+        if (!isPattern) {
+            self.exactRoutes[m + " " + path] = handler;
+            return self;
+        }
+
+        segments = path.split("/");
+        star = false;
+        starName = "";
+        lastSeg = segments[segments.len - 1];
+        if (lastSeg.startsWith("*")) {
+            star = true;
+            starName = lastSeg.slice(1, lastSeg.len);
+        }
+
+        // 同 method + 同模式重复注册：覆盖处理器，不新增
+        idx = 0;
+        while (idx < self.patternRoutes.len) {
+            old = self.patternRoutes[idx];
+            if (old["method"] == m && self.sameSegments(old["segments"], segments)) {
+                old["handler"] = handler;
+                return self;
+            }
+            idx = idx + 1;
+        }
+
+        p = {};
+        p["method"] = m;
+        p["segments"] = segments;
+        p["star"] = star;
+        p["starName"] = starName;
+        p["handler"] = handler;
+        self.patternRoutes.add(p);
         return self;
     }
 
@@ -124,16 +325,67 @@ public class WebApplication extends ServiceApplication {
     func patch(path: string, handler)   { return self.route(HttpMethod.PATCH, path, handler); }
     func head(path: string, handler)    { return self.route(HttpMethod.HEAD, path, handler); }
 
+    // 模式匹配：命中返回路径参数 map（:name 逐段、*name 收剩余多段），未命中返回 null
+    private func matchPattern(p: map, reqSegments: array) {
+        segments = p["segments"];
+        star = (p["star"] == true);
+        if (star) {
+            // 末段 *name：固定段必须全部存在，剩余可为 0..n 段
+            if (reqSegments.len < segments.len - 1) { return null; }
+        } else {
+            if (reqSegments.len != segments.len) { return null; }
+        }
+
+        params = {};
+        limit = star ? segments.len - 1 : segments.len;
+        i = 0;
+        while (i < limit) {
+            seg = segments[i];
+            if (seg.startsWith(":")) {
+                params[seg.slice(1, seg.len)] = reqSegments[i];
+            } else {
+                if (seg != reqSegments[i]) { return null; }
+            }
+            i = i + 1;
+        }
+
+        if (star) {
+            rest = [];
+            j = segments.len - 1;
+            while (j < reqSegments.len) {
+                rest.add(reqSegments[j]);
+                j = j + 1;
+            }
+            params[p["starName"]] = rest.join("/");
+        }
+        return params;
+    }
+
+    // 处理器统一调用：func → h(req)；对象 → h.serve(req)
+    private func invokeHandler(h, req: ServerRequest): ServerResponse {
+        if (type(h) == "func") { return h(req); }
+        return h.serve(req);
+    }
+
     // ---- 请求分派（核心扩展点，连接线程内调用）----
-    // 默认：按 "METHOD /path" 查路由表，未命中走 onNotFound。
+    // 顺序：精确表 O(1) → 模式表注册序首个匹配 → onNotFound。
     // 子类重写可实现任意分派逻辑（中间件、前缀匹配、重写等），
     // 需要回退默认行为时调 super.handleRequest(req)。
     func handleRequest(req: ServerRequest): ServerResponse {
         key = req.method + " " + req.path;
-        if (self.routes.contains(key)) {
-            h = self.routes[key];
-            if (type(h) == "func") { return h(req); }
-            return h.serve(req);
+        if (self.exactRoutes.contains(key)) {
+            return self.invokeHandler(self.exactRoutes[key], req);
+        }
+
+        reqSegments = req.path.split("/");
+        for p in self.patternRoutes {
+            if (p["method"] == req.method) {
+                pathParams = self.matchPattern(p, reqSegments);
+                if (pathParams != null) {
+                    req.pathParams = pathParams;
+                    return self.invokeHandler(p["handler"], req);
+                }
+            }
         }
         return self.onNotFound(req);
     }

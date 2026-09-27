@@ -13,6 +13,7 @@
  * 主文件不做 mangle，其符号为程序全局符号。
  */
 #include "import.h"
+#include "app_scan.h"
 #include "cond_compile.h"
 #include "lumyr_log.h"
 
@@ -1674,6 +1675,30 @@ static char* expand_file(const char* abs_path, SB* out,
     return ret;
 }
 
+/* 展开 scanDirs 的隐式模块（import.h 声明） */
+int lm_expand_scanned_module(const char* abs_path, const char* main_real,
+                             char** out_body) {
+    SB body; sb_init(&body);
+
+    /* 循环检测：主文件入 active，避免扫描模块反向导入主文件成环 */
+    const char* active[2];
+    int nactive = 0;
+    if (main_real) { active[0] = main_real; active[1] = abs_path; nactive = 2; }
+    else { active[0] = abs_path; nactive = 1; }
+
+    /* 扫描模块是主应用命名空间的一部分（如同用户直接写在主文件里）：
+     * 以 no-alias 模式展开，导出类/函数保持全局原名，主文件与编译期
+     * 生成的引导函数都能按原名引用。 */
+    char* expvar = expand_file(abs_path, &body, active, nactive, 1, NULL, NULL, 0);
+    if (!expvar) { free(body.buf); return -1; }
+    free(expvar);
+
+    ProcessedMod* pm = find_processed(abs_path);
+    int mod_id = pm ? pm->module_id : -1;
+    *out_body = body.buf;
+    return mod_id;
+}
+
 /* ---------------- extends/implements 文本重写 ---------------- */
 /* AliasEntry/RenameEntry 及全局收集器定义见文件头部（expand_file 之前） */
 
@@ -1918,6 +1943,17 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
     int has_any = (tr->nimports > 0) || (tr->nexports > 0);
 
+    /* 应用配置 scanDirs 扫描（编译期）：扫描模块体稍后前插到最终输出。
+     * 扫描失败（同名文件/模块展开错误）直接中止编译。 */
+    char* scannedBodies = NULL;
+    AppScanResult* scanRes = app_scan_run(tr->text, real, &scannedBodies);
+    if (!scanRes) {
+        tr_free(tr);
+        *had_mod_out = -1;
+        return NULL;
+    }
+    if (scanRes->count > 0) has_any = 1;
+
     /* 主文件：展开其 import（主文件不 mangle，其符号为全局符号） */
     SB out; sb_init(&out);
     const char* txt = tr->text;
@@ -1971,6 +2007,11 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
             sb_puts(&out, child_body.buf);
             free(child_body.buf);
+
+            /* 用户代码起点哨兵：框架模块体已内联完毕，其后属于用户代码。
+             * boot_gen 据此把引导登记语句插在「框架初始化之后、用户代码之前」；
+             * 用无依赖的字符串表达式语句，未使用注解通道时也是合法空操作。 */
+            sb_puts(&out, "\"__LM_USER_BODY_START__\";\n");
 
             /* alias 赋值（仅 alias 模式 / 混合模式） */
             if(isp->alias) {
@@ -2028,6 +2069,7 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
     if(!ok) {
         free(out.buf);
+        free(scannedBodies);
         ext_free_maps();
         *had_mod_out = -1;
         return NULL;
@@ -2045,9 +2087,23 @@ char* lm_preprocess_main(const char* src_path, int* had_mod_out) {
 
     if(!has_any) {
         free(out.buf);
+        free(scannedBodies);
         *had_mod_out = 0;
         return NULL;
     }
+
+    /* 扫描模块体前插到最终输出（模块体为 mangled 独立单元，主文件符号在后） */
+    if(scannedBodies) {
+        size_t lenA = strlen(scannedBodies);
+        size_t lenB = strlen(out.buf);
+        char* merged = (char*)malloc(lenA + lenB + 1);
+        memcpy(merged, scannedBodies, lenA);
+        memcpy(merged + lenA, out.buf, lenB + 1);
+        free(out.buf);
+        free(scannedBodies);
+        out.buf = merged;
+    }
+
     *had_mod_out = 1;
     return out.buf;
 }

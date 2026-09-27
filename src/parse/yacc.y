@@ -324,7 +324,9 @@ static void compile_class_ctors(const char* cls) {
         AstNode* ctor = g_class_ctor_list[i];
         if(!ctor || ctor->type != AST_FUNC_DEF) continue;
         /* 已在静态方法解析期提前编译（ensure_ctors_compiled）则跳过 */
-        if(ir_func_table_lookup(ctor->u.func_def.name)) continue;
+        if(ir_func_table_lookup(ctor->u.func_def.name)) {
+            continue;
+        }
         RuntimeFunc* rf = compile_func_from_ast_with_class(ctor, cls);
         class_add_constructor(cls, ctor, rf);
     }

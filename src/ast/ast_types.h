@@ -39,6 +39,9 @@ typedef struct {
     struct AstNode* constructor;  // 主构造函数 AST 节点（首个声明的重载）
     void* constructor_func;       // 主构造函数 RuntimeFunc*
     int nctor_overloads;          // 构造函数重载总数（0=无构造函数）
+    /* 全部构造器重载 AST（供编译期 DI 构造器选择；主构造也在其中） */
+    struct AstNode** ctor_overload_nodes;
+    int nctor_overload_nodes;
     /* 统一运行时类型信息指针（struct/class 注册时由 lumyr_type_register 返回） */
     struct RuntimeTypeInfo* runtime_info;
 } TypeDef;

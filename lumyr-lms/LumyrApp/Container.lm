@@ -1,0 +1,108 @@
+// ============================================================
+// lumyr-Container：IoC 服务容器 + 应用引导表
+//   ContainerInterface   容器契约（注册 / 获取 / 判存）
+//   AbstractContainer    map 后备默认实现，不能实例化
+//   Container            可实例化容器
+//
+//   应用引导表（模块级）：
+//     __lm_register_boot(fn)  登记引导函数 fn(app, container)
+//     __lm_boot_count()       已登记引导函数数量
+//     __lm_boot_at(i)         按下标取引导函数
+//
+// 定位：
+//   编译期扫描 @Service / @Controller 生成的引导函数，在应用 scan 时
+//   依拓扑序实例化服务、注册进容器，再实例化控制器并挂载到 app。
+//   容器内服务为单例：同名只允许注册一次，多处注入 / get 拿到同一实例。
+//
+// 用法：
+//   import <App/Container>;
+//   c = Container();
+//   c.register("userService", UserService());
+//   s = c.get("userService");
+// ============================================================
+
+// 容器契约：服务按名注册、单例获取
+public interface ContainerInterface {
+    // 注册服务实例（空名 / 重复名直接抛出）
+    func register(name: string, instance);
+    // 按名取服务（未注册直接抛出，不返回 null 兜底）
+    func get(name: string);
+    // 判断服务是否已注册
+    func contains(name: string): bool;
+}
+
+// 容器抽象基类：map 后备默认实现（抽象类豁免接口方法实现检查）
+public abstract class AbstractContainer implements ContainerInterface {
+    instances: map;
+
+    func AbstractContainer() {
+        self.instances = {};
+    }
+
+    // 注册单例：空名 / 重复名直接抛出（无兜底）
+    func register(name: string, instance) {
+        if (name == "") {
+            throw "服务名不能为空 / service name must not be empty";
+        }
+        if (self.instances.contains(name)) {
+            throw "服务重复注册 / service already registered: " + name;
+        }
+        self.instances[name] = instance;
+        return self;
+    }
+
+    // 取服务：未注册直接抛出（不返回 null 兜底）
+    func get(name: string) {
+        if (self.instances.contains(name) == false) {
+            throw "服务未注册 / service not registered: " + name;
+        }
+        return self.instances[name];
+    }
+
+    func contains(name: string): bool {
+        return self.instances.contains(name);
+    }
+}
+
+// 可实例化容器：WebApplication.scan 与编程式注册共用
+public class Container extends AbstractContainer {
+
+    func Container() {
+        super();
+    }
+}
+
+// ============================================================
+// 应用引导表
+//   编译期代码生成把 @Service/@Controller 的实例化计划写成
+//   func __lm_app_boot__(app, container){...}，并在「框架初始化之后、
+//   用户代码之前」经 __lm_register_boot 登记；scan() 按登记顺序执行。
+//
+// 语言语义：函数内不能重新赋值全局变量（首次赋值会创建局部），
+// 故列表在顶层直接创建，登记函数只做原地 add。
+// ============================================================
+
+// 已登记引导函数列表
+__lm_boot_functions = [];
+
+// 登记引导函数：必须是 func 类型
+public func __lm_register_boot(bootFn) {
+    if (type(bootFn) != "func") {
+        throw "引导项必须是函数 / boot entry must be a function";
+    }
+    __lm_boot_functions.add(bootFn);
+    return bootFn;
+}
+
+// 已登记引导函数数量
+public func __lm_boot_count(): int {
+    return len(__lm_boot_functions);
+}
+
+// 按下标取引导函数（下标越界直接抛出）
+public func __lm_boot_at(index: int) {
+    if (index < 0 || index >= len(__lm_boot_functions)) {
+        throw "引导函数下标越界 / boot index out of range: " + index;
+    }
+    return __lm_boot_functions[index];
+}

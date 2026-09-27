@@ -34,6 +34,9 @@
 #include "ir/vm.h"
 #include "ir/ir_cgen.h"
 #include "parse/import.h"
+#include "parse/di_analysis.h"
+#include "parse/boot_gen.h"
+#include "annotation/lm_annotation.h"
 #include "parse/cond_compile.h"
 #include "i18n/lm_i18n.h"
 #include "ast/ast_runtime_sym.h"
@@ -70,6 +73,7 @@ int main(int argc, char** argv) {
     
     int codegen_mode = 0;
     int only_emit_c = 0;
+    int print_boot = 0;   /* --print-boot：输出引导文本后不编译 */
 
     /* Initialize i18n - auto-detect system language */
     lm_i18n_init();
@@ -90,6 +94,9 @@ int main(int argc, char** argv) {
         } else if(strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             out_base = argv[i + 1];
             i += 2;
+        } else if(strcmp(argv[i], "--print-boot") == 0) {
+            print_boot = 1;
+            i++;
         } else if(strncmp(argv[i], "-D", 2) == 0) {
             /* -D 自定义条件编译符号：支持 -DNAME 与 -D NAME 两种写法 */
             const char* def = argv[i] + 2;
@@ -211,7 +218,24 @@ int main(int argc, char** argv) {
             ast_free(root);
             root = NULL;
             ret = 1;
-        } else if(codegen_mode) {
+        } else if(!di_analyze()) {
+            /* Controller/Service 元信息或依赖图校验失败（错误已双语打印） */
+            ast_free(root);
+            root = NULL;
+            ret = 1;
+        } else if(print_boot) {
+            /* 仅打印引导计划，不编译 */
+            boot_gen_inject(root, 1);
+            ast_free(root);
+            root = NULL;
+            ret = 0;
+        } else if(!(root = boot_gen_inject(root, 0))) {
+            /* 注入失败：适配生成错误已双语打印（如模型形参类型不可绑定） */
+            root = NULL;
+            ret = 1;
+        } else {
+            /* 引导函数已注入，后续 codegen/VM 分支共用 */
+        if(codegen_mode) {
             if(only_emit_c) {
                 // -S：输出字节码指令文本（反汇编）
                 BytecodeFunc* main_fn = ir_compile_main(root);
@@ -289,6 +313,7 @@ int main(int argc, char** argv) {
             vm_run_main(main_fn);
             bytecode_func_free(main_fn);
         }
+        } /* end else（boot_gen 注入后的 codegen/VM 分支） */
         ast_free(root);
     }
 

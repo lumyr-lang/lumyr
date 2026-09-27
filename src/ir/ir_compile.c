@@ -17,6 +17,7 @@
 #include "annotation/lm_annotation.h"
 #include "lm_value.h"
 #include "lm_type.h"
+#include "parse/di_analysis.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3796,6 +3797,68 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
     AstNode* recv = node->u.method_call.recv;
     const char* mname = node->u.method_call.method;
     AstNode* margs = node->u.method_call.args;
+
+    /* app.controller(instance)：编译期校验 + 改写为类专属注册函数调用。
+     * 自动扫描与手动注册共用 __lm_reg_<Class>，映射方法注册规则唯一。 */
+    if(mname && strcmp(mname, "controller") == 0) {
+        char* appOwner = c_expr_owner_type(c, recv);
+        TypeDef* appTd = appOwner ? type_lookup(appOwner) : NULL;
+        int isWebApp;
+        if(appTd) {
+            /* owner 明确：仅 WebApplication 及其子类才拦截，
+             * 其他用户类型若恰好有 controller 方法走普通分派 */
+            isWebApp = 0;
+            for(TypeDef* t = appTd; t; t = t->parent ? type_lookup(t->parent) : NULL) {
+                if(strcmp(t->name, "WebApplication") == 0) { isWebApp = 1; break; }
+            }
+        } else {
+            /* owner 无法静态确定（如函数内引用全局 app 变量）：
+             * controller 是框架注册 API，按 Web 应用调用处理 */
+            isWebApp = 1;
+        }
+        if(isWebApp) {
+            int argc = 0, acap = 0;
+            AstNode** argv = NULL;
+            collect_call_args(margs, &argv, &argc, &acap);
+            if(argc != 1) {
+                fprintf(stderr,
+                    "IR: app.controller(instance) 只接受一个控制器实例参数（实参 %d 个）/ "
+                    "app.controller(instance) expects exactly one controller instance argument (got %d)\n",
+                    argc, argc);
+                g_ir_compile_error = 1;
+                free(argv); free(appOwner);
+                return EXPR_TYPE_NONE;
+            }
+            char* ctlClass = c_expr_owner_type(c, argv[0]);
+            if(!ctlClass) {
+                fprintf(stderr,
+                    "IR: app.controller 的参数类型无法静态确定，请直接传控制器实例（new 出来的对象）/ "
+                    "cannot statically determine the class of app.controller argument; pass a concrete controller instance directly\n");
+                g_ir_compile_error = 1;
+                free(argv); free(appOwner);
+                return EXPR_TYPE_NONE;
+            }
+            if(!di_meta_is_controller(ctlClass)) {
+                fprintf(stderr,
+                    "IR: 类 %s 未标注 @Controller，不能用 app.controller 注册；只有带映射注解的 @Controller 类才可注册 / "
+                    "class %s is not annotated with @Controller and cannot be registered via app.controller; only @Controller classes with mapped methods are allowed\n",
+                    ctlClass, ctlClass);
+                g_ir_compile_error = 1;
+                free(ctlClass); free(argv); free(appOwner);
+                return EXPR_TYPE_NONE;
+            }
+            /* 改写：__lm_reg_<Class>(recv, instance) */
+            AstNode* newArgs = ast_arg_append(recv, argv[0]);
+            size_t need = strlen("__lm_reg_") + strlen(ctlClass) + 1;
+            char* regFnName = malloc(need);
+            snprintf(regFnName, need, "__lm_reg_%s", ctlClass);
+            AstNode* rewritten = ast_call(regFnName, newArgs);
+            ExprType et = c_expr(c, rewritten);
+            free(ctlClass); free(argv); free(appOwner);
+            return et;
+        }
+        free(appOwner);
+    }
 
     /* 1. 推断 receiver 类型名 + 定位 TypeDef */
     char* owner = c_expr_owner_type(c, recv);

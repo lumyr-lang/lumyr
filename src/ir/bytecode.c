@@ -583,6 +583,11 @@ void bc_disasm(FILE* out, BytecodeFunc* fn)
             case OPC_CALLV:
                 snprintf(txt, sizeof(txt), "CALLV argc=%d", in.b);
                 break;
+            case OPC_GETFUNC:
+                snprintf(txt, sizeof(txt), "GETFUNC %s",
+                         (in.a >= 0 && in.a < fn->sym_cnt && fn->syms[in.a])
+                         ? fn->syms[in.a] : "?");
+                break;
             case OPC_ARRAY_LIT:
                 snprintf(txt, sizeof(txt), "ARRAY_LIT n=%d", in.b);
                 break;

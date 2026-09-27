@@ -1,4 +1,5 @@
 #include "lm_annotation.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,11 +33,29 @@ typedef struct {
     void* user_data;
 } AnnotationForeachData;
 
-/* 红黑树遍历回调函数 */
-static void annotation_rbtree_callback(const char* class_name, const char* method_name, void* data, void* user_data) {
+/* 注解桶：同一属主（target_class, 目标名）可持有多个注解。
+ * rbtree 槽位存桶指针；此前直接存单条 AnnotationInfo，同一方法上多注解
+ * （如 @Get + @deprecated）会被 rbtree_insert 同 key 覆盖而丢失。 */
+typedef struct {
+    AnnotationInfo** items;  /* 注解信息数组（按注册顺序） */
+    int count;
+    int cap;
+} AnnotationBucket;
+
+/* 红黑树遍历回调：展平桶内全部注解逐个回调。
+ * 注意签名必须与 rbtree_foreach 一致：首参 ns 不可省（此前缺 ns 导致
+ * 后续参数错位、遍历静默失效）。 */
+static void annotation_rbtree_callback(RBTNamespace ns, const char* class_name,
+                                       const char* method_name, void* data,
+                                       void* user_data) {
+    (void)ns; (void)class_name; (void)method_name;
     AnnotationForeachData* foreach_data = (AnnotationForeachData*)user_data;
-    if (data && foreach_data && foreach_data->callback) {
-        foreach_data->callback((AnnotationInfo*)data, foreach_data->user_data);
+    AnnotationBucket* bucket = (AnnotationBucket*)data;
+    if (!bucket || !foreach_data || !foreach_data->callback) return;
+    for (int i = 0; i < bucket->count; i++) {
+        if (bucket->items[i]) {
+            foreach_data->callback(bucket->items[i], foreach_data->user_data);
+        }
     }
 }
 
@@ -94,10 +113,29 @@ int annotation_register(const char* name, int type_marks, int category, AstNode*
     info->target_func = target_func ? strdup(target_func) : NULL;
     info->target_field = target_field ? strdup(target_field) : NULL;
 
-    /* 插入到红黑树中，key 为 (target_class, target_func) */
-    /* 对于类注解（没有 target_func），用 "__class__" 作为 method_name */
+    /* key 为 (target_class, target_func)；类注解决 target_func 用 "__class__" */
     const char* method_name = target_func ? target_func : "__class__";
-    rbtree_insert(g_annotation_tree, NS_PROPERTY, target_class, method_name, info);
+
+    /* 桶已存在则追加；不存在先建桶再插入红黑树 */
+    AnnotationBucket* bucket = NULL;
+    if (g_annotation_tree) {
+        bucket = (AnnotationBucket*)rbtree_find(g_annotation_tree, NS_PROPERTY,
+                                                target_class, method_name);
+    }
+    if (!bucket) {
+        bucket = (AnnotationBucket*)calloc(1, sizeof(AnnotationBucket));
+        if (!bucket) return 0;
+        rbtree_insert(g_annotation_tree, NS_PROPERTY, target_class, method_name, bucket);
+    }
+    if (bucket->count >= bucket->cap) {
+        int newCap = bucket->cap == 0 ? 4 : bucket->cap * 2;
+        AnnotationInfo** grown = (AnnotationInfo**)realloc(bucket->items,
+                                       (size_t)newCap * sizeof(AnnotationInfo*));
+        if (!grown) return 0;
+        bucket->items = grown;
+        bucket->cap = newCap;
+    }
+    bucket->items[bucket->count++] = info;
 
     return 1;
 }
@@ -106,10 +144,16 @@ int annotation_register(const char* name, int type_marks, int category, AstNode*
 AnnotationInfo* annotation_lookup_func(const char* class_name, const char* func_name, const char* annotation_name) {
     if (!func_name || !annotation_name || !g_annotation_tree) return NULL;
 
-    /* 从红黑树中查找 */
-    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, NS_PROPERTY, class_name, func_name);
-    if (info && info->name && strcmp(info->name, annotation_name) == 0) {
-        return info;
+    /* 从桶中按注解名查找 */
+    AnnotationBucket* bucket = (AnnotationBucket*)rbtree_find(g_annotation_tree,
+                                        NS_PROPERTY, class_name, func_name);
+    if (bucket) {
+        for (int i = 0; i < bucket->count; i++) {
+            AnnotationInfo* info = bucket->items[i];
+            if (info && info->name && strcmp(info->name, annotation_name) == 0) {
+                return info;
+            }
+        }
     }
 
     return NULL;
@@ -119,10 +163,16 @@ AnnotationInfo* annotation_lookup_func(const char* class_name, const char* func_
 AnnotationInfo* annotation_lookup_class(const char* class_name, const char* annotation_name) {
     if (!class_name || !annotation_name || !g_annotation_tree) return NULL;
 
-    /* 从红黑树中查找，类注解的 method_name 为 "__class__" */
-    AnnotationInfo* info = (AnnotationInfo*)rbtree_find(g_annotation_tree, NS_PROPERTY, class_name, "__class__");
-    if (info && info->name && strcmp(info->name, annotation_name) == 0) {
-        return info;
+    /* 类注解的 method_name 为 "__class__"；从桶中按注解名查找 */
+    AnnotationBucket* bucket = (AnnotationBucket*)rbtree_find(g_annotation_tree,
+                                        NS_PROPERTY, class_name, "__class__");
+    if (bucket) {
+        for (int i = 0; i < bucket->count; i++) {
+            AnnotationInfo* info = bucket->items[i];
+            if (info && info->name && strcmp(info->name, annotation_name) == 0) {
+                return info;
+            }
+        }
     }
 
     return NULL;
@@ -147,4 +197,13 @@ void annotation_foreach(void (*callback)(AnnotationInfo* info, void* user_data),
     foreach_data.user_data = user_data;
 
     rbtree_foreach(g_annotation_tree, annotation_rbtree_callback, &foreach_data);
+}
+
+/* 判断节点是否为字面量表达式（字符串 / 整数 / 数值 / 布尔 / 字符）。
+ * 供框架注解参数合法性校验使用：路由路径等只接受编译期字面量。 */
+int annotation_node_is_literal(AstNode* node) {
+    if (!node) return 0;
+    return node->type == AST_STRING || node->type == AST_INT ||
+           node->type == AST_NUM || node->type == AST_BOOL ||
+           node->type == AST_CHAR;
 }
