@@ -167,6 +167,25 @@ int64_t vm_value_to_i64(Value v) {
         const char* s = v.str_inline ? v.v.sso.data : v.v.s;
         return s ? strtoll(s, NULL, 10) : 0;
     }
+    /* 高精度族：经字符串中转取整（超长幅值 strtoll 钳到 int64 极值，C 风格精度丢失，不报错） */
+    if (v.type == VAL_BIGINT) {
+        char* s = v.v.bigint ? lumyr_bigint_to_string(v.v.bigint) : NULL;
+        int64_t r = s ? strtoll(s, NULL, 10) : 0;
+        free(s);
+        return r;
+    }
+    if (v.type == VAL_DECIMAL) {
+        char* s = v.v.decimal ? lumyr_decimal_to_string(v.v.decimal) : NULL;
+        int64_t r = s ? strtoll(s, NULL, 10) : 0;
+        free(s);
+        return r;
+    }
+    if (v.type == VAL_BITDECIMAL) {
+        char* s = v.v.bitdecimal ? lumyr_bitdecimal_to_string(v.v.bitdecimal) : NULL;
+        int64_t r = s ? strtoll(s, NULL, 10) : 0;
+        free(s);
+        return r;
+    }
     /* 非数值类型维持原兜底（其余 Value 种类不属于整型族） */
     Value c = lumyr_cast_int64(v);
     if (c.type == VAL_INT64) return c.v.i64;
@@ -188,6 +207,25 @@ double vm_value_to_f64(Value v) {
     if (v.type == VAL_STRING) {
         const char* s = v.str_inline ? v.v.sso.data : v.v.s;
         return s ? strtod(s, NULL) : 0.0;
+    }
+    /* 高精度族：经字符串中转取浮点（精度随 double 表示丢失，不报错） */
+    if (v.type == VAL_BIGINT) {
+        char* s = v.v.bigint ? lumyr_bigint_to_string(v.v.bigint) : NULL;
+        double r = s ? strtod(s, NULL) : 0.0;
+        free(s);
+        return r;
+    }
+    if (v.type == VAL_DECIMAL) {
+        char* s = v.v.decimal ? lumyr_decimal_to_string(v.v.decimal) : NULL;
+        double r = s ? strtod(s, NULL) : 0.0;
+        free(s);
+        return r;
+    }
+    if (v.type == VAL_BITDECIMAL) {
+        char* s = v.v.bitdecimal ? lumyr_bitdecimal_to_string(v.v.bitdecimal) : NULL;
+        double r = s ? strtod(s, NULL) : 0.0;
+        free(s);
+        return r;
     }
     return (double)vm_value_to_i64(v);
 }

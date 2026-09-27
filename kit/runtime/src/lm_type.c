@@ -570,7 +570,12 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
     }
     /* PTR 族 */
     if(fi->valtype == VAL_STRING) {
-        /* 字符串字段：GC 分配拷贝（修复旧 strdup 内存泄漏） */
+        /* 字符串字段：null（VAL_NONE）→ 槽位置 NULL（引用类型以 NULL 指针表示 null）；
+         * 非空时 GC 分配拷贝（修复旧 strdup 内存泄漏） */
+        if(value.type == VAL_NONE) {
+            *(char**)field_ptr = NULL;
+            return;
+        }
         const char* s = lumyr_str_cstr(&value);
         size_t len = strlen(s);
         char* gc_str = (char*)gc_alloc(len + 1, VAL_STRING);

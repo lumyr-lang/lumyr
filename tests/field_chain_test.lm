@@ -1,0 +1,25 @@
+// 二分 4：深嵌套字段链 + 多 local
+class Inner { v: int = 0; }
+class Mid { inner: Inner; }
+class Outer { mid: Mid; ss: string = "y"; }
+class Svc {
+    func deep(o: Outer) {
+        a1 = type(o.mid.inner.v);
+        a2 = type(o.mid.inner.v);
+        a3 = type(o.ss);
+        a5 = 123;
+        a6 = "str";
+        print("a1=" + a1 + " a3=" + a3 + " a6=" + a6);
+        print("recheck a1=" + a1 + " a5=" + a5);
+        return a1;
+    }
+}
+inn = Inner();
+inn.v = 9;
+mid = Mid();
+mid.inner = inn;
+o = Outer();
+o.mid = mid;
+sv = Svc();
+r = sv.deep(o);
+print("r=" + r);

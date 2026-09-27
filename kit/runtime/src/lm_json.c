@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 
 /* ========== 解析 ========== */
 
@@ -134,7 +137,9 @@ static Value jp_parse_string(JP* j)
     return v;
 }
 
-// 解析数字：纯整数（无小数点/指数）→ VAL_INT，否则 VAL_DOUBLE
+// 解析数字：纯整数（无小数点/指数）按幅值升档 int → long long → bigint，
+// 绝不静默环绕（旧实现一律 make_int，2147483648 环绕成 -2147483648、
+// 50 位数字钳成 -1）；带小数点/指数 → VAL_DOUBLE
 static Value jp_parse_number(JP* j)
 {
     const char* start = j->p;
@@ -149,9 +154,16 @@ static Value jp_parse_number(JP* j)
     Value v;
     if(is_int) {
         char* endp = NULL;
+        errno = 0;
         long long ll = strtoll(tmp, &endp, 10);
-        if(*endp == '\0' && endp != tmp) {
-            v = lumyr_make_int(ll);
+        if(errno == ERANGE) {
+            /* 超出 int64（如 50 位数字）：升档任意精度 bigint，保留完整值 */
+            v.type = VAL_BIGINT;
+            v.v.bigint = lumyr_bigint_from_string(tmp);
+        } else if(*endp == '\0' && endp != tmp) {
+            /* int32 装得下给 int；装不下升档 long long（64 位精确） */
+            if(ll >= INT_MIN && ll <= INT_MAX) v = lumyr_make_int((int)ll);
+            else                               v = lumyr_make_long_long(ll);
         } else {
             v = lumyr_make_double(strtod(tmp, NULL));
         }
@@ -406,12 +418,17 @@ static void jq_stringify(SB* b, Value v, Value enc)
         }
         /* 浮点类型：每个类型独立 case */
         case VAL_FLOAT: {
-            char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", (double)v.v.f); sb_puts(b, tmp); break;
+            /* 非有限值（inf/nan）不是合法 JSON token：按 JS JSON.stringify 语义输出 null */
+            double dv = (double)v.v.f;
+            if(!isfinite(dv)) { sb_puts(b, "null"); break; }
+            char tmp[32]; snprintf(tmp, sizeof(tmp), "%g", dv); sb_puts(b, tmp); break;
         }
         case VAL_DOUBLE: {
+            if(!isfinite(v.v.d)) { sb_puts(b, "null"); break; }
             char tmp[64]; snprintf(tmp, sizeof(tmp), "%g", v.v.d); sb_puts(b, tmp); break;
         }
         case VAL_LONG_DOUBLE: {
+            if(!isfinite((double)v.v.ld)) { sb_puts(b, "null"); break; }
             char tmp[64]; snprintf(tmp, sizeof(tmp), "%Lg", v.v.ld); sb_puts(b, tmp); break;
         }
         case VAL_CHAR: {

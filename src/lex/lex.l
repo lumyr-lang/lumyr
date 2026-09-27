@@ -454,6 +454,14 @@ f\"([^"\\]|\\.)*\"   {
 "<bigint>"         { yylval.ll = CAST_BIGINT; LEX_RET(TOK_TYPE_ANNOT); }
 "<decimal>"        { yylval.ll = CAST_DECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
 "<bitdecimal>"     { yylval.ll = CAST_BITDECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
+    /* 括号式高精度 cast：(bigint)/(decimal)/(bitdecimal) 整体匹配（最长匹配优先于
+       单字符 '('），直接复用类型标注令牌 TOK_TYPE_ANNOT 返回对应 CastKind——
+       语法零改动（与 <bigint>x 同走 TOK_TYPE_ANNOT 产生式），故不增 bison 冲突。
+       代价：f(bigint) 中“括号内名为 bigint 的变量”也会被当作类型（上下文关键字），
+       此写法在本代码库不存在 */
+"(bigint)"         { yylval.ll = CAST_BIGINT; LEX_RET(TOK_TYPE_ANNOT); }
+"(decimal)"        { yylval.ll = CAST_DECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
+"(bitdecimal)"     { yylval.ll = CAST_BITDECIMAL; LEX_RET(TOK_TYPE_ANNOT); }
 "<any>"            { yylval.ll = CAST_NONE; LEX_RET(TOK_TYPE_ANNOT); }  /* 动态类型：<any> 等价 any */
 "<dynamic>"        { yylval.ll = CAST_NONE; LEX_RET(TOK_TYPE_ANNOT); }  /* 动态类型别名（兼容旧写法） */
 "<ptr>"            { yylval.ll = CAST_PTR; LEX_RET(TOK_TYPE_ANNOT); }

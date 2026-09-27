@@ -64,9 +64,16 @@ static AstNode* build_400_block(const char* msg) {
     return ast_seq(mk, ast_seq(tx, ret));
 }
 
+/* CastKind → RequestBinder 严格绑定函数平名（定义见后，前置声明） */
+static const char* binder_name_for_cast(CastKind ck);
+
 /* 为模型类生成 __lm_model_<Class>(m) 反序列化函数：
- * inst = <Class>(); 公开字段逐个 if (m.contains(f)) inst[f] = m[f]; return inst;
- * 类未注册返回 NULL（调用方报编译错误） */
+ * inst = <Class>(); 公开字段逐个（仅当 m.contains(f)）：
+ *   - 有明确声明类型的标量字段：按该类型经 RequestBinder 转换后赋值；
+ *     类型不匹配/越界（binder 返回 null）→ 直接赋 null（允许精度丢失，不报错）；
+ *   - 嵌套模型字段：递归调用其 __lm_model_ 反序列化；
+ *   - 未标注/容器字段：直接赋值（保留 JSON 原结构）。
+ * 类未注册返回 NULL（调用方报编译错误）。 */
 static AstNode* build_model_builder(const char* cls) {
     TypeDef* td = class_lookup(cls);
     if(!td) return NULL;
@@ -76,12 +83,39 @@ static AstNode* build_model_builder(const char* cls) {
         if(!td->props || !td->props[i]) continue;
         /* 仅映射公开字段（0=public；访问修饰表缺失视为全公开） */
         if(td->prop_access_modifiers && td->prop_access_modifiers[i] != 0) continue;
+
+        const char* fname = td->props[i];
+        /* 嵌套模型字段：field_struct_names 非空且名字确实注册为类才算
+         * （内置类型名残留场景不算嵌套，按声明 cast kind 走标量/动态绑定） */
+        const char* nested_raw = (td->field_struct_names && td->field_struct_names[i])
+                                 ? td->field_struct_names[i] : NULL;
+        const char* nested = (nested_raw && class_lookup(nested_raw)) ? nested_raw : NULL;
+        CastKind ck = td->field_cast_kinds ? td->field_cast_kinds[i] : CAST_NONE;
+        const char* binder = nested ? NULL : binder_name_for_cast(ck);
+
         AstNode* cond = ast_method_call(ast_var(strdup("m")), strdup("contains"),
-                                        ast_string(strdup(td->props[i])));
+                                        ast_string(strdup(fname)));
+        AstNode* mget = ast_index(ast_var(strdup("m")), ast_string(strdup(fname)));
+        AstNode* val = NULL;
+
+        if(nested) {
+            /* 嵌套模型：值为 null 直接赋 null，否则递归反序列化 */
+            AstNode* isNull = ast_binop(OP_EQ, mget, ast_none());
+            AstNode* inner = ast_call(model_builder_name(nested),
+                                     ast_index(ast_var(strdup("m")),
+                                               ast_string(strdup(fname))));
+            val = ast_ternary(isNull, ast_none(), inner);
+        }
+        else if(binder) {
+            /* 声明类型标量：按声明类型严格转换；不匹配/越界 → null（不报错） */
+            val = ast_call(strdup(binder), mget);
+        }
+        else {
+            /* 无精确类型（未标注/容器）：直接赋值，保留 JSON 原结构 */
+            val = mget;
+        }
         AstNode* setField = ast_index_assign(ast_var(strdup("inst")),
-                                             ast_string(strdup(td->props[i])),
-                                             ast_index(ast_var(strdup("m")),
-                                                       ast_string(strdup(td->props[i]))));
+                                             ast_string(strdup(fname)), val);
         body = ast_seq(body, ast_if(cond, setField, NULL, NULL));
     }
     body = ast_seq(body, ast_return(ast_var(strdup("inst"))));
@@ -100,41 +134,76 @@ static int str_in_list(char** list, int n, const char* s) {
  * 按位宽分派：窄类型先范围核对再收窄，杜绝静默截断；
  * map/array 走 JSON 串解析；未列出的类型返回 0（类名走模型绑定，
  * 其余在生成期报错）。 */
+/* CastKind → RequestBinder 严格绑定函数平名；未列出返回 NULL */
+static const char* binder_name_for_cast(CastKind ck) {
+    switch(ck) {
+    case CAST_INT: case CAST_INT32:               return "RequestBinder_asInt";
+    case CAST_INT8:                                return "RequestBinder_asInt8";
+    case CAST_SHORT: case CAST_INT16:              return "RequestBinder_asShort";
+    case CAST_USHORT: case CAST_UINT16:            return "RequestBinder_asUshort";
+    case CAST_BYTE: case CAST_UINT8:               return "RequestBinder_asByte";
+    case CAST_LONG: case CAST_SSIZE_T:             return "RequestBinder_asLong";
+    case CAST_LONGLONG: case CAST_INT64:           return "RequestBinder_asLongLong";
+    /* uint 标注在 yacc.y（TOK_UINT 规则）归并为 CAST_UINT64（既有设计：
+     * uint 是 uint64 别名，map/generic/type_inference 测试锁定），标注通道
+     * 不会流入 CAST_UINT；此处 asUint 仅防御 (uint) cast 语义流入参数位 */
+    case CAST_UINT: case CAST_UINT32:              return "RequestBinder_asUint";
+    case CAST_UINT64:
+    case CAST_ULONG: case CAST_SIZE_T:             return "RequestBinder_asUlong";
+    case CAST_DOUBLE:                              return "RequestBinder_asDouble";
+    case CAST_LONG_DOUBLE:                         return "RequestBinder_asLongDouble";
+    case CAST_FLOAT:                               return "RequestBinder_asFloat";
+    case CAST_BOOL:                                return "RequestBinder_asBool";
+    case CAST_CHAR:                                return "RequestBinder_asChar";
+    case CAST_STRING:                              return "RequestBinder_asString";
+    case CAST_BIGINT:                              return "RequestBinder_asBigInt";
+    case CAST_DECIMAL:                             return "RequestBinder_asDecimal";
+    case CAST_BITDECIMAL:                          return "RequestBinder_asBitDecimal";
+    case CAST_MAP:                                 return "RequestBinder_asMap";
+    case CAST_ARRAY:                               return "RequestBinder_asArray";
+    default:                                       return NULL;
+    }
+}
+
+/* 标量/容器参数类型名 → RequestBinder 严格绑定函数平名；不支持返回 0 */
 static int scalar_binder_kind(const char* type, const char** flatName) {
     /* map/array：name_to_castkind（ast_types.c）不含这两个名字，显式特判 */
     if(strcmp(type, "map") == 0)   { *flatName = "RequestBinder_asMap"; return 1; }
     if(strcmp(type, "array") == 0) { *flatName = "RequestBinder_asArray"; return 1; }
-    int ck = name_to_castkind(type);
-    switch(ck) {
-    case CAST_INT: case CAST_INT32:
-        *flatName = "RequestBinder_asInt"; return 1;
-    case CAST_INT8:
-        *flatName = "RequestBinder_asInt8"; return 1;
-    case CAST_SHORT: case CAST_INT16:
-        *flatName = "RequestBinder_asShort"; return 1;
-    case CAST_USHORT: case CAST_UINT16:
-        *flatName = "RequestBinder_asUshort"; return 1;
-    case CAST_BYTE: case CAST_UINT8:
-        *flatName = "RequestBinder_asByte"; return 1;
-    case CAST_LONG: case CAST_LONGLONG: case CAST_INT64: case CAST_SSIZE_T:
-        *flatName = "RequestBinder_asLong"; return 1;
-    case CAST_UINT: case CAST_UINT32: case CAST_UINT64: case CAST_ULONG: case CAST_SIZE_T:
-        *flatName = "RequestBinder_asUlong"; return 1;
-    case CAST_DOUBLE:
-        *flatName = "RequestBinder_asDouble"; return 1;
-    case CAST_FLOAT:
-        *flatName = "RequestBinder_asFloat"; return 1;
-    case CAST_BOOL:
-        *flatName = "RequestBinder_asBool"; return 1;
-    case CAST_STRING:
-        *flatName = "RequestBinder_asString"; return 1;
-    case CAST_MAP:
-        *flatName = "RequestBinder_asMap"; return 1;
-    case CAST_ARRAY:
-        *flatName = "RequestBinder_asArray"; return 1;
-    default:
-        return 0;
+    const char* nm = binder_name_for_cast(name_to_castkind(type));
+    if(nm) { *flatName = nm; return 1; }
+    return 0;
+}
+
+/* 递归确保 cls 及其嵌套模型字段的反序列化函数已生成并编译（按名去重）。
+ * 类型未注册返回 0（调用方负责报错）。 */
+static int ensure_model_builder(const char* cls,
+                                char*** pDone, int* pN, int* pCap,
+                                AstNode** pFuncs) {
+    if(str_in_list(*pDone, *pN, cls)) { return 1; }
+    TypeDef* td = class_lookup(cls);
+    if(!td) { return 0; }
+    /* 先确保嵌套模型的反序列化函数存在（编译时即可解析名字）。
+     * field_struct_names 可能残留内置类型名（如旧解析把 bigint 当自定义名），
+     * 仅对真实注册类递归，其余按动态字段处理 */
+    for(int i = 0; i < td->nprops; i++) {
+        const char* nest = (td->field_struct_names && td->field_struct_names[i])
+                           ? td->field_struct_names[i] : NULL;
+        if(nest && class_lookup(nest) &&
+           !ensure_model_builder(nest, pDone, pN, pCap, pFuncs)) {
+            return 0;
+        }
     }
+    AstNode* mb = build_model_builder(cls);
+    if(!mb) { return 0; }
+    if(*pN == *pCap) {
+        *pCap = *pCap ? *pCap * 2 : 8;
+        *pDone = realloc(*pDone, (size_t)(*pCap) * sizeof(char*));
+    }
+    (*pDone)[(*pN)++] = strdup(cls);
+    compile_func_from_ast(mb);
+    *pFuncs = *pFuncs ? ast_seq(*pFuncs, mb) : mb;
+    return 1;
 }
 
 /* 按服务类名找它的拓扑位置（变量名后缀）；无则 -1 */
@@ -365,25 +434,17 @@ AstNode* boot_gen_inject(AstNode* root, int print_only) {
                     continue;
                 }
 
-                /* 类模型：从 JSON body 反序列化（按公开字段映射，无参构造）。
-                 * 模型构造函数按类名去重，只生成并编译一次 */
-                if(!str_in_list(modelDone, nModelDone, dp->type)) {
-                    AstNode* mb = build_model_builder(dp->type);
-                    if(!mb) {
-                        fprintf(stderr,
-                                "BootGen: 方法 %s.%s 形参 %s 的类型 \"%s\" 不是已注册的类，无法从 JSON 绑定 / "
-                                "cannot bind parameter %s of %s.%s: type \"%s\" is not a registered class (JSON binding unsupported)\n",
-                                c->class_name, rt->method_name, dp->name, dp->type,
-                                dp->name, c->class_name, rt->method_name, dp->type);
-                        return NULL;
-                    }
-                    if(nModelDone == modelCap) {
-                        modelCap = modelCap ? modelCap * 2 : 8;
-                        modelDone = realloc(modelDone, (size_t)modelCap * sizeof(char*));
-                    }
-                    modelDone[nModelDone++] = strdup(dp->type);
-                    modelFuncs = modelFuncs ? ast_seq(modelFuncs, mb) : mb;
-                    compile_func_from_ast(mb);
+                /* 类模型：从 JSON body 反序列化（公开字段按声明类型转换，
+                 * 类型不符→null；嵌套模型递归）。构造函数按类名去重，
+                 * 递归确保一次生成并编译 */
+                if(!ensure_model_builder(dp->type, &modelDone, &nModelDone,
+                                         &modelCap, &modelFuncs)) {
+                    fprintf(stderr,
+                            "BootGen: 方法 %s.%s 形参 %s 的类型 \"%s\" 不是已注册的类，无法从 JSON 绑定 / "
+                            "cannot bind parameter %s of %s.%s: type \"%s\" is not a registered class (JSON binding unsupported)\n",
+                            c->class_name, rt->method_name, dp->name, dp->type,
+                            dp->name, c->class_name, rt->method_name, dp->type);
+                    return NULL;
                 }
                 AstNode* jcall = ast_method_call(ast_var(strdup("req")), strdup("json"), NULL);
                 AstNode* bind = ast_assign(strdup(abuf),

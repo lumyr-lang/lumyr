@@ -7,7 +7,8 @@
 // ——(int)"abc" 得 0、(bool)"true" 得 false 的裸强转不可靠。
 //
 // 覆盖类型：int / int8 / short / ushort / byte / long / ulong /
-//          float / double / bool / string / map / array
+//          long long / long double / float / double / bool / char / string /
+//          bigint / decimal / bitdecimal / map / array
 // 设计要点：
 //   1) 窄类型（int8/short/ushort/byte）先按 64 位解析再范围核对，杜绝静默截断；
 //   2) 64 位类型用 strtoll 钳制侦测（溢出串必被钳到极值，
@@ -17,13 +18,22 @@
 
 public class RequestBinder {
 
-    // 严格整数 int/int32：int 直通；字符串 trim 后须整体匹配 ^[+-]?[0-9]+$
+    // 严格整数 int/int32：int 直通；long 族范围核对；
+    // 字符串 trim 后须整体匹配 ^[+-]?[0-9]+$（超长串 strtol 钳到 64 位极值，
+    // 必超 int32 范围被拒，绝不静默截断成垃圾值）
     static func asInt(v) {
-        if (type(v) == "int") { return v; }
-        if (type(v) != "string") { return null; }
-        s = v.trim();
-        if (!s.regexMatch("^[+-]?[0-9]+$")) { return null; }
-        return (int)s;
+        t = type(v);
+        if (t == "int") { return v; }
+        w = null;
+        if (t == "long" || t == "int64" || t == "long long") { w = v; }
+        else if (t == "string") {
+            s = v.trim();
+            if (!s.regexMatch("^[+-]?[0-9]+$")) { return null; }
+            w = (long)s;
+        }
+        else { return null; }
+        if (w < -2147483648 || w > 2147483647) { return null; }
+        return (int)w;
     }
 
     // 严格 8 位整数 int8：int8 直通；int/long 范围核对；字符串同上
@@ -140,24 +150,52 @@ public class RequestBinder {
         return r;
     }
 
-    // 严格单精度浮点 float：float 直通、double/int 收窄；字符串须匹配十进制字面量
+    // 严格 32 位无符号整数 uint/uint32：仅数字（不带符号）、负值拒绝，
+    // 范围 [0, 4294967295]——独立于 asUlong（64 位），
+    // 否则 uint 形参经 64 位校验放行超范围值（如 uint32max+1），声明形同虚设
+    static func asUint(v) {
+        t = type(v);
+        if (t == "uint") { return v; }
+        w = null;
+        if (t == "int" || t == "long" || t == "int64" || t == "long long") {
+            if (v < 0) { return null; }
+            w = v;
+        }
+        else if (t == "string") {
+            s = v.trim();
+            if (!s.regexMatch("^[0-9]+$")) { return null; }
+            w = (long)s;
+        }
+        else { return null; }
+        if (w > 4294967295) { return null; }
+        return (uint)w;
+    }
+
+    // 严格单精度浮点 float：float 直通、double/int 收窄、long 族/bigint 转浮点
+    // （超大幅值允许精度丢失）；字符串须匹配十进制字面量
     static func asFloat(v) {
         t = type(v);
         if (t == "float") { return v; }
         if (t == "double") { return (float)v; }
         if (t == "int") { return (float)v; }
+        if (t == "long" || t == "int64" || t == "long long") { return (float)v; }
+        if (t == "bigint") { return (float)v; }
         if (t != "string") { return null; }
         s = v.trim();
         if (!s.regexMatch("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)$")) { return null; }
         return (float)s;
     }
 
-    // 严格双精度浮点：double 直通、float/int 提升；字符串须匹配十进制字面量
+    // 严格双精度浮点：double 直通、float/int 提升、long 族/bigint 转浮点
+    // （超大幅值允许精度丢失）；字符串须匹配十进制字面量
     static func asDouble(v) {
-        if (type(v) == "double") { return v; }
-        if (type(v) == "float") { return (double)v; }
-        if (type(v) == "int") { return (double)v; }
-        if (type(v) != "string") { return null; }
+        t = type(v);
+        if (t == "double") { return v; }
+        if (t == "float") { return (double)v; }
+        if (t == "int") { return (double)v; }
+        if (t == "long" || t == "int64" || t == "long long") { return (double)v; }
+        if (t == "bigint") { return (double)v; }
+        if (t != "string") { return null; }
         s = v.trim();
         if (!s.regexMatch("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)$")) { return null; }
         return (double)s;
@@ -212,5 +250,101 @@ public class RequestBinder {
         }
         if (type(r) != "array") { return null; }
         return r;
+    }
+
+    // 严格 64 位有符号整数 long long/int64：
+    // long long/int64 直通；long/int 加宽；字符串规则同 asLong（钳制侦测），
+    // 返回 long long 以保留精确类型（此前 long long 形参被并到 asLong 得 long）
+    static func asLongLong(v) {
+        t = type(v);
+        if (t == "long long" || t == "int64") { return v; }
+        if (t == "long" || t == "int") { return (long long)v; }
+        if (t != "string") { return null; }
+        s = v.trim();
+        if (!s.regexMatch("^[+-]?[0-9]+$")) { return null; }
+        d = s;
+        if (d.slice(0, 1) == "+" || d.slice(0, 1) == "-") { d = d.slice(1, d.len); }
+        while (d.len > 1 && d.slice(0, 1) == "0") { d = d.slice(1, d.len); }
+        r = (long long)s;
+        if (s.slice(0, 1) == "-") {
+            if (r == (long long)"-9223372036854775808" && d != "9223372036854775808") { return null; }
+        }
+        else {
+            if (r == (long long)"9223372036854775807" && d != "9223372036854775807") { return null; }
+        }
+        return r;
+    }
+
+    // 严格 80 位扩展精度浮点 long double：
+    // long double 直通；double/float/int/long 族/bigint 按原值加宽（精度不丢信息）；
+    // 字符串须匹配十进制字面量
+    static func asLongDouble(v) {
+        t = type(v);
+        if (t == "long double") { return v; }
+        if (t == "double" || t == "float" || t == "int" || t == "long") { return (long double)v; }
+        if (t == "int64" || t == "long long") { return (long double)v; }
+        if (t == "bigint") { return (long double)v; }
+        if (t != "string") { return null; }
+        s = v.trim();
+        if (!s.regexMatch("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)$")) { return null; }
+        return (long double)s;
+    }
+
+    // 严格任意精度整数 bigint：
+    // bigint 直通；整数族加宽；字符串须整体为（可带符号的）整数，
+    // 禁止空串/小数/字母（裸 <bigint>"abc" 会静默得 0，必须先校验）
+    static func asBigInt(v) {
+        t = type(v);
+        if (t == "bigint") { return v; }
+        if (t == "int" || t == "long" || t == "int64" || t == "long long") { return (bigint)v; }
+        if (t != "string") { return null; }
+        s = v.trim();
+        if (!s.regexMatch("^[+-]?[0-9]+$")) { return null; }
+        return (bigint)s;
+    }
+
+    // 严格高精度十进制 decimal：
+    // decimal 直通；整数族/bigint 加宽、double/float 按其值转换（允许精度差异）；
+    // 字符串须匹配十进制字面量
+    static func asDecimal(v) {
+        t = type(v);
+        if (t == "decimal") { return v; }
+        if (t == "int" || t == "long" || t == "int64" || t == "long long") { return (decimal)v; }
+        if (t == "bigint") { return (decimal)v; }
+        if (t == "double" || t == "float") { return (decimal)v; }
+        if (t != "string") { return null; }
+        s = v.trim();
+        if (!s.regexMatch("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)$")) { return null; }
+        return (decimal)s;
+    }
+
+    // 严格位压缩高精度 bitdecimal：同 asDecimal
+    static func asBitDecimal(v) {
+        t = type(v);
+        if (t == "bitdecimal") { return v; }
+        if (t == "int" || t == "long" || t == "int64" || t == "long long") { return (bitdecimal)v; }
+        if (t == "bigint") { return (bitdecimal)v; }
+        if (t == "double" || t == "float") { return (bitdecimal)v; }
+        if (t != "string") { return null; }
+        s = v.trim();
+        if (!s.regexMatch("^[+-]?([0-9]+[.]?[0-9]*|[.][0-9]+)$")) { return null; }
+        return (bitdecimal)s;
+    }
+
+    // 严格单字符 char：
+    // char 直通；整数须在 ASCII [0,127]；字符串必须恰好 1 个字节字符
+    // （不做 trim：空格本身是合法字符；多字符/空串拒绝）。
+    // 取码点经 <uint8>bytes 中转——(char)str 裸 cast 走数值解析会静默得 0
+    static func asChar(v) {
+        t = type(v);
+        if (t == "char") { return v; }
+        if (t == "int" || t == "long") {
+            if (v < 0 || v > 127) { return null; }
+            return (char)v;
+        }
+        if (t != "string") { return null; }
+        if (v.len != 1) { return null; }
+        b = <uint8>bytes(v);
+        return (char)b[0];
     }
 }

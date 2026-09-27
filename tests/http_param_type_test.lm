@@ -1,0 +1,651 @@
+// ============================================================
+// HTTP 真实接口参数类型推断 · 端到端测试
+//
+// 真实启动 WebApplication（真 socket 监听、真 HTTP 报文解析、真注解路由），
+// 经内置 HTTP 客户端（socket 直连）发起真实请求，验证控制器方法接收到的
+//   - 路径参数（:name）
+//   - query 参数
+//   - JSON body（DTO 模型绑定）
+// 参数类型推断是否正确，以及非法/超限/缺失参数是否走 400 通道。
+//
+// 自验证：startAsync 后台启动 → 发请求断言 → stop，exit 0。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Http>;
+
+// JSON body 嵌套 DTO
+class AddrIn {
+    city: string = "";
+    zip: int = 0;
+}
+
+// JSON body DTO（公开字段，字段初始化器提供默认值）
+class UserIn {
+    name: string = "";
+    age: int = 0;
+    score: double = 0.0;
+    addr: AddrIn;
+}
+
+// 超限数字 body DTO：各整数/高精度类型字段
+class NumIn {
+    i: int = 0;
+    l: long = 0;
+    ll: long long = 0;
+    ul: ulong = 0;
+    i8: int8 = 0;
+    i16: int16 = 0;
+    sh: short = 0;
+    by: byte = 0;
+    u16: ushort = 0;
+    ui: uint = 0;
+    u64: uint64 = 0;
+    sz: size_t = 0;
+    sst: ssize_t = 0;
+    f: float = 0.0;
+    ld: long double = 0.0;
+    bd: bitdecimal;
+    bo: bool = false;
+    ch: char = ' ';
+    bi: bigint;
+    dec: decimal;
+    d: double = 0.0;
+}
+
+@Controller("/api")
+class ParamController {
+
+    // 路径标量参数：int8（范围 -128..127，超范围须 400）
+    @Get("/u/:id")
+    func byId(req, id: int8) {
+        r = ServerResponse(200);
+        r.json({"idType": type(id), "id": id});
+        return r;
+    }
+
+    // query 多类型参数：string / int / double
+    @Get("/s")
+    func search(req, name: string, page: int, ratio: double) {
+        r = ServerResponse(200);
+        r.json({
+            "nameType": type(name), "name": name,
+            "pageType": type(page), "page": page,
+            "ratioType": type(ratio), "ratio": ratio
+        });
+        return r;
+    }
+
+    // JSON body 模型绑定
+    @Post("/u")
+    func create(req, user: UserIn) {
+        city = null;
+        zipType = "none";
+        ad = user.addr;
+        if (ad != null) {
+            city = ad.city;
+            zipType = type(ad.zip);
+        }
+        r = ServerResponse(200);
+        r.json({
+            "nameType": type(user.name), "name": user.name,
+            "ageType": type(user.age), "age": user.age,
+            "scoreType": type(user.score), "score": user.score,
+            "city": city, "zipType": zipType
+        });
+        return r;
+    }
+
+    // ---- 超限数字 query 端点：每类型一个，返回 {t: 推断类型, s: 字符串形态} ----
+    @Get("/t/i8")
+    func tI8(req, v: int8) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/i")
+    func tI(req, v: int) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/l")
+    func tL(req, v: long) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/ll")
+    func tLL(req, v: long long) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/ul")
+    func tUL(req, v: ulong) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/bi")
+    func tBI(req, v: bigint) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/d")
+    func tD(req, v: double) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/ld")
+    func tLD(req, v: long double) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/f")
+    func tF(req, v: float) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/dec")
+    func tDEC(req, v: decimal) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/bd")
+    func tBD(req, v: bitdecimal) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    // ---- 窄整型/无符号/bool/char query 端点（绑定层分派完整性验证）----
+    @Get("/t/i16")
+    func tI16(req, v: int16) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/u16")
+    func tU16(req, v: ushort) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/by")
+    func tBY(req, v: byte) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/ui")
+    func tUI(req, v: uint) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/u64")
+    func tU64(req, v: uint64) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/sz")
+    func tSZ(req, v: size_t) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/sst")
+    func tSST(req, v: ssize_t) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/bo")
+    func tBO(req, v: bool) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    @Get("/t/ch")
+    func tCH(req, v: char) { r = ServerResponse(200); r.json({"t": type(v), "s": (string)v}); return r; }
+
+    // 超限数字 body 端点：各类型字段的推断类型 + 字符串形态
+    @Post("/t/num")
+    func tNum(req, n: NumIn) {
+        r = ServerResponse(200);
+        r.json({
+            "it": type(n.i), "is": (string)n.i,
+            "lt": type(n.l), "ls": (string)n.l,
+            "llt": type(n.ll), "lls": (string)n.ll,
+            "ult": type(n.ul), "uls": (string)n.ul,
+            "i8t": type(n.i8), "i8s": (string)n.i8,
+            "i16t": type(n.i16), "i16s": (string)n.i16,
+            "sht": type(n.sh), "shs": (string)n.sh,
+            "byt": type(n.by), "bys": (string)n.by,
+            "u16t": type(n.u16), "u16s": (string)n.u16,
+            "uit": type(n.ui), "uis": (string)n.ui,
+            "u64t": type(n.u64), "u64s": (string)n.u64,
+            "szt": type(n.sz), "szs": (string)n.sz,
+            "sstt": type(n.sst), "ssts": (string)n.sst,
+            "ft": type(n.f), "fs": (string)n.f,
+            "ldt": type(n.ld), "lds": (string)n.ld,
+            "bdt": type(n.bd), "bds": (string)n.bd,
+            "bot": type(n.bo), "bos": (string)n.bo,
+            "cht": type(n.ch), "chs": (string)n.ch,
+            "bit": type(n.bi), "bis": (string)n.bi,
+            "dect": type(n.dec), "decs": (string)n.dec,
+            "dt": type(n.d), "ds": (string)n.d
+        });
+        return r;
+    }
+}
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+// GET 请求辅助
+func getResp(url) {
+    return HttpRequest<any, any>(url).send();
+}
+
+// POST JSON 请求辅助（map 体自动序列化为 JSON）
+func postResp(url, body) {
+    hreq = HttpRequest<any, any>("POST", url);
+    hreq.setHeader("Content-Type", "application/json");
+    hreq.setBody(body);
+    return hreq.send();
+}
+
+// ---- 启动真实服务 ----
+port = 18099;
+base = "http://127.0.0.1:" + port;
+app = WebApplication("127.0.0.1", port);
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// P1: 路径参数 int8 合法 —— 类型须为 int8、值正确
+// ------------------------------------------------------------
+r1 = getResp(base + "/api/u/100");
+check(r1.statusCode() == 200, "P1 合法路径参数应 200");
+b1 = r1.json();
+check(b1["idType"] == "int8", "P1 id 应推断为 int8，实际: " + b1["idType"]);
+check(b1["id"] == 100, "P1 id 值应为 100");
+
+// ------------------------------------------------------------
+// P2: 路径参数 int8 超范围（999 > 127）—— 必须走 400
+// ------------------------------------------------------------
+r2 = getResp(base + "/api/u/999");
+check(r2.statusCode() == 400, "P2 int8 超范围应 400，实际: " + r2.statusCode());
+
+// ------------------------------------------------------------
+// P3: 路径参数 int8 非数字 —— 必须走 400
+// ------------------------------------------------------------
+r3 = getResp(base + "/api/u/abc");
+check(r3.statusCode() == 400, "P3 int8 非数字应 400，实际: " + r3.statusCode());
+
+// ------------------------------------------------------------
+// P4: query 参数全合法 —— string/int/double 类型与值
+// ------------------------------------------------------------
+r4 = getResp(base + "/api/s?name=tom&page=3&ratio=1.5");
+check(r4.statusCode() == 200, "P4 合法 query 应 200");
+b4 = r4.json();
+check(b4["nameType"] == "string", "P4 name 应为 string，实际: " + b4["nameType"]);
+check(b4["name"] == "tom", "P4 name 值应为 tom");
+check(b4["pageType"] == "int", "P4 page 应为 int，实际: " + b4["pageType"]);
+check(b4["page"] == 3, "P4 page 值应为 3");
+check(b4["ratioType"] == "double", "P4 ratio 应为 double，实际: " + b4["ratioType"]);
+check(b4["ratio"] == 1.5, "P4 ratio 值应为 1.5");
+
+// ------------------------------------------------------------
+// P5: query 缺失必填参数（少 page）—— 必须走 400
+// ------------------------------------------------------------
+r5 = getResp(base + "/api/s?name=tom&ratio=1.5");
+check(r5.statusCode() == 400, "P5 缺少 query 参数应 400，实际: " + r5.statusCode());
+
+// ------------------------------------------------------------
+// P6: query 参数类型不符（page=abc）—— 必须走 400
+// ------------------------------------------------------------
+r6 = getResp(base + "/api/s?name=tom&page=abc&ratio=1.5");
+check(r6.statusCode() == 400, "P6 query 类型不符应 400，实际: " + r6.statusCode());
+
+// ------------------------------------------------------------
+// P7: JSON body DTO 合法 —— 字段 string/int/double 类型与值
+// ------------------------------------------------------------
+r7 = postResp(base + "/api/u", {"name": "tom", "age": 20, "score": 9.5});
+check(r7.statusCode() == 200, "P7 合法 body 应 200");
+b7 = r7.json();
+check(b7["nameType"] == "string", "P7 name 应为 string，实际: " + b7["nameType"]);
+check(b7["name"] == "tom", "P7 name 值应为 tom");
+check(b7["ageType"] == "int", "P7 age 应为 int，实际: " + b7["ageType"]);
+check(b7["age"] == 20, "P7 age 值应为 20");
+check(b7["scoreType"] == "double", "P7 score 应为 double，实际: " + b7["scoreType"]);
+check(b7["score"] == 9.5, "P7 score 值应为 9.5");
+
+// ------------------------------------------------------------
+// P8: JSON body 声明类型为 primitive 的字段（int）——不匹配时
+//     primitive 槽无法容纳 null（对象模型限制），落默认值 0，不报错
+// ------------------------------------------------------------
+r8 = postResp(base + "/api/u", {"name": "tom", "age": "20", "score": 9.5});
+check(r8.statusCode() == 200, "P8a 应 200");
+check(r8.json()["ageType"] == "int" && r8.json()["age"] == 20,
+      "P8a 数字串 \"20\" 应按 int 解析为 20");
+
+r8b = postResp(base + "/api/u", {"name": "tom", "age": "abc", "score": 9.5});
+check(r8b.json()["age"] == 0, "P8b 非数字串 → int 槽默认 0");
+
+r8c = postResp(base + "/api/u", {"name": "tom", "age": true, "score": 9.5});
+check(r8c.json()["age"] == 0, "P8c 布尔 → int 槽默认 0");
+
+r8d = postResp(base + "/api/u", {"name": "tom", "age": 3.7, "score": 9.5});
+check(r8d.json()["age"] == 0, "P8d 浮点 → int 槽默认 0（不收窄截断）");
+
+r8e = postResp(base + "/api/u", {"name": "tom", "score": 9.5});
+check(r8e.json()["age"] == 0, "P8e 缺失 → int 槽默认 0");
+
+// ------------------------------------------------------------
+// P9: JSON body 引用类型字段（string）显式传 null —— 应直接落 null
+// ------------------------------------------------------------
+r9 = postResp(base + "/api/u", {"name": null, "age": 20, "score": 9.5});
+check(r9.statusCode() == 200, "P9 应 200");
+b9 = r9.json();
+check(b9["nameType"] == "none",
+      "P9 string 字段显式 null 应落 null（none），实际: " + b9["nameType"]);
+
+// ------------------------------------------------------------
+// P10: 嵌套 DTO 合法 —— 子对象字段按声明类型递归绑定
+// ------------------------------------------------------------
+r10 = postResp(base + "/api/u", {
+    "name": "tom", "age": 20, "score": 9.5,
+    "addr": {"city": "BJ", "zip": 100}
+});
+check(r10.statusCode() == 200, "P10 应 200");
+b10 = r10.json();
+check(b10["city"] == "BJ", "P10 嵌套 city 应为 BJ，实际: " + b10["city"]);
+check(b10["zipType"] == "int",
+      "P10 嵌套 zip 应为 int，实际: " + b10["zipType"]);
+
+// ------------------------------------------------------------
+// P11: 嵌套 DTO 显式 null —— 子对象应为 null（city 落 null）
+// ------------------------------------------------------------
+r11 = postResp(base + "/api/u", {
+    "name": "tom", "age": 20, "score": 9.5, "addr": null
+});
+check(r11.statusCode() == 200, "P11 应 200");
+b11 = r11.json();
+check(b11["city"] == null,
+      "P11 嵌套 addr=null 时 city 应为 null，实际: " + b11["city"]);
+
+// ============================================================
+// 超限数字参数（超 50 位 / 各类型边界）· query 与 body 双通道
+// big50 = 56 位整数，远超 int64（19 位）
+// ============================================================
+big50 = "12345678901234567890123456789012345678901234567890123456";
+negbig50 = "-" + big50;
+llmax = "9223372036854775807";
+llmax1 = "9223372036854775808";
+imax = "2147483647";
+imax1 = "2147483648";
+
+// ---------- query 通道：整型超范围一律 400，绝不静默截断 ----------
+q1 = getResp(base + "/api/t/i?v=" + imax);
+check(q1.statusCode() == 200 && q1.json()["s"] == imax,
+      "Q1 int 边界 " + imax + " 应 200 精确");
+check(getResp(base + "/api/t/i?v=" + imax1).statusCode() == 400,
+      "Q2 int 收 int32+1 应 400");
+check(getResp(base + "/api/t/i?v=" + big50).statusCode() == 400,
+      "Q3 int 收 56 位应 400");
+check(getResp(base + "/api/t/i?v=" + negbig50).statusCode() == 400,
+      "Q4 int 收负 56 位应 400");
+check(getResp(base + "/api/t/i8?v=" + big50).statusCode() == 400,
+      "Q5 int8 收 56 位应 400");
+
+q6 = getResp(base + "/api/t/l?v=" + llmax);
+check(q6.statusCode() == 200 && q6.json()["s"] == llmax,
+      "Q6 long 收 llmax 应 200 精确");
+check(getResp(base + "/api/t/l?v=" + big50).statusCode() == 400,
+      "Q7 long 收 56 位应 400");
+
+q8 = getResp(base + "/api/t/ll?v=" + llmax);
+check(q8.statusCode() == 200 && q8.json()["t"] == "long long"
+      && q8.json()["s"] == llmax,
+      "Q8 long long 收 llmax 应 200 精确，实际: " + q8.json()["t"]);
+check(getResp(base + "/api/t/ll?v=" + llmax1).statusCode() == 400,
+      "Q9 long long 收 llmax+1 应 400");
+check(getResp(base + "/api/t/ll?v=" + big50).statusCode() == 400,
+      "Q10 long long 收 56 位应 400");
+
+q11 = getResp(base + "/api/t/ul?v=" + llmax);
+check(q11.statusCode() == 200 && q11.json()["s"] == llmax,
+      "Q11 ulong 收 llmax 应 200 精确");
+check(getResp(base + "/api/t/ul?v=" + big50).statusCode() == 400,
+      "Q12 ulong 收 56 位应 400");
+
+// ---------- query 通道：bigint/decimal/bitdecimal 精确保留全部位 ----------
+q13 = getResp(base + "/api/t/bi?v=" + big50);
+check(q13.statusCode() == 200 && q13.json()["t"] == "bigint"
+      && q13.json()["s"] == big50,
+      "Q13 bigint 收 56 位应 200 精确，实际: " + q13.json()["s"]);
+q14 = getResp(base + "/api/t/bi?v=" + negbig50);
+check(q14.statusCode() == 200 && q14.json()["s"] == negbig50,
+      "Q14 bigint 收负 56 位应 200 精确");
+
+q15 = getResp(base + "/api/t/dec?v=" + big50);
+check(q15.statusCode() == 200 && q15.json()["t"] == "decimal"
+      && q15.json()["s"] == big50,
+      "Q15 decimal 收 56 位应 200 精确，实际: " + q15.json()["s"]);
+q16 = getResp(base + "/api/t/bd?v=" + big50);
+check(q16.statusCode() == 200 && q16.json()["t"] == "bitdecimal"
+      && q16.json()["s"] == big50,
+      "Q16 bitdecimal 收 56 位应 200 精确，实际: " + q16.json()["s"]);
+
+// ---------- query 通道：浮点族允许精度丢失但不报错 ----------
+q17 = getResp(base + "/api/t/d?v=" + big50);
+check(q17.statusCode() == 200 && q17.json()["t"] == "double",
+      "Q17 double 收 56 位应 200（允许精度丢失）");
+q18 = getResp(base + "/api/t/ld?v=" + big50);
+check(q18.statusCode() == 200 && q18.json()["t"] == "long double",
+      "Q18 long double 收 56 位应 200");
+q19 = getResp(base + "/api/t/f?v=" + big50);
+check(q19.statusCode() == 200 && q19.json()["t"] == "float",
+      "Q19 float 收 56 位应 200");
+
+// ---------- query 通道：窄整型边界（绑定层按位宽核对，绝不静默截断）----------
+q20 = getResp(base + "/api/t/i16?v=32767");
+check(q20.statusCode() == 200 && q20.json()["s"] == "32767",
+      "Q20 int16 收 32767 应 200 精确");
+check(getResp(base + "/api/t/i16?v=32768").statusCode() == 400,
+      "Q20b int16 收 32768 应 400");
+check(getResp(base + "/api/t/i16?v=-32769").statusCode() == 400,
+      "Q20c int16 收 -32769 应 400");
+
+q21 = getResp(base + "/api/t/u16?v=65535");
+check(q21.statusCode() == 200 && q21.json()["s"] == "65535",
+      "Q21 ushort 收 65535 应 200 精确");
+check(getResp(base + "/api/t/u16?v=65536").statusCode() == 400,
+      "Q21b ushort 收 65536 应 400");
+check(getResp(base + "/api/t/u16?v=-1").statusCode() == 400,
+      "Q21c ushort 收负数应 400");
+
+q22 = getResp(base + "/api/t/by?v=255");
+check(q22.statusCode() == 200 && q22.json()["s"] == "255",
+      "Q22 byte 收 255 应 200 精确");
+check(getResp(base + "/api/t/by?v=256").statusCode() == 400,
+      "Q22b byte 收 256 应 400");
+check(getResp(base + "/api/t/by?v=-1").statusCode() == 400,
+      "Q22c byte 收负数应 400");
+
+// uint 标注在编译期归并 uint64（既有设计：uint 是 uint64 别名），故收
+// uint32max+1 合法放行——按 64 位语义精确绑定
+q23 = getResp(base + "/api/t/ui?v=4294967295");
+check(q23.statusCode() == 200 && q23.json()["s"] == "4294967295",
+      "Q23 uint 收 uint32max 应 200 精确");
+q23b = getResp(base + "/api/t/ui?v=4294967296");
+check(q23b.statusCode() == 200 && q23b.json()["s"] == "4294967296",
+      "Q23b uint（=uint64 别名）收 uint32max+1 应 200 精确，实际: "
+      + q23b.statusCode() + " s=" + q23b.json()["s"]);
+check(getResp(base + "/api/t/ui?v=-1").statusCode() == 400,
+      "Q23c uint 收负数应 400");
+
+// uint64 上界超出 int64 表示范围：binder 保守拒绝（宁拒不错），锁定语义
+q24 = getResp(base + "/api/t/u64?v=" + llmax);
+check(q24.statusCode() == 200 && q24.json()["s"] == llmax,
+      "Q24 uint64 收 llmax 应 200 精确");
+check(getResp(base + "/api/t/u64?v=18446744073709551615").statusCode() == 400,
+      "Q24b uint64 收 uint64max（超 int64 上界）保守拒绝应 400");
+check(getResp(base + "/api/t/u64?v=" + big50).statusCode() == 400,
+      "Q24c uint64 收 56 位应 400");
+
+q25 = getResp(base + "/api/t/sz?v=" + llmax);
+check(q25.statusCode() == 200 && q25.json()["s"] == llmax,
+      "Q25 size_t 收 llmax 应 200 精确");
+check(getResp(base + "/api/t/sz?v=-1").statusCode() == 400,
+      "Q25b size_t 收负数应 400");
+
+q26 = getResp(base + "/api/t/sst?v=-9223372036854775808");
+check(q26.statusCode() == 200 && q26.json()["s"] == "-9223372036854775808",
+      "Q26 ssize_t 收 llmin 应 200 精确");
+check(getResp(base + "/api/t/sst?v=-9223372036854775809").statusCode() == 400,
+      "Q26b ssize_t 收 llmin-1 应 400");
+
+// ---------- query 通道：bool / char / 负下界 / 科学计数法 ----------
+// (string)bool/char 已统一为语义形态（"true"/"false"/字符），与字段、print 一致
+q27 = getResp(base + "/api/t/bo?v=true");
+check(q27.statusCode() == 200 && q27.json()["t"] == "bool" && q27.json()["s"] == "true",
+      "Q27 bool 收 true 应 200 bool，实际: " + q27.json()["t"] + "/" + q27.json()["s"]);
+check(getResp(base + "/api/t/bo?v=1").json()["s"] == "true",
+      "Q27b bool 收 1 应 true");
+check(getResp(base + "/api/t/bo?v=0").json()["s"] == "false",
+      "Q27c bool 收 0 应 false");
+check(getResp(base + "/api/t/bo?v=yes").statusCode() == 400,
+      "Q27d bool 收 yes 应 400");
+
+// (string)char 输出字符形态
+q28 = getResp(base + "/api/t/ch?v=A");
+check(q28.statusCode() == 200 && q28.json()["t"] == "char" && q28.json()["s"] == "A",
+      "Q28 char 收 A 应 200（字符形态），实际: " + q28.json()["t"] + "/" + q28.json()["s"]);
+check(getResp(base + "/api/t/ch?v=AB").statusCode() == 400,
+      "Q28b char 收多字符应 400");
+
+check(getResp(base + "/api/t/i8?v=-129").statusCode() == 400,
+      "Q29 int8 收 -129（负下界越界）应 400");
+check(getResp(base + "/api/t/i?v=-2147483649").statusCode() == 400,
+      "Q30 int 收 -2147483649（负下界越界）应 400");
+
+// 科学计数法串不是合法十进制字面量（query 浮点 regex 不含指数）→ 400
+check(getResp(base + "/api/t/d?v=1e40").statusCode() == 400,
+      "Q31 double 收科学计数法 1e40 应 400");
+
+// ---------- body 通道：JSON 数字按幅值升档后按声明类型绑定 ----------
+bi50 = (bigint)big50;
+b20 = postResp(base + "/api/t/num", {
+    "i": 2147483647, "l": 2147483648, "ll": 9223372036854775807,
+    "ul": 4294967295, "bi": bi50, "dec": bi50, "d": bi50
+});
+check(b20.statusCode() == 200, "B20 合法大值 body 应 200");
+j20 = b20.json();
+check(j20["it"] == "int" && j20["is"] == imax,
+      "B20 i 应为 int=" + imax + "，实际: " + j20["it"] + "=" + j20["is"]);
+check(j20["ls"] == "2147483648",
+      "B20 l 应精确收 2147483648（JSON 升 long long 后入 long），实际: " + j20["ls"]);
+check(j20["llt"] == "long long" && j20["lls"] == llmax,
+      "B20 ll 应为 long long=" + llmax + "，实际: " + j20["llt"] + "=" + j20["lls"]);
+check(j20["bit"] == "bigint" && j20["bis"] == big50,
+      "B20 bi 应为 bigint 精确 56 位，实际: " + j20["bit"] + "=" + j20["bis"]);
+check(j20["dect"] == "decimal" && j20["decs"] == big50,
+      "B20 dec 应为 decimal 精确 56 位，实际: " + j20["dect"] + "=" + j20["decs"]);
+check(j20["dt"] == "double",
+      "B20 d 应为 double（bigint 转浮点），实际: " + j20["dt"]);
+
+// ---------- body 通道：字符串形态大值，按声明类型严格校验 ----------
+b21 = postResp(base + "/api/t/num", {
+    "i": imax1, "l": llmax, "ll": llmax1,
+    "ul": big50, "bi": big50, "dec": big50, "d": big50
+});
+check(b21.statusCode() == 200, "B21 应 200");
+j21 = b21.json();
+check(j21["is"] == "0",
+      "B21 i 收 \"2147483648\" 越 int32 → null 落默认 0，实际: " + j21["is"]);
+check(j21["ls"] == llmax,
+      "B21 l 收 llmax 字符串应精确，实际: " + j21["ls"]);
+check(j21["lls"] == "0",
+      "B21 ll 收 llmax+1 字符串 → null 落默认 0，实际: " + j21["lls"]);
+check(j21["uls"] == "0",
+      "B21 ul 收 56 位字符串 → null 落默认 0，实际: " + j21["uls"]);
+check(j21["bis"] == big50,
+      "B21 bi 收 56 位字符串应精确，实际: " + j21["bis"]);
+check(j21["decs"] == big50,
+      "B21 dec 收 56 位字符串应精确，实际: " + j21["decs"]);
+
+// ---------- body 通道：窄整型/无符号/bool/char 合法值按声明类型精确绑定 ----------
+b22 = postResp(base + "/api/t/num", {
+    "i8": 127, "i16": 32767, "sh": 32767, "by": 255,
+    "u16": 65535, "ui": 4294967295, "u64": 9223372036854775807,
+    "sz": 9223372036854775807, "sst": -9223372036854775808,
+    "f": 1.5, "ld": 2.5, "bd": big50, "bo": true, "ch": "A"
+});
+check(b22.statusCode() == 200, "B22 应 200");
+j22 = b22.json();
+check(j22["i8s"] == "127" && j22["i16s"] == "32767" && j22["shs"] == "32767",
+      "B22 窄有符号边界值应精确，实际: " + j22["i8s"] + "/" + j22["i16s"] + "/" + j22["shs"]);
+check(j22["bys"] == "255" && j22["u16s"] == "65535",
+      "B22 byte/ushort 边界值应精确，实际: " + j22["bys"] + "/" + j22["u16s"]);
+check(j22["uis"] == "4294967295",
+      "B22 uint 收 uint32max 应精确，实际: " + j22["uis"]);
+check(j22["u64s"] == llmax && j22["szs"] == llmax,
+      "B22 uint64/size_t 收 llmax 应精确，实际: " + j22["u64s"] + "/" + j22["szs"]);
+check(j22["ssts"] == "-9223372036854775808",
+      "B22 ssize_t 收 llmin 应精确，实际: " + j22["ssts"]);
+check(j22["fs"] == "1.5" || j22["fs"] == "1.500000",
+      "B22 float 收 1.5 应精确，实际: " + j22["fs"]);
+check(j22["lds"] == "2.5" || j22["lds"] == "2.500000",
+      "B22 long double 收 2.5 应精确，实际: " + j22["lds"]);
+check(j22["bds"] == big50,
+      "B22 bitdecimal 收 56 位字符串应精确，实际: " + j22["bds"]);
+check(j22["bos"] == "true",
+      "B22 bool 收 true 应精确，实际: " + j22["bos"]);
+check(j22["chs"] == "A",
+      "B22 char 收 A 应精确（字符形态），实际: " + j22["chs"]);
+
+// ---------- body 通道：窄类型越界/不匹配 → null 落默认值（不报错不 400）----------
+b23 = postResp(base + "/api/t/num", {
+    "i8": 128, "i16": 32768, "sh": -32769, "by": 256,
+    "u16": -1, "ui": 4294967296, "u64": big50, "sst": negbig50,
+    "f": "abc", "bo": "yes", "ch": "AB"
+});
+check(b23.statusCode() == 200, "B23 应 200（body 越界不报错，按用户规则落默认值）");
+j23 = b23.json();
+check(j23["i8s"] == "0" && j23["i16s"] == "0" && j23["shs"] == "0",
+      "B23 i8/i16/short 越界应落 0，实际: " + j23["i8s"] + "/" + j23["i16s"] + "/" + j23["shs"]);
+check(j23["bys"] == "0" && j23["u16s"] == "0",
+      "B23 byte/ushort 越界应落 0，实际: " + j23["bys"] + "/" + j23["u16s"]);
+check(j23["uis"] == "4294967296",
+      "B23 uint（=uint64 别名）收 uint32max+1 应按 64 位精确放行，实际: " + j23["uis"]);
+check(j23["u64s"] == "0" && j23["ssts"] == "0",
+      "B23 uint64/ssize_t 收超 int64 串应落 0，实际: " + j23["u64s"] + "/" + j23["ssts"]);
+check(j23["ft"] == "float" && j23["bos"] == "false" && j23["chs"] != "AB",
+      "B23 float/bool/char 不匹配应落默认，实际: " + j23["fs"] + "/" + j23["bos"] + "/" + j23["chs"]);
+
+// ---------- body 通道：嵌套 DTO 内字段超限同样按声明类型绑定 ----------
+b24 = postResp(base + "/api/u", {
+    "name": "tom", "age": 20, "score": 9.5,
+    "addr": {"city": "BJ", "zip": big50}
+});
+check(b24.statusCode() == 200, "B24 应 200");
+j24 = b24.json();
+check(j24["city"] == "BJ",
+      "B24 嵌套 city 应正常，实际: " + j24["city"]);
+check(j24["zipType"] == "int" && j24["zip"] == 0 || j24["zip"] == null,
+      "B24 嵌套 zip 收 56 位应拒绝落 0，实际: " + j24["zip"]);
+
+// ---------- body 通道：极限值专项（各类型真正上界/超界，B25 合法、B26 超界）----------
+// 200 位数字：程序生成（"1234567890" × 20），验证高精度族无限精度往返
+big200 = "";
+gi = 0;
+while (gi < 20) { big200 = big200 + "1234567890"; gi = gi + 1; }
+
+// B25 合法极限：
+//   u64 收 uint64max 数字串（binder 字符串路径无法精确解析超 int64 上界，保守拒绝）
+//   bi/dec 收 200 位（bigint/decimal 无限精度）
+//   d 收 1e308（double 上界内）、f 收 3.4e38（float 上界内）
+b25 = postResp(base + "/api/t/num", {
+    "u64": "18446744073709551615",
+    "bi": big200, "dec": big200,
+    "d": 1e308, "f": 3.4e38
+});
+check(b25.statusCode() == 200, "B25 应 200");
+j25 = b25.json();
+// B25 断言：合法极限值精确绑定
+check(j25["u64s"] == "0",
+      "B25 u64 收 uint64max 字符串应保守拒绝落 0，实际: " + j25["u64s"]);
+check(j25["bis"].len == 200 && j25["decs"].len == 200,
+      "B25 bigint/decimal 收 200 位应无限精度往返，实际: "
+      + j25["bis"].len + "/" + j25["decs"].len);
+check(j25["ds"] == "1e+308",
+      "B25 double 收 1e308（上界内）应精确，实际: " + j25["ds"]);
+check(j25["fs"] == "3.4e+38",
+      "B25 float 收 3.4e38（上界内）应精确，实际: " + j25["fs"]);
+
+// B26 断言：超极限跨 JSON 边界语义
+// 客户端序列化 inf（1e400）→ null（JS JSON.stringify 语义，lm_json.c jq_stringify）
+// → 服务器收 null → binder 拒 → 字段落默认 0
+r_d = postResp(base + "/api/t/num", {"d": 1e400});
+check(r_d.statusCode() == 200,
+      "B26 d 收 1e400（客户端序列化为 null）应 200 不再 500");
+j_d = r_d.json();
+check(j_d["ds"] == "0",
+      "B26 double 收非有限值应 null 落 0，实际: " + j_d["ds"]);
+// 未知字段携带 inf：仅经过解析/序列化层，不应影响请求处理
+check(postResp(base + "/api/t/num", {"zzz": 1e400}).statusCode() == 200,
+      "B26 未知字段携带非有限值应 200");
+// 服务器侧 float 物理槽溢出 inf：(string) 是字符串 "inf"，响应合法
+r_f = postResp(base + "/api/t/num", {"f": 1e40});
+j_f = r_f.json();
+check(r_f.statusCode() == 200 && j_f["ft"] == "float" && j_f["fs"] == "inf",
+      "B26 float 收 1e40 服务器侧溢出 inf（允许精度丢失），实际: "
+      + r_f.statusCode() + "/" + j_f["fs"]);
+// uint64max / 39 位整数 JSON 数字：解析升档 bigint → binder 拒 → 落 0
+r_u64 = postResp(base + "/api/t/num", {"u64": 18446744073709551615});
+check(r_u64.statusCode() == 200 && r_u64.json()["u64s"] == "0",
+      "B26 u64 收 uint64max 数字（升档 bigint）应拒绝落 0，实际: "
+      + r_u64.statusCode() + "/" + r_u64.json()["u64s"]);
+r_i = postResp(base + "/api/t/num", {"i": 1234567890123456789012345678901234567890});
+check(r_i.statusCode() == 200 && r_i.json()["is"] == "0",
+      "B26 int 收 39 位数字（升档 bigint）应拒绝落 0，实际: "
+      + r_i.statusCode() + "/" + r_i.json()["is"]);
+
+// ---- 关闭服务 ----
+app.stop();
+app.join();
+
+print("http_param_type_test ALL PASS");

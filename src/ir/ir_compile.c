@@ -957,7 +957,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 转成 string：根据源类型选择转换指令 */
         if(ct == CAST_STRING) {
             if(child_type == EXPR_TYPE_INT) {
-                emit(c, OPC_INT64_TO_STRING, 0, 0);
+                /* bool/char 按语义形态转串（"true"/字符），与字段、print、
+                 * 字符串拼接语境一致；其余整数族数值形态（与原行为一致） */
+                emit_int64_to_string_cast(c, child_ct);
             } else if(child_type == EXPR_TYPE_DOUBLE) {
                 emit(c, OPC_DOUBLE_TO_STRING, 0, 0);
             } else if(child_type == EXPR_TYPE_NONE) {
