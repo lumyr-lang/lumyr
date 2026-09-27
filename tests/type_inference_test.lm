@@ -1,0 +1,592 @@
+// ============================================================
+// 类型推断专项测试 / Type inference regression test
+// 覆盖全部数据类型：整型族 20 + 浮点族 3 + string + 高精度 3
+//                 + struct + class（继承多态）+ map/array/typed array
+// 重点：不显式写类型时的自动推断、各类型强转、未声明返回值的函数边界、
+//       带类型标注的变量初始化（a: T = expr）、尖括号前缀返回函数（func <T> f()）、
+//       全部运算符（算术 + - * / % **、位 & | ^ << >> ~、比较、逻辑 && || !、
+//       一元负）跨全部数据类型的运算结果类型（M-P 区）
+// 判定：任一类型/值不符即 throw 退出非 0；全过得 TYPE INFERENCE ALL OK
+// ============================================================
+
+// ---------- 断言助手 ----------
+// 类型断言：值的运行时类型必须等于期望（类型在赋值/传参/返回后不得丢失）
+func assertType(label, v, expected) {
+    t = type(v);
+    if (t != expected) {
+        throw label + " 类型推断丢失：期望 " + expected + " 实际 " + t
+              + " / type inference lost";
+    }
+}
+// 值断言
+func assertEq(label, actual, expected) {
+    if (actual != expected) {
+        throw label + " 值错误：期望 " + expected + " 实际 " + actual
+              + " / value mismatch";
+    }
+}
+
+// ============================================================
+// A：裸字面量自动推断（不写任何类型标注）
+// ============================================================
+aInt = 42;
+aDouble = 3.14;
+aString = "hello";
+aBool = true;
+aChar = 'A';
+
+// ============================================================
+// B：全标量类型矩阵——显式标注后类型正确
+// ============================================================
+bInt = <int>42;
+bInt8 = <int8>5;
+bInt16 = <int16>5;
+bInt32 = <int32>5;
+bInt64 = <int64>5;
+bShort = <short>5;
+bUshort = <ushort>5;
+bLong = <long>5;
+bLongLong = <long long>5;
+bUint8 = <uint8>5;
+bUint16 = <uint16>5;
+bUint32 = <uint32>5;
+bUint = <uint>5;
+bUint64 = <uint64>5;
+bUlong = <ulong>5;
+bUchar = <uchar>65;
+bByte = <byte>200;
+bBool = <bool>true;
+bChar2 = <char>65;
+bSizeT = <size_t>5;
+bSsizeT = <ssize_t>5;
+bDouble = <double>1.5;
+bFloat = <float>1.5;
+bLongDouble = <long double>1.5;
+bStr = <string>"hi";
+
+// ============================================================
+// C：强转表达式（cast）——cast 后立即校验类型与值
+// ============================================================
+cLong = (long)"9007199254740993";      // 大值：不得被 32 位截断
+cShort = (short)"300";
+cByte = (byte)"200";
+cInt8 = (int8)"100";
+cUshort = (ushort)"500";
+cUlong = (ulong)"9007199254740993";
+cInt16 = (int16)"5";
+cUint32 = (uint32)"5";
+cUint64 = (uint64)"5";
+cLongLong = (long long)"5";
+cSizeT = (size_t)"5";
+cSsizeT = (ssize_t)"5";
+cFloat = (float)"1.5";
+cDouble = (double)"1.5";
+cLongDouble = (long double)"1.5";
+cInt = (int)"42";
+
+// ============================================================
+// D：未声明返回值的函数边界（VM 类型丢失 bug 核心回归点）
+// 强转值经 return 跨函数后，类型标识与值都不得丢失
+// ============================================================
+func dRetLong(s) { return (long)s; }
+func dRetShort(s) { return (short)s; }
+func dRetByte(s) { return (byte)s; }
+func dRetInt8(s) { return (int8)s; }
+func dRetUshort(s) { return (ushort)s; }
+func dRetUlong(s) { return (ulong)s; }
+func dRetFloat(s) { return (float)s; }
+func dRetDouble(s) { return (double)s; }
+func dRetInt(s) { return (int)s; }
+func dRetString(s) { return s; }
+func dRetBool(s) { return s; }
+func dRetChar(s) { return s; }
+
+dLong = dRetLong("9007199254740993");
+dShort = dRetShort("300");
+dByte = dRetByte("200");
+dInt8 = dRetInt8("100");
+dUshort = dRetUshort("500");
+dUlong = dRetUlong("9007199254740993");
+dFloat = dRetFloat("1.5");
+dDouble = dRetDouble("1.5");
+dInt = dRetInt("42");
+dString = dRetString("hi");
+dBool = dRetBool(true);
+dChar = dRetChar('Z');
+
+// ============================================================
+// E：函数内未标注局部计算
+// ============================================================
+// 经动态形参：整数运算结果落 INT64（动态通道）
+func eCompute(a, b) {
+    c = a + b;
+    return c;
+}
+// 多步链式（未标注局部）
+func eChain(a, b) {
+    x = a + b;
+    y = x * 2;
+    z = y - a;
+    return z;
+}
+eR = eCompute(3, 4);
+eC = eChain(10, 5);
+// 主流程字面量运算：编译期按字面量推断为 int
+eLit = 3 + 4;
+
+// ============================================================
+// F：高精度类型 bigint / decimal / bitdecimal
+// ============================================================
+fBig = <bigint>"123456789012345678901234567890";
+fDec = <decimal>"3.141592653589793238462643383279";
+fBitd = <bitdecimal>"1.234567890123456789";
+// 高精度运算（未标注返回函数边界）
+func fBigAdd(a, b) { return a + b; }
+func fDecMul(a, b) { return a * b; }
+func fBitAdd(a, b) { return a + b; }
+fBigR = fBigAdd(<bigint>"100000000000000000000", <bigint>"200000000000000000000");
+fDecR = fDecMul(<decimal>"1.5", <decimal>"2.5");
+fBitR = fBitAdd(<bitdecimal>"1.25", <bitdecimal>"2.25");
+// 高精度经未声明返回恒等函数
+func fId(x) { return x; }
+
+// ============================================================
+// G：结构体 struct
+// ============================================================
+struct Point {
+    x: int;
+    y: int;
+    func <int> sum() { return self.x + self.y; }
+}
+gP = Point(3, 4);
+// 结构体实例经未声明返回函数
+func gId(p) { return p; }
+gP2 = gId(gP);
+
+// ============================================================
+// H：类 class（含继承多态）
+// ============================================================
+class Animal {
+    name: string;
+    func Animal(n) { self.name = n; }
+    func speak(): string { return "animal:" + self.name; }
+    func getName(): string { return self.name; }
+}
+class Cat extends Animal {
+    func Cat(n) { super(n); }
+    func speak(): string { return "cat:" + self.name; }
+}
+hA = Animal("ani");
+hC = Cat("tom");
+// 类实例经未声明返回函数
+func hId(o) { return o; }
+hA2 = hId(hA);
+hC2 = hId(hC);
+
+// ============================================================
+// I：容器 map / array / typed array
+// ============================================================
+iMap = {"a": 1, "b": 2};
+iArr = [10, 20, 30];
+iTyped = <long>[100, 200, 300];
+// 容器经未声明返回函数
+func iIdMap(m) { return m; }
+func iIdArr(a) { return a; }
+iMap2 = iIdMap(iMap);
+iArr2 = iIdArr(iArr);
+// 容器元素
+iElem = iMap["a"];
+iArrElem = iArr[1];
+iTypedElem = iTyped[2];
+
+// ============================================================
+// J：带类型标注的变量初始化 a: T = expr（语义等同 a = <T>expr，按标注转换）
+// ============================================================
+jStr: string = 1;                     // int → string
+jInt: int = "42";                     // string → int
+jLong: long = "9007199254740993";     // string → long（大值不截断）
+jDbl: double = "3.14";                // string → double
+jB: bool = 1;                         // int → bool
+jSameStr: string = "same";            // 同类型
+jSameInt: int = 7;                    // 同类型
+// 不可转换：class 对象 → 标量，转换必须抛错（try/catch 拦截，不得静默）
+jCaught = false;
+try {
+    jBad: int = hA;
+} catch (e) {
+    jCaught = true;
+}
+
+// ============================================================
+// K：运算结果推断（a = b * c 等）——字面量与动态形参两条路径
+// ============================================================
+kLitMul = 6 * 7;                      // 字面量 int*int
+kLitDblMul = 3.0 * 2;                 // 字面量 double*int
+func kMulDyn(b, c) { return b * c; }
+func kDivDyn(b, c) { return b / c; }
+kDynMul = kMulDyn(6, 7);              // 动态 int*int
+kDynDblMul = kMulDyn(2.5, 4);         // 动态 double*int
+kMixedMul = kMulDyn(3, 2.5);          // 动态 int*double（类型提升）
+kDynDiv = kDivDyn(20, 6);             // 动态 int/int（整数除法）
+kDynDblDiv = kDivDyn(6.0, 4);         // 动态 double/int
+
+// ============================================================
+// L：尖括号前缀返回函数 func <T> f()——调用点按标注固定返回类型
+// ============================================================
+func <int> lRetInt(x) { return x; }
+func <long> lRetLong(x) { return x; }
+func <double> lRetDbl(x) { return x; }
+func <string> lRetStr(x) { return x; }
+func <bool> lRetBool(x) { return x; }
+lInt = lRetInt(42);
+lLong = lRetLong("9007199254740993"); // 尖括号 long：调用点不丢类型
+lDbl = lRetDbl(1.5);
+lStr = lRetStr("hi");
+lBool = lRetBool(true);
+lArith = lRetInt(10) + 5;             // 尖括号结果参与运算
+
+// ============================================================
+// M-P：全部运算符 × 全部数据类型 的运算结果类型矩阵
+// ============================================================
+// 通用每运算符函数（形参不标注 → 走动态 Value 通道）
+func mAdd(a,b){return a+b;}
+func mSub(a,b){return a-b;}
+func mMul(a,b){return a*b;}
+func mDiv(a,b){return a/b;}
+func mMod(a,b){return a%b;}
+func mPow(a,b){return a**b;}
+func mBand(a,b){return a&b;}
+func mBor(a,b){return a|b;}
+func mBxor(a,b){return a^b;}
+func mShl(a,b){return a<<b;}
+func mShr(a,b){return a>>b;}
+func mEq(a,b){return a==b;}
+func mLand(a,b){return a&&b;}
+func mNeg(a){return -a;}
+func mBnot(a){return ~a;}
+func mNot(a){return !a;}
+
+// M：整型族一行矩阵（算术6 + 位5 + 比较 + 逻辑 + 一元负 + 按位非）
+func mRow(x,y){
+    return type(mAdd(x,y))+"|"+type(mSub(x,y))+"|"+type(mMul(x,y))+"|"
+          +type(mDiv(x,y))+"|"+type(mMod(x,y))+"|"+type(mPow(x,2))+"|"
+          +type(mBand(x,y))+"|"+type(mBor(x,y))+"|"+type(mBxor(x,y))+"|"
+          +type(mShl(x,2))+"|"+type(mShr(x,1))+"|"+type(mEq(x,y))+"|"
+          +type(mLand(x,y))+"|"+type(mNeg(x))+"|"+type(mBnot(x));
+}
+mIntRow = mRow(<int>10,<int>3);
+mLongRow = mRow(<long>10,<long>3);
+mInt8Row = mRow(<int8>10,<int8>3);
+mShortRow = mRow(<short>10,<short>3);
+mByteRow = mRow(<byte>10,<byte>3);
+mUintRow = mRow(<uint>10,<uint>3);
+mUshortRow = mRow(<ushort>10,<ushort>3);
+mUlongRow = mRow(<ulong>10,<ulong>3);
+mMixedLongInt = type(mAdd(<long>10,<int>3));   // 混合宽度
+mIntAddV = mAdd(<int>10,<int>3);              // 值核对
+mIntDivV = mDiv(<int>10,<int>3);
+
+// N：浮点族 + string
+nDblX = 2.5; nDblY = 0.5;
+nDAdd = mAdd(nDblX,nDblY);
+nDSub = mSub(nDblX,nDblY);
+nDMul = mMul(nDblX,nDblY);
+nDDiv = mDiv(nDblX,nDblY);
+nDMod = mMod(nDblX,nDblY);
+nDPow = mPow(nDblX,2);
+nDEq = mEq(nDblX,nDblY);
+nDNeg = mNeg(nDblX);
+nDNot = mNot(nDblX);
+nDblIntAdd = mAdd(nDblX,2);
+nFltX = <float>2.5; nFltY = <float>0.5;
+nFAdd = mAdd(nFltX,nFltY);                   // float 动态运算提升
+nDblBandTh = false;
+try { z = mBand(nDblX,nDblY); } catch(e) { nDblBandTh = true; }
+nStrX = "ab"; nStrY = "cd";
+nSAdd = mAdd(nStrX,nStrY);
+nSEq = mEq(nStrX,nStrY);
+nSNot = mNot(nStrX);
+nStrSubTh = false;
+try { z = mSub(nStrX,nStrY); } catch(e) { nStrSubTh = true; }
+nStrMulTh = false;
+try { z = mMul(nStrX,2); } catch(e) { nStrMulTh = true; }
+
+// O：高精度 bigint / decimal / bitdecimal
+oG1 = <bigint>"100000000000000000000"; oG2 = <bigint>"3";
+oGAdd = mAdd(oG1,oG2); oGMul = mMul(oG1,oG2); oGDiv = mDiv(oG1,oG2);
+oGEq = mEq(oG1,oG2); oGNeg = mNeg(oG1);
+oGModTh = false; try { z = mMod(oG1,oG2); } catch(e) { oGModTh = true; }
+oGPowTh = false; try { z = mPow(oG1,2); } catch(e) { oGPowTh = true; }
+oGBandTh = false; try { z = mBand(oG1,oG2); } catch(e) { oGBandTh = true; }
+oP1 = <decimal>"12345678901234567890.25"; oP2 = <decimal>"0.5";
+oPAdd = mAdd(oP1,oP2); oPMul = mMul(oP1,oP2); oPDiv = mDiv(oP1,oP2);
+oPEq = mEq(oP1,oP2); oPNeg = mNeg(oP1);
+oPModTh = false; try { z = mMod(oP1,oP2); } catch(e) { oPModTh = true; }
+oPPowTh = false; try { z = mPow(oP1,oP2); } catch(e) { oPPowTh = true; }
+oPBandTh = false; try { z = mBand(oP1,oP2); } catch(e) { oPBandTh = true; }
+oT1 = <bitdecimal>"12345678901234567890.5"; oT2 = <bitdecimal>"0.5";
+oTAdd = mAdd(oT1,oT2); oTMul = mMul(oT1,oT2); oTDiv = mDiv(oT1,oT2);
+oTEq = mEq(oT1,oT2); oTNeg = mNeg(oT1);
+oTModTh = false; try { z = mMod(oT1,oT2); } catch(e) { oTModTh = true; }
+oTPowTh = false; try { z = mPow(oT1,oT2); } catch(e) { oTPowTh = true; }
+oTBandTh = false; try { z = mBand(oT1,oT2); } catch(e) { oTBandTh = true; }
+
+// P：容器 / struct / class
+pArr1 = [1,2]; pArr2 = [3,4];
+pArrAdd = mAdd(pArr1,pArr2); pArrEq = mEq(pArr1,pArr2); pArrNot = mNot(pArr1);
+pTArr1 = <long>[1,2]; pTArr2 = <long>[3,4];
+pTArrEq = mEq(pTArr1,pTArr2);
+pTArrAddTh = false; try { z = mAdd(pTArr1,pTArr2); } catch(e) { pTArrAddTh = true; }
+pMap1 = {"a":1}; pMap2 = {"b":2};
+pMapEq = mEq(pMap1,pMap2);
+pMapAddTh = false; try { z = mAdd(pMap1,pMap2); } catch(e) { pMapAddTh = true; }
+struct OpPoint { x: int; y: int; }
+pSt1 = OpPoint(1,2); pSt2 = OpPoint(1,2);
+pStEq = mEq(pSt1,pSt2);
+pStAddTh = false; try { z = mAdd(pSt1,pSt2); } catch(e) { pStAddTh = true; }
+class OpBox {
+    v: int;
+    func OpBox(v) { self.v = v; }
+}
+pB1 = OpBox(1); pB2 = OpBox(1);
+pBoxEq = mEq(pB1,pB2); pBoxSame = mEq(pB1,pB1);
+
+// ============================================================
+// 断言执行
+// ============================================================
+// A：裸字面量
+assertType("A-int", aInt, "int");          assertEq("A-int", aInt, 42);
+assertType("A-double", aDouble, "double"); assertEq("A-double", aDouble, 3.14);
+assertType("A-string", aString, "string"); assertEq("A-string", aString, "hello");
+assertType("A-bool", aBool, "bool");       assertEq("A-bool", aBool, true);
+assertType("A-char", aChar, "char");     assertEq("A-char", aChar, 'A');
+print("A BARE LITERAL OK");
+
+// B：全标量矩阵
+assertType("B-int", bInt, "int");
+assertType("B-int8", bInt8, "int8");
+assertType("B-int16", bInt16, "int16");
+assertType("B-int32", bInt32, "int32");
+assertType("B-int64", bInt64, "int64");
+assertType("B-short", bShort, "short");
+assertType("B-ushort", bUshort, "unsigned short");
+assertType("B-long", bLong, "long");
+assertType("B-longlong", bLongLong, "long long");
+assertType("B-uint8", bUint8, "uint8");
+assertType("B-uint16", bUint16, "uint16");
+assertType("B-uint32", bUint32, "uint32");
+assertType("B-uint", bUint, "uint");
+assertType("B-uint64", bUint64, "uint64");
+assertType("B-ulong", bUlong, "unsigned long");
+assertType("B-uchar", bUchar, "unsigned char");
+assertType("B-byte", bByte, "byte");
+assertType("B-bool", bBool, "bool");
+assertType("B-char", bChar2, "char");
+assertType("B-sizet", bSizeT, "size_t");
+assertType("B-ssizet", bSsizeT, "ssize_t");
+assertType("B-double", bDouble, "double");
+assertType("B-float", bFloat, "float");
+assertType("B-longdouble", bLongDouble, "long double");
+assertType("B-string", bStr, "string");
+print("B FULL SCALAR MATRIX OK");
+
+// C：强转
+assertType("C-long", cLong, "long");     assertEq("C-long", cLong, 9007199254740993);
+assertType("C-short", cShort, "short");  assertEq("C-short", cShort, 300);
+assertType("C-byte", cByte, "byte");     assertEq("C-byte", cByte, 200);
+assertType("C-int8", cInt8, "int8");     assertEq("C-int8", cInt8, 100);
+assertType("C-ushort", cUshort, "unsigned short"); assertEq("C-ushort", cUshort, 500);
+assertType("C-ulong", cUlong, "unsigned long");    assertEq("C-ulong", cUlong, 9007199254740993);
+assertType("C-int16", cInt16, "int16");
+assertType("C-uint32", cUint32, "uint32");
+assertType("C-uint64", cUint64, "uint64");
+assertType("C-longlong", cLongLong, "long long");
+assertType("C-sizet", cSizeT, "size_t");
+assertType("C-ssizet", cSsizeT, "ssize_t");
+assertType("C-float", cFloat, "float");   assertEq("C-float", cFloat, 1.5);
+assertType("C-double", cDouble, "double"); assertEq("C-double", cDouble, 1.5);
+assertType("C-longdouble", cLongDouble, "long double");
+assertType("C-int", cInt, "int");         assertEq("C-int", cInt, 42);
+print("C CAST EXPRESSION OK");
+
+// D：未声明返回边界
+assertType("D-long", dLong, "long");      assertEq("D-long", dLong, 9007199254740993);
+assertType("D-short", dShort, "short");   assertEq("D-short", dShort, 300);
+assertType("D-byte", dByte, "byte");      assertEq("D-byte", dByte, 200);
+assertType("D-int8", dInt8, "int8");      assertEq("D-int8", dInt8, 100);
+assertType("D-ushort", dUshort, "unsigned short"); assertEq("D-ushort", dUshort, 500);
+assertType("D-ulong", dUlong, "unsigned long");   assertEq("D-ulong", dUlong, 9007199254740993);
+assertType("D-float", dFloat, "float");   assertEq("D-float", dFloat, 1.5);
+assertType("D-double", dDouble, "double"); assertEq("D-double", dDouble, 1.5);
+assertType("D-int", dInt, "int");         assertEq("D-int", dInt, 42);
+assertType("D-string", dString, "string"); assertEq("D-string", dString, "hi");
+assertType("D-bool", dBool, "bool");      assertEq("D-bool", dBool, true);
+assertType("D-char", dChar, "char");      assertEq("D-char", dChar, "Z");
+print("D UNDECLARED RETURN BOUNDARY OK");
+
+// E：函数内计算
+assertType("E-dynamic-int", eR, "int64"); assertEq("E-dynamic-int", eR, 7);
+assertType("E-chain", eC, "int64");       assertEq("E-chain", eC, 20);
+assertType("E-literal-int", eLit, "int"); assertEq("E-literal-int", eLit, 7);
+print("E UNTYPED LOCAL COMPUTE OK");
+
+// F：高精度
+assertType("F-bigint", fBig, "bigint");
+assertType("F-decimal", fDec, "decimal");
+assertType("F-bitd", fBitd, "bitdecimal");
+assertType("F-bigadd", fBigR, "bigint");  assertEq("F-bigadd", fBigR, <bigint>"300000000000000000000");
+assertType("F-decmul", fDecR, "decimal"); assertEq("F-decmul", fDecR, <decimal>"3.75");
+assertType("F-bitadd", fBitR, "bitdecimal"); assertEq("F-bitadd", fBitR, <bitdecimal>"3.50");
+assertType("F-id-big", fId(fBig), "bigint");
+assertType("F-id-dec", fId(fDec), "decimal");
+assertType("F-id-bitd", fId(fBitd), "bitdecimal");
+print("F HIGH PRECISION OK");
+
+// G：结构体
+assertType("G-point", gP, "Point");
+assertEq("G-x", gP.x, 3);
+assertEq("G-y", gP.y, 4);
+assertEq("G-sum", gP.sum(), 7);
+assertType("G-point-boundary", gP2, "Point");
+assertEq("G-boundary-sum", gP2.sum(), 7);
+print("G STRUCT OK");
+
+// H：类
+assertType("H-animal", hA, "Animal");
+assertType("H-cat", hC, "Cat");
+assertEq("H-animal-speak", hA.speak(), "animal:ani");
+assertEq("H-cat-speak", hC.speak(), "cat:tom");
+assertEq("H-animal-name", hA.getName(), "ani");
+assertType("H-animal-boundary", hA2, "Animal");
+assertType("H-cat-boundary", hC2, "Cat");
+assertEq("H-boundary-animal-speak", hA2.speak(), "animal:ani");
+assertEq("H-boundary-cat-speak", hC2.speak(), "cat:tom");
+print("H CLASS + POLYMORPHISM OK");
+
+// I：容器
+assertType("I-map", iMap, "map");
+assertType("I-array", iArr, "array");
+assertType("I-typed", iTyped, "typed_array");
+assertType("I-map-boundary", iMap2, "map");
+assertType("I-array-boundary", iArr2, "array");
+assertEq("I-map-elem", iElem, 1);
+assertEq("I-arr-elem", iArrElem, 20);
+assertType("I-typed-elem", iTypedElem, "long");
+assertEq("I-typed-elem", iTypedElem, 300);
+print("I CONTAINER OK");
+
+// J：带类型标注初始化
+assertType("J-str", jStr, "string");    assertEq("J-str", jStr, "1");
+assertType("J-int", jInt, "int");       assertEq("J-int", jInt, 42);
+assertType("J-long", jLong, "long");    assertEq("J-long", jLong, 9007199254740993);
+assertType("J-dbl", jDbl, "double");    assertEq("J-dbl", jDbl, 3.14);
+assertType("J-bool", jB, "bool");       assertEq("J-bool", jB, true);
+assertEq("J-same-str", jSameStr, "same");
+assertEq("J-same-int", jSameInt, 7);
+assertType("J-caught", jCaught, "bool"); assertEq("J-caught", jCaught, true);
+print("J TYPED VARIABLE INIT OK");
+
+// K：运算结果推断
+assertType("K-lit-mul", kLitMul, "int");        assertEq("K-lit-mul", kLitMul, 42);
+assertType("K-lit-dbl-mul", kLitDblMul, "double"); assertEq("K-lit-dbl-mul", kLitDblMul, 6);
+assertType("K-dyn-mul", kDynMul, "int64");      assertEq("K-dyn-mul", kDynMul, 42);
+assertType("K-dyn-dbl-mul", kDynDblMul, "double"); assertEq("K-dyn-dbl-mul", kDynDblMul, 10);
+assertType("K-mixed-mul", kMixedMul, "double"); assertEq("K-mixed-mul", kMixedMul, 7.5);
+assertType("K-dyn-div", kDynDiv, "int64");      assertEq("K-dyn-div", kDynDiv, 3);
+assertType("K-dyn-dbl-div", kDynDblDiv, "double"); assertEq("K-dyn-dbl-div", kDynDblDiv, 1.5);
+print("K ARITHMETIC INFERENCE OK");
+
+// L：尖括号前缀函数
+assertType("L-int", lInt, "int");       assertEq("L-int", lInt, 42);
+assertType("L-long", lLong, "long");    assertEq("L-long", lLong, 9007199254740993);
+assertType("L-dbl", lDbl, "double");    assertEq("L-dbl", lDbl, 1.5);
+assertType("L-str", lStr, "string");    assertEq("L-str", lStr, "hi");
+assertType("L-bool", lBool, "bool");    assertEq("L-bool", lBool, true);
+assertType("L-arith", lArith, "int");   assertEq("L-arith", lArith, 15);
+print("L ANGLE-BRACKET PREFIX FUNC OK");
+
+// M：整型族全部运算符结果类型矩阵（动态通道）
+// 公共期望前缀：算术6+位5 全 int64，比较/逻辑 bool；一元负保持原子类型；按位非 int64
+assertEq("M-int-row", mIntRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|int|int64");
+assertEq("M-long-row", mLongRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|long|int64");
+assertEq("M-int8-row", mInt8Row,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|int8|int64");
+assertEq("M-short-row", mShortRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|short|int64");
+assertEq("M-byte-row", mByteRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|byte|int64");
+assertEq("M-uint-row", mUintRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|uint|int64");
+assertEq("M-ushort-row", mUshortRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|unsigned short|int64");
+assertEq("M-ulong-row", mUlongRow,
+    "int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|int64|bool|bool|unsigned long|int64");
+assertEq("M-mixed-long-int", mMixedLongInt, "int64");
+assertType("M-int-add", mIntAddV, "int64"); assertEq("M-int-add", mIntAddV, 13);
+assertType("M-int-div", mIntDivV, "int64"); assertEq("M-int-div", mIntDivV, 3);
+print("M INTEGER FULL-OPERATOR MATRIX OK");
+
+// N：浮点族 + string
+assertType("N-dbl+", nDAdd, "double");   assertEq("N-dbl+", nDAdd, 3);
+assertType("N-dbl-", nDSub, "double");   assertEq("N-dbl-", nDSub, 2);
+assertType("N-dbl*", nDMul, "double");   assertEq("N-dbl*", nDMul, 1.25);
+assertType("N-dbl/", nDDiv, "double");   assertEq("N-dbl/", nDDiv, 5);
+assertType("N-dbl%", nDMod, "double");   assertEq("N-dbl%", nDMod, 0);
+assertType("N-dbl**", nDPow, "double");  assertEq("N-dbl**", nDPow, 6.25);
+assertType("N-dbl==", nDEq, "bool");     assertEq("N-dbl==", nDEq, false);
+assertType("N-dbl-neg", nDNeg, "double");assertEq("N-dbl-neg", nDNeg, -2.5);
+assertType("N-dbl!", nDNot, "bool");     assertEq("N-dbl!", nDNot, false);
+assertType("N-dbl+int", nDblIntAdd, "double"); assertEq("N-dbl+int", nDblIntAdd, 4.5);
+assertType("N-flt+", nFAdd, "double");  // float 动态运算提升为 double
+assertEq("N-dbl-&-throws", nDblBandTh, true);
+assertType("N-str+", nSAdd, "string");   assertEq("N-str+", nSAdd, "abcd");
+assertType("N-str==", nSEq, "bool");     assertEq("N-str==", nSEq, false);
+assertType("N-str!", nSNot, "bool");     assertEq("N-str!", nSNot, false);
+assertEq("N-str--throws", nStrSubTh, true);
+assertEq("N-str-*-throws", nStrMulTh, true);
+print("N FLOAT + STRING OPERATORS OK");
+
+// O：高精度
+assertType("O-big+", oGAdd, "bigint");
+assertType("O-big*", oGMul, "bigint");
+assertType("O-big/", oGDiv, "bigint");
+assertType("O-big==", oGEq, "bool");  assertEq("O-big==", oGEq, false);
+assertType("O-big-neg", oGNeg, "bigint");
+assertEq("O-big-%-throws", oGModTh, true);
+assertEq("O-big-**-throws", oGPowTh, true);
+assertEq("O-big-&-throws", oGBandTh, true);
+assertType("O-dec+", oPAdd, "decimal");
+assertType("O-dec*", oPMul, "decimal");
+assertType("O-dec/", oPDiv, "decimal");
+assertType("O-dec==", oPEq, "bool");
+assertType("O-dec-neg", oPNeg, "decimal");
+assertEq("O-dec-%-throws", oPModTh, true);
+assertEq("O-dec-**-throws", oPPowTh, true);
+assertEq("O-dec-&-throws", oPBandTh, true);
+assertType("O-bitd+", oTAdd, "bitdecimal");
+assertType("O-bitd*", oTMul, "bitdecimal");
+assertType("O-bitd/", oTDiv, "bitdecimal");
+assertType("O-bitd==", oTEq, "bool");
+assertType("O-bitd-neg", oTNeg, "bitdecimal");
+assertEq("O-bitd-%-throws", oTModTh, true);
+assertEq("O-bitd-**-throws", oTPowTh, true);
+assertEq("O-bitd-&-throws", oTBandTh, true);
+print("O HIGH-PRECISION OPERATORS OK");
+
+// P：容器 / struct / class
+assertType("P-arr+", pArrAdd, "array"); assertEq("P-arr-elem", pArrAdd[3], 4);
+assertType("P-arr==", pArrEq, "bool");  assertEq("P-arr==", pArrEq, false);
+assertType("P-arr!", pArrNot, "bool");  assertEq("P-arr!", pArrNot, false);
+assertType("P-tarr==", pTArrEq, "bool");assertEq("P-tarr==", pTArrEq, false);
+assertEq("P-tarr-+-throws", pTArrAddTh, true);
+assertType("P-map==", pMapEq, "bool");  assertEq("P-map==", pMapEq, false);
+assertEq("P-map-+-throws", pMapAddTh, true);
+assertType("P-struct==", pStEq, "bool");assertEq("P-struct==", pStEq, true);
+assertEq("P-struct-+-throws", pStAddTh, true);
+assertType("P-class==", pBoxEq, "bool");assertEq("P-class==", pBoxEq, false);
+assertEq("P-class-same", pBoxSame, true);
+print("P CONTAINER / STRUCT / CLASS OPERATORS OK");
+
+print("TYPE INFERENCE ALL OK");

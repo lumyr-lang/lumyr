@@ -3427,6 +3427,17 @@ postfix_expr
     | postfix_expr LPAREN arg_list RPAREN {
           /* super(args)：调用父类构造函数，实参 self 前置 */
           if($1->type == AST_VAR && strcmp($1->u.varname, "super") == 0) {
+              /* 无兜底：无父类（或类外）却调用 super，编译期双语报错。
+               * 此前静默继续，ctor_owner 退化为 "unknown"，生成调用
+               * unknown___init__ 的坏字节码（运行期才炸）。 */
+              if(!g_current_class_parent) {
+                  fprintf(stderr,
+                          "[语义错误] 类 %s 没有父类，不能调用 super(...)：请移除该调用或为类声明 extends 继承 / "
+                          "class %s has no parent class, cannot call super(...): remove the call or declare extends\n",
+                          g_current_class_name ? g_current_class_name : "(unknown)",
+                          g_current_class_name ? g_current_class_name : "(unknown)");
+                  YYABORT;
+              }
               /* 根因修复：此前硬编码 <parent>___init__ 主构造名，父类构造器重载
                * （如 super(a) 对应 Base___init__2）永远调错。与 AST_CLASS_NEW
                * 同一选择规则：沿继承链找到真正持有构造器的类，枚举其
@@ -3539,6 +3550,15 @@ postfix_expr
               free($3);
               $$ = L(ast_dyn_call(fn, margs));
           } else if(recv->type == AST_VAR && strcmp(recv->u.varname, "super") == 0) {
+              /* 无兜底：无父类却调用 super.method，编译期双语报错 */
+              if(!g_current_class_parent) {
+                  fprintf(stderr,
+                          "[语义错误] 类 %s 没有父类，不能通过 super 调用方法 %s：请移除该调用或为类声明 extends 继承 / "
+                          "class %s has no parent class, cannot call super.%s: remove the call or declare extends\n",
+                          g_current_class_name ? g_current_class_name : "(unknown)", $3,
+                          g_current_class_name ? g_current_class_name : "(unknown)", $3);
+                  YYABORT;
+              }
               /* super.method(args)：保留 method_call 节点，编译器用父类方法表分派 */
               $$ = L(ast_method_call(recv, $3, margs));
           } else {

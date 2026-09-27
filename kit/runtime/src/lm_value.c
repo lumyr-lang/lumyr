@@ -408,13 +408,37 @@ Value lumyr_unary_minus(Value v) {
         return lumyr_make_double(-v.v.d);
     }
     /* 其余整型族（VAL_INT64 及各子类型、uint 族、bool、char、byte、long、
-       size_t 等）：按 int64 取负并保留整型，避免负整数字面量（如 -5、
-       -9223372036854775808）被错误转换为 double */
+       size_t 等）：取负不改变位宽，结果类型必须与操作数一致（与编译期静态
+       通道一致）。经 uint64 做补码取负避免有符号溢出 UB，再按原 ValueType
+       回绕重装箱。此前一律重装箱为 int64，导致 long/short 等子类型经动态
+       形参取负时类型静默丢失（如 -<long>x 得 int64）。 */
     if(v.type == VAL_BOOL || v.type == VAL_CHAR || v.type == VAL_BYTE ||
        (v.type >= VAL_INT8 && v.type <= VAL_SSIZE_T)) {
-        int64_t n = (int64_t)lumyr_extract_ll(v);
-        if(n == INT64_MIN) return lumyr_make_int64(INT64_MIN);  /* -INT64_MIN 溢出，按补码回绕保持值 */
-        return lumyr_make_int64(-n);
+        uint64_t raw = (uint64_t)lumyr_extract_ll(v);
+        uint64_t neg = 0u - raw;   /* 补码取负：INT64_MIN 自动回绕为自身 */
+        switch(v.type) {
+            case VAL_BOOL:      return lumyr_make_bool(neg != 0);
+            case VAL_CHAR:      return lumyr_make_char((char)neg);
+            case VAL_BYTE:      return lumyr_make_byte((unsigned char)neg);
+            case VAL_INT8:      return lumyr_make_int8((int8_t)neg);
+            case VAL_INT16:     return lumyr_make_int16((int16_t)neg);
+            case VAL_SHORT:     return lumyr_make_short((short)neg);
+            case VAL_INT32:     return lumyr_make_int32((int32_t)neg);
+            case VAL_LONG:      return lumyr_make_long((long)neg);
+            case VAL_LONG_LONG: return lumyr_make_long_long((long long)neg);
+            case VAL_INT64:     return lumyr_make_int64((int64_t)neg);
+            case VAL_UINT8:     return lumyr_make_uint8((uint8_t)neg);
+            case VAL_UCHAR:     return lumyr_make_uchar((unsigned char)neg);
+            case VAL_UINT16:    return lumyr_make_uint16((uint16_t)neg);
+            case VAL_USHORT:    return lumyr_make_ushort((unsigned short)neg);
+            case VAL_UINT32:    return lumyr_make_uint32((uint32_t)neg);
+            case VAL_UINT:      return lumyr_make_uint((unsigned int)neg);
+            case VAL_UINT64:    return lumyr_make_uint64(neg);
+            case VAL_ULONG:     return lumyr_make_ulong((unsigned long)neg);
+            case VAL_SIZE_T:    return lumyr_make_size_t((size_t)neg);
+            case VAL_SSIZE_T:   return lumyr_make_ssize_t((ssize_t)neg);
+            default:            return lumyr_make_int64((int64_t)neg);
+        }
     }
     /* 高精度类型：按 0 - x 取负，保持原高精度类型（此前落空 value_as_number
        得 -0.0 double，类型与精度全失）。零对象临时使用后立即释放。 */

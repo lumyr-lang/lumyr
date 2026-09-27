@@ -2061,7 +2061,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             fprintf(stderr, "IR: ++/-- only supports simple variable\n");
             return EXPR_TYPE_NONE;
         }
-        /* 逻辑非 !a：a 转 VALUE 栈，假则跳到 true 分支，结果 0/1 压 VALUE 栈 */
+        /* 逻辑非 !a：a 转 VALUE 栈，假则跳到 true 分支，结果 0/1 压 VALUE 栈，
+         * 汇合后经 TO_BOOL 统一为 bool（此前 0/1 以 int 留在 VALUE 栈，导致
+         * type(!x)=="int"，与“LOGIC_NOT 结果为 bool”的语义及 &&/|| 不一致） */
         if(op == OP_LOGIC_NOT) {
             ExprType ct = c_expr(c, node->u.uny.child);
             if(ct != EXPR_TYPE_NONE) emit_to_dynamic(c, ct, c_expr_cast_type(c, node->u.uny.child));
@@ -2071,6 +2073,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             patch_to(c, jtrue);
             emit(c, OPC_PUSH_INT_VAL, 1, 0);                       /* a 假 → !a = true */
             patch_to(c, jend);
+            emit(c, OPC_TO_BOOL, 0, 0);                            /* 0/1 → 真正的 bool */
             return EXPR_TYPE_NONE;
         }
         /* 一元运算：负号 */
