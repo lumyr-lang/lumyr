@@ -19,6 +19,19 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
+/* 进程级忽略 SIGPIPE：向已关闭连接 send 时返回 EPIPE 错误而非终止进程。
+ * constructor 属性使 VM 通道（lumyr 自身）与 C 生成通道（链接 libruntime
+ * 的产物）在进程启动时自动生效，无需业务层干预。 */
+#ifndef _WIN32
+__attribute__((constructor))
+static void lm_socket_ignore_sigpipe(void) {
+    signal(SIGPIPE, SIG_IGN);
+}
+#endif
 
 /* ============================================================
  * 内部辅助

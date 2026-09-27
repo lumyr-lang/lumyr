@@ -1,0 +1,439 @@
+// ============================================================
+// lumyr-HttpMultipart：请求体解析规范与默认实现
+//
+// 抽象规范（用户自定义解析器按此接口接入）：
+//   BodyParser 接口        —— canParse(contentType) + parse(body, contentType)
+//   ServerRequest 通过 registerParser 注册自定义解析器，
+//   按 Content-Type 匹配优先级高于内置默认解析器。
+//
+// 内置实现：
+//   MultipartPart   单个部件（name/filename/contentType/data）
+//   MultipartForm   整组部件（fields() 取普通字段 / files() 取文件）
+//   MultipartParser multipart/form-data 默认解析器（RFC 7578）
+//   FormParser      application/x-www-form-urlencoded 默认解析器
+//   JsonParser      application/json 默认解析器
+//
+// 用法：
+//   import <NetWork/HttpMultipart>;
+//   form = MultipartParser().parse(req.body, req.header("Content-Type"));
+//   filePart = form.files()["avatar"];   // MultipartPart
+//   filePart.data      // 文件原始内容（字符串字节）
+//   filePart.filename  // 原始文件名
+// ============================================================
+
+// ============================================================
+// BodyParser：请求体解析器接口（自定义解析器实现此接口）
+// ============================================================
+public interface BodyParser {
+    // 是否处理该 Content-Type（如 "multipart/form-data"）
+    func canParse(contentType: string): bool;
+    // 解析 body。body 为 string 或 bytes（bytes 由实现自行 decode 或字节级解析）；
+    // contentType 为完整标头值（可含 boundary/charset 参数）
+    func parse(body, contentType: string);
+}
+
+// ============================================================
+// MultipartPart：multipart 单个部件
+//   普通字段：filename == ""，data 为字段值
+//   文件字段：filename != ""，data 为文件内容
+//   data 类型 any：string（文本安全）| bytes（二进制安全，含 NUL/0xFF）
+//   来源取决于请求 body 类型：body 为 bytes 时文件部件保留原始字节
+// ============================================================
+public class MultipartPart {
+    name: string;
+    filename: string;
+    contentType: string;
+    data: any;
+
+    func MultipartPart() {
+        self.name = "";
+        self.filename = "";
+        self.contentType = "";
+        self.data = "";
+    }
+
+    func isFile(): bool {
+        return self.filename != "";
+    }
+
+    // 文件大小（字节）
+    func size(): int {
+        return self.data.len;
+    }
+
+    // data 按 string 返回（bytes 时按 UTF-8 解码；仅适合文本部件）
+    func text(): string {
+        if (type(self.data) == "bytes") { return self.data.decode(); }
+        return self.data;
+    }
+
+    // 部件内容转为内存 file 对象（file(name, bytes) 字面量，不落盘）
+    // 文件名取原始 filename（普通字段取 name）；返回的 file 支持 readBytes/readAll/size 等
+    func toFile(): file {
+        name = self.filename;
+        if (name == "") { name = self.name; }
+        if (type(self.data) == "bytes") { return file(name, self.data); }
+        return file(name, bytes(self.data));
+    }
+
+    // 另存到磁盘（bytes 走 writeBytes 二进制安全；string 走 writeAll）
+    func saveAs(path: string) {
+        f = file(path, "w");
+        if (type(self.data) == "bytes") {
+            f.writeBytes(self.data);
+        } else {
+            f.writeAll(self.data);
+        }
+        return path;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        if (self.isFile()) {
+            return "MultipartPart(" + self.name + ", file=" + self.filename + ", " + self.data.len + "B)";
+        }
+        return "MultipartPart(" + self.name + "=" + self.text() + ")";
+    }
+}
+
+// ============================================================
+// MultipartForm：multipart 解析结果集
+// ============================================================
+public class MultipartForm {
+    parts: array;
+
+    func MultipartForm() {
+        self.parts = [];
+    }
+
+    func add(p: MultipartPart) {
+        self.parts.add(p);
+        return self;
+    }
+
+    func size(): int {
+        return self.parts.len;
+    }
+
+    // 普通字段 name → value（bytes 数据按 UTF-8 解码为 string）
+    func fields(): map {
+        out = {};
+        for p in self.parts {
+            if (p.isFile() == false) { out[p.name] = p.text(); }
+        }
+        return out;
+    }
+
+    // 文件字段 name → MultipartPart（同名多文件只保留第一个，全部见 filesAll）
+    func files(): map {
+        out = {};
+        for p in self.parts {
+            if (p.isFile() && out.contains(p.name) == false) { out[p.name] = p; }
+        }
+        return out;
+    }
+
+    // 文件字段 name → MultipartPart[]（同名多文件）
+    func filesAll(): map {
+        out = {};
+        for p in self.parts {
+            if (p.isFile()) {
+                if (out.contains(p.name) == false) { out[p.name] = []; }
+                out[p.name].add(p);
+            }
+        }
+        return out;
+    }
+
+    // 按字段名取第一个部件（无则 null）
+    func get(name: string) {
+        for p in self.parts {
+            if (p.name == name) { return p; }
+        }
+        return null;
+    }
+
+    // 普通字段值快捷访问（无则 ""；bytes 按 UTF-8 解码）
+    func getString(name: string): string {
+        p = self.get(name);
+        if (p == null || p.isFile()) { return ""; }
+        return p.text();
+    }
+}
+
+// ============================================================
+// MultipartParser：multipart/form-data 默认解析器（RFC 7578）
+// Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryX
+// body 形如：
+//   ------X\r\n
+//   Content-Disposition: form-data; name="field"\r\n
+//   \r\n
+//   value\r\n
+//   ------X\r\n
+//   Content-Disposition: form-data; name="file"; filename="a.txt"\r\n
+//   Content-Type: text/plain\r\n
+//   \r\n
+//   <文件字节>\r\n
+//   ------X--\r\n
+// ============================================================
+public class MultipartParser implements BodyParser {
+    func canParse(contentType: string): bool {
+        return contentType.lower().contains("multipart/form-data");
+    }
+
+    // 从 Content-Type 提取 boundary 参数
+    func boundaryOf(contentType: string): string {
+        key = "boundary=";
+        idx = contentType.indexOf(key);
+        if (idx < 0) { return ""; }
+        b = contentType.slice(idx + key.len, contentType.len).trim();
+        // boundary 可能被引号包裹
+        q = "" + '"';
+        if (b.len >= 2 && b[0] == q) { b = b.slice(1, b.len - 1); }
+        return b;
+    }
+
+    // body: string | bytes。string 走字符串路径（文本安全）；
+    // bytes 走字节级路径：文件部件 data 保留 bytes（二进制安全）
+    func parse(body, contentType: string) {
+        if (type(body) == "bytes") { return self.parseBytes(body, contentType); }
+        return self.parseString(body, contentType);
+    }
+
+    // 字符串路径（原实现）
+    private func parseString(body: string, contentType: string) {
+        form = MultipartForm();
+        boundary = self.boundaryOf(contentType);
+        if (boundary == "" || body == "") { return form; }
+
+        crlf = "" + '\r' + '\n';
+        delim = "--" + boundary;
+
+        segments = body.split(delim);
+        // 首尾段：第一段是前言（通常空），最后一段以 "--" 开头表示结束
+        for seg in segments {
+            part = self.parsePartHead(self.segHead(seg));
+            if (part == null) { continue; }
+            s = seg;
+            if (s.startsWith(crlf)) { s = s.slice(crlf.len, s.len); }
+            if (s.endsWith(crlf)) { s = s.slice(0, s.len - crlf.len); }
+            sep = s.indexOf(crlf + crlf);
+            part.data = s.slice(sep + crlf.len * 2, s.len);
+            form.add(part);
+        }
+        return form;
+    }
+
+    // bytes 路径：全程字节级操作，文件部件 data 为 bytes（含 NUL/0xFF 不丢失）
+    // 语言 bytes 无 split/slice： delim 逐字节扫描、段内容逐字节收集
+    private func parseBytes(body, contentType: string) {
+        form = MultipartForm();
+        boundary = self.boundaryOf(contentType);
+        if (boundary == "" || body.len == 0) { return form; }
+
+        delim = bytes("--" + boundary);
+        crlfB = bytes("" + '\r' + '\n');
+        dblCr = bytes("" + '\r' + '\n' + '\r' + '\n');
+
+        // 找所有 delim 出现位置
+        poses = self.findAll(body, delim);
+        if (poses.len < 2) { return form; }  // 至少首尾两个 boundary
+
+        // 段 = 相邻两个 delim 之间；最后一段是 "--" 结尾标记，跳过
+        i = 0;
+        while (i + 1 < poses.len) {
+            segStart = poses[i] + delim.len;
+            segEnd = poses[i + 1];
+            i = i + 1;
+
+            // 去段首 CRLF / 段尾 CRLF
+            if (self.matchAt(body, segStart, crlfB)) { segStart = segStart + 2; }
+            if (segEnd - segStart >= 2 && body[segEnd - 2] == 13 && body[segEnd - 1] == 10) {
+                segEnd = segEnd - 2;
+            }
+            if (segEnd <= segStart) { continue; }
+
+            // 段内空行分隔头部与体
+            sepPos = self.findFrom(body, dblCr, segStart, segEnd);
+            if (sepPos < 0) { continue; }
+
+            // 头部（ASCII）解码后复用字符串解析
+            headStr = self.bytesSliceDecode(body, segStart, sepPos);
+            part = self.parsePartHead2(headStr);
+            if (part == null) { continue; }
+
+            // 体：保留原始 bytes
+            part.data = self.bytesSlice(body, sepPos + 4, segEnd);
+            form.add(part);
+        }
+        return form;
+    }
+
+    // ---- 段/头部解析辅助 ----
+
+    // string 段：校验并返回「段内头部文本」；无效段返回 ""（配合 parsePartHead 判空）
+    private func segHead(seg: string): string {
+        crlf = "" + '\r' + '\n';
+        if (seg == "" || seg == "--" || seg == "--" + crlf || seg == crlf) { return ""; }
+        s = seg;
+        if (s.startsWith(crlf)) { s = s.slice(crlf.len, s.len); }
+        if (s.endsWith(crlf)) { s = s.slice(0, s.len - crlf.len); }
+        if (s == "" || s == "--") { return ""; }
+        sep = s.indexOf(crlf + crlf);
+        if (sep < 0) { return ""; }
+        return s.slice(0, sep);
+    }
+
+    // 从头部文本构造 MultipartPart（无效头部返回 null）；data 由调用方填
+    private func parsePartHead(headText: string) {
+        if (headText == "") { return null; }
+        return self.parsePartHead2(headText);
+    }
+
+    private func parsePartHead2(headText: string) {
+        crlf = "" + '\r' + '\n';
+        part = MultipartPart();
+        hlines = headText.split(crlf);
+        for hl in hlines {
+            c = hl.indexOf(":");
+            if (c < 0) { continue; }
+            hname = hl.slice(0, c).trim().lower();
+            hval = hl.slice(c + 1, hl.len).trim();
+            if (hname == "content-disposition") {
+                part.name = self.dispParam(hval, "name");
+                part.filename = self.dispParam(hval, "filename");
+            } else if (hname == "content-type") {
+                part.contentType = hval;
+            }
+        }
+        if (part.name == "") { return null; }
+        return part;
+    }
+
+    // ---- bytes 字节级辅助 ----
+
+    // 在 bytes 中从 from 到 to（不含）找 needle 首次出现位置，未找到 -1
+    private func findFrom(hay, needle, from: int, to: int): int {
+        nl = needle.len;
+        if (nl == 0 || to - from < nl) { return -1; }
+        i = from;
+        last = to - nl;
+        while (i <= last) {
+            if (self.matchAt(hay, i, needle)) { return i; }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    // bytes 中 needle 全部出现位置（array）
+    private func findAll(hay, needle): array {
+        out = [];
+        nl = needle.len;
+        i = 0;
+        last = hay.len - nl;
+        while (i <= last) {
+            if (self.matchAt(hay, i, needle)) {
+                out.add(i);
+                i = i + nl;  // 不重叠
+            } else {
+                i = i + 1;
+            }
+        }
+        return out;
+    }
+
+    // hay[pos..pos+needle.len) 是否等于 needle
+    private func matchAt(hay, pos: int, needle): bool {
+        j = 0;
+        while (j < needle.len) {
+            if (hay[pos + j] != needle[j]) { return false; }
+            j = j + 1;
+        }
+        return true;
+    }
+
+    // bytes[from..to) 子段 → bytes（逐字节收集）
+    private func bytesSlice(b, from: int, to: int) {
+        arr = [];
+        i = from;
+        while (i < to) { arr.add(b[i]); i = i + 1; }
+        return bytes(arr);
+    }
+
+    // bytes[from..to) 子段 → string（UTF-8 解码；仅用于 ASCII 头部）
+    private func bytesSliceDecode(b, from: int, to: int): string {
+        return self.bytesSlice(b, from, to).decode();
+    }
+
+    // 从 Content-Disposition 值中提取参数：name="x" / filename="a.txt"
+    private func dispParam(disposition: string, key: string): string {
+        q = "" + '"';  // 真实双引号字符（源码 " 不转义）
+        pat = key + "=" + q;
+        idx = disposition.indexOf(pat);
+        if (idx < 0) { return ""; }
+        start = idx + pat.len;
+        // indexOf(sub, start) 不支持起始偏移：手动从 start 扫描闭合引号
+        i = start;
+        while (i < disposition.len) {
+            if (disposition[i] == q) {
+                return disposition.slice(start, i);
+            }
+            i = i + 1;
+        }
+        return "";
+    }
+}
+
+// ============================================================
+// FormParser：application/x-www-form-urlencoded 默认解析器
+// ============================================================
+public class FormParser implements BodyParser {
+    func canParse(contentType: string): bool {
+        return contentType.lower().contains("x-www-form-urlencoded");
+    }
+
+    func parse(body, contentType: string): map {
+        return HttpSpec.parseQuery(self.bodyText(body));
+    }
+
+    // body 统一为 string（bytes 时 UTF-8 解码）
+    private func bodyText(body): string {
+        if (type(body) == "bytes") { return body.decode(); }
+        return body;
+    }
+}
+
+// ============================================================
+// JsonParser：application/json 默认解析器
+// ============================================================
+public class JsonParser implements BodyParser {
+    func canParse(contentType: string): bool {
+        return contentType.lower().contains("json");
+    }
+
+    func parse(body, contentType: string) {
+        s = body;
+        if (type(body) == "bytes") { s = body.decode(); }
+        if (s == "") { return {}; }
+        return s.json();
+    }
+}
+
+// ============================================================
+// XmlParser：application/xml / text/xml 默认解析器
+// 产出 C 内置 xml() 的 DOM map 树：{ tagName, attributes, textContent, children }
+// 解析失败返回 null（调用方判空）
+// ============================================================
+public class XmlParser implements BodyParser {
+    func canParse(contentType: string): bool {
+        ct = contentType.lower();
+        return ct.contains("xml");
+    }
+
+    func parse(body, contentType: string) {
+        s = body;
+        if (type(body) == "bytes") { s = body.decode(); }
+        if (s == "") { return null; }
+        return s.xml();
+    }
+}

@@ -1,0 +1,251 @@
+// ============================================================
+// lumyr-ServiceApplication：通用 TCP 服务应用基座
+//   ServiceHandler             连接处理器契约（命名接口）
+//   ServiceConnectionHandler   单连接处理线程
+//   ServiceApplication         继承 Application：accept 循环 + 每连接一线程 +
+//                              线程回收 + stop 自连唤醒，不绑任何上层协议
+//
+// 定位：
+//   自定义协议服务（echo、私有 RPC、游戏网关、长连接推送等）的基座。
+//   用户把连接处理逻辑写在 ServiceHandler.serve(conn) 里，或继承重写
+//   handleConnection(conn)，拿到的是原始连接 socket：
+//     conn.recv(maxLen) / conn.recv(maxLen, 0, true) 收（文本 / bytes）
+//     conn.send(data) / conn.close()
+//
+//   WebApplication（<App/WebApplication>）继承本类，仅重写 createHandler
+//   换入 HTTP 连接处理器，复用全部 accept/线程/停止骨架。
+//
+// 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
+//   host    string  默认 "0.0.0.0"
+//   port    int     默认 8080
+//   backlog int     默认 128
+//
+// 用法：
+//   import <App/ServiceApplication>;
+//   class EchoHandler implements ServiceHandler {
+//       func serve(conn) {
+//           data = conn.recv(4096);
+//           conn.send(data);
+//       }
+//   }
+//   // 直接传 handler，或子类化重写 handleConnection
+//   ServiceApplication("0.0.0.0", 18090, EchoHandler()).start();
+// ============================================================
+
+import <App/Application>;
+import <NetWork/Socket>;
+import <Thread/Thread>;
+
+// 连接处理器契约：在原始连接上实现自定义协议；返回后连接由框架关闭
+public interface ServiceHandler {
+    func serve(conn);
+}
+
+// ============================================================
+// ServiceConnectionHandler：单连接处理线程
+// 执行应用的 handleConnection（用户协议逻辑）→ 兜底关闭连接 → 自报完成。
+// 用户逻辑抛错只影响本连接，不拖垮服务。
+// ============================================================
+class ServiceConnectionHandler extends Thread {
+    app: any;
+    conn: any;
+    active: bool;
+
+    func ServiceConnectionHandler(app, conn) {
+        super();
+        self.app = app;
+        self.conn = conn;
+        self.active = true;
+    }
+
+    func run() {
+        conn = self.conn;
+        try {
+            self.app.handleConnection(conn);
+        } catch (e) { x = 1; }
+        try {
+            conn.close();
+        } catch (e2) { x = 1; }
+        self.app.markFinished(self);
+        return 1;
+    }
+}
+
+// 通用 TCP 服务应用基类
+public class ServiceApplication extends Application {
+    serverSock: any;
+    hostVal: string;
+    portVal: int;
+    backlogVal: int;
+    finishedHandlers: array;
+    activeHandlers: array;
+    handlerLock: int;
+    target: any;
+
+    func ServiceApplication() {
+        super();
+        self.initServiceFields();
+    }
+
+    // 单参构造：int 为端口；string 为配置文件路径（立即加载）；map 为配置表；
+    // 其余对象/func 当作连接处理器（ServiceHandler）
+    // （构造器重载仅按参数个数选择，无法按参数类型区分，故合并为一个构造器）
+    func ServiceApplication(first) {
+        super();
+        self.initServiceFields();
+        t = type(first);
+        if (t == "int") { self.portVal = first; }
+        else if (t == "string") { self.loadConfig(first); }
+        else if (t == "map") { self.loadConfigMap(first); }
+        else { self.target = first; }
+    }
+
+    // 双参构造：监听地址 + 端口
+    func ServiceApplication(host: string, port: int) {
+        super();
+        self.initServiceFields();
+        self.hostVal = host;
+        self.portVal = port;
+    }
+
+    // 三参构造：监听地址 + 端口 + 连接处理器
+    func ServiceApplication(host: string, pos: int, handler) {
+        super();
+        self.initServiceFields();
+        self.hostVal = host;
+        self.portVal = pos;
+        self.target = handler;
+    }
+
+    // 编程式设置连接处理器（配合单参端口构造：ServiceApplication(port).setHandler(h)）
+    func setHandler(handler) {
+        self.target = handler;
+        return self;
+    }
+
+    private func initServiceFields() {
+        self.serverSock = null;
+        self.hostVal = "";
+        self.portVal = 0;
+        self.backlogVal = 0;
+        self.finishedHandlers = [];
+        self.activeHandlers = [];
+        self.handlerLock = mutex();
+        self.target = null;
+    }
+
+    // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
+
+    func host(): string {
+        if (self.hostVal != "") { return self.hostVal; }
+        return self.configString("host", "0.0.0.0");
+    }
+
+    func port(): int {
+        if (self.portVal > 0) { return self.portVal; }
+        return self.configInt("port", 8080);
+    }
+
+    func backlog(): int {
+        if (self.backlogVal > 0) { return self.backlogVal; }
+        return self.configInt("backlog", 128);
+    }
+
+    // ---- 连接处理（核心扩展点，连接线程内调用）----
+    // 默认：挂有 target 处理器时执行——func 直接调用，
+    // ServiceHandler 对象调 serve；无 target 为空操作（连接随即关闭）。
+    // 子类可重写实现自己的连接逻辑。
+    func handleConnection(conn) {
+        h = self.target;
+        if (h != null) {
+            if (type(h) == "func") { return h(conn); }
+            return h.serve(conn);
+        }
+    }
+
+    // 连接处理器工厂：run() 每接受一个连接调一次。
+    // 子类（如 WebApplication）重写以换入协议专属的连接线程。
+    func createHandler(conn) {
+        return ServiceConnectionHandler(self, conn);
+    }
+
+    // ---- 应用主循环（start 生命周期内执行，阻塞至 stop）----
+    func run() {
+        srv = ServerSocket(self.host(), self.port(), self.backlog());
+        self.serverSock = srv;
+        while (self.running) {
+            conn = srv.accept();
+            // stop 的自连唤醒：accept 返回后先确认仍在运行
+            if (self.running == false) {
+                conn.close();
+                break;
+            }
+            self.reapFinished();
+            h = self.createHandler(conn);
+            lock(self.handlerLock);
+            self.activeHandlers.add(h);
+            unlock(self.handlerLock);
+            h.start();
+        }
+        // 收尾：关闭监听、回收全部连接线程
+        if (self.serverSock != null) {
+            self.serverSock.close();
+            self.serverSock = null;
+        }
+        self.reapFinished();
+        self.joinActive();
+    }
+
+    // 停止：置标志位后自连一次，唤醒阻塞在 accept 的主循环。
+    // 监听 socket 由 run 退出循环后自行关闭（避免跨线程 close 竞态）。
+    func stop() {
+        super.stop();
+        if (self.serverSock != null) {
+            try {
+                h = self.host();
+                if (h == "0.0.0.0" || h == "") { h = "127.0.0.1"; }
+                wake = ClientSocket(h, self.port());
+                wake.close();
+            } catch (e) { x = 1; }
+        }
+        return self;
+    }
+
+    // ---- 连接线程管理 ----
+
+    // 连接线程完成回调（连接线程内最后调用）：标记挂起待回收
+    func markFinished(h) {
+        lock(self.handlerLock);
+        h.active = false;
+        self.finishedHandlers.add(h);
+        unlock(self.handlerLock);
+    }
+
+    // 回收已完成的连接线程（join 已结束线程立即返回，不阻塞主循环）
+    private func reapFinished() {
+        lock(self.handlerLock);
+        done = self.finishedHandlers;
+        self.finishedHandlers = [];
+        still = [];
+        for h in self.activeHandlers {
+            if (h.active) { still.add(h); }
+        }
+        self.activeHandlers = still;
+        unlock(self.handlerLock);
+        for h in done { h.join(); }
+    }
+
+    // run 退出时等待全部在役连接线程处理完在飞的请求
+    private func joinActive() {
+        lock(self.handlerLock);
+        all = self.activeHandlers;
+        self.activeHandlers = [];
+        unlock(self.handlerLock);
+        for h in all { h.join(); }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "ServiceApplication(" + self.host() + ":" + self.port() + ")";
+    }
+}

@@ -31,6 +31,7 @@
 #include "lm_socket.h"
 #include "lm_type.h"
 #include "lm_json.h"
+#include "lm_xml.h"
 #include "lm_io.h"
 #include "vm_serialize.h"
 #include "lm_http.h"
@@ -1344,6 +1345,25 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         return bi_type_err("toJSONString", recv);
     }
+    /* json(s)：解析 JSON 文本 → 值（全局形式 json(s) 与方法形式 s.json() 均用 recv） */
+    case BUILTIN_JSON:
+        if(recv.type != VAL_STRING) return bi_type_err("json", recv);
+        *out = lumyr_json_parse(lumyr_str_cstr(&recv));
+        return 1;
+    /* stringify(v)：值 → JSON 文本（全局 stringify(v) 与方法 v.stringify() 均用 recv） */
+    case BUILTIN_STRINGIFY:
+        {
+            Value cleaned = bi_json_clean(recv);
+            char* s = lumyr_json_stringify(cleaned);
+            *out = s ? lumyr_make_string(s) : val_none();
+            free(s);
+        }
+        return 1;
+    /* xml(s)：解析 XML 文本 → DOM map 树（s.xml() 同 json(s) 语义） */
+    case BUILTIN_XML:
+        if(recv.type != VAL_STRING) return bi_type_err("xml", recv);
+        *out = lumyr_xml_parse(lumyr_str_cstr(&recv));
+        return 1;
     /* copy：所有数据类型深拷贝（无额外参数） */
     case BUILTIN_COPY:
         *out = bi_copy(recv);
@@ -3845,6 +3865,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_TOMAP: return "toMap";
     case BUILTIN_TOARRAY: return "toArray";
     case BUILTIN_TOJSON: return "toJSONString";
+    case BUILTIN_JSON: return "json";
+    case BUILTIN_STRINGIFY: return "stringify";
+    case BUILTIN_XML: return "xml";
     case BUILTIN_COPY: return "copy";
     case BUILTIN_TCP_SOCKET: return "tcpSocket";
     case BUILTIN_UDP_SOCKET: return "udpSocket";

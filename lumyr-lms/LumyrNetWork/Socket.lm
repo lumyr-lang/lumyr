@@ -60,6 +60,8 @@ public class ServerSocket implements ServerSocketInterface {
         self.port = port;
         self.closed = false;
         self.sock = TcpSocket();
+        // 服务端惯例：SO_REUSEADDR，允许重启时绑定 TIME_WAIT 残留的端口
+        self.sock.setOption("reuseAddr", 1);
         self.bind(host, port);
         self.listen(128);
     }
@@ -69,6 +71,8 @@ public class ServerSocket implements ServerSocketInterface {
         self.port = port;
         self.closed = false;
         self.sock = TcpSocket();
+        // 服务端惯例：SO_REUSEADDR，允许重启时绑定 TIME_WAIT 残留的端口
+        self.sock.setOption("reuseAddr", 1);
         self.bind(host, port);
         self.listen(backlog);
     }

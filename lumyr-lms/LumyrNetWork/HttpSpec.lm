@@ -1,0 +1,142 @@
+// ============================================================
+// lumyr-HttpSpec：HTTP 协议规范层（纯函数，无 I/O 依赖）
+// 客户端（HttpUtil）与服务端（HttpServer）共用的协议工具：
+//   statusText(code)   状态码 → 原因短语（RFC 7231 常用项）
+//   mimeType(path)     文件扩展名 → MIME Content-Type
+//   isSuccess/isRedirect/isClientError/isServerError/isError  状态区间判定
+//
+// 设计说明：
+//   抽离为独立模块，避免 HttpServer 依赖高层的 Utils/HttpUtil（防止循环依赖），
+//   同时让 HttpUtil 委托到这里，消除重复实现。
+//
+// 用法：
+//   import <NetWork/HttpSpec>;
+//   text = HttpSpec.statusText(404);        // "Not Found"
+//   ct = HttpSpec.mimeType("a/index.html"); // "text/html; charset=utf-8"
+//   ok = HttpSpec.isSuccess(resp.status);
+// ============================================================
+
+public class HttpSpec {
+
+    // 状态码 → 原因短语（RFC 7231 常用项，未知返回 ""）
+    public static func statusText(code: int): string {
+        if (code == 100) { return "Continue"; }
+        if (code == 101) { return "Switching Protocols"; }
+        if (code == 200) { return "OK"; }
+        if (code == 201) { return "Created"; }
+        if (code == 202) { return "Accepted"; }
+        if (code == 203) { return "Non-Authoritative Information"; }
+        if (code == 204) { return "No Content"; }
+        if (code == 205) { return "Reset Content"; }
+        if (code == 206) { return "Partial Content"; }
+        if (code == 300) { return "Multiple Choices"; }
+        if (code == 301) { return "Moved Permanently"; }
+        if (code == 302) { return "Found"; }
+        if (code == 303) { return "See Other"; }
+        if (code == 304) { return "Not Modified"; }
+        if (code == 307) { return "Temporary Redirect"; }
+        if (code == 308) { return "Permanent Redirect"; }
+        if (code == 400) { return "Bad Request"; }
+        if (code == 401) { return "Unauthorized"; }
+        if (code == 403) { return "Forbidden"; }
+        if (code == 404) { return "Not Found"; }
+        if (code == 405) { return "Method Not Allowed"; }
+        if (code == 406) { return "Not Acceptable"; }
+        if (code == 408) { return "Request Timeout"; }
+        if (code == 409) { return "Conflict"; }
+        if (code == 410) { return "Gone"; }
+        if (code == 411) { return "Length Required"; }
+        if (code == 413) { return "Payload Too Large"; }
+        if (code == 414) { return "URI Too Long"; }
+        if (code == 415) { return "Unsupported Media Type"; }
+        if (code == 418) { return "I'm a teapot"; }
+        if (code == 422) { return "Unprocessable Entity"; }
+        if (code == 429) { return "Too Many Requests"; }
+        if (code == 500) { return "Internal Server Error"; }
+        if (code == 501) { return "Not Implemented"; }
+        if (code == 502) { return "Bad Gateway"; }
+        if (code == 503) { return "Service Unavailable"; }
+        if (code == 504) { return "Gateway Timeout"; }
+        if (code == 505) { return "HTTP Version Not Supported"; }
+        return "";
+    }
+
+    // 文件扩展名 → MIME Content-Type（静态资源/下载用）
+    // 无 lastIndexOf：正向扫描找最后一个 '.'（且在最后一个 '/' 之后才算扩展名）
+    public static func mimeType(path: string): string {
+        dot = -1;
+        slash = -1;
+        i = 0;
+        while (i < path.len) {
+            ch = path[i];
+            if (ch == ".") { dot = i; }
+            if (ch == "/" || ch == "\\") { slash = i; }
+            i = i + 1;
+        }
+        if (dot < 0 || dot < slash) { return "application/octet-stream"; }
+        ext = path.slice(dot + 1, path.len).lower();
+        if (ext == "html" || ext == "htm") { return "text/html; charset=utf-8"; }
+        if (ext == "css") { return "text/css; charset=utf-8"; }
+        if (ext == "js" || ext == "mjs") { return "application/javascript; charset=utf-8"; }
+        if (ext == "json") { return "application/json"; }
+        if (ext == "xml") { return "application/xml"; }
+        if (ext == "txt" || ext == "md" || ext == "log") { return "text/plain; charset=utf-8"; }
+        if (ext == "csv") { return "text/csv; charset=utf-8"; }
+        if (ext == "png") { return "image/png"; }
+        if (ext == "jpg" || ext == "jpeg") { return "image/jpeg"; }
+        if (ext == "gif") { return "image/gif"; }
+        if (ext == "webp") { return "image/webp"; }
+        if (ext == "svg") { return "image/svg+xml"; }
+        if (ext == "ico") { return "image/x-icon"; }
+        if (ext == "bmp") { return "image/bmp"; }
+        if (ext == "pdf") { return "application/pdf"; }
+        if (ext == "zip") { return "application/zip"; }
+        if (ext == "gz" || ext == "gzip") { return "application/gzip"; }
+        if (ext == "tar") { return "application/x-tar"; }
+        if (ext == "mp3") { return "audio/mpeg"; }
+        if (ext == "wav") { return "audio/wav"; }
+        if (ext == "mp4") { return "video/mp4"; }
+        if (ext == "webm") { return "video/webm"; }
+        if (ext == "wasm") { return "application/wasm"; }
+        if (ext == "woff") { return "font/woff"; }
+        if (ext == "woff2") { return "font/woff2"; }
+        if (ext == "ttf") { return "font/ttf"; }
+        if (ext == "otf") { return "font/otf"; }
+        return "application/octet-stream";
+    }
+
+    // 解析查询字符串 / form-urlencoded 为 map
+    // "a=1&b=2&flag" → {"a": "1", "b": "2", "flag": ""}
+    // Url.queryParams / ServerRequest.queryParams / FormParser 共用此实现
+    public static func parseQuery(queryString: string): map {
+        out = {};
+        if (queryString == "") { return out; }
+        segs = queryString.split("&");
+        for seg in segs {
+            eq = seg.indexOf("=");
+            if (eq >= 0) {
+                out[seg.slice(0, eq)] = seg.slice(eq + 1, seg.len);
+            } else if (seg != "") {
+                out[seg] = "";
+            }
+        }
+        return out;
+    }
+
+    // 状态码区间判定（2xx/3xx/4xx/5xx）
+    public static func isSuccess(code: int): bool {
+        return code >= 200 && code < 300;
+    }
+    public static func isRedirect(code: int): bool {
+        return code >= 300 && code < 400;
+    }
+    public static func isClientError(code: int): bool {
+        return code >= 400 && code < 500;
+    }
+    public static func isServerError(code: int): bool {
+        return code >= 500 && code < 600;
+    }
+    public static func isError(code: int): bool {
+        return code >= 400;
+    }
+}

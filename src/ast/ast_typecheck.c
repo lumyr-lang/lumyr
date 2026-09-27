@@ -1018,6 +1018,7 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"arr_get", 2, 2}, {"indexOf", 2, 2}, {"set", 0, 32}, {"first", 1, 1}, {"last", 1, 1}, {"has", 0, 32},
     {"flat", 1, 2}, {"qs", 1, 2}, {"addAll", 2, 2}, {"bytes", 1, 32}, {"str", 1, 2},
     {"json", 1, 2}, {"stringify", 1, 2},
+    {"xml", 1, 2},
     {"encode", 1, 2}, {"decode", 1, 2},
     {"encodeURL", 1, 1}, {"decodeURL", 1, 1},
     {"md5", 1, 1}, {"encodeBase64", 1, 1}, {"decodeBase64", 1, 1},

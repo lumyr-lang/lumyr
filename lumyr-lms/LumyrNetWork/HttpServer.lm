@@ -1,0 +1,674 @@
+// ============================================================
+// lumyr-HttpServer：服务端 HTTP 报文解析与构建
+// 为搭建 HTTP 服务提供底层能力：
+//   Url            URL 解析（scheme/host/port/path/query/fragment）
+//   ServerRequest  从原始字节解析请求行/标头/正文/查询参数
+//   ServerResponse 构建状态行/标头/正文并序列化为 HTTP 响应字节
+//   HttpMethod     HTTP 方法常量
+//
+// 依赖：<NetWork/Http> 的 Headers（大小写不敏感标头）、HttpStatus、Cookie
+//
+// 用法：
+//   import <NetWork/HttpServer>;
+//   req = ServerRequest.parse(rawBytes);
+//   print(req.method + " " + req.path);
+//   body = req.json();   // Content-Type: application/json
+//
+//   resp = ServerResponse(200);
+//   resp.json({"result": "ok"});
+//   send(resp.toBytes());
+// ============================================================
+
+import <NetWork/Http>;
+import <NetWork/HttpSpec>;
+import <NetWork/HttpMultipart>;
+import <NetWork/HttpRequestParser>;
+
+// CRLF 行分隔符（HTTP 报文标准行尾）
+// 语言字符串字面量不处理转义，用字符字面量拼接得到真实 \r\n
+crlf = "" + '\r' + '\n';
+sp = " ";
+colon = ": ";
+
+// HTTP 方法常量
+public class HttpMethod {
+    public static const GET: string = "GET";
+    public static const POST: string = "POST";
+    public static const PUT: string = "PUT";
+    public static const DELETE: string = "DELETE";
+    public static const PATCH: string = "PATCH";
+    public static const HEAD: string = "HEAD";
+    public static const OPTIONS: string = "OPTIONS";
+    public static const CONNECT: string = "CONNECT";
+    public static const TRACE: string = "TRACE";
+}
+
+// 常用 Content-Type
+public class HttpContentType {
+    public static const JSON: string = "application/json";
+    public static const FORM: string = "application/x-www-form-urlencoded";
+    public static const TEXT: string = "text/plain";
+    public static const HTML: string = "text/html";
+    public static const XML: string = "application/xml";
+    public static const OCTET: string = "application/octet-stream";
+    public static const MULTIPART: string = "multipart/form-data";
+}
+
+// ============================================================
+// Url：URL 解析
+// ============================================================
+public class Url {
+    scheme: string;
+    host: string;
+    port: int;
+    path: string;
+    queryString: string;
+    fragment: string;
+
+    func Url() {
+        self.scheme = "";
+        self.host = "";
+        self.port = 0;
+        self.path = "/";
+        self.queryString = "";
+        self.fragment = "";
+    }
+
+    // 解析 URL 字符串
+    public static func parse(s: string): Url {
+        u = Url();
+        rest = s;
+
+        // scheme://
+        sep = rest.indexOf("://");
+        if (sep >= 0) {
+            u.scheme = rest.slice(0, sep);
+            rest = rest.slice(sep + 3, rest.len);
+        }
+
+        // fragment
+        hash = rest.indexOf("#");
+        if (hash >= 0) {
+            u.fragment = rest.slice(hash + 1, rest.len);
+            rest = rest.slice(0, hash);
+        }
+
+        // query
+        q = rest.indexOf("?");
+        if (q >= 0) {
+            u.queryString = rest.slice(q + 1, rest.len);
+            rest = rest.slice(0, q);
+        }
+
+        // host[:port] (rest 此时不含 scheme/query/fragment)
+        slash = rest.indexOf("/");
+        authority = rest;
+        if (slash >= 0) {
+            authority = rest.slice(0, slash);
+            u.path = rest.slice(slash, rest.len);
+        } else {
+            u.path = "/";
+        }
+
+        // host:port
+        colon = authority.indexOf(":");
+        if (colon >= 0) {
+            u.host = authority.slice(0, colon);
+            portStr = authority.slice(colon + 1, authority.len);
+            u.port = (int)portStr;
+        } else {
+            u.host = authority;
+            u.port = 0;
+        }
+
+        if (u.path == "") { u.path = "/"; }
+        return u;
+    }
+
+    // 解析查询字符串为 map（委托 HttpSpec.parseQuery 公共实现）
+    func queryParams(): map {
+        return HttpSpec.parseQuery(self.queryString);
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        s = "";
+        if (self.scheme != "") { s = s + self.scheme + "://"; }
+        s = s + self.host;
+        if (self.port > 0) { s = s + ":" + self.port; }
+        s = s + self.path;
+        if (self.queryString != "") { s = s + "?" + self.queryString; }
+        if (self.fragment != "") { s = s + "#" + self.fragment; }
+        return s;
+    }
+}
+
+// ============================================================
+// ServerRequest：服务端 HTTP 请求解析
+// body 类型为 any：string | bytes
+//   - parse(raw) 接收 string 时，body 为 string（表单/JSON/文本场景）
+//   - parse(raw) 接收 bytes 时，body 保留为 bytes（二进制安全，含 NUL 不丢失）
+//     bodyString() 可显式按 UTF-8 解码为 string
+// 二进制 body 的正确收法：
+//   req = ServerRequest.readFrom(sock);   // 内部 recv(len, 0, true) 按 bytes 接收
+// （默认 recv(len) 返回 string 走 C 字符串语义，遇 NUL 截断，仅适合文本报文）
+// ============================================================
+public class ServerRequest {
+    method: string;
+    path: string;
+    queryString: string;
+    httpVersion: string;
+    headers: Headers;
+    body: any;
+    raw: string;
+
+    func ServerRequest() {
+        self.method = "";
+        self.path = "/";
+        self.queryString = "";
+        self.httpVersion = "1.1";
+        self.headers = Headers();
+        self.body = "";
+        self.raw = "";
+    }
+
+    // ---- 请求报文解析规范（RequestParser 抽象）----
+    // 用户实现 NetWork/HttpRequestParser 的 RequestParser 接口后，
+    // 调 registerRequestParser 替换默认解析器；之后 parse(raw) 全部走自定义实现。
+    // 用单元素数组当可变槽（静态字段初始化后只读，数组内容可变）。
+    private static requestParserSlot: array = [];
+
+    // readFrom 的 recv 单次缓冲区大小（字节）。只是每次系统调用取多少，
+    // 不是报文上限（循环累加，报文可任意大）。默认 64KB；
+    // 大文件上传场景可调大减少循环次数，小服务可调小省内存。
+    // 用单元素数组当可变槽（静态字段初始化后只读，数组内容可变）。
+    private static readChunkSizeSlot: array = [65536];
+
+    // 调整 readFrom 的 recv 缓冲区大小
+    public static func setReadChunkSize(n: int) {
+        if (n > 0) { ServerRequest.readChunkSizeSlot[0] = n; }
+    }
+
+    // 注册自定义请求报文解析器（实现 RequestParser 接口）
+    public static func registerRequestParser(p) {
+        if (ServerRequest.requestParserSlot.len == 0) {
+            ServerRequest.requestParserSlot.add(p);
+        } else {
+            ServerRequest.requestParserSlot[0] = p;
+        }
+    }
+
+    // 从原始 HTTP 请求报文解析（raw: string | bytes）
+    // 默认走 DefaultRequestParser；注册了自定义 RequestParser 则走自定义实现
+    public static func parse(raw): ServerRequest {
+        if (ServerRequest.requestParserSlot.len > 0) {
+            return ServerRequest.requestParserSlot[0].parse(raw);
+        }
+        return DefaultRequestParser().parse(raw);
+    }
+
+    // 在字节数组中找 \r\n\r\n（13,10,13,10），返回起始下标，未找到返回 -1
+    private static func findHeaderEnd(buf: array): int {
+        if (buf.len < 4) { return -1; }
+        i = 0;
+        last = buf.len - 4;
+        while (i <= last) {
+            if (buf[i] == 13 && buf[i + 1] == 10 && buf[i + 2] == 13 && buf[i + 3] == 10) {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    // 从 buf[0..headerEnd] 头部字节中提取 Content-Length（无则 0）
+    // 头部恒为 ASCII，decode 安全
+    private static func headerContentLength(buf: array, headerEnd: int): int {
+        harr = [];
+        i = 0;
+        while (i < headerEnd) { harr.add(buf[i]); i = i + 1; }
+        headStr = bytes(harr).decode();
+        lines = headStr.split(crlf);
+        for line in lines {
+            low = line.lower();
+            if (low.startsWith("content-length:")) {
+                return (int)line.slice(15, line.len).trim();
+            }
+        }
+        return 0;
+    }
+
+    // 从 socket 读取完整请求并解析（二进制安全）
+    // 全程 recv(len, 0, true) 按 bytes 接收，body 原始字节不丢失（含 NUL）；
+    // 头部完整（双 CRLF）后按 Content-Length 收齐 body；
+    // 无 Content-Length 时按「头部结束即无 body」处理（chunked 暂不支持）。
+    // 返回解析好的 ServerRequest（body 为 bytes）。
+    public static func readFrom(sock): ServerRequest {
+        buf = [];
+        headerEnd = -1;   // buf 中 \r\n\r\n 起始下标，-1 未找到
+        total = -1;       // 完整报文字节数（headerEnd+4+ContentLength），-1 未确定
+        chunkSize = ServerRequest.readChunkSizeSlot[0];
+
+        while (true) {
+            chunk = sock.recv(chunkSize, 0, true);
+            n = chunk.len;
+            if (n == 0) { break; }  // 对端关闭 / EOF
+            i = 0;
+            while (i < n) { buf.add(chunk[i]); i = i + 1; }
+
+            if (headerEnd < 0) {
+                headerEnd = ServerRequest.findHeaderEnd(buf);
+                if (headerEnd >= 0) {
+                    total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+                }
+            }
+            if (total >= 0 && buf.len >= total) { break; }
+        }
+        return ServerRequest.parse(bytes(buf));
+    }
+
+    // 查询参数 map（委托 HttpSpec.parseQuery 公共实现）
+    func queryParams(): map {
+        return HttpSpec.parseQuery(self.queryString);
+    }
+
+    // body 统一按 string 返回（bytes 时按 UTF-8 解码；供文本类解析器使用）
+    func bodyString(): string {
+        if (type(self.body) == "bytes") { return self.body.decode(); }
+        return self.body;
+    }
+
+    // 单个标头（大小写不敏感）
+    func header(name: string): string {
+        return self.headers.get(name);
+    }
+
+    func hasHeader(name: string): bool {
+        return self.headers.has(name);
+    }
+
+    // Content-Type（不含 charset 等参数）
+    func contentType(): string {
+        ct = self.header("Content-Type");
+        semi = ct.indexOf(";");
+        if (semi >= 0) { ct = ct.slice(0, semi).trim(); }
+        return ct;
+    }
+
+    func contentLength(): int {
+        cl = self.header("Content-Length");
+        if (cl == "") { return 0; }
+        return (int)cl;
+    }
+
+    func isJson(): bool {
+        return self.contentType().lower().contains("json");
+    }
+
+    func isForm(): bool {
+        ct = self.contentType().lower();
+        return ct.contains("x-www-form-urlencoded");
+    }
+
+    func isMultipart(): bool {
+        return self.contentType().lower().contains("multipart");
+    }
+
+    func isXml(): bool {
+        return self.contentType().lower().contains("xml");
+    }
+
+    // ---- 请求体解析（规范抽象：BodyParser 接口）----
+    // 静态自定义解析器注册表：用户实现 BodyParser 后 registerParser 接入，
+    // 匹配优先级高于内置默认解析器。
+    private static customParsers: array = [];
+
+    // 注册自定义请求体解析器（实现 NetWork/HttpMultipart 的 BodyParser 接口）
+    public static func registerParser(p) {
+        ServerRequest.customParsers.add(p);
+    }
+
+    // 按 Content-Type 找匹配的解析器（先自定义，后内置）
+    private func findParser() {
+        ct = self.contentType();
+        for p in ServerRequest.customParsers {
+            if (p.canParse(ct)) { return p; }
+        }
+        if (JsonParser().canParse(ct)) { return JsonParser(); }
+        if (FormParser().canParse(ct)) { return FormParser(); }
+        if (MultipartParser().canParse(ct)) { return MultipartParser(); }
+        if (XmlParser().canParse(ct)) { return XmlParser(); }
+        return null;
+    }
+
+    // 通用解析入口：按 Content-Type 自动分派到匹配解析器
+    // 返回类型由各解析器决定（map / MultipartForm / 任意）
+    // 传原始 self.body（string|bytes），由各 parser 自行处理：
+    // 文本类（json/form/xml）内部 decode；multipart 的 bytes 路径保留文件原始字节
+    func parseBody() {
+        p = self.findParser();
+        if (p == null) { return null; }
+        return p.parse(self.body, self.header("Content-Type"));
+    }
+
+    // 正文按 JSON 解析
+    func json() {
+        return JsonParser().parse(self.body, self.header("Content-Type"));
+    }
+
+    // 正文按 form-urlencoded 解析
+    func form(): map {
+        return FormParser().parse(self.body, self.header("Content-Type"));
+    }
+
+    // 正文按 multipart/form-data 解析（文件上传），返回 MultipartForm
+    // body 为 bytes 时文件部件 data 保留原始字节（二进制安全）
+    func multipart() {
+        return MultipartParser().parse(self.body, self.header("Content-Type"));
+    }
+
+    // 正文按 XML 解析（application/xml / text/xml），返回 DOM map 树
+    func xml() {
+        return XmlParser().parse(self.body, self.header("Content-Type"));
+    }
+
+    // Cookie 值（从 Cookie 请求头解析单个 name）
+    func cookie(name: string): string {
+        cookieHeader = self.header("Cookie");
+        if (cookieHeader == "") { return ""; }
+        segs = cookieHeader.split(";");
+        for seg in segs {
+            kv = seg.trim().split("=");
+            if (kv.len >= 1 && kv[0] == name) {
+                if (kv.len >= 2) { return kv.slice(1, kv.len).join("="); }
+                return "";
+            }
+        }
+        return "";
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "ServerRequest(" + self.method + " " + self.path + ")";
+    }
+}
+
+// ============================================================
+// ServerResponse：服务端 HTTP 响应构建
+// body 支持三种形态：
+//   string —— 文本/JSON/HTML（toBytes 按 UTF-8 编码）
+//   bytes  —— 二进制正文（二进制安全，可含 NUL，sendTo 原样发送）
+//   file   —— 文件正文（发送时按需 readBytes 读取）
+// 序列化：
+//   toBytes()     —— 一次性拿到完整响应 bytes（文件会被读入内存）
+//   sendTo(sock)  —— 分段发送：头部、正文分别 send，避免超大响应一次性拼内存
+// ============================================================
+public class ServerResponse {
+    status: int;
+    headers: Headers;
+    body: any;  // string | bytes | file
+
+    func ServerResponse(status: int) {
+        self.status = status;
+        self.headers = Headers();
+        self.body = "";
+        // 默认标头
+        self.headers.set("Server", "lumyr");
+        self.headers.set("Connection", "close");
+    }
+
+    func setHeader(name: string, value: string) {
+        self.headers.set(name, value);
+        return self;
+    }
+
+    func addHeader(name: string, value: string) {
+        self.headers.add(name, value);
+        return self;
+    }
+
+    func setContentType(ct: string) {
+        self.headers.set("Content-Type", ct);
+        return self;
+    }
+
+    // 文本正文
+    func text(body: string) {
+        self.body = body;
+        if (self.headers.has("Content-Type") == false) {
+            self.setContentType(HttpContentType.TEXT);
+        }
+        return self;
+    }
+
+    // HTML 正文
+    func html(body: string) {
+        self.body = body;
+        self.setContentType(HttpContentType.HTML);
+        return self;
+    }
+
+    // JSON 正文（自动序列化）
+    func json(obj) {
+        self.body = obj.stringify();
+        self.setContentType(HttpContentType.JSON);
+        return self;
+    }
+
+    // 二进制正文（bytes 对象，原样发送；默认 application/octet-stream）
+    func raw(data) {
+        self.body = data;
+        if (self.headers.has("Content-Type") == false) {
+            self.setContentType(HttpContentType.OCTET);
+        }
+        return self;
+    }
+
+    // 文件正文（file 对象；按扩展名推断 Content-Type，发送时读取）
+    func sendFile(path: string) {
+        f = file(path);
+        self.body = f;
+        if (self.headers.has("Content-Type") == false) {
+            self.setContentType(HttpSpec.mimeType(path));
+        }
+        return self;
+    }
+
+    // 设置 Content-Disposition: attachment 触发浏览器下载
+    func download(path: string, filename: string) {
+        self.sendFile(path);
+        self.headers.set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+        return self;
+    }
+
+    // 设置 Set-Cookie
+    func setCookie(c: Cookie) {
+        self.headers.add("Set-Cookie", c.toString());
+        return self;
+    }
+
+    // 重定向
+    func redirect(location: string, code: int) {
+        self.status = code;
+        self.headers.set("Location", location);
+        self.body = "";
+        return self;
+    }
+
+    func found(location: string) {
+        return self.redirect(location, HttpStatus.FOUND);
+    }
+
+    func movedPermanently(location: string) {
+        return self.redirect(location, HttpStatus.MOVED_PERMANENTLY);
+    }
+
+    func notModified() {
+        self.status = HttpStatus.NOT_MODIFIED;
+        self.body = "";
+        return self;
+    }
+
+    func noContent() {
+        self.status = HttpStatus.NO_CONTENT;
+        self.body = "";
+        return self;
+    }
+
+    // 状态码原因短语
+    func reasonPhrase(): string {
+        return HttpSpec.statusText(self.status);
+    }
+
+    // body 真实字节长度（bytes 直接 len；string 取 UTF-8 编码长度；file 取文件大小）
+    private func bodyByteLen(): int {
+        t = type(self.body);
+        if (t == "bytes") { return self.body.len; }
+        if (t == "string") { return bytes(self.body).len; }
+        if (t == "file") {
+            sz = self.body.size;
+            if (sz < 0) { return 0; }
+            return sz;
+        }
+        return 0;
+    }
+
+    // body 作为 bytes 返回（string→UTF-8 编码；file→读入；bytes 原样）
+    private func bodyBytes() {
+        t = type(self.body);
+        if (t == "bytes") { return self.body; }
+        if (t == "file") { return self.body.readBytes(); }
+        return bytes(self.body);
+    }
+
+    // 响应头部（状态行 + 标头 + 空行）的字符串形式
+    private func headString(): string {
+        s = "HTTP/1.1 " + self.status + " " + HttpSpec.statusText(self.status) + crlf;
+        hdrMap = self.headers.toMap();
+        keys = hdrMap.keys();
+        for k in keys {
+            s = s + k + ": " + hdrMap[k] + crlf;
+        }
+        return s + crlf;
+    }
+
+    // 一次性序列化为完整响应 bytes（适合小响应；文件 body 会读入内存）
+    func toBytes() {
+        self.headers.set("Content-Length", "" + self.bodyByteLen());
+        head = bytes(self.headString());
+        // head 与 body 分段拼接：string 头已是 bytes，body 转 bytes
+        bodyB = self.bodyBytes();
+        // 语言 bytes 无 concat：头部 ASCII 逐字节 + body 逐字节合成数组
+        arr = [];
+        i = 0;
+        while (i < head.len) { arr.add(head[i]); i = i + 1; }
+        i = 0;
+        while (i < bodyB.len) { arr.add(bodyB[i]); i = i + 1; }
+        return bytes(arr);
+    }
+
+    // 分段发送到 socket：先发头部（UTF-8），再发正文（bytes 原样）
+    // 返回发送的总字节数
+    func sendTo(sock): int {
+        self.headers.set("Content-Length", "" + self.bodyByteLen());
+        total = 0;
+        total = total + sock.send(bytes(self.headString()));
+        t = type(self.body);
+        if (t == "file") {
+            total = total + sock.send(self.body.readBytes());
+        } else if (t == "bytes") {
+            total = total + sock.send(self.body);
+        } else if (t == "string" && self.body != "") {
+            total = total + sock.send(self.body);
+        }
+        return total;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "ServerResponse(" + self.status + ")";
+    }
+}
+
+// ============================================================
+// DefaultRequestParser：内置默认请求报文解析器
+// 实现 NetWork/HttpRequestParser 的 RequestParser 接口。
+// raw 支持 string | bytes：
+//   bytes 入参时头部按 UTF-8 解码（HTTP 头部恒为 ASCII），
+//   body 保留原始 bytes（二进制安全，含 NUL 不丢失）。
+// 用户可通过 ServerRequest.registerRequestParser(自定义) 替换本实现。
+// ============================================================
+public class DefaultRequestParser implements RequestParser {
+
+    func parse(raw) {
+        // 统一为 string 头部 + any body
+        headStr = raw;
+        bodyData = "";
+        isBytes = (type(raw) == "bytes");
+        if (isBytes) {
+            headStr = raw.decode();
+        }
+
+        req = ServerRequest();
+        if (isBytes) { req.raw = headStr; } else { req.raw = raw; }
+
+        // 分离 header 区与 body：空行（双 CRLF）为界
+        sep = headStr.indexOf(crlf + crlf);
+        headerPart = headStr;
+        if (sep >= 0) {
+            headerPart = headStr.slice(0, sep);
+            if (isBytes) {
+                // body 保留原始 bytes（语言 bytes 无 slice：逐字节收集）
+                arr = [];
+                bi = sep + 4;
+                while (bi < raw.len) { arr.add(raw[bi]); bi = bi + 1; }
+                req.body = bytes(arr);
+            } else {
+                req.body = headStr.slice(sep + 4, headStr.len);
+            }
+        }
+
+        lines = headerPart.split(crlf);
+        if (lines.len == 0) { return req; }
+
+        // 请求行：METHOD PATH HTTP/VERSION
+        reqLine = lines[0];
+        parts = reqLine.split(sp);
+        if (parts.len >= 1) { req.method = parts[0]; }
+        if (parts.len >= 2) {
+            fullPath = parts[1];
+            q = fullPath.indexOf("?");
+            if (q >= 0) {
+                req.path = fullPath.slice(0, q);
+                req.queryString = fullPath.slice(q + 1, fullPath.len);
+            } else {
+                req.path = fullPath;
+            }
+        }
+        if (parts.len >= 3) {
+            // "HTTP/1.1" → "1.1"
+            ver = parts[2];
+            slash = ver.indexOf("/");
+            if (slash >= 0) { req.httpVersion = ver.slice(slash + 1, ver.len); }
+            else { req.httpVersion = ver; }
+        }
+
+        // 标头行
+        i = 1;
+        while (i < lines.len) {
+            line = lines[i];
+            if (line != "") {
+                c = line.indexOf(":");
+                if (c >= 0) {
+                    name = line.slice(0, c).trim();
+                    val = line.slice(c + 1, line.len).trim();
+                    req.headers.add(name, val);
+                }
+            }
+            i = i + 1;
+        }
+
+        return req;
+    }
+}
+

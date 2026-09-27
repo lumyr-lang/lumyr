@@ -1,0 +1,157 @@
+// ============================================================
+// lumyr-WebApplication：HTTP Web 应用基类
+//   RequestHandler         路由处理器契约（命名接口）
+//   HttpConnectionHandler  单连接 HTTP 处理线程
+//   WebApplication         继承 ServiceApplication：只负责 HTTP 报文解析与
+//                          路由分派；accept 循环 / 每连接一线程 / 线程回收 /
+//                          stop 唤醒全部复用 ServiceApplication
+//
+// 依赖：<App/ServiceApplication>（服务骨架：生命周期/配置/连接线程管理）
+//       <NetWork/HttpServer>（ServerRequest/ServerResponse/HttpMethod）
+//       <Thread/Thread>（HttpConnectionHandler 线程基类）
+//
+// 连接处理流程（HttpConnectionHandler 线程内）：
+//   ServerRequest.readFrom(conn) 二进制安全收读完整报文并解析
+//   → app.handleRequest(req) 分派（默认走路由表）
+//   → resp.sendTo(conn) 分段回写 → conn.close()
+//
+// 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
+//   host    string  默认 "0.0.0.0"
+//   port    int     默认 8080
+//   backlog int     默认 128
+//
+// 扩展方式（两选一或叠加）：
+//   1. 注册路由：app.get("/hello", handler)（handler 为实现 RequestHandler
+//      的对象，或直接传 func(req): ServerResponse）
+//   2. 继承重写：class MyApp extends WebApplication 重写
+//      handleRequest(req)（可 super.handleRequest(req) 回退路由表）、
+//      onNotFound(req)、onStart()/onStop() 等钩子
+//
+// 用法：
+//   import <App/WebApplication>;
+//   class MyApp extends WebApplication {
+//       func onStart() { print("listen on " + self.port() + "\n"); }
+//   }
+//   app = MyApp(8080);
+//   app.get("/hello", HelloHandler());
+//   app.start();            // 阻塞；或 app.startAsync() 后台运行
+//   // 另一线程 app.stop(); app.join();
+// ============================================================
+
+import <App/ServiceApplication>;
+import <NetWork/HttpServer>;
+import <Thread/Thread>;
+
+// 路由处理器契约：接收解析好的请求，返回构建好的响应
+// （方法名取 serve：handle 是语言指针类型关键字，不能作方法名）
+public interface RequestHandler {
+    func serve(req: ServerRequest): ServerResponse;
+}
+
+// ============================================================
+// HttpConnectionHandler：单连接 HTTP 处理线程
+// 收读解析请求 → 应用分派 → 回写响应（兜底关闭连接与自报完成由
+// HttpConnectionHandler 自身完成，不沿用 ServiceConnectionHandler，
+// 因为 HTTP 连接的关闭时机要在响应写完之后）。
+// 处理器抛错兜底为 500，保证单连接异常不拖垮整个服务。
+// ============================================================
+class HttpConnectionHandler extends Thread {
+    app: any;
+    conn: any;
+    active: bool;
+
+    func HttpConnectionHandler(app, conn) {
+        super();
+        self.app = app;
+        self.conn = conn;
+        self.active = true;
+    }
+
+    func run() {
+        conn = self.conn;
+        path = "?";
+        resp = null;
+        try {
+            req = ServerRequest.readFrom(conn);
+            path = req.method + " " + req.path;
+            resp = self.app.handleRequest(req);
+        } catch (e) {
+            resp = ServerResponse(500);
+            resp.text("Internal Server Error");
+        }
+        try {
+            resp.sendTo(conn);
+        } catch (e2) { x = 1; }
+        conn.close();
+        self.app.markFinished(self);
+        return path;
+    }
+}
+
+// HTTP Web 应用基类
+public class WebApplication extends ServiceApplication {
+    routes: map;
+
+    func WebApplication() {
+        super();
+        self.routes = {};
+    }
+
+    // 单参构造：int 为端口；string 为配置文件路径（立即加载）；map 为配置表
+    // （构造器重载仅按参数个数选择，无法按参数类型区分，故合并为一个构造器）
+    func WebApplication(first) {
+        super(first);
+        self.routes = {};
+    }
+
+    // 双参构造：监听地址 + 端口
+    func WebApplication(host: string, port: int) {
+        super(host, port);
+        self.routes = {};
+    }
+
+    // ---- 路由注册（start 前完成注册；handler 为 RequestHandler 对象或 func）----
+
+    func route(method: string, path: string, handler) {
+        self.routes[method.upper() + " " + path] = handler;
+        return self;
+    }
+
+    func get(path: string, handler)     { return self.route(HttpMethod.GET, path, handler); }
+    func post(path: string, handler)    { return self.route(HttpMethod.POST, path, handler); }
+    func put(path: string, handler)     { return self.route(HttpMethod.PUT, path, handler); }
+    func delete(path: string, handler)  { return self.route(HttpMethod.DELETE, path, handler); }
+    func patch(path: string, handler)   { return self.route(HttpMethod.PATCH, path, handler); }
+    func head(path: string, handler)    { return self.route(HttpMethod.HEAD, path, handler); }
+
+    // ---- 请求分派（核心扩展点，连接线程内调用）----
+    // 默认：按 "METHOD /path" 查路由表，未命中走 onNotFound。
+    // 子类重写可实现任意分派逻辑（中间件、前缀匹配、重写等），
+    // 需要回退默认行为时调 super.handleRequest(req)。
+    func handleRequest(req: ServerRequest): ServerResponse {
+        key = req.method + " " + req.path;
+        if (self.routes.contains(key)) {
+            h = self.routes[key];
+            if (type(h) == "func") { return h(req); }
+            return h.serve(req);
+        }
+        return self.onNotFound(req);
+    }
+
+    // 404 钩子（可重写定制）
+    func onNotFound(req: ServerRequest): ServerResponse {
+        resp = ServerResponse(404);
+        resp.text("Not Found: " + req.method + " " + req.path);
+        return resp;
+    }
+
+    // 连接处理器工厂重写：换入 HTTP 连接线程（run 主循环继承自 ServiceApplication）
+    func createHandler(conn) {
+        return HttpConnectionHandler(self, conn);
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "WebApplication(" + self.host() + ":" + self.port() + ")";
+    }
+}

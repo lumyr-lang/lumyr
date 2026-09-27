@@ -356,6 +356,7 @@ typedef enum {
     BUILTIN_FORMDATA_APPEND,  // formdata 追加字段（同名追加=多值/多文件）
     BUILTIN_JSON,         // json(s)：解析 JSON 文本 → 值
     BUILTIN_STRINGIFY,    // stringify(v)：值 → JSON 文本
+    BUILTIN_XML,          // xml(s)：解析 XML 文本 → DOM map 树
     BUILTIN_ARRAY_ADD,    // add(arr, x)：末尾追加，原地修改并返回 self（arr.add(x) 链式）
     BUILTIN_ARRAY_REMOVE, // remove(arr, i)：删下标 i 元素，原地修改并返回 self
     BUILTIN_ARRAY_CLEAR,  // clear(arr)：清空，原地修改并返回 self

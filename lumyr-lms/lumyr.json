@@ -4,6 +4,7 @@
     "Utils": "./LumyrUtils",
     "IO": "./LumyrIO",
     "NetWork": "./LumyrNetWork",
-    "Thread": "./LumyrThread"
+    "Thread": "./LumyrThread",
+    "App": "./LumyrApp"
   }
 }

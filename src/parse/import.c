@@ -183,6 +183,7 @@ static ProcessedMod* register_processed(const char* realpath) {
     p->mangled = NULL; p->nmangled = 0;
     p->class_names = NULL; p->nclass_names = 0;
     p->export_names = NULL; p->nexport_names = 0;
+    p->exports_full = NULL; p->nexports_full = 0; p->no_alias = 0;
     return p;
 }
 
@@ -1570,6 +1571,11 @@ static char* expand_file(const char* abs_path, SB* out,
         tr_free(tr);
         return NULL;
     }
+
+    /* 递归展开子模块时 register_processed 可能 realloc g_processed 表，
+     * 此前持有的 pm 已悬垂（继续读写会踩已释放堆块，随机崩）。
+     * 重新按路径锚定；mod_id 是值拷贝，不受影响。 */
+    pm = find_processed(abs_path);
 
     /* 6) 输出模块体 */
     sb_puts(out, body.buf);

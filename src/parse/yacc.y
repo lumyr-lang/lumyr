@@ -3425,14 +3425,18 @@ postfix_expr
     | postfix_expr LPAREN arg_list RPAREN {
           /* super(args)：调用父类构造函数，实参 self 前置 */
           if($1->type == AST_VAR && strcmp($1->u.varname, "super") == 0) {
-              AstNode* self_arg = L(ast_var(strdup("self")));
-              AstNode* all_args = $3 ? ast_seq_front($3, self_arg) : self_arg;
               /* 根因修复：此前硬编码 <parent>___init__ 主构造名，父类构造器重载
                * （如 super(a) 对应 Base___init__2）永远调错。与 AST_CLASS_NEW
                * 同一选择规则：沿继承链找到真正持有构造器的类，枚举其
                * <owner>___init__/2/3...，按用户实参数精确 arity 优先，
                * 其次可变参数（...args），最后主构造。父类必须先定义，
                * 此刻其构造器全部已注册。 */
+
+              /* 必须先数用户实参：ast_seq_front 对多参 SEQ 会就地把 self
+               * 插进 first（裸节点才返回新副本），若先注入再计数，双参
+               * super 会被数成 3 个，误选父类三参构造（缺 handler 参数）。 */
+              int user_argc = count_arg_list($3);
+
               const char* ctor_owner = NULL;
               TypeDef* ptd = g_current_class_parent ? class_lookup(g_current_class_parent) : NULL;
               while(ptd) {
@@ -3443,7 +3447,7 @@ postfix_expr
               if(!ctor_owner) ctor_owner = g_current_class_parent ? g_current_class_parent : "unknown";
               char ctor_base[256];
               snprintf(ctor_base, sizeof(ctor_base), "%s___init__", ctor_owner);
-              int user_argc = count_arg_list($3);
+
               char sel_name[272];
               snprintf(sel_name, sizeof(sel_name), "%s", ctor_base);
               char var_name[272]; int var_found = 0, var_min = 0;
@@ -3467,6 +3471,11 @@ postfix_expr
               }
               if(var_found && user_argc >= var_min && strcmp(sel_name, ctor_base) == 0)
                   snprintf(sel_name, sizeof(sel_name), "%s", var_name);
+
+              /* 构造器选定后再把 self 前置到实参链（多参树就地修改，
+               * 但此后不再有人读取 $3 的参数个数） */
+              AstNode* self_arg = L(ast_var(strdup("self")));
+              AstNode* all_args = $3 ? ast_seq_front($3, self_arg) : self_arg;
               $$ = L(ast_call(strdup(sel_name), all_args));
           } else {
               $$ = L(ast_dyn_call($1, $3));

@@ -411,7 +411,7 @@ Value lumyr_file_read_all(Value v) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("readAll() 文件对象无效"); return val_none(); }
     long sz = 0;
-    char* content = read_whole_file(o->path, &sz);
+    char* content = file_get_content(o, &sz);
     if (!content) {
         char buf[512];
         snprintf(buf, sizeof(buf), "readAll() 无法读取文件: %s", o->path);
@@ -682,7 +682,7 @@ Value lumyr_file_read_bytes(Value v) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("readBytes() 文件对象无效"); return val_none(); }
     long sz = 0;
-    char* content = read_whole_file(o->path, &sz);
+    char* content = file_get_content(o, &sz);
     if (!content) {
         char buf[512];
         snprintf(buf, sizeof(buf), "readBytes() 无法读取文件: %s", o->path);

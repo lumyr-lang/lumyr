@@ -27,6 +27,7 @@
 // ============================================================
 
 import <NetWork/Http>;
+import <NetWork/HttpSpec>;
 
 public class HttpUtil {
 
@@ -259,49 +260,27 @@ public class HttpUtil {
         return base + "/" + path;
     }
 
-    // ========== 状态码工具 ==========
+    // ========== 状态码工具（协议层实现委托 NetWork/HttpSpec） ==========
 
     // 状态码 → 原因短语（RFC 7231 常用项，未知返回 ""）
     public static func statusText(code: int): string {
-        if (code == HttpStatus.CONTINUE) { return "Continue"; }
-        if (code == HttpStatus.SWITCHING_PROTOCOLS) { return "Switching Protocols"; }
-        if (code == HttpStatus.OK) { return "OK"; }
-        if (code == HttpStatus.CREATED) { return "Created"; }
-        if (code == HttpStatus.ACCEPTED) { return "Accepted"; }
-        if (code == HttpStatus.NO_CONTENT) { return "No Content"; }
-        if (code == HttpStatus.MULTIPLE_CHOICES) { return "Multiple Choices"; }
-        if (code == HttpStatus.MOVED_PERMANENTLY) { return "Moved Permanently"; }
-        if (code == HttpStatus.FOUND) { return "Found"; }
-        if (code == HttpStatus.NOT_MODIFIED) { return "Not Modified"; }
-        if (code == HttpStatus.BAD_REQUEST) { return "Bad Request"; }
-        if (code == HttpStatus.UNAUTHORIZED) { return "Unauthorized"; }
-        if (code == HttpStatus.FORBIDDEN) { return "Forbidden"; }
-        if (code == HttpStatus.NOT_FOUND) { return "Not Found"; }
-        if (code == HttpStatus.METHOD_NOT_ALLOWED) { return "Method Not Allowed"; }
-        if (code == HttpStatus.REQUEST_TIMEOUT) { return "Request Timeout"; }
-        if (code == HttpStatus.CONFLICT) { return "Conflict"; }
-        if (code == HttpStatus.TOO_MANY_REQUESTS) { return "Too Many Requests"; }
-        if (code == HttpStatus.INTERNAL_SERVER_ERROR) { return "Internal Server Error"; }
-        if (code == HttpStatus.BAD_GATEWAY) { return "Bad Gateway"; }
-        if (code == HttpStatus.SERVICE_UNAVAILABLE) { return "Service Unavailable"; }
-        if (code == HttpStatus.GATEWAY_TIMEOUT) { return "Gateway Timeout"; }
-        return "";
+        return HttpSpec.statusText(code);
     }
 
     // 状态码区间判定（2xx/3xx/4xx/5xx）
     public static func isSuccess(code: int): bool {
-        return code >= HttpStatus.OK && code < HttpStatus.MULTIPLE_CHOICES;
+        return HttpSpec.isSuccess(code);
     }
     public static func isRedirect(code: int): bool {
-        return code >= HttpStatus.MULTIPLE_CHOICES && code < HttpStatus.BAD_REQUEST;
+        return HttpSpec.isRedirect(code);
     }
     public static func isClientError(code: int): bool {
-        return code >= HttpStatus.BAD_REQUEST && code < HttpStatus.INTERNAL_SERVER_ERROR;
+        return HttpSpec.isClientError(code);
     }
     public static func isServerError(code: int): bool {
-        return code >= HttpStatus.INTERNAL_SERVER_ERROR && code < 600;
+        return HttpSpec.isServerError(code);
     }
     public static func isError(code: int): bool {
-        return code >= HttpStatus.BAD_REQUEST;
+        return HttpSpec.isError(code);
     }
 }

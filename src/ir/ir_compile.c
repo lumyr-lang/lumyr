@@ -187,6 +187,9 @@ int builtin_id_by_name(const char* name) {
         {"toMap", BUILTIN_TOMAP},
         {"toArray", BUILTIN_TOARRAY},
         {"toJSONString", BUILTIN_TOJSON},
+        {"json", BUILTIN_JSON},
+        {"stringify", BUILTIN_STRINGIFY},
+        {"xml", BUILTIN_XML},
         {"copy", BUILTIN_COPY},
         /* AI / 线性代数 */
         {"shape", BUILTIN_SHAPE},

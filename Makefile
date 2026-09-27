@@ -114,6 +114,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_lock.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_tls.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_http.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_json.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_xml.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_charset.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_crypto.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_regex.c

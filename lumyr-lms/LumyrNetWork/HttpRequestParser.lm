@@ -1,0 +1,21 @@
+// ============================================================
+// lumyr-HttpRequestParser：HTTP 请求报文解析规范（接口抽象层）
+//
+// 抽象规范（用户自定义解析器按此接口接入）：
+//   RequestParser 接口 —— parse(raw) 将原始请求报文解析为 ServerRequest
+//   raw 支持 string 或 bytes（bytes 自动按 UTF-8 解码，HTTP 头部恒为 ASCII）
+//
+// 接入方式：
+//   class MyParser implements RequestParser { func parse(raw) { ... } }
+//   ServerRequest.registerRequestParser(MyParser());
+// 之后 ServerRequest.parse(raw) 全部走自定义实现；
+// 未注册时使用内置 DefaultRequestParser（见 NetWork/HttpServer）。
+//
+// 本模块不依赖 ServerRequest（仅定义规范），避免循环依赖。
+// ============================================================
+
+public interface RequestParser {
+    // 解析原始 HTTP 请求报文，返回 ServerRequest
+    // raw: string | bytes
+    func parse(raw);
+}

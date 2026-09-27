@@ -1,0 +1,207 @@
+// ============================================================
+// lumyr-Application：应用抽象基座
+//   ApplicationInterface    应用契约（配置加载 / 生命周期 / 扩展钩子）
+//   AbstractApplication     全量默认实现，不能实例化
+//   Application             可实例化基类：用户继承后重写 run 与钩子
+//
+// 定位：
+//   任何「加载配置 → 启动 → 运行主循环 → 停止」形态的应用都以此为基座。
+//   WebApplication（<App/WebApplication>）即继承它实现 HTTP 服务。
+//
+// 生命周期（start 内的固定流程）：
+//   onStart() → run()（子类主循环，可阻塞）→ onStop()
+//   stop() 由另一线程调用：置 running=false，子类负责唤醒阻塞的 run
+//
+// 配置：
+//   loadConfig(path)     从 JSON 文件加载（必须是 JSON 对象）
+//   loadConfigMap(cfg)   直接从 map 加载
+//   setConfig(k, v)      编程式单项设置
+//   config(k) / configString(k, def) / configInt(k, def) 读取
+//
+// 后台运行：
+//   startAsync() 在独立线程执行完整 start 生命周期；join() 等待结束
+//
+// 用法（三模式）：
+//   1. alias：import <App/Application> as app; → app.Application("conf.json");
+//   2. no-alias：import <App/Application>; → class MyApp extends Application {...}
+//   3. rename：import <App/Application> {Application as Base};
+//
+//   class MyApp extends Application {
+//       func run() { print("running\n"); }
+//       func onStart() { print("start\n"); }
+//   }
+//   MyApp("app.json").start();
+// ============================================================
+
+// 应用契约：配置加载 + 生命周期 + 扩展钩子
+public interface ApplicationInterface {
+    // ---- 配置 ----
+    func loadConfig(path: string);
+    func loadConfigMap(cfg: map);
+    func setConfig(key: string, value);
+    func config(key: string);
+    func configString(key: string, defaultValue: string): string;
+    func configInt(key: string, defaultValue: int): int;
+
+    // ---- 生命周期 ----
+    func start();
+    func stop();
+    func isRunning(): bool;
+    func startAsync();
+    func join();
+
+    // ---- 扩展钩子（子类重写）----
+    func onStart();          // 启动后、进入主循环前
+    func onStop();           // 主循环退出后
+    func onConfigLoaded();   // 配置加载完成后
+    func run();              // 应用主循环（子类实现，可阻塞）
+}
+
+// 应用抽象基类：字段 + 全部默认实现（抽象类豁免接口方法实现检查）
+public abstract class AbstractApplication implements ApplicationInterface {
+    configMap: map;
+    running: bool;
+    bgTid: int;
+
+    func AbstractApplication() {
+        self.configMap = {};
+        self.running = false;
+        self.bgTid = 0;
+    }
+
+    // ---- 配置 ----
+
+    // 从 JSON 文件加载配置（必须是 JSON 对象；文件不存在/格式错误直接抛出）
+    func loadConfig(path: string) {
+        f = file(path);
+        if (f.exists == false) {
+            throw "配置文件不存在 / config file not found: " + path;
+        }
+        text = f.readAll();
+        if (text.trim() != "") {
+            cfg = text.json();
+            if (type(cfg) != "map") {
+                throw "配置必须是 JSON 对象 / config must be a JSON object: " + path;
+            }
+            self.configMap = cfg;
+        }
+        self.onConfigLoaded();
+        return self;
+    }
+
+    // 直接从 map 加载配置（整体替换）
+    func loadConfigMap(cfg: map) {
+        self.configMap = cfg;
+        self.onConfigLoaded();
+        return self;
+    }
+
+    // 编程式设置单项配置
+    func setConfig(key: string, value) {
+        self.configMap[key] = value;
+        return self;
+    }
+
+    // 原始配置值（无则 null）
+    func config(key: string) {
+        if (self.configMap.contains(key)) { return self.configMap[key]; }
+        return null;
+    }
+
+    // 字符串配置（非字符串值做拼接转换；无则默认值）
+    func configString(key: string, defaultValue: string): string {
+        if (self.configMap.contains(key) == false) { return defaultValue; }
+        v = self.configMap[key];
+        if (type(v) == "string") { return v; }
+        return "" + v;
+    }
+
+    // 整型配置（字符串值做转型；无则默认值）
+    func configInt(key: string, defaultValue: int): int {
+        if (self.configMap.contains(key) == false) { return defaultValue; }
+        return (int)self.configMap[key];
+    }
+
+    // ---- 生命周期 ----
+
+    // 启动：onStart → run（主循环，可阻塞）→ onStop
+    // run 抛错时 onStop 仍执行（finally 兜底）
+    func start() {
+        if (self.running) {
+            throw "应用已启动，禁止重复 start / application already started, cannot start twice";
+        }
+        self.running = true;
+        self.onStart();
+        try {
+            self.run();
+        } finally {
+            self.running = false;
+            self.onStop();
+        }
+        return self;
+    }
+
+    // 停止：置标志位；子类若 run 阻塞在 I/O 上，需重写 stop 负责唤醒
+    func stop() {
+        self.running = false;
+        return self;
+    }
+
+    func isRunning(): bool {
+        return self.running;
+    }
+
+    // 在独立线程执行完整 start 生命周期（主线程可继续做事）
+    func startAsync() {
+        if (self.running || self.bgTid > 0) {
+            throw "应用已启动，禁止重复 startAsync / application already started, cannot startAsync twice";
+        }
+        self.bgTid = thread(func(a) { a.start(); return 1; }, self);
+        return self;
+    }
+
+    // 等待 startAsync 启动的后台线程结束（子线程未捕获错误在此重抛）
+    func join() {
+        if (self.bgTid > 0) {
+            tid = self.bgTid;
+            self.bgTid = 0;
+            thread_join(tid);
+        }
+        return self;
+    }
+
+    // ---- 扩展钩子默认实现（空操作，子类重写）----
+    func onStart() { }
+    func onStop() { }
+    func onConfigLoaded() { }
+    func run() { }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "AbstractApplication(running=" + self.running + ")";
+    }
+}
+
+// 可实例化应用基类：用户继承后重写 run 与钩子
+public class Application extends AbstractApplication {
+
+    func Application() {
+        super();
+    }
+
+    // 单参构造：string 为配置文件路径（立即加载），map 为配置表
+    // （构造器重载仅按参数个数选择，无法按参数类型区分，故合并为一个构造器）
+    func Application(source) {
+        super();
+        if (type(source) == "string") {
+            self.loadConfig(source);
+        } else if (type(source) == "map") {
+            self.loadConfigMap(source);
+        }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "Application(running=" + self.running + ")";
+    }
+}
