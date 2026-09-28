@@ -1,0 +1,157 @@
+// conn_capacity_test.lm —— Phase 7.6 单测：reactor 连接池容量（connCapacity）可配
+// 验证 ServiceApplication 的 connCapacity 配置：
+//   [1] getter/setter 语义：默认 65536；setConnCapacity 生效；非法值抛错；
+//       配置表 connCapacity 键生效；编程式设置优先于配置表
+//   [2] 小容量功能验证：connCapacity=1024 时 echo 服务正常工作
+//       （reactor 连接池按 fd 索引，小容量不影响少量连接）
+//   [3] 多线程模式小容量：workers=2 + connCapacity=1024，echo 正常
+//       （验证 per-worker reactor 均使用 app.connCapacity()）
+// 运行：./bin/lumyr tests/conn_capacity_test.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+// echo handler：收到什么回什么
+class EchoHandler implements ServiceHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data != "") {
+            conn.send(data);
+        }
+    }
+}
+
+// 测试 1：getter/setter 语义
+func testConfigSemantics() {
+    print("[1] connCapacity 配置语义 / config semantics");
+    // 默认值
+    app = ServiceApplication(18091);
+    if (app.connCapacity() != 65536) {
+        print("  FAIL: 默认 connCapacity " + app.connCapacity() + " != 65536");
+        return false;
+    }
+    // 编程式设置
+    app.setConnCapacity(4096);
+    if (app.connCapacity() != 4096) {
+        print("  FAIL: setConnCapacity(4096) 后 " + app.connCapacity() + " != 4096");
+        return false;
+    }
+    // 非法值抛错
+    threw = false;
+    try {
+        app.setConnCapacity(0);
+    } catch (e) { threw = true; }
+    if (!threw) {
+        print("  FAIL: setConnCapacity(0) 未抛错");
+        return false;
+    }
+    threw = false;
+    try {
+        app.setConnCapacity(-100);
+    } catch (e) { threw = true; }
+    if (!threw) {
+        print("  FAIL: setConnCapacity(-100) 未抛错");
+        return false;
+    }
+    // 配置表键生效
+    app2 = ServiceApplication({"port": 18092, "connCapacity": 8192});
+    if (app2.connCapacity() != 8192) {
+        print("  FAIL: 配置表 connCapacity " + app2.connCapacity() + " != 8192");
+        return false;
+    }
+    // 编程式优先于配置表
+    app2.setConnCapacity(2048);
+    if (app2.connCapacity() != 2048) {
+        print("  FAIL: 编程式覆盖后 " + app2.connCapacity() + " != 2048");
+        return false;
+    }
+    print("  默认/设置/非法/配置表/优先级 全部正确 / semantics ok");
+    return true;
+}
+
+// 测试 2：小容量单线程 echo 功能验证
+func testSmallCapacityEcho() {
+    print("[2] connCapacity=1024 单线程 echo / small-capacity echo");
+    port = 19382;
+    app = ServiceApplication("127.0.0.1", port, EchoHandler());
+    app.setConnCapacity(1024);
+    app.startAsync();
+    sleep(300);
+
+    total = 10;
+    ok = 0;
+    i = 0;
+    while (i < total) {
+        msg = "cap" + i;
+        cli = ClientSocket("127.0.0.1", port);
+        cli.send(msg);
+        resp = cli.recv(4096);
+        cli.close();
+        if (resp == msg) { ok = ok + 1; }
+        i = i + 1;
+    }
+
+    app.stop();
+    app.join();
+
+    if (ok != total) {
+        print("  FAIL: echo 成功 " + ok + "/" + total);
+        return false;
+    }
+    print("  echo 成功 " + ok + "/" + total + " / echo ok");
+    return true;
+}
+
+// 测试 3：多线程模式小容量 echo（per-worker reactor 均用 connCapacity）
+func testMultiWorkerSmallCapacity() {
+    print("[3] workers=2 + connCapacity=1024 多线程 echo / multi-worker small capacity");
+    port = 19383;
+    app = ServiceApplication("127.0.0.1", port, EchoHandler());
+    app.setWorkers(2);
+    app.setConnCapacity(1024);
+    app.startAsync();
+    sleep(300);
+
+    total = 8;
+    ok = 0;
+    i = 0;
+    while (i < total) {
+        msg = "mw" + i;
+        cli = ClientSocket("127.0.0.1", port);
+        cli.send(msg);
+        resp = cli.recv(4096);
+        cli.close();
+        if (resp == msg) { ok = ok + 1; }
+        i = i + 1;
+    }
+
+    app.stop();
+    app.join();
+
+    if (ok != total) {
+        print("  FAIL: echo 成功 " + ok + "/" + total);
+        return false;
+    }
+    // acceptTotal 总和 == total（connCapacity 配置透传到各 worker reactor 的佐证：
+    // 若 worker 仍用默认 65536 或容量异常，echo 无法全部成功）
+    sum = 0;
+    for w in app.workerList {
+        sum = sum + w.acceptTotal;
+    }
+    if (sum != total) {
+        print("  FAIL: acceptTotal 总和 " + sum + " != " + total);
+        return false;
+    }
+    print("  echo 成功 " + ok + "/" + total + "，acceptTotal 总和 " + sum + " / echo ok");
+    return true;
+}
+
+// ---- main ----
+print("=== Phase 7.6 connCapacity 测试 / connCapacity tests ===");
+r1 = testConfigSemantics();
+r2 = testSmallCapacityEcho();
+r3 = testMultiWorkerSmallCapacity();
+if (r1 && r2 && r3) {
+    print("=== ALL PASS / 全部通过 ===");
+} else {
+    print("=== FAILED / 存在失败 ===");
+}

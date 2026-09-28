@@ -7,6 +7,10 @@
 
 // runtime错误抛出
 void runtime_error(const char* msg);
+// 带错误码的 runtime_error：code 与 lm 层 enum 数值对齐（SocketError 等），
+// type 为错误类别名（如 "SocketError"），msg 为双语诊断文本。
+// runtime_error（不带码）内部清零 g_err_code，VAL_ERROR.code=0 兼容。
+void runtime_error_code(int code, const char* type, const char* msg);
 // 重新抛出 VAL_ERROR（join 子线程错误）：当前线程有 try 着陆点则 longjmp，
 // 否则按未捕获错误打印并退出进程
 void lumyr_rethrow_error(Value err);
@@ -17,6 +21,7 @@ void lumyr_rethrow_error(Value err);
 extern _Thread_local jmp_buf* g_err_jmp;
 extern _Thread_local char* g_err_msg;
 extern _Thread_local char* g_err_type;
+extern _Thread_local int g_err_code;
 extern _Thread_local const char** g_trace;
 extern _Thread_local int g_trace_n;
 extern _Thread_local jmp_buf* __g_jbs;

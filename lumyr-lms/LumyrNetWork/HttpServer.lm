@@ -162,6 +162,7 @@ public class ServerRequest {
     body: any;
     raw: string;
     pathParams: map;   // 模式路由命中后的路径参数（:name / *name）
+    attributes: map;   // 请求作用域属性（过滤器/拦截器与处理器之间传递）
 
     func ServerRequest() {
         self.method = "";
@@ -172,6 +173,7 @@ public class ServerRequest {
         self.body = "";
         self.raw = "";
         self.pathParams = {};
+        self.attributes = {};
     }
 
     // ---- 请求报文解析规范（RequestParser 抽象）----
@@ -189,6 +191,11 @@ public class ServerRequest {
     // 调整 readFrom 的 recv 缓冲区大小
     public static func setReadChunkSize(n: int) {
         if (n > 0) { ServerRequest.readChunkSizeSlot[0] = n; }
+    }
+
+    // 读取当前 recv 缓冲区大小（连接处理器空闲预读等场景与 readFrom 保持一致）
+    public static func readChunkSize(): int {
+        return ServerRequest.readChunkSizeSlot[0];
     }
 
     // 注册自定义请求报文解析器（实现 RequestParser 接口）
@@ -269,6 +276,54 @@ public class ServerRequest {
         return ServerRequest.parse(bytes(buf));
     }
 
+    // 连接级读缓冲形态（HTTP keep-alive 专用）：connBuf 为调用方持有的
+    // 字节数组，跨请求复用。每请求只消费 headerEnd+4+Content-Length 字节，
+    // 残留字节（pipelining 的下一请求）留在 connBuf 供下次调用；
+    // 残留已含完整请求时不触发 recv 直接解析。
+    // EOF/异常语义与单参形态一致；connBuf 在返回后始终只含未消费字节。
+    public static func readFrom(sock, connBuf: array): ServerRequest {
+        buf = connBuf;
+        // 先看残留缓冲（pipelining 场景可能无需 recv 即凑齐整包）
+        headerEnd = ServerRequest.findHeaderEnd(buf);
+        total = -1;
+        if (headerEnd >= 0) {
+            total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+        }
+        chunkSize = ServerRequest.readChunkSizeSlot[0];
+
+        while (total < 0 || buf.len < total) {
+            chunk = sock.recv(chunkSize, 0, true);
+            n = chunk.len;
+            if (n == 0) { break; }  // 对端关闭 / EOF
+            i = 0;
+            while (i < n) { buf.add(chunk[i]); i = i + 1; }
+            if (headerEnd < 0) {
+                headerEnd = ServerRequest.findHeaderEnd(buf);
+                if (headerEnd >= 0) {
+                    total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+                }
+            }
+        }
+
+        // 只消费当前请求字节；残留左移保留在 connBuf（原地 clear + 重放）
+        consume = buf.len;
+        if (total >= 0 && total < consume) { consume = total; }
+        reqArr = [];
+        i = 0;
+        while (i < consume) { reqArr.add(buf[i]); i = i + 1; }
+        if (consume < buf.len) {
+            rest = [];
+            i = consume;
+            while (i < buf.len) { rest.add(buf[i]); i = i + 1; }
+            buf.clear();
+            i = 0;
+            while (i < rest.len) { buf.add(rest[i]); i = i + 1; }
+        } else {
+            buf.clear();
+        }
+        return ServerRequest.parse(bytes(reqArr));
+    }
+
     // 查询参数 map（委托 HttpSpec.parseQuery 公共实现）
     func queryParams(): map {
         return HttpSpec.parseQuery(self.queryString);
@@ -308,6 +363,17 @@ public class ServerRequest {
 
     func hasHeader(name: string): bool {
         return self.headers.has(name);
+    }
+
+    // 请求作用域属性写/读（过滤器、拦截器向处理器传递上下文，如鉴权后的用户信息）
+    func setAttribute(name: string, v) {
+        self.attributes[name] = v;
+        return self;
+    }
+
+    func getAttribute(name: string) {
+        if (self.attributes.contains(name)) { return self.attributes[name]; }
+        return null;
     }
 
     // Content-Type（不含 charset 等参数）

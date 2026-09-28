@@ -1,0 +1,35 @@
+// ============================================================
+// NetError —— 网络套接字错误码枚举
+// 与 C 层 kit/runtime/include/lm_net_errno.h 的 NetErrorCode 数值逐项一对一对齐。
+// C 层 lm_socket.c 抛错：runtime_error_code(NET_ERR_*, "SocketError", msg)，
+// VAL_ERROR 携带 code；lm 层 catch(e) 后 e.getCode() == NetError.XXX 精确比较，
+// 不再依赖字符串前缀匹配。
+// 新增网络错误码时：①在 lm_net_errno.h 加 NET_ERR_* 枚举项；②在此加同值 enum 项。
+// ============================================================
+
+public enum NetError {
+    NONE = 0,
+    INVALID_TYPE = 1,
+    BAD_STATE = 2,
+    BAD_FD = 3,
+    NO_MEMORY = 4,
+    NO_FIELD = 5,
+    ADDR_RESOLVE = 6,
+    ADDR_TIMEOUT = 7,
+    CONNECT = 10,
+    BIND = 11,
+    LISTEN = 12,
+    ACCEPT = 13,
+    SEND = 14,
+    RECV = 15,
+    SENDTO = 16,
+    RECVFROM = 17,
+    SET_OPTION = 18,
+    GET_OPTION = 19,
+    RECV_TIMEOUT = 30,
+    SEND_TIMEOUT = 31,
+    INVALID_VALUE = 40,
+    EMPTY_NAME = 41,
+    UNSUPPORTED = 42,
+    UNKNOWN_OPTION = 43
+}

@@ -1,0 +1,117 @@
+// service_co.lm —— Phase 6 框架层单测：ServiceApplication reactor + 协程模型
+// 验证 ServiceApplication 从 thread-per-conn 换底为 reactor + 协程后，
+// echo server 仍能正常 accept + 每连接协程处理 + recv/send 协程化 yield
+// 运行：./bin/lumyr tests/service_co.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+// echo handler：收到什么回什么
+class EchoHandler implements ServiceHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data != "") {
+            conn.send(data);
+        }
+    }
+}
+
+// 测试 1：echo server（reactor + 协程）
+func testEchoServer() {
+    print("[1] echo server (reactor + 协程) / echo server");
+    port = 18901;
+    app = ServiceApplication("0.0.0.0", port, EchoHandler());
+    app.startAsync();
+    // 等服务器 bind+listen+reactor 起来
+    sleep(300);
+
+    // 客户端（主线程非协程，socket 走阻塞路径）
+    cli = ClientSocket("127.0.0.1", port);
+    cli.send("hello");
+    data = cli.recv(1024);
+    print("  client recv: " + data);
+    cli.close();
+
+    app.stop();
+    app.join();
+
+    if (data != "hello") {
+        print("  FAIL: 期望 hello，实际 " + data);
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 2：多客户端并发（验证多协程在 reactor 内交替调度）
+func testMultiClient() {
+    print("[2] 多客户端并发 / multi-client concurrent");
+    port = 18902;
+    app = ServiceApplication("0.0.0.0", port, EchoHandler());
+    app.startAsync();
+    sleep(300);
+
+    // 3 个客户端依次连接发送，handler 协程并发处理
+    results = [];
+    i = 0;
+    while (i < 3) {
+        cli = ClientSocket("127.0.0.1", port);
+        msg = "msg" + i;
+        cli.send(msg);
+        r = cli.recv(1024);
+        results.add(r);
+        cli.close();
+        i = i + 1;
+    }
+
+    app.stop();
+    app.join();
+
+    ok = true;
+    i = 0;
+    while (i < 3) {
+        if (results[i] != "msg" + i) {
+            ok = false;
+            print("  FAIL: idx " + i + " 期望 msg" + i + "，实际 " + results[i]);
+        }
+        i = i + 1;
+    }
+    if (ok) { print("  PASS"); }
+    return ok;
+}
+
+// 测试 3：stop 优雅退出（reactor.stop 打破事件循环 + 协程清理）
+func testStop() {
+    print("[3] stop 优雅退出 / graceful stop");
+    port = 18903;
+    app = ServiceApplication("0.0.0.0", port, EchoHandler());
+    app.startAsync();
+    sleep(300);
+
+    // 连一个客户端但不发数据（handler 协程挂在 recv yield）
+    cli = ClientSocket("127.0.0.1", port);
+    sleep(100);
+
+    // stop：reactor.stop 打破事件循环，run 退出后清理挂起协程
+    app.stop();
+    app.join();
+    cli.close();
+
+    print("  PASS");
+    return true;
+}
+
+// 主入口
+pass = 0;
+total = 3;
+
+if (testEchoServer()) pass++;
+if (testMultiClient()) pass++;
+if (testStop()) pass++;
+
+print("");
+print("Phase 6 框架层单测: " + pass + "/" + total + " PASS");
+if (pass == total) {
+    print("ALL PASS / 全部通过");
+} else {
+    print("SOME FAILED / 存在失败");
+}

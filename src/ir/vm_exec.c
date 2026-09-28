@@ -564,6 +564,7 @@ int vm_exec_guarded(VMExecCtx* ctx, RetSlot* ret) {
     e.v.err.type = strdup((g_err_type && g_err_type[0]) ? g_err_type : "RuntimeError");
     e.v.err.message = strdup(g_err_msg ? g_err_msg : "");
     e.v.err.stack = NULL;
+    e.v.err.code = g_err_code;   /* 错误码（runtime_error_code 设置，默认 0） */
     vm_except_throw_value(ctx, e);
     if(vm_except_unwind_active()) return VM_LOOP_UNWIND;
     /* 同帧捕获或 finally 路径：pc 已重定位，重入继续执行 */

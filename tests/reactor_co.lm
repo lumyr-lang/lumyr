@@ -1,0 +1,119 @@
+// reactor_co.lm —— Phase 5 lm 层单测：协程 spawn/resume/yield/isDead/destroy
+// 验证 VM builtin 暴露的 reactor + 协程在 lm 层可用
+// 运行：./bin/lumyr tests/reactor_co.lm
+import <NetWork/Reactor>;
+
+// 测试 1：协程基本 spawn + resume + yield + isDead
+func testBasicCoroutine() {
+    print("[1] 基本协程 spawn/resume/yield / basic coroutine");
+    trace = "";
+
+    co = Coroutine(func(n) {
+        trace = trace + "A" + n;
+        coYield();
+        trace = trace + "B" + n;
+    }, 1);
+
+    // resume 1：协程跑到 yield（A1）
+    co.resume();
+    print("  after resume 1, isDead=" + co.isDead() + ", trace=" + trace);
+
+    // resume 2：协程从 yield 继续到结束（B1）
+    co.resume();
+    print("  after resume 2, isDead=" + co.isDead() + ", trace=" + trace);
+
+    co.destroy();
+    if (trace != "A1B1") {
+        print("  FAIL: trace 应为 A1B1，实际 " + trace);
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 2：多协程交替 resume（验证 vm_state 隔离）
+func testMultiCoroutine() {
+    print("[2] 多协程交替 resume（vm_state 隔离）/ multi-coroutine");
+    log = "";
+
+    a = Coroutine(func(x) {
+        log = log + "a1";
+        coYield();
+        log = log + "a2";
+    }, 0);
+
+    b = Coroutine(func(x) {
+        log = log + "b1";
+        coYield();
+        log = log + "b2";
+    }, 0);
+
+    a.resume();   // a1
+    b.resume();   // b1
+    a.resume();   // a2
+    b.resume();   // b2
+
+    a.destroy();
+    b.destroy();
+    if (log != "a1b1a2b2") {
+        print("  FAIL: log 应为 a1b1a2b2，实际 " + log);
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 3：协程内 try/catch（验证异常状态隔离）
+func testCoroutineTryCatch() {
+    print("[3] 协程内 try/catch（异常状态隔离）/ coroutine try/catch");
+    result = "";
+
+    co = Coroutine(func(x) {
+        try {
+            result = result + "try";
+            coYield();
+            throw "boom";
+        } catch (e) {
+            result = result + "catch:" + e;
+        }
+        result = result + "end";
+    }, 0);
+
+    co.resume();   // try
+    co.resume();   // throw → catch → end
+    co.destroy();
+    print("  result=" + result);
+    if (result.indexOf("try") < 0 || result.indexOf("catch") < 0 || result.indexOf("end") < 0) {
+        print("  FAIL: result 缺少 try/catch/end");
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 4：reactor 创建/stop/destroy（不 run，避免阻塞）
+func testReactorLifecycle() {
+    print("[4] reactor 创建/stop/destroy / reactor lifecycle");
+    r = ReactorInstance(1024);
+    r.stop();
+    r.destroy();
+    print("  PASS");
+    return true;
+}
+
+// 主入口
+pass = 0;
+total = 4;
+
+if (testBasicCoroutine()) pass++;
+if (testMultiCoroutine()) pass++;
+if (testCoroutineTryCatch()) pass++;
+if (testReactorLifecycle()) pass++;
+
+print("");
+print("Phase 5 lm 单测: " + pass + "/" + total + " PASS");
+if (pass == total) {
+    print("ALL PASS / 全部通过");
+} else {
+    print("SOME FAILED / 存在失败");
+}

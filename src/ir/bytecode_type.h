@@ -547,6 +547,43 @@ typedef enum {
     BUILTIN_SOCKET_SETOPT,      // s.setOption(name, val)
     BUILTIN_SOCKET_GETOPT,      // s.getOption(name)
     BUILTIN_SOCKET_FILENO,      // s.fileno() → int
+    /* ===== reactor + 协程（Phase 5：暴露给 lm 层）===== */
+    BUILTIN_REACTOR_NEW,         // reactor([capacity]) → reactor 实例（ptr）
+    BUILTIN_REACTOR_DEL,         // r.destroy()
+    BUILTIN_REACTOR_RUN,         // r.run()：进入 reactor 主循环
+    BUILTIN_REACTOR_STOP,        // r.stop()
+    BUILTIN_REACTOR_ADD_TIMER,   // r.addTimer(impl, ms, cb) → timerId
+    BUILTIN_REACTOR_DEL_TIMER,   // r.delTimer(impl, id)
+    BUILTIN_SET_SOCKET_REACTOR,  // setSocketReactor(impl)：socket API 协程化
+    BUILTIN_CO_SPAWN,            // spawn(f, arg) → co 实例（ptr）
+    BUILTIN_CO_RESUME,           // co.resume(impl)
+    BUILTIN_CO_YIELD,            // yield()：当前协程让出
+    BUILTIN_CO_CURRENT,          // current() → co 实例或 null
+    BUILTIN_CO_IS_DEAD,          // co.isDead(impl) → bool
+    BUILTIN_CO_DESTROY,          // co.destroy(impl)
+    /* Phase 7.2：per-thread scheduler（reactor + 就绪队列 + TLS）
+     * scheduler(reactor) 创建并返回；setScheduler 绑定当前线程（TLS + drain 钩子）；
+     * clearScheduler 解绑；destroyScheduler 销毁。 */
+    BUILTIN_SCHEDULER_NEW,       // scheduler(reactor) → sched ptr
+    BUILTIN_SCHEDULER_SET,       // setScheduler(sched)：TLS 置位 + reactor drain 钩子
+    BUILTIN_SCHEDULER_CLEAR,    // clearScheduler(sched)：TLS 清 + reactor drain 钩子清
+    BUILTIN_SCHEDULER_DESTROY,  // destroyScheduler(sched)
+    BUILTIN_SCHEDULER_POST,     // postReady(sched, co)：手动投递协程到就绪队列（测试/跨线程用）
+    /* ===== Phase 7.3：跨线程唤醒原语（coWakeup/coCond） =====
+     * coWakeup(co, sched)：跨线程投递协程到目标 scheduler + 唤醒 reactor；
+     * coCond 条件变量：wait yield + signal/broadcast wakeup。
+     * 对标 lthread lthread_cond_t（create/wait/signal/broadcast）。 */
+    BUILTIN_CO_WAKEUP,          // coWakeup(co, sched)：跨线程唤醒（post + reactor self-pipe）
+    BUILTIN_COWAKE_COND_NEW,    // coCond() → cond 实例（ptr）
+    BUILTIN_COWAKE_COND_WAIT,   // cond.wait()：当前协程挂 waiter 队列 + yield
+    BUILTIN_COWAKE_COND_SIGNAL, // cond.signal()：唤醒一个 waiter
+    BUILTIN_COWAKE_COND_BCAST,  // cond.broadcast()：唤醒全部 waiter
+    /* ===== Phase 7.4：compute worker pool =====
+     * computeBegin()：当前协程迁入 compute 池（N=CPU 核数 worker，无 reactor），
+     * CPU 密集段不卡 IO reactor；computeEnd()：迁回老家 IO scheduler。
+     * 对标 lthread_compute_begin/end（迁移协议见 lm_co.h）。 */
+    BUILTIN_COMPUTE_BEGIN,      // computeBegin()：当前协程迁入 compute 池
+    BUILTIN_COMPUTE_END,        // computeEnd()：迁回老家 IO scheduler
     /* ===== 三角/反三角/对数/指数（全局形式透传，1~2 参，返回 double） ===== */
     BUILTIN_SIN,           // sin(x)：正弦（弧度）
     BUILTIN_COS,           // cos(x)：余弦（弧度）

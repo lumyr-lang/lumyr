@@ -973,7 +973,8 @@ Value lumyr_index_get(Value c, Value idx) {
         if(strcmp(idxcs, "type") == 0) return lumyr_make_string(c.v.err.type ? c.v.err.type : "");
         if(strcmp(idxcs, "message") == 0) return lumyr_make_string(c.v.err.message ? c.v.err.message : "");
         if(strcmp(idxcs, "stack") == 0) return lumyr_make_string(c.v.err.stack ? c.v.err.stack : "");
-        runtime_error("错误对象只有 type/message/stack 三个字段");
+        if(strcmp(idxcs, "code") == 0) return lumyr_make_int(c.v.err.code);
+        runtime_error("错误对象只有 type/message/stack/code 四个字段");
         return val_none();
     }
     long long i = array_index_of(idx);

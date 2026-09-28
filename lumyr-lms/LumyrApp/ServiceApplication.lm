@@ -1,9 +1,10 @@
 // ============================================================
-// lumyr-ServiceApplication：通用 TCP 服务应用基座
+// lumyr-ServiceApplication：通用 TCP 服务应用基座（reactor + 协程模型）
 //   ServiceHandler             连接处理器契约（命名接口）
-//   ServiceConnectionHandler   单连接处理线程
-//   ServiceApplication         继承 Application：accept 循环 + 每连接一线程 +
-//                              线程回收 + stop 自连唤醒，不绑任何上层协议
+//   ServiceConnectionHandler   单连接处理协程（持有 Coroutine，非 Thread）
+//   ServiceApplication         继承 Application：onStart 建 reactor + setReactor；
+//                              run spawn accept loop 协程后进入 reactor.run() 事件循环；
+//                              stop 调 reactor.stop 打破事件循环；onStop 清理 reactor。
 //
 // 定位：
 //   自定义协议服务（echo、私有 RPC、游戏网关、长连接推送等）的基座。
@@ -13,12 +14,56 @@
 //     conn.send(data) / conn.close()
 //
 //   WebApplication（<App/WebApplication>）继承本类，仅重写 createHandler
-//   换入 HTTP 连接处理器，复用全部 accept/线程/停止骨架。
+//   换入 HTTP 连接处理器，复用全部 reactor+协程骨架。
+//
+// 模型要点（Phase 6 换底）：
+//   - accept/recv/send/connect 在协程上下文内自动协程化（lm_socket.c 已做）：
+//     EAGAIN → co_wait_fd 注册事件 + lm_co_yield 切回 reactor 主循环；
+//     事件就绪 → co_resume_handler → lm_co_resume 协程从 yield 后继续。
+//   - reactor 单线程跑所有协程：accept loop 协程 + 每连接一个 handler 协程，
+//     无线程切换开销，无锁（activeHandlers/activeCount 仅 reactor 主线程访问）。
+//   - stop 由外部线程调：super.stop (running=false) + reactor.stop (stop_flag)，
+//     下一轮 epoll_wait/kevent 立即返回 0，reactor.run() 退出。
+//     无需自连唤醒（reactor.stop 直接打破事件循环）。
+//   - run 退出后清理：destroy accept loop 协程 + 所有挂起的 handler 协程
+//     （lm_co_destroy 对 DEAD/SUSPENDED 状态安全）。
 //
 // 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
-//   host    string  默认 "0.0.0.0"
-//   port    int     默认 8080
-//   backlog int     默认 128
+//   host         string  默认 "0.0.0.0"
+//   port         int     默认 8080
+//   backlog      int     默认 128（listen 全连接队列长度；高并发下建议
+//                        调大，如 4096/8192，超限的握手被内核丢弃由客户端重试）
+//   workers      int     默认 1（单线程）；>1 启用 Phase 7.5 多线程模式——
+//                        n 个 ServiceWorker（n-1 子线程 + 主线程）各自独立
+//                        reactor + scheduler + SO_REUSEPORT 同端口 listen，
+//                        内核按连接 hash 分发；maxConnections 转为 per-worker 限制
+//   connCapacity int     默认 65536（Phase 7.6）：reactor 连接池容量，
+//                        即可跟踪的最大 fd 数（连接对象池按 fd 索引预分配）。
+//                        取值应 ≥ 进程 fd 上限（ulimit -n）；fd 超出容量时
+//                        新连接被直接拒绝。多线程模式下为 per-worker 容量。
+//
+// 两个"连接数"概念的区分：
+//   connCapacity    资源容量：reactor 连接池大小，决定能跟踪多少 fd，
+//                   随 fd 上限一次性预留（每槽位约百字节，预分配不占额外内存）
+//   maxConnections  业务限流：在役连接达到上限后新连接走 onRejectConnection
+//                   （TCP 直接关 / HTTP 503），0 = 不限
+//
+// 系统级调优要点（Phase 7.6，单机 C1M 量级的前提）：
+//   fd 上限       每连接占 1 个 fd，进程 fd 上限决定连接数天花板。
+//                 macOS: launchctl limit maxfiles / ulimit -n；
+//                 Linux: /etc/security/limits.conf + systemd LimitNOFILE。
+//                 调高 fd 上限后 connCapacity 需同步调大（≥ ulimit -n）。
+//   SO_REUSEADDR  ServerSocket 已默认开启（重启可绑 TIME_WAIT 残留端口）。
+//   SO_REUSEPORT  多线程模式自动开启（workers > 1 时各 worker 同端口 listen）。
+//   内存预算      单连接成本 ≈ 连接对象（约百字节，连接池预分配）
+//                 + 协程控制块（约数百字节）+ 协程栈（默认 128 KiB 虚拟地址，
+//                 mmap 惰性分配——物理内存只按实际触及页计费；VM 调用帧较深，
+//                 IO 型连接协程实测触及约 70 KiB）+ 框架对象（handler/闭包等
+//                 约千字节级）。实测口径：4000 并发长连接 echo 峰值 RSS
+//                 约 296 MiB（含 VM 基线约 1.5 MiB），折合每连接约 74 KiB。
+//                 物理内存粗算：每连接数十 KiB 量级（视业务栈深度），
+//                 10 万连接约 7~8 GiB；虚拟地址空间每连接固定 132 KiB 左右
+//                 （64 位系统地址空间充裕，不构成瓶颈）。
 //
 // 用法：
 //   import <App/ServiceApplication>;
@@ -34,7 +79,7 @@
 
 import <App/Application>;
 import <NetWork/Socket>;
-import <Thread/Thread>;
+import <NetWork/Reactor>;
 
 // 连接处理器契约：在原始连接上实现自定义协议；返回后连接由框架关闭
 public interface ServiceHandler {
@@ -42,45 +87,266 @@ public interface ServiceHandler {
 }
 
 // ============================================================
-// ServiceConnectionHandler：单连接处理线程
-// 执行应用的 handleConnection（用户协议逻辑）→ 兜底关闭连接 → 自报完成。
-// 用户逻辑抛错只影响本连接，不拖垮服务。
+// ServiceConnectionHandler：单连接处理协程
+// 构造即 spawn 协程（state=READY，不立即执行）；start() resume 一次跑到第一个
+// yield（recv/send 等待 IO 事件）；协程内 try handleConnection → 兜底 close →
+// 自报 markFinished。用户逻辑抛错只影响本协程，不拖垮 reactor。
+// destroy() 替代 Thread.join：reactor 退出后强制释放挂起的协程栈。
 // ============================================================
-class ServiceConnectionHandler extends Thread {
+class ServiceConnectionHandler {
     app: any;
     conn: any;
+    co: any;       // Coroutine 实例
     active: bool;
 
     func ServiceConnectionHandler(app, conn) {
-        super();
         self.app = app;
         self.conn = conn;
         self.active = true;
+        // 协程入口接 handler 自身为参数，避免闭包捕获歧义
+        self.co = Coroutine(func(h) {
+            c = h.conn;
+            try {
+                h.app.handleConnection(c);
+            } catch (e) { x = 1; }
+            try {
+                c.close();
+            } catch (e2) { x = 1; }
+            h.app.markFinished(h);
+        }, self);
     }
 
+    // 启动协程：resume 一次跑到第一个 yield 或结束
+    func start() {
+        self.co.resume();
+    }
+
+    // Phase 7.5 多线程模式：重绑协程的 owner（默认 owner 为 app 自身）。
+    // 多 worker 模式下 accept loop 把 owner 重绑为所属 ServiceWorker，
+    // 使 markFinished 落到 per-worker 状态（worker 线程本地，无跨线程竞争）；
+    // handleConnection 等虚分派由 worker 委托回 app（子类重写仍生效）。
+    func bindOwner(owner) {
+        self.app = owner;
+        return self;
+    }
+
+    // 销毁协程（替代 Thread.join）：reactor 退出后清理挂起协程
+    func destroy() {
+        if (self.co != null) {
+            self.co.destroy();
+            self.co = null;
+        }
+    }
+}
+
+// ============================================================
+// ServiceWorker：多线程模式下的单 worker（Phase 7.5 SO_REUSEPORT）
+// 每个 worker 线程独立持有整套 per-thread 状态：
+//   reactor + scheduler + SO_REUSEPORT 同端口 listen socket + accept 协程
+//   + 连接协程队列（activeHandlers/finishedHandlers/activeCount 线程本地）。
+// 内核按连接 5 元组 hash 把新连接分发到各 worker 的 listen socket，
+// 连接全程在 accept 它的 worker 线程内处理（协程不跨线程迁移）。
+//
+// handler owner 鸭子类型：连接协程（ServiceConnectionHandler /
+// HttpConnectionHandler）bindOwner(worker) 后调 worker 的
+//   handleConnection / dispatchWithFilters / markFinished——
+//   前两者委托回 app（虚分派保持，子类重写生效），
+//   markFinished 落 worker 本地状态（无跨线程竞争）。
+//
+// 异常传递：子线程 run 内未捕获异常（如 bind 失败）存 error 字段，
+// 主线程 join 时重抛（同 Application.startAsync 的 bgError 模式）。
+// ============================================================
+class ServiceWorker {
+    app: any;
+    idx: int;
+    serverSock: any;
+    reactorInst: any;
+    scheduler: any;
+    acceptCo: any;
+    finishedHandlers: array;
+    activeHandlers: array;
+    activeCount: int;
+    acceptTotal: int;      // 累计 accept 连接数（分布统计，主线程 run 后只读）
+    stopRequested: bool;
+    tid: int;
+    error: any;
+
+    func ServiceWorker(app, idx: int) {
+        self.app = app;
+        self.idx = idx;
+        self.serverSock = null;
+        self.reactorInst = null;
+        self.scheduler = null;
+        self.acceptCo = null;
+        self.finishedHandlers = [];
+        self.activeHandlers = [];
+        self.activeCount = 0;
+        self.acceptTotal = 0;
+        self.stopRequested = false;
+        self.tid = 0;
+        self.error = null;
+    }
+
+    // 子线程入口：完整跑 run 生命周期；异常捕获存 error，join 时主线程重抛
+    func startAsync() {
+        self.tid = thread(func(w) {
+            try {
+                w.run();
+            } catch (e) {
+                w.error = e;
+            }
+            return 1;
+        }, self);
+        return self;
+    }
+
+    // 等待子线程结束（子线程错误在此重抛）
+    func join() {
+        if (self.tid > 0) {
+            tid = self.tid;
+            self.tid = 0;
+            thread_join(tid);
+            if (self.error != null) {
+                e = self.error;
+                self.error = null;
+                throw e;
+            }
+        }
+        return self;
+    }
+
+    // worker 主流程（主线程直接调 / 子线程入口调）：
+    //   建 reactor + scheduler（TLS 均为线程本地）→ SO_REUSEPORT 同端口 listen
+    //   → spawn accept loop 协程 → reactor.run → 退出后清理 + 拆 scheduler/reactor
     func run() {
-        conn = self.conn;
-        try {
-            self.app.handleConnection(conn);
-        } catch (e) { x = 1; }
-        try {
-            conn.close();
-        } catch (e2) { x = 1; }
-        self.app.markFinished(self);
-        return 1;
+        app = self.app;
+        self.reactorInst = ReactorInstance(app.connCapacity());
+        setReactor(self.reactorInst);
+        self.scheduler = scheduler(self.reactorInst.impl);
+        setScheduler(self.scheduler);
+        // stop 先于 run 到达（reactor 建立前）：立即停，不进事件循环
+        if (self.stopRequested) { self.reactorInst.stop(); }
+        // SO_REUSEPORT：多 worker 同端口 listen，内核 hash 分发连接
+        srv = ServerSocket(app.host(), app.port(), app.backlog(), 1);
+        self.serverSock = srv;
+        // accept loop 协程（与单线程路径同构，差别仅在连接协程归 worker 管理）
+        self.acceptCo = Coroutine(func(w) {
+            ls = w.serverSock;
+            a = w.app;
+            while (a.running) {
+                conn = ls.accept();
+                if (a.running == false) {
+                    try { conn.close(); } catch (e) { x = 1; }
+                    break;
+                }
+                // 并发上限保护：多线程模式下 maxConnections 为 per-worker 限制
+                if (a.maxConnections > 0 && w.activeCount >= a.maxConnections) {
+                    a.onRejectConnection(conn);
+                    continue;
+                }
+                h = a.createHandler(conn);
+                h.bindOwner(w);
+                w.activeHandlers.add(h);
+                w.activeCount = w.activeCount + 1;
+                w.acceptTotal = w.acceptTotal + 1;
+                h.start();
+            }
+        }, self);
+        self.acceptCo.resume();
+        self.reactorInst.run();
+        // reactor 退出后清理：accept 协程 + listen socket + 挂起 handler 协程
+        if (self.acceptCo != null) {
+            self.acceptCo.destroy();
+            self.acceptCo = null;
+        }
+        if (self.serverSock != null) {
+            self.serverSock.close();
+            self.serverSock = null;
+        }
+        self.reapFinished();
+        self.destroyActive();
+        // onStop 等价：清 scheduler（TLS + drain 钩子）+ destroy + clearReactor
+        if (self.scheduler != null) {
+            clearScheduler(self.scheduler);
+            destroyScheduler(self.scheduler);
+            self.scheduler = null;
+        }
+        clearReactor();
+        if (self.reactorInst != null) {
+            self.reactorInst.destroy();
+            self.reactorInst = null;
+        }
+    }
+
+    // 停止：置标志位 + reactor.stop 打破事件循环（跨线程调用安全：
+    // reactor.stop 走 C 层 stop_flag + self-pipe 唤醒）
+    func stop() {
+        self.stopRequested = true;
+        if (self.reactorInst != null) {
+            self.reactorInst.stop();
+        }
+        return self;
+    }
+
+    // ---- handler owner 鸭子类型接口（bindOwner 后连接协程调这里）----
+    // 业务分派委托回 app（虚分派保持，子类重写生效）；
+    // 状态回收落 worker 本地（worker 线程单线程访问，无锁）。
+
+    func handleConnection(conn) {
+        return self.app.handleConnection(conn);
+    }
+
+    // 仅 WebApplication 的 HttpConnectionHandler 会调（ServiceApplication
+    // 自身的 handler 只走 handleConnection/markFinished）
+    func dispatchWithFilters(req) {
+        return self.app.dispatchWithFilters(req);
+    }
+
+    // 连接协程完成回调：标记挂起待回收（worker 线程本地，无锁）
+    func markFinished(h) {
+        h.active = false;
+        self.finishedHandlers.add(h);
+        self.activeCount = self.activeCount - 1;
+    }
+
+    // 回收已完成的连接协程（run 退出时调用，destroy 释放协程栈）
+    private func reapFinished() {
+        done = self.finishedHandlers;
+        self.finishedHandlers = [];
+        still = [];
+        for h in self.activeHandlers {
+            if (h.active) { still.add(h); }
+        }
+        self.activeHandlers = still;
+        for h in done { h.destroy(); }
+    }
+
+    // run 退出时 destroy 所有在役连接协程（挂起在 IO yield 的协程强制释放）
+    private func destroyActive() {
+        all = self.activeHandlers;
+        self.activeHandlers = [];
+        self.activeCount = 0;
+        for h in all { h.destroy(); }
     }
 }
 
 // 通用 TCP 服务应用基类
 public class ServiceApplication extends Application {
     serverSock: any;
+    reactor: any;        // ReactorInstance
+    scheduler: any;      // Phase 7.2：per-thread scheduler（绑定 reactor + 就绪队列）
+    acceptCo: any;       // accept loop 协程（Coroutine 实例）
     hostVal: string;
     portVal: int;
     backlogVal: int;
     finishedHandlers: array;
     activeHandlers: array;
-    handlerLock: int;
     target: any;
+    maxConnections: int;   // 并发连接上限（0 = 不限）
+    activeCount: int;      // 在役连接协程计数
+    workerCountVal: int;   // Phase 7.5：worker 线程数（0 = 未设置，走配置/默认 1）
+    workerList: any;       // Phase 7.5：多线程模式下的 ServiceWorker 数组（null = 单线程）
+    connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/默认 65536）
 
     func ServiceApplication() {
         super();
@@ -125,13 +391,20 @@ public class ServiceApplication extends Application {
 
     private func initServiceFields() {
         self.serverSock = null;
+        self.reactor = null;
+        self.scheduler = null;
+        self.acceptCo = null;
         self.hostVal = "";
         self.portVal = 0;
         self.backlogVal = 0;
         self.finishedHandlers = [];
         self.activeHandlers = [];
-        self.handlerLock = mutex();
         self.target = null;
+        self.maxConnections = 0;
+        self.activeCount = 0;
+        self.workerCountVal = 0;
+        self.workerList = null;
+        self.connCapacityVal = 0;
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -151,7 +424,54 @@ public class ServiceApplication extends Application {
         return self.configInt("backlog", 128);
     }
 
-    // ---- 连接处理（核心扩展点，连接线程内调用）----
+    // 设置并发连接上限：在役连接数达到上限后，新连接交 onRejectConnection
+    // 处理（默认直接关闭，HTTP 应用重写为 503 响应）。0 = 不限（默认）。
+    func setMaxConnections(max: int) {
+        if (max < 0) {
+            throw "连接上限不能为负 / max connections must not be negative";
+        }
+        self.maxConnections = max;
+        return self;
+    }
+
+    // ---- Phase 7.5：多线程模式（SO_REUSEPORT 同端口多 reactor）----
+    // worker 线程数：1 = 单线程（默认，既有行为）；>1 时 n-1 个子线程 +
+    // 主线程各跑一个 ServiceWorker，各自独立 reactor + scheduler +
+    // SO_REUSEPORT 同端口 listen，内核按连接 hash 分发到各 worker。
+    // 注意：多线程模式下 maxConnections 为 per-worker 限制。
+    func workerCount(): int {
+        if (self.workerCountVal > 0) { return self.workerCountVal; }
+        return self.configInt("workers", 1);
+    }
+
+    // 编程式设置 worker 线程数（须在 start 前调用）
+    func setWorkers(n: int) {
+        if (n < 1) {
+            throw "worker 线程数必须 ≥ 1 / worker count must be at least 1";
+        }
+        self.workerCountVal = n;
+        return self;
+    }
+
+    // ---- Phase 7.6：reactor 连接池容量（connCapacity）----
+    // 资源容量语义（区别于 maxConnections 业务限流）：reactor 连接池按 fd
+    // 索引预分配，决定可跟踪的最大 fd 数；fd 超出容量时新连接被直接拒绝。
+    // 取值应 ≥ 进程 fd 上限（ulimit -n）；多线程模式下为 per-worker 容量。
+    func connCapacity(): int {
+        if (self.connCapacityVal > 0) { return self.connCapacityVal; }
+        return self.configInt("connCapacity", 65536);
+    }
+
+    // 编程式设置 reactor 连接池容量（须在 start 前调用）
+    func setConnCapacity(n: int) {
+        if (n < 1) {
+            throw "连接池容量必须 ≥ 1 / connection pool capacity must be at least 1";
+        }
+        self.connCapacityVal = n;
+        return self;
+    }
+
+    // ---- 连接处理（核心扩展点，连接协程内调用）----
     // 默认：挂有 target 处理器时执行——func 直接调用，
     // ServiceHandler 对象调 serve；无 target 为空操作（连接随即关闭）。
     // 子类可重写实现自己的连接逻辑。
@@ -163,67 +483,174 @@ public class ServiceApplication extends Application {
         }
     }
 
-    // 连接处理器工厂：run() 每接受一个连接调一次。
-    // 子类（如 WebApplication）重写以换入协议专属的连接线程。
+    // 连接处理器工厂：accept loop 协程每接受一个连接调一次。
+    // 子类（如 WebApplication）重写以换入协议专属的连接协程。
     func createHandler(conn) {
         return ServiceConnectionHandler(self, conn);
     }
 
+    // 并发超限拒绝钩子（accept loop 内调用）：默认 TCP 层直接关闭；
+    // 协议子类（如 WebApplication）重写为明确的协议层拒绝（HTTP 503）。
+    func onRejectConnection(conn) {
+        conn.close();
+        return self;
+    }
+
+    // ---- 生命周期钩子 ----
+
+    // onStart：创建 reactor + setReactor（socket API 协程化的全局开关）
+    //         + Phase 7.2：创建 scheduler 绑定 reactor，置当前线程 TLS + drain 钩子。
+    //         scheduler 使 spawn 后的协程自动入就绪队列，由 reactor 主循环每轮
+    //         drain_ready 消费 resume（不再需业务层显式 resume）。
+    func onStart() {
+        // 多线程模式：reactor/scheduler 由各 worker 线程自建自拆（TLS 线程本地），
+        // app 层不持有全局 reactor
+        if (self.workerCount() > 1) { return; }
+        self.reactor = ReactorInstance(self.connCapacity());
+        setReactor(self.reactor);
+        // Phase 7.2：创建 scheduler 绑定 reactor，置 TLS + drain 钩子。
+        // spawn 后协程自动入就绪队列，reactor 主循环每轮 drain_ready 消费 resume。
+        self.scheduler = scheduler(self.reactor.impl);
+        setScheduler(self.scheduler);
+    }
+
+    // onStop：清 scheduler（TLS + drain 钩子）+ destroy + clearReactor + reactor.destroy
+    func onStop() {
+        // 多线程模式：worker 各自已拆 reactor/scheduler；workerList 引用保留
+        // （run 结束后可读取各 worker 的 acceptTotal 分布统计）
+        if (self.workerList != null) { return; }
+        if (self.scheduler != null) {
+            clearScheduler(self.scheduler);
+            destroyScheduler(self.scheduler);
+            self.scheduler = null;
+        }
+        clearReactor();
+        if (self.reactor != null) {
+            self.reactor.destroy();
+            self.reactor = null;
+        }
+    }
+
     // ---- 应用主循环（start 生命周期内执行，阻塞至 stop）----
+    // 创建 listen socket → spawn accept loop 协程 → 进入 reactor 事件循环
+    // → reactor 退出后清理 accept 协程 + 挂起 handler 协程 + listen socket
     func run() {
+        // Phase 7.5：多线程模式分派（workerCount > 1 走 SO_REUSEPORT 多 reactor）
+        if (self.workerCount() > 1) {
+            self.runMultiWorker(self.workerCount());
+            return;
+        }
         srv = ServerSocket(self.host(), self.port(), self.backlog());
         self.serverSock = srv;
-        while (self.running) {
-            conn = srv.accept();
-            // stop 的自连唤醒：accept 返回后先确认仍在运行
-            if (self.running == false) {
-                conn.close();
-                break;
+        // accept loop 协程：循环 srv.accept()（EAGAIN 自动 yield 等读事件）
+        // → createHandler + h.start()（resume handler 协程到第一个 yield）
+        self.acceptCo = Coroutine(func(app) {
+            ls = app.serverSock;
+            while (app.running) {
+                conn = ls.accept();
+                // stop 后 accept 返回的连接直接关闭退出
+                if (app.running == false) {
+                    try { conn.close(); } catch (e) { x = 1; }
+                    break;
+                }
+                // 并发上限保护：在役连接数已达上限 → 拒绝新连接
+                // （不启协程，防止慢客户端/攻击耗尽协程资源）
+                if (app.maxConnections > 0 && app.activeCount >= app.maxConnections) {
+                    app.onRejectConnection(conn);
+                    continue;
+                }
+                h = app.createHandler(conn);
+                app.activeHandlers.add(h);
+                app.activeCount = app.activeCount + 1;
+                h.start();
             }
-            self.reapFinished();
-            h = self.createHandler(conn);
-            lock(self.handlerLock);
-            self.activeHandlers.add(h);
-            unlock(self.handlerLock);
-            h.start();
+        }, self);
+        self.acceptCo.resume();  // 启动协程跑到第一个 yield（accept 等读事件）
+        // 进入 reactor 事件循环（阻塞至 stop）
+        self.reactor.run();
+        // reactor 退出后清理：accept 协程 + 挂起 handler 协程 + listen socket
+        if (self.acceptCo != null) {
+            self.acceptCo.destroy();
+            self.acceptCo = null;
         }
-        // 收尾：关闭监听、回收全部连接线程
         if (self.serverSock != null) {
             self.serverSock.close();
             self.serverSock = null;
         }
         self.reapFinished();
-        self.joinActive();
+        self.destroyActive();
     }
 
-    // 停止：置标志位后自连一次，唤醒阻塞在 accept 的主循环。
+    // ---- Phase 7.5：多线程主循环 ----
+    // n-1 个子线程 + 主线程各跑一个 ServiceWorker（各自 SO_REUSEPORT 同端口
+    // listen）。主线程跑最后一个 worker 并阻塞；主 worker 退出（stop 或异常）
+    // 后停掉所有子 worker 并 join（子线程错误随 join 重抛）。
+    private func runMultiWorker(n: int) {
+        workers = [];
+        i = 0;
+        while (i < n) {
+            workers.add(ServiceWorker(self, i));
+            i = i + 1;
+        }
+        self.workerList = workers;
+        // 先启动子 worker 线程（前 n-1 个）
+        i = 0;
+        while (i < n - 1) {
+            workers[i].startAsync();
+            i = i + 1;
+        }
+        // 主线程跑最后一个 worker（阻塞至 stop）
+        err = null;
+        try {
+            workers[n - 1].run();
+        } catch (e) {
+            err = e;
+        }
+        // 主 worker 退出后：停所有子 worker（幂等，已停的 reactor.stop 无害）
+        i = 0;
+        while (i < n - 1) {
+            workers[i].stop();
+            i = i + 1;
+        }
+        // join 收子线程；子线程错误在主流程无错时抛出（不覆盖主错误）
+        i = 0;
+        while (i < n - 1) {
+            try {
+                workers[i].join();
+            } catch (e2) {
+                if (err == null) { err = e2; }
+            }
+            i = i + 1;
+        }
+        if (err != null) { throw err; }
+    }
+
+    // 停止：置标志位 + reactor.stop 打破事件循环（无需自连唤醒）。
     // 监听 socket 由 run 退出循环后自行关闭（避免跨线程 close 竞态）。
     func stop() {
         super.stop();
-        if (self.serverSock != null) {
-            try {
-                h = self.host();
-                if (h == "0.0.0.0" || h == "") { h = "127.0.0.1"; }
-                wake = ClientSocket(h, self.port());
-                wake.close();
-            } catch (e) { x = 1; }
+        // 多线程模式：停所有 worker 的 reactor（worker.reactor 建立前
+        // stop 先到时由 worker.run 内的 stopRequested 检查兜底）
+        if (self.workerList != null) {
+            for w in self.workerList { w.stop(); }
+        }
+        if (self.reactor != null) {
+            self.reactor.stop();
         }
         return self;
     }
 
-    // ---- 连接线程管理 ----
+    // ---- 连接协程管理（reactor 主线程内，无锁）----
 
-    // 连接线程完成回调（连接线程内最后调用）：标记挂起待回收
+    // 连接协程完成回调（协程内最后调用）：标记挂起待回收
     func markFinished(h) {
-        lock(self.handlerLock);
         h.active = false;
         self.finishedHandlers.add(h);
-        unlock(self.handlerLock);
+        self.activeCount = self.activeCount - 1;
     }
 
-    // 回收已完成的连接线程（join 已结束线程立即返回，不阻塞主循环）
+    // 回收已完成的连接协程（run 退出时调用，destroy 释放协程栈）
     private func reapFinished() {
-        lock(self.handlerLock);
         done = self.finishedHandlers;
         self.finishedHandlers = [];
         still = [];
@@ -231,17 +658,15 @@ public class ServiceApplication extends Application {
             if (h.active) { still.add(h); }
         }
         self.activeHandlers = still;
-        unlock(self.handlerLock);
-        for h in done { h.join(); }
+        for h in done { h.destroy(); }
     }
 
-    // run 退出时等待全部在役连接线程处理完在飞的请求
-    private func joinActive() {
-        lock(self.handlerLock);
+    // run 退出时 destroy 所有在役连接协程（挂起在 IO yield 的协程强制释放）
+    private func destroyActive() {
         all = self.activeHandlers;
         self.activeHandlers = [];
-        unlock(self.handlerLock);
-        for h in all { h.join(); }
+        self.activeCount = 0;
+        for h in all { h.destroy(); }
     }
 
     @FuncAlias("toStr")

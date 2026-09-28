@@ -1,0 +1,129 @@
+// ============================================================
+// lumyr-Reactor：ReactorInterface + ReactorInstance + Coroutine
+// 面向对象封装内置 reactor + 协程 builtin：
+//   reactor()/run()/stop()/addTimer()/delTimer()/destroyReactor()
+//   setSocketReactor() / spawn()/resume()/coYield()/current()/isDead()/destroy()
+// 注：协程让出用 coYield() 而非 yield（lm 的 yield 是 generator 语句关键字，仅限 gen func）
+//
+// 分层：
+//   ReactorInterface   reactor 契约（run/stop/timer/destroy）
+//   ReactorInstance    reactor 实例（构造即创建，run 进入事件循环）
+//   Coroutine          协程实例（spawn/resume/yield/isDead/destroy）
+//
+// 用法：
+//   import <NetWork/Reactor>;
+//   r = ReactorInstance();
+//   setReactor(r);
+//   co = Coroutine(func(arg) { print("co: " + arg); yield(); print("co resumed"); }, 42);
+//   co.resume();   // 协程跑到 yield
+//   co.resume();   // 协程从 yield 继续到结束
+//   co.destroy();
+//   r.destroy();
+//
+// reactor + 协程化 socket echo server（需 reactor 内置 accept trampoline，Phase 6）：
+//   r = ReactorInstance();
+//   setReactor(r);
+//   srv = ServerSocket("0.0.0.0", 8080);
+//   // reactor.run() 内部 accept + spawn 协程处理（Phase 6 框架层补 accept trampoline）
+//   r.run();
+// ============================================================
+
+// reactor 契约：事件循环 + 定时器 + 生命周期
+public interface ReactorInterface {
+    func run();
+    func stop();
+    func addTimer(ms: int, cb): int;
+    func delTimer(id: int);
+    func destroy();
+}
+
+// reactor 实例：构造即创建，run 进入事件循环
+public class ReactorInstance implements ReactorInterface {
+    impl: any;   // reactor C 指针（VAL_STRUCT_PTR）
+    stopped: bool;
+
+    // 默认 capacity=65536
+    func ReactorInstance() {
+        self.impl = reactor(65536);
+        self.stopped = false;
+    }
+
+    func ReactorInstance(capacity: int) {
+        self.impl = reactor(capacity);
+        self.stopped = false;
+    }
+
+    // 进入 reactor 主循环；run 返回后 stopped=true
+    func run() {
+        run(self.impl);
+        self.stopped = true;
+    }
+
+    func stop() {
+        stop(self.impl);
+        self.stopped = true;
+    }
+
+    // addTimer(ms, cb)：ms 毫秒后触发 cb（lm 函数，无参或接 timerId）
+    // 返回 timerId（>0），失败 -1
+    func addTimer(ms: int, cb): int {
+        return addTimer(self.impl, ms, cb);
+    }
+
+    func delTimer(id: int) {
+        delTimer(self.impl, id);
+    }
+
+    func destroy() {
+        if (self.impl != null) {
+            destroyReactor(self.impl);
+            self.impl = null;
+        }
+    }
+}
+
+// 协程实例：spawn 创建，resume 调度，yield 让出
+public class Coroutine {
+    impl: any;   // lm_co_t C 指针（VAL_STRUCT_PTR）
+
+    // 带参数构造：spawn(f, arg)
+    func Coroutine(f, arg) {
+        self.impl = spawn(f, arg);
+    }
+
+    // 无参数构造：spawn(f, null)
+    func Coroutine(f) {
+        self.impl = spawn(f, null);
+    }
+
+    // resume：从挂起点继续；协程内 yield 会切回这里
+    func resume() {
+        resume(self.impl);
+    }
+
+    // 是否已结束（DEAD）
+    func isDead(): bool {
+        return isDead(self.impl);
+    }
+
+    func destroy() {
+        if (self.impl != null) {
+            destroy(self.impl);
+            self.impl = null;
+        }
+    }
+}
+
+// 全局函数：设置 socket API 使用的 reactor 实例
+// 设置后，协程上下文内调 socket.recv/send/accept/connect 自动协程化（yield 等事件）
+// 注：lm 函数名与 builtin 同名会触发递归解析，故本函数名 setReactor 与 builtin setSocketReactor 分离
+public func setReactor(r: ReactorInstance) {
+    setSocketReactor(r.impl);
+}
+
+// 全局函数：清理全局 reactor 指针（reactor 生命周期收尾时调）
+// reactor.destroy 前后必须清理 g_socket_reactor，否则 destroy 后悬空指针
+// （后续 socket 操作虽走阻塞路径，但悬空指针是隐患）
+public func clearReactor() {
+    setSocketReactor(null);
+}

@@ -1,0 +1,133 @@
+// cowakeup_test.lm —— Phase 7.3 lm 层单测：跨线程唤醒原语（coWakeup/coCond）
+// 验证：coCond wait 挂起协程 + signal/broadcast 跨线程唤醒（主线程 signal →
+//       worker 线程 reactor self-pipe 唤醒 → drain_ready resume 协程）
+// 运行：./bin/lumyr tests/cowakeup_test.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+// 全局 cond（handler 协程 wait，主线程 signal——跨线程唤醒）
+g_cond = coCond();
+
+// 测试 1：coCond 基础冒烟（无 waiter signal no-op）
+func testCondSmoke() {
+    print("[1] coCond 创建 + 无 waiter signal/broadcast no-op / cond smoke");
+    c = coCond();
+    coSignal(c);       // 无 waiter，no-op
+    coBroadcast(c);    // 无 waiter，no-op
+    print("  PASS");
+    return true;
+}
+
+// 测试 2：handler 协程 coWait 挂起 + 主线程 coSignal 跨线程唤醒
+// 完整链路：客户端1 发 "wait" → handler 协程 wait 挂起（worker 线程 reactor）
+// → 主线程 coSignal（跨线程 post + self-pipe 唤醒 worker reactor）
+// → drain_ready resume handler → send("woken") → 客户端1 收到
+func testCondSignalCrossThread() {
+    print("[2] coWait 挂起 + 主线程 coSignal 跨线程唤醒 / cross-thread signal");
+    port = 19101;
+
+    class WaitHandler implements ServiceHandler {
+        func serve(conn) {
+            data = conn.recv(4096);
+            if (data == "wait") {
+                coWait(g_cond);        // 挂起：waiter 队列 + yield
+                conn.send("woken");    // signal 后从这里继续
+            }
+        }
+    }
+
+    app = ServiceApplication("0.0.0.0", port, WaitHandler());
+    app.startAsync();
+    sleep(300);
+
+    // 客户端1 发 "wait"：handler 协程挂起（不回包）
+    cli1 = ClientSocket("127.0.0.1", port);
+    cli1.send("wait");
+
+    // 等 handler 协程跑到 coWait 挂起
+    sleep(300);
+
+    // 主线程 signal：跨线程唤醒（post 到 worker scheduler + self-pipe）
+    coSignal(g_cond);
+    sleep(300);
+
+    r1 = cli1.recv(1024);
+    cli1.close();
+    app.stop();
+    app.join();
+
+    if (r1 != "woken") {
+        print("  FAIL: 期望 woken，实际 " + r1);
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 3：broadcast 唤醒多个 waiter
+func testCondBroadcast() {
+    print("[3] coBroadcast 唤醒多 waiter / broadcast wake all");
+    port = 19102;
+
+    class WaitHandler implements ServiceHandler {
+        func serve(conn) {
+            data = conn.recv(4096);
+            if (data == "wait") {
+                coWait(g_cond);
+                conn.send("woken");
+            }
+        }
+    }
+
+    app = ServiceApplication("0.0.0.0", port, WaitHandler());
+    app.startAsync();
+    sleep(300);
+
+    // 3 个客户端同时挂起在 coWait
+    clis = [];
+    i = 0;
+    while (i < 3) {
+        c = ClientSocket("127.0.0.1", port);
+        c.send("wait");
+        clis.add(c);
+        i = i + 1;
+    }
+    sleep(300);
+
+    // 主线程 broadcast：唤醒全部 waiter
+    coBroadcast(g_cond);
+    sleep(300);
+
+    ok = true;
+    i = 0;
+    while (i < 3) {
+        r = clis[i].recv(1024);
+        if (r != "woken") {
+            ok = false;
+            print("  FAIL: cli" + i + " 期望 woken，实际 " + r);
+        }
+        clis[i].close();
+        i = i + 1;
+    }
+    app.stop();
+    app.join();
+
+    if (ok) { print("  PASS"); }
+    return ok;
+}
+
+// 主入口
+pass = 0;
+total = 3;
+
+if (testCondSmoke()) pass++;
+if (testCondSignalCrossThread()) pass++;
+if (testCondBroadcast()) pass++;
+
+print("");
+print("Phase 7.3 lm 单测: " + pass + "/" + total + " PASS");
+if (pass == total) {
+    print("ALL PASS / 全部通过");
+} else {
+    print("SOME FAILED / 存在失败");
+}

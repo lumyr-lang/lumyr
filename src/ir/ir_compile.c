@@ -296,6 +296,37 @@ int builtin_id_by_name(const char* name) {
         {"setOption", BUILTIN_SOCKET_SETOPT},
         {"getOption", BUILTIN_SOCKET_GETOPT},
         {"fileno", BUILTIN_SOCKET_FILENO},
+        /* reactor + 协程（Phase 5：大写为主用名，小写驼峰为别名）
+         * 注：reactor 与 co 销毁用不同名避免 builtin id 冲突——
+         * reactor 用 destroyReactor，co 用 destroy */
+        {"reactor", BUILTIN_REACTOR_NEW}, {"Reactor", BUILTIN_REACTOR_NEW},
+        {"run", BUILTIN_REACTOR_RUN},
+        {"stop", BUILTIN_REACTOR_STOP},
+        {"addTimer", BUILTIN_REACTOR_ADD_TIMER},
+        {"delTimer", BUILTIN_REACTOR_DEL_TIMER},
+        {"destroyReactor", BUILTIN_REACTOR_DEL},  /* reactor 销毁 */
+        {"setSocketReactor", BUILTIN_SET_SOCKET_REACTOR},
+        {"spawn", BUILTIN_CO_SPAWN},
+        {"resume", BUILTIN_CO_RESUME},
+        {"coYield", BUILTIN_CO_YIELD},             /* 协程让出：与 lm 的 yield 关键字（generator 语句）分离 */
+        {"current", BUILTIN_CO_CURRENT},
+        {"isDead", BUILTIN_CO_IS_DEAD},
+        {"destroy", BUILTIN_CO_DESTROY},           /* co 销毁 */
+        /* Phase 7.2：per-thread scheduler（reactor + 就绪队列 + TLS） */
+        {"scheduler", BUILTIN_SCHEDULER_NEW},
+        {"setScheduler", BUILTIN_SCHEDULER_SET},
+        {"clearScheduler", BUILTIN_SCHEDULER_CLEAR},
+        {"destroyScheduler", BUILTIN_SCHEDULER_DESTROY},
+        {"postReady", BUILTIN_SCHEDULER_POST},
+        /* Phase 7.3：跨线程唤醒原语（coWakeup/coCond） */
+        {"coWakeup", BUILTIN_CO_WAKEUP},
+        {"coCond", BUILTIN_COWAKE_COND_NEW},
+        {"coWait", BUILTIN_COWAKE_COND_WAIT},
+        {"coSignal", BUILTIN_COWAKE_COND_SIGNAL},
+        {"coBroadcast", BUILTIN_COWAKE_COND_BCAST},
+        /* Phase 7.4：compute worker pool（CPU 密集协程迁入 worker 池） */
+        {"computeBegin", BUILTIN_COMPUTE_BEGIN},
+        {"computeEnd", BUILTIN_COMPUTE_END},
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {

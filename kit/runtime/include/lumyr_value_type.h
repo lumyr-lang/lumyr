@@ -188,6 +188,7 @@ typedef struct {
     char* type;      // 错误类型名（"RuntimeError" / throw 自定义）
     char* message;   // 错误消息
     char* stack;     // 调用栈回溯文本（可空）
+    int code;        // 错误码（0=无码，与 lm 层 enum 数值对齐；SocketError 等专用码）
 } ValueError;
 
 // VAL_FUNC：直接持有独立运行时函数堆对象；FFI 外部函数用 ffi_func 字段
@@ -492,6 +493,8 @@ typedef struct {
     uint8_t is_connected;  // 1=已连接（TCP/Unix 流，或 UDP 已设默认对端）
     uint8_t closed;        // 1=已关闭（close() 调用后）
     uint8_t stack_alloc;   // 0=堆分配，1=编译通道栈分配
+    int recv_timeout_ms;   // 协程模式 recv 超时（毫秒，0=不限；setOption recvTimeout 写入，走 reactor 定时器）
+    int send_timeout_ms;   // 协程模式 send 超时（毫秒，0=不限；setOption sendTimeout 写入，走 reactor 定时器）
 } SocketObj;
 
 #endif //LUMYR_VALUE_TYPE_H

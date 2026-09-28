@@ -1,0 +1,201 @@
+// compute_test.lm —— Phase 7.4 lm 层单测：compute worker pool
+// 验证：computeBegin 把 CPU 密集协程迁到 worker 线程池执行（不卡 IO reactor），
+//       computeEnd 迁回老家 IO scheduler 继续收尾；多协程并发进池结果正确；
+//       错误上下文（主线程无协程）正确报错
+// 运行：./bin/lumyr tests/compute_test.lm
+//
+// 作用域注意：lm 函数体内对顶层名"赋值"创建局部遮蔽（读才是 LOAD_GLOBAL），
+// 跨函数可变状态必须走顶层容器元素写（map["k"]=v / arr[i]=v）。
+// 共享状态统一放 g_st map；且全部在 computeEnd 回家（reactor 线程）后写，
+// worker 池并发段不碰共享容器，规避数据竞争。
+import <NetWork/Reactor>;
+
+// 共享状态（reactor 线程内串行写；worker 段只写局部变量）
+g_st = {
+    "r": null,          // 测试 1 ReactorInstance（timer 链 + stop）
+    "r2": null,         // 测试 2 ReactorInstance
+    "sum": 0,           // 测试 1 计算结果
+    "computeDone": false,
+    "tick": 0,          // 心跳计数（timer 链，reactor 线程）
+    "tickerDone": false,
+    "tickAtDone": 0,    // heavy 完成时的心跳数（核心断言：compute 期间 reactor 存活）
+    "heavyMs": 0,       // heavy 全程耗时
+    "multiLeft": 4      // 测试 2 未完成协程数
+};
+g_rArr = [0, 0, 0, 0];          // 测试 2 各协程计算结果（回家后写）
+g_rDoneArr = [false, false, false, false];
+
+// ---- 测试 1：compute 迁移 + IO 心跳不中断 ----
+
+// heavy 协程：computeBegin 迁入 worker 池 → 重计算 → computeEnd 回家
+// 若迁移失效（compute 卡 IO 线程），heavy 期间 timer 全部冻结，
+// tickAtDone == 0 → 断言失败
+// 计算量标定：200 万次循环在 worker 上约 2-4s（VM 解释执行），IO 线程跑
+// 会冻结 reactor 同样时长；ticker 50ms×20=1s → tickAtDone 期望 ~5-8
+func heavyJob(x) {
+    t0 = timestamp_ms();
+    computeBegin();
+    sum = 0;
+    i = 0;
+    while (i < 2000000) { sum = sum + i; i = i + 1; }
+    computeEnd();
+    // 以下均在老家 reactor 线程写共享状态
+    g_st["sum"] = sum;
+    g_st["tickAtDone"] = g_st["tick"];
+    g_st["computeDone"] = true;
+    g_st["heavyMs"] = timestamp_ms() - t0;
+}
+
+// ticker：timer 链心跳（reactor 线程执行，50ms 一跳）
+// 20 跳后置 tickerDone，但继续空跳直到 computeDone（否则 compute 完成时
+// 无人触发 stop，reactor 空转死锁）
+func tickLoop(t) {
+    g_st["tick"] = g_st["tick"] + 1;
+    if (g_st["tick"] >= 20) { g_st["tickerDone"] = true; }
+    if (g_st["tickerDone"] && g_st["computeDone"]) {
+        g_st["r"].stop();              // 两者完成 → 打破事件循环
+    } else {
+        g_st["r"].addTimer(50, tickLoop);
+    }
+}
+
+// 保底：迁移失效导致 reactor 冻结时强制结束测试（12s 超时）
+func bailoutStop(t) {
+    g_st["r"].stop();
+}
+
+func testComputeNotBlockIO() {
+    print("[1] computeBegin/computeEnd 迁移 + IO 心跳不被 CPU 密集卡死 / compute migration");
+    g_st["sum"] = 0; g_st["computeDone"] = false; g_st["tick"] = 0;
+    g_st["tickerDone"] = false; g_st["tickAtDone"] = 0; g_st["heavyMs"] = 0;
+
+    r = ReactorInstance(65536);        // 局部变量；跨函数引用走 g_st["r"]
+    g_st["r"] = r;
+    setReactor(r);
+    sched = scheduler(r.impl);
+    setScheduler(sched);
+
+    Coroutine(heavyJob, null);         // 投就绪队列，reactor drain 自动 resume
+    r.addTimer(50, tickLoop);          // 心跳链
+    r.addTimer(12000, bailoutStop);
+
+    r.run();                           // 阻塞至 stop
+
+    // run 退出后收尾（对齐 ServiceApplication.onStop 契约：清钩子 → 毁 scheduler → 清 reactor）
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    clearReactor();
+    r.destroy();
+    g_st["r"] = null;
+
+    ok = true;
+    if (!g_st["computeDone"]) { ok = false; print("  FAIL: compute 协程未完成 / coroutine not finished"); }
+    if (g_st["sum"] != 1999999000000) { ok = false; print("  FAIL: sum 错误 " + g_st["sum"] + "，期望 1999999000000"); }
+    if (g_st["tick"] < 20) { ok = false; print("  FAIL: 心跳数 " + g_st["tick"] + " < 20"); }
+    if (g_st["tickAtDone"] < 2) {
+        ok = false;
+        print("  FAIL: compute 期间心跳 " + g_st["tickAtDone"] + " < 2（reactor 被 CPU 密集卡死 / IO blocked by compute）");
+    }
+    print("  heavyMs=" + g_st["heavyMs"] + ", tickAtDone=" + g_st["tickAtDone"]);
+    if (ok) { print("  PASS"); }
+    return ok;
+}
+
+// ---- 测试 2：多协程并发进池 ----
+
+// 4 个协程各自 computeBegin 迁池（round-robin 分发到不同 worker），
+// 算不同规模的等差和，computeEnd 回家后上报；最后一个完成时 stop
+func multiJob(idx) {
+    computeBegin();
+    sum = 0;
+    i = 0;
+    n = 500000 * (idx + 1);
+    while (i < n) { sum = sum + i; i = i + 1; }
+    computeEnd();
+    // 回家（reactor 线程）后写共享状态
+    g_rArr[idx] = sum;
+    g_rDoneArr[idx] = true;
+    g_st["multiLeft"] = g_st["multiLeft"] - 1;
+    if (g_st["multiLeft"] == 0) { g_st["r2"].stop(); }
+}
+
+func multiBailout(t) { g_st["r2"].stop(); }
+
+func testMultiCompute() {
+    print("[2] 多协程并发进 compute 池 / multi-coroutine into pool");
+    i = 0;
+    while (i < 4) {
+        g_rArr[i] = 0;
+        g_rDoneArr[i] = false;
+        i = i + 1;
+    }
+    g_st["multiLeft"] = 4;
+
+    r2 = ReactorInstance(65536);
+    g_st["r2"] = r2;
+    setReactor(r2);
+    sched = scheduler(r2.impl);
+    setScheduler(sched);
+
+    k = 0;
+    while (k < 4) {
+        Coroutine(multiJob, k);        // spawn 时按值传 k
+        k = k + 1;
+    }
+    r2.addTimer(12000, multiBailout);
+
+    r2.run();
+
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    clearReactor();
+    r2.destroy();
+    g_st["r2"] = null;
+
+    // 期望值：Σ(0..n-1) = n(n-1)/2
+    expect = [124999750000, 499999500000, 1124999250000, 1999999000000];
+    ok = true;
+    i = 0;
+    while (i < 4) {
+        if (!g_rDoneArr[i]) { ok = false; print("  FAIL: 协程 " + i + " 未完成"); }
+        else if (g_rArr[i] != expect[i]) { ok = false; print("  FAIL: 协程 " + i + " sum=" + g_rArr[i] + "，期望 " + expect[i]); }
+        i = i + 1;
+    }
+    if (ok) { print("  PASS"); }
+    return ok;
+}
+
+// ---- 测试 3：错误上下文守卫 ----
+
+// 主线程（无协程上下文）调 computeBegin 应报错而非静默
+func testErrorContext() {
+    print("[3] 主线程 computeBegin 报错守卫 / error context guard");
+    caught = false;
+    try {
+        computeBegin();
+    } catch (e) {
+        caught = true;
+    }
+    if (!caught) {
+        print("  FAIL: 主线程 computeBegin 未报错 / no error on main thread");
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 主入口
+pass = 0;
+total = 3;
+
+if (testComputeNotBlockIO()) pass++;
+if (testMultiCompute()) pass++;
+if (testErrorContext()) pass++;
+
+print("");
+print("Phase 7.4 lm 单测: " + pass + "/" + total + " PASS");
+if (pass == total) {
+    print("ALL PASS / 全部通过");
+} else {
+    print("SOME FAILED / 存在失败");
+}

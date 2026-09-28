@@ -333,6 +333,33 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
         stack_vm_pop(g_stack_mgr, STACK_VALUE, &argv[i]);
     Value recv = argv[0];
 
+    /* 0. 内置错误包装（VAL_ERROR）：kit 层 runtime_error 经着陆垫转协作式
+     * 异常后，catch(e) 绑定的就是它（C 结构，非 Error 类实例）。
+     * 必须暴露 getMessage/getErrType/getCode，否则 e.getMessage() 二次
+     * runtime_error 会逃逸当前 catch（try 节点已标记 caught）直接终止线程。 */
+    if (recv.type == VAL_ERROR) {
+        Value outv;
+        if (strcmp(mname, "getMessage") == 0) {
+            outv = lumyr_make_string(recv.v.err.message ? recv.v.err.message : "");
+        } else if (strcmp(mname, "getErrType") == 0) {
+            outv = lumyr_make_string(recv.v.err.type ? recv.v.err.type : "RuntimeError");
+        } else if (strcmp(mname, "getCode") == 0) {
+            outv = lumyr_make_int(recv.v.err.code);
+        } else {
+            char buf[512];
+            snprintf(buf, sizeof(buf),
+                     "运行时错误: 内置错误值不支持方法 .%s / runtime error: builtin error value does not support method .%s",
+                     mname, mname);
+            free(argv);
+            runtime_error(buf);
+            return 0;   /* 不可达 */
+        }
+        free(argv);
+        if (cs->keep_result)
+            stack_vm_push(g_stack_mgr, STACK_VALUE, &outv);
+        return 1;
+    }
+
     /* 1. 用户实例：方法表分派（bound method，self 自动占 slot0） */
     if ((recv.type == VAL_STRUCT_PTR || recv.type == VAL_CLASS_PTR) &&
         recv.v.struct_ptr) {

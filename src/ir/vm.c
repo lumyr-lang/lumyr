@@ -7,6 +7,7 @@
 #include "stack_manager.h"
 #include "ast/stackframe.h"
 #include "gc_runtime.h"
+#include "vm_co.h"   /* Phase 5: 协程 VM 状态 hook 注册 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,10 @@ Value vm_run_main(BytecodeFunc* main_fn) {
         fprintf(stderr, "VM: no main function\n");
         return val_none();
     }
+    /* Phase 5: 注册协程 VM 状态保存/恢复 hook（resume/yield/release）。
+     * 注册一次全局生效；协程 yield/resume 时自动保存/恢复 _Thread_local 的
+     * g_stack_mgr + 异常栈，避免 reactor resume 不同协程互相污染。 */
+    vm_co_hooks_register();
 
     vm_run(main_fn);
     return val_none();

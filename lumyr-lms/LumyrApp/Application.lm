@@ -62,11 +62,14 @@ public abstract class AbstractApplication implements ApplicationInterface {
     configMap: map;
     running: bool;
     bgTid: int;
+    bgError: any;   // startAsync 后台线程未捕获异常（如 run 内 bind/listen 失败抛出），
+                    // 主线程 join 时检测并重抛——子线程异常不再静默丢失
 
     func AbstractApplication() {
         self.configMap = {};
         self.running = false;
         self.bgTid = 0;
+        self.bgError = null;
     }
 
     // ---- 配置 ----
@@ -152,11 +155,21 @@ public abstract class AbstractApplication implements ApplicationInterface {
     }
 
     // 在独立线程执行完整 start 生命周期（主线程可继续做事）
+    // 子线程内 start() 抛出的异常捕获后存入 bgError，主线程 join 时检测并重抛，
+    // 否则 run() 内的 bind/listen 失败等错误会静默丢失（旧 bug）。
     func startAsync() {
         if (self.running || self.bgTid > 0) {
             throw "应用已启动，禁止重复 startAsync / application already started, cannot startAsync twice";
         }
-        self.bgTid = thread(func(a) { a.start(); return 1; }, self);
+        self.bgError = null;
+        self.bgTid = thread(func(a) {
+            try {
+                a.start();
+            } catch (e) {
+                a.bgError = e;
+            }
+            return 1;
+        }, self);
         return self;
     }
 
@@ -166,6 +179,12 @@ public abstract class AbstractApplication implements ApplicationInterface {
             tid = self.bgTid;
             self.bgTid = 0;
             thread_join(tid);
+            // 子线程 run 内抛出的异常（如 ServerSocket bind/listen 失败）在此重抛
+            if (self.bgError != null) {
+                e = self.bgError;
+                self.bgError = null;
+                throw e;
+            }
         }
         return self;
     }

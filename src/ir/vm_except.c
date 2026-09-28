@@ -486,3 +486,56 @@ Value vm_except_take_thread_root_error(void) {
         (g_err_type && g_err_type[0]) ? g_err_type : "RuntimeError",
         g_err_msg ? g_err_msg : "", NULL);
 }
+
+/* ============================================================
+ * Phase 5: 协程 VM 状态快照 save/restore/clear
+ * 协程在同线程复用 _Thread_local 异常状态，yield/resume 必须保存/恢复。
+ * 链表节点（TryCtxNode/FinNode）不 deep copy，只切换链头指针——
+ * 节点属于各自协程，正常结束 try 栈已空。
+ * ============================================================ */
+void vm_except_save_state(VMExceptState* out) {
+    if(!out) return;
+    out->try_stack           = g_try_stack;
+    out->fin_stack           = g_fin_stack;
+    out->unwind_active       = g_unwind.active;
+    out->unwind_error        = g_unwind.error;
+    out->unwind_throw_val    = g_unwind.throw_val;
+    out->unwind_target_frame = g_unwind.target_frame;
+    out->unwind_catch_pc     = g_unwind.catch_pc;
+    out->current_error       = g_current_error;
+    out->current_throw_val   = g_current_throw_val;
+    out->thread_root        = g_thread_root;
+    out->thread_root_err    = g_thread_root_err;
+    out->thread_root_pushed = g_thread_root_pushed;
+}
+
+void vm_except_restore_state(const VMExceptState* in) {
+    if(!in) return;
+    g_try_stack            = (TryCtxNode*)in->try_stack;
+    g_fin_stack            = (FinNode*)in->fin_stack;
+    g_unwind.active        = in->unwind_active;
+    g_unwind.error         = in->unwind_error;
+    g_unwind.throw_val     = in->unwind_throw_val;
+    g_unwind.target_frame  = (StackFrame*)in->unwind_target_frame;
+    g_unwind.catch_pc      = in->unwind_catch_pc;
+    g_current_error        = in->current_error;
+    g_current_throw_val    = in->current_throw_val;
+    g_thread_root          = in->thread_root;
+    g_thread_root_err      = in->thread_root_err;
+    g_thread_root_pushed   = in->thread_root_pushed;
+}
+
+void vm_except_clear_state(void) {
+    g_try_stack = NULL;
+    g_fin_stack = NULL;
+    g_unwind.active = 0;
+    g_unwind.error = val_none();
+    g_unwind.throw_val = val_none();
+    g_unwind.target_frame = NULL;
+    g_unwind.catch_pc = 0;
+    g_current_error = val_none();
+    g_current_throw_val = val_none();
+    g_thread_root = 0;
+    g_thread_root_err = val_none();
+    g_thread_root_pushed = 0;
+}

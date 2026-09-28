@@ -1,0 +1,116 @@
+// ============================================================
+// WebApplication 生产保护端到端测试：请求接收超时 + 并发连接上限
+//
+// T1 请求接收超时：客户端发半截报文后长时间不发 → 服务端 408 并关连接
+//    （setRequestTimeout → 协程模式 reactor 定时器 → NetError.RECV_TIMEOUT → 408）
+// T2 正常请求不受超时影响（完整报文正常分派 200）
+// T3 并发上限：占坑连接挂住 handler 期间，新连接被拒 503；
+//    占坑连接完成后恢复接受（setMaxConnections → onRejectConnection 503）
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 收发断言 → stop/join。
+// 注：Phase 7.7 起 HTTP/1.1 默认 keep-alive，本测试 httpGet 统一带
+// Connection: close 头，保持 readAll-until-EOF 读取语义确定。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// raw HTTP 请求报文（语言字符串字面量不处理转义，CRLF 用字符字面量拼接）
+// 统一带 Connection: close——keep-alive 默认开启后，否则 readAll 会等不到 EOF
+crlf = "" + '\r' + '\n';
+func httpGet(path: string): string {
+    return "GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf;
+}
+
+// 读到对端关闭（EOF），返回完整响应文本（阻塞读，适合确定性时序场景）
+func readAll(cli): string {
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    return all;
+}
+
+// ---- 启动真实服务：接收超时 500ms、并发上限 1 ----
+port = 18109;
+base = "127.0.0.1:" + port;
+app = WebApplication("127.0.0.1", port);
+app.setRequestTimeout(500);
+app.setMaxConnections(1);
+
+app.get("/ok", func(req) {
+    r = ServerResponse(200);
+    r.text("fine");
+    return r;
+});
+
+// 慢处理器：占坑连接完成后的正常返回用（验证完成后恢复接受）
+app.get("/hang", func(req) {
+    r = ServerResponse(200);
+    r.text("done");
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 半截报文 + 接收超时 → 408 Request Timeout，连接被关闭
+// ------------------------------------------------------------
+slow = ClientSocket("127.0.0.1", port);
+slow.send("GET /ok HTTP/1.1" + crlf + "Host: t" + crlf);   // 少结尾空行，报文不完整
+sleep(800);   // 等服务端超时（500ms）回 408 并关闭后再读，时序确定
+r1 = readAll(slow);   // 服务端超时后回 408 并 close，readAll 到 EOF
+slow.close();
+check(r1.contains("HTTP/1.1 408"), "T1 半截报文超时应回 408，实际: [" + r1 + "]");
+check(r1.contains("Request Timeout"), "T1 408 错误体应含 Request Timeout，实际: [" + r1 + "]");
+
+// ------------------------------------------------------------
+// T2: 完整报文正常分派，不受接收超时影响
+// ------------------------------------------------------------
+ok1 = ClientSocket("127.0.0.1", port);
+ok1.send(httpGet("/ok"));
+r2 = readAll(ok1);
+ok1.close();
+check(r2.contains("HTTP/1.1 200"), "T2 完整报文应正常 200，实际: [" + r2 + "]");
+check(r2.contains("fine"), "T2 响应体应为 fine，实际: [" + r2 + "]");
+
+// ------------------------------------------------------------
+// T3: 并发上限 = 1
+//   c1 发半截报文占坑（handler 协程 yield 等剩余字节，连接在役）
+//   → c2 被拒 503 → c1 补全报文正常完成 → c3 恢复 200
+// 注：协程模型下 handler 内 sleep 会阻塞整个 reactor（含 accept 循环），
+// 占坑必须用「请求未收齐」的协程挂起形态，而非处理器内 sleep。
+// ------------------------------------------------------------
+c1 = ClientSocket("127.0.0.1", port);
+c1.send("GET /hang HTTP/1.1" + crlf + "Host: t" + crlf);   // 半截报文：缺结尾空行
+sleep(300);   // 确保 c1 已被 accept 且 handler 协程在役（< requestTimeout=500）
+
+c2 = ClientSocket("127.0.0.1", port);
+c2.send(httpGet("/ok"));
+r3 = readAll(c2);
+c2.close();
+check(r3.contains("HTTP/1.1 503"), "T3 上限占满时新连接应被拒 503，实际: [" + r3 + "]");
+check(r3.contains("Service Unavailable"), "T3 503 错误体应含 Service Unavailable，实际: [" + r3 + "]");
+
+c1.send(crlf);   // 补全报文 → /hang 正常分派完成
+r4 = readAll(c1);   // 占坑连接完成（读到 done + EOF）
+c1.close();
+check(r4.contains("done"), "T3 占坑连接应正常完成并读到 done，实际: [" + r4 + "]");
+
+c3 = ClientSocket("127.0.0.1", port);
+c3.send(httpGet("/ok"));
+r5 = readAll(c3);
+c3.close();
+check(r5.contains("HTTP/1.1 200"), "T3 占坑连接释放后应恢复接受 200，实际: [" + r5 + "]");
+
+app.stop();
+app.join();
+
+print("web_limits_test ALL PASS");

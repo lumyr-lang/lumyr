@@ -15,6 +15,7 @@ _Thread_local char* g_err_msg = NULL;
 static _Thread_local int g_err_msg_cap = 0;
 _Thread_local char* g_err_type = NULL;
 static _Thread_local int g_err_type_cap = 0;
+_Thread_local int g_err_code = 0;   /* 错误码（runtime_error_code 设置，默认 0；runtime_error 清零） */
 _Thread_local const char** g_trace = NULL;
 _Thread_local int g_trace_n = 0;
 static _Thread_local int g_trace_cap = 0;
@@ -106,13 +107,28 @@ void g_err_type_set(const char* s)
 }
 
 // 运行时错误：有 try 处理器则恢复（longjmp），否则打印并退出
+// 不带码版本：清零 g_err_code，VAL_ERROR.code=0（兼容 22 个 .c 文件现有调用）
 void runtime_error(const char* msg) {
     if(g_err_jmp) {
+        g_err_code = 0;
         g_err_type_set("RuntimeError");
         g_err_msg_set(msg);
         longjmp(*g_err_jmp, 1);
     }
     LOG_ERROR("Runtime Error: %s\n", msg);
+    exit(EXIT_FAILURE);
+}
+
+// 带错误码的运行时错误：code 与 lm 层 enum 数值对齐，type 为错误类别名。
+// 供 socket 等需要稳定错误码、上层按 getCode() 精确分派的场景使用。
+void runtime_error_code(int code, const char* type, const char* msg) {
+    if(g_err_jmp) {
+        g_err_code = code;
+        g_err_type_set(type ? type : "RuntimeError");
+        g_err_msg_set(msg);
+        longjmp(*g_err_jmp, 1);
+    }
+    LOG_ERROR("Runtime Error [%s#%d]: %s\n", type ? type : "RuntimeError", code, msg);
     exit(EXIT_FAILURE);
 }
 
@@ -122,6 +138,7 @@ void lumyr_rethrow_error(Value err) {
     const char* et = (err.v.err.type && err.v.err.type[0]) ? err.v.err.type : "RuntimeError";
     const char* em = err.v.err.message ? err.v.err.message : "";
     if(g_err_jmp) {
+        g_err_code = err.v.err.code;
         g_err_type_set(et);
         g_err_msg_set(em);
         longjmp(*g_err_jmp, 1);

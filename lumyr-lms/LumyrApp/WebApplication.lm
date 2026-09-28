@@ -1,20 +1,41 @@
 // ============================================================
 // lumyr-WebApplication：HTTP Web 应用基类
 //   RequestHandler         路由处理器契约（命名接口）
-//   HttpConnectionHandler  单连接 HTTP 处理线程
+//   HttpConnectionHandler  单连接 HTTP 处理协程（持有 Coroutine，非 Thread）
 //   WebApplication         继承 ServiceApplication：只负责 HTTP 报文解析与
-//                          路由分派；accept 循环 / 每连接一线程 / 线程回收 /
-//                          stop 唤醒全部复用 ServiceApplication
+//                          路由分派；reactor+协程骨架（accept 循环 / 连接协程
+//                          管理 / stop 唤醒）全部复用 ServiceApplication
 //
-// 依赖：<App/ServiceApplication>（服务骨架：生命周期/配置/连接线程管理）
+// 依赖：<App/ServiceApplication>（服务骨架：生命周期/配置/连接协程管理）
 //       <App/Container>（IoC 容器 + 应用引导表）
+//       <App/RequestBinder>（控制器适配函数绑定）
 //       <NetWork/HttpServer>（ServerRequest/ServerResponse/HttpMethod）
-//       <Thread/Thread>（HttpConnectionHandler 线程基类）
+//       <NetWork/NetError>（socket 错误码枚举）
+//       <NetWork/Reactor>（Coroutine 协程封装）
 //
-// 连接处理流程（HttpConnectionHandler 线程内）：
-//   ServerRequest.readFrom(conn) 二进制安全收读完整报文并解析
+// 连接处理流程（HttpConnectionHandler 协程内，keep-alive 循环）：
+//   ServerRequest.readFrom(conn, connBuf) 二进制安全收读完整报文并解析
+//   （recv 协程化 yield；connBuf 为连接级读缓冲，pipelining 残留跨请求保留）
 //   → app.handleRequest(req) 分派（默认走路由表）
-//   → resp.sendTo(conn) 分段回写 → conn.close()
+//   → resp.sendTo(conn) 分段回写（send 协程化 yield）
+//   → Connection 语义判定：keep-alive 则循环读下一请求，否则 conn.close()
+//
+// 错误处理分层：
+//   分派链尾异常（路由处理器/业务逻辑 throw）→ onError(req, e)：
+//     默认 500；app.setErrorHandler(f) 自定义（实现 ErrorHandler 的对象，
+//     或 func(req, e): ServerResponse）。错误响应仍回到外层过滤器的
+//     post 阶段，可统一包装错误格式（如 JSON 错误体）
+//   过滤器自身抛错 → 不进 onError（基础设施异常），由连接协程兜 500
+//   报文解析错误 → 由连接协程兜 500
+//
+// 生产保护（建议显式设置）：
+//   app.setMaxConnections(n)：并发在役连接达上限 → 新连接不再起协程，
+//     回 503 Service Unavailable（ServiceApplication 层钩子，HTTP 重写）
+//   慢客户端防护（Phase 7.7，reactor 定时器驱动，协程模式生效）：
+//     requestTimeout    请求读取阶段每次 recv 无数据等待上限，超时回 408 并关闭
+//     keepAliveTimeout  keep-alive 空闲等首字节上限，超时静默关闭
+//     （SO_RCVTIMEO 仅阻塞模式有效；协程模式 fd 非阻塞，走 per-socket
+//      recvTimeout/sendTimeout 字段 + reactor 一次性定时器）
 //
 // 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
 //   host     string  默认 "0.0.0.0"
@@ -22,6 +43,12 @@
 //   backlog  int     默认 128
 //   autoScan bool   默认 true；false 时不执行编译期生成的引导函数，
 //                    需手动 app.scan()
+//   keepAlive        bool  默认 true（Phase 7.7）：HTTP/1.1 持久连接总开关，
+//                          false 时每请求响应后关闭（Connection: close）
+//   keepAliveTimeout int   默认 5000 毫秒（Phase 7.7）：keep-alive 空闲
+//                          等下一请求首字节上限，超时静默关闭
+//   requestTimeout   int   默认 30000 毫秒（Phase 7.7）：单请求读取阶段
+//                          每次 recv 无数据等待上限，超时回 408 并关闭
 //
 // 注解驱动通道（@Controller / @Service）：
 //   编译期生成的引导函数在 run 开始时执行（autoScan 未关闭）：
@@ -29,12 +56,19 @@
 //   也可编程式注册：app.service(inst) / app.service("name", inst)、
 //   app.controller(inst)；app.scan() 手动执行引导。
 //
-// 扩展方式（两选一或叠加）：
+// 扩展方式（可叠加）：
 //   1. 注册路由：app.get("/hello", handler)（handler 为实现 RequestHandler
 //      的对象，或直接传 func(req): ServerResponse）
-//   2. 继承重写：class MyApp extends WebApplication 重写
+//   2. 注册过滤器：app.addFilter(f)（f 为实现 WebFilter 的对象，或直接传
+//      func(req, chain): ServerResponse）。过滤器按注册序形成洋葱链包住
+//      整个请求分派：chain.next(req) 之前可改写 ServerRequest（改 header、
+//      setAttribute 传上下文），之后可改写 ServerResponse（加 header、
+//      包装 body）；不调 chain.next 即短路（如鉴权失败直接回 401）。
+//      404/500 兜底响应同样经过滤链。
+//   3. 继承重写：class MyApp extends WebApplication 重写
 //      handleRequest(req)（可 super.handleRequest(req) 回退路由表）、
-//      onNotFound(req)、onStart()/onStop() 等钩子
+//      onNotFound(req)、onStart()/onStop() 等钩子；重写 dispatchWithFilters
+//      可整体接管过滤链（含跳过）
 //
 // 用法：
 //   import <App/WebApplication>;
@@ -51,7 +85,8 @@ import <App/ServiceApplication>;
 import <App/Container>;
 import <App/RequestBinder>;
 import <NetWork/HttpServer>;
-import <Thread/Thread>;
+import <NetWork/NetError>;
+import <NetWork/Reactor>;
 
 // 路由处理器契约：接收解析好的请求，返回构建好的响应
 // （方法名取 serve：handle 是语言指针类型关键字，不能作方法名）
@@ -60,42 +95,174 @@ public interface RequestHandler {
 }
 
 // ============================================================
-// HttpConnectionHandler：单连接 HTTP 处理线程
-// 收读解析请求 → 应用分派 → 回写响应（兜底关闭连接与自报完成由
-// HttpConnectionHandler 自身完成，不沿用 ServiceConnectionHandler，
-// 因为 HTTP 连接的关闭时机要在响应写完之后）。
-// 处理器抛错兜底为 500，保证单连接异常不拖垮整个服务。
+// FilterChain：过滤器链（洋葱模型）
+// 持有剩余过滤器与分派终点（app.handleRequest，虚分派——子类重写生效）。
+// next(req) 依次推进：还有过滤器 → 构造子链交给下一个过滤器；
+// 过滤器耗尽 → 回归应用分派（路由表 / onNotFound）。
 // ============================================================
-class HttpConnectionHandler extends Thread {
+public class FilterChain {
+    filters: array;   // 全量过滤器（注册序，共享只读）
+    idx: int;         // 当前推进到的过滤器下标
+    app: any;         // 分派终点（链尾调 app.handleRequest）
+
+    func FilterChain(filters: array, idx: int, app) {
+        self.filters = filters;
+        self.idx = idx;
+        self.app = app;
+    }
+
+    func next(req: ServerRequest): ServerResponse {
+        if (self.idx < self.filters.len) {
+            f = self.filters[self.idx];
+            sub = FilterChain(self.filters, self.idx + 1, self.app);
+            // func 形态过滤器直接调用；对象形态走 doFilter 契约
+            if (type(f) == "func") { return f(req, sub); }
+            return f.doFilter(req, sub);
+        }
+        // 链尾：带异常处理的分派核心（错误响应回到本洋葱外层过滤器的 post 阶段）
+        return self.app.dispatchCore(req);
+    }
+}
+
+// 过滤器契约：包住整个请求分派
+//   前置改写请求：调 chain.next(req) 之前改 req（header / setAttribute）
+//   后置改写响应：chain.next(req) 返回后改 resp（加 header / 包装 body）
+//   短路：不调 chain.next，直接 return 自己构造的 ServerResponse
+public interface WebFilter {
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse;
+}
+
+// 全局异常处理契约：分派链尾（路由处理器执行）抛出的异常统一落到这里，
+// 返回的错误响应仍会回到外层过滤器的 post 阶段（可统一包装错误格式）。
+// e 为 throw 的原始值（string 或 Error 实例）。
+public interface ErrorHandler {
+    func onError(req: ServerRequest, e): ServerResponse;
+}
+
+// ============================================================
+// HttpConnectionHandler：单连接 HTTP 处理协程（keep-alive 循环）
+// 循环：读请求 → 应用分派 → 回写响应，直到协议要求关闭或出错。
+//   Connection 语义：HTTP/1.1 默认 keep-alive（Connection: close 关闭）；
+//   HTTP/1.0 默认关闭（Connection: keep-alive 保持）；响应回写 Connection 标头。
+//   应用配置 keepAlive=false 时恒关闭（同 HTTP/1.0 短连接）。
+// 两级 recv 超时（协程模式 reactor 定时器驱动，setOption recvTimeout 应用）：
+//   请求读取阶段 requestTimeout（默认 30s）：超时回 408 并关闭（慢客户端防护）；
+//   keep-alive 空闲等首字节 keepAliveTimeout（默认 5s）：超时静默关闭
+//   （无未决请求，同 nginx keepalive_timeout 语义）。
+// 处理器抛错兜底为 500（并关闭连接），保证单连接异常不拖垮 reactor。
+// recv/send 在协程上下文自动协程化（yield 等 IO 事件，reactor resume）。
+// ============================================================
+class HttpConnectionHandler {
     app: any;
     conn: any;
+    co: any;       // Coroutine 实例
     active: bool;
+    kaEnabled: bool;   // keepAlive 配置缓存（构造时读取，启动后不变）
+    reqMs: int;        // requestTimeout 毫秒
+    idleMs: int;       // keepAliveTimeout 毫秒
 
     func HttpConnectionHandler(app, conn) {
-        super();
         self.app = app;
         self.conn = conn;
         self.active = true;
+        // 配置在构造时从真实 app 缓存：多线程模式 bindOwner(worker) 后
+        // self.app 变为 worker（鸭子类型只有分派/回收接口），
+        // 缓存避免向 worker 扩散配置访问
+        self.kaEnabled = app.keepAliveEnabled();
+        self.reqMs = app.requestTimeout();
+        self.idleMs = app.keepAliveTimeout();
+        self.co = Coroutine(func(h) {
+            c = h.conn;
+            connBuf = [];   // 连接级读缓冲（pipelining 残留跨请求保留）
+            first = true;   // 首请求标记：首请求读取直接用 requestTimeout
+            while (true) {
+                // keep-alive 空闲等首字节：仅非首请求且缓冲已空时进入。
+                // 超时/EOF/读错均静默关闭（无未决请求）
+                if (!first && connBuf.len == 0) {
+                    c.setOption("recvTimeout", h.idleMs);
+                    chunk = null;
+                    try {
+                        chunk = c.recv(ServerRequest.readChunkSize(), 0, true);
+                    } catch (e) {
+                        break;
+                    }
+                    if (chunk.len == 0) { break; }   // 对端关闭
+                    i = 0;
+                    while (i < chunk.len) { connBuf.add(chunk[i]); i = i + 1; }
+                }
+                first = false;
+                // 请求读取阶段：requestTimeout（每次 recv 无数据等待上限）
+                c.setOption("recvTimeout", h.reqMs);
+                resp = null;
+                req = null;
+                failed = false;
+                try {
+                    req = ServerRequest.readFrom(c, connBuf);
+                    resp = h.app.dispatchWithFilters(req);
+                } catch (e) {
+                    failed = true;   // 任何异常响应后关闭连接（同历史行为）
+                    // 错误码分派：kit 层 socket 错误（VAL_ERROR）携带 code，与
+                    // NetError 枚举数值对齐，e.getCode() 精确比较（不再字符串匹配）；
+                    // string/Error 实例无 socket 码（getCode=0 或不适用），走 500
+                    code = 0;
+                    if (type(e) != "string") {
+                        code = e.getCode();
+                    }
+                    if (code == NetError.RECV_TIMEOUT) {
+                        // 客户端长时间不发送完整报文（请求接收超时）：协议层 408，
+                        // 不进业务 onError（非应用异常），协程及时回收
+                        resp = ServerResponse(408);
+                        resp.text("Request Timeout: incomplete request / 请求接收超时");
+                    } else if (code == NetError.SEND_TIMEOUT) {
+                        // 响应阶段发送超时：协议层 408，连接关闭
+                        resp = ServerResponse(408);
+                        resp.text("Request Timeout: send timeout / 发送超时");
+                    } else {
+                        resp = ServerResponse(500);
+                        resp.text("Internal Server Error");
+                    }
+                }
+                // Connection 语义判定（异常响应恒关闭）
+                ka = false;
+                if (h.kaEnabled && !failed && req != null) {
+                    hdr = req.header("Connection").lower();
+                    if (req.httpVersion == "1.1") { ka = (hdr != "close"); }
+                    else { ka = (hdr == "keep-alive"); }
+                }
+                if (ka) { resp.setHeader("Connection", "keep-alive"); }
+                else { resp.setHeader("Connection", "close"); }
+                try {
+                    resp.sendTo(c);
+                } catch (e2) { break; }
+                if (!ka) { break; }
+            }
+            try {
+                c.close();
+            } catch (e3) { x = 1; }
+            h.app.markFinished(h);
+        }, self);
     }
 
-    func run() {
-        conn = self.conn;
-        path = "?";
-        resp = null;
-        try {
-            req = ServerRequest.readFrom(conn);
-            path = req.method + " " + req.path;
-            resp = self.app.handleRequest(req);
-        } catch (e) {
-            resp = ServerResponse(500);
-            resp.text("Internal Server Error");
+    // 启动协程：resume 一次跑到第一个 yield（recv 等 IO 事件）
+    func start() {
+        self.co.resume();
+    }
+
+    // Phase 7.5 多线程模式：重绑协程的 owner（默认 owner 为 app 自身）。
+    // 多 worker 模式下 accept loop 把 owner 重绑为所属 ServiceWorker，
+    // dispatchWithFilters 由 worker 委托回 app（虚分派保持），
+    // markFinished 落 per-worker 状态（worker 线程本地，无跨线程竞争）。
+    func bindOwner(owner) {
+        self.app = owner;
+        return self;
+    }
+
+    // 销毁协程（替代 Thread.join）：reactor 退出后清理挂起协程
+    func destroy() {
+        if (self.co != null) {
+            self.co.destroy();
+            self.co = null;
         }
-        try {
-            resp.sendTo(conn);
-        } catch (e2) { x = 1; }
-        conn.close();
-        self.app.markFinished(self);
-        return path;
     }
 }
 
@@ -161,6 +328,11 @@ public class WebApplication extends ServiceApplication {
     container: any;      // IoC 服务容器（scan 或编程式注册时创建）
     controllers: array;  // 已挂载控制器实例
     scanned: bool;       // 引导函数是否已执行（幂等保护）
+    filters: array;      // 过滤器链（注册序：先注册 = 外层）
+    errHandler: any;     // 全局异常处理器（null = 默认 500 兜底）
+    kaVal: int;          // Phase 7.7：keepAlive 开关（-1 未设置走配置；0=关 1=开）
+    kaTimeoutVal: int;   // Phase 7.7：keepAliveTimeout 毫秒（0 未设置走配置）
+    reqTimeoutVal: int;  // Phase 7.7：requestTimeout 毫秒（0 未设置走配置）
 
     func WebApplication() {
         super();
@@ -187,6 +359,11 @@ public class WebApplication extends ServiceApplication {
         self.container = null;
         self.controllers = [];
         self.scanned = false;
+        self.filters = [];
+        self.errHandler = null;
+        self.kaVal = -1;
+        self.kaTimeoutVal = 0;
+        self.reqTimeoutVal = 0;
     }
 
     // ---- 编程式注册（start 前或 onStart 内调用）----
@@ -233,6 +410,114 @@ public class WebApplication extends ServiceApplication {
         return self;
     }
 
+    // 注册过滤器（洋葱模型：先注册 = 外层，pre 先跑、post 后跑）。
+    // f 为实现 WebFilter 的对象，或直接传 func(req, chain): ServerResponse。
+    // 对象缺 doFilter 方法时运行期动态分派报错（无兜底）。
+    func addFilter(f) {
+        if (f == null) {
+            throw "过滤器不能为空 / filter must not be null";
+        }
+        self.filters.add(f);
+        return self;
+    }
+
+    // 过滤链分派入口（连接协程调用）：有过滤器走洋葱链包住分派核心，
+    // 无过滤器零开销直通。重写本方法可整体接管过滤链。
+    func dispatchWithFilters(req: ServerRequest): ServerResponse {
+        if (self.filters.len == 0) { return self.dispatchCore(req); }
+        return FilterChain(self.filters, 0, self).next(req);
+    }
+
+    // 注册全局异常处理器：分派链尾抛出的异常统一落到这里。
+    // f 为实现 ErrorHandler 的对象，或直接传 func(req, e): ServerResponse
+    // （e 为 throw 的原始值：string 或 Error 实例）。
+    // 错误响应仍回到外层过滤器的 post 阶段；过滤器自身抛错不进这里
+    // （基础设施异常由连接协程兜 500）。
+    func setErrorHandler(f) {
+        if (f == null) {
+            throw "异常处理器不能为空 / error handler must not be null";
+        }
+        self.errHandler = f;
+        return self;
+    }
+
+    // ---- Phase 7.7：HTTP keep-alive 与连接级超时配置 ----
+
+    // keep-alive 总开关：默认 true（HTTP/1.1 持久连接）。
+    // false 时每请求响应后关闭连接（Connection: close），同 HTTP/1.0 短连接行为。
+    func keepAliveEnabled(): bool {
+        if (self.kaVal >= 0) { return self.kaVal == 1; }
+        v = self.config("keepAlive");
+        if (v == null) { return true; }
+        if (type(v) == "bool") { return v; }
+        throw "keepAlive 配置必须是布尔值 / keepAlive config must be a boolean";
+    }
+
+    // 编程式开关 keep-alive（须在 start 前调用）
+    func setKeepAlive(enabled: bool) {
+        self.kaVal = enabled ? 1 : 0;
+        return self;
+    }
+
+    // keep-alive 空闲超时（毫秒）：响应完成后等下一请求首字节的最长时间，
+    // 超时静默关闭（无未决请求，同 nginx keepalive_timeout 语义）。默认 5000。
+    // 取 0 以下的配置无意义（空闲连接会钉死协程耗尽资源），故下界 1ms。
+    func keepAliveTimeout(): int {
+        if (self.kaTimeoutVal > 0) { return self.kaTimeoutVal; }
+        return self.configInt("keepAliveTimeout", 5000);
+    }
+
+    // 编程式设置 keep-alive 空闲超时（毫秒，须在 start 前调用）
+    func setKeepAliveTimeout(ms: int) {
+        if (ms < 1) {
+            throw "keep-alive 空闲超时必须 ≥ 1 毫秒 / keep-alive idle timeout must be at least 1ms";
+        }
+        self.kaTimeoutVal = ms;
+        return self;
+    }
+
+    // 请求读取超时（毫秒）：单请求读取阶段每次 recv 的无数据等待上限
+    // （慢客户端/Slowloris 防护），超时回 408 Request Timeout 并关闭连接。
+    // 默认 30000。协程模式由 reactor 定时器实现（setOption recvTimeout）。
+    func requestTimeout(): int {
+        if (self.reqTimeoutVal > 0) { return self.reqTimeoutVal; }
+        return self.configInt("requestTimeout", 30000);
+    }
+
+    // 编程式设置请求读取超时（毫秒，须在 start 前调用）
+    func setRequestTimeout(ms: int) {
+        if (ms < 1) {
+            throw "请求读取超时必须 ≥ 1 毫秒 / request timeout must be at least 1ms";
+        }
+        self.reqTimeoutVal = ms;
+        return self;
+    }
+
+    // 分派核心：路由分派 + 链尾异常兜底。
+    // 处理器/路由匹配阶段抛出的异常统一转交 onError；错误响应作为
+    // 正常返回值回到调用方（有过滤器时即外层过滤器的 post 阶段）。
+    func dispatchCore(req: ServerRequest): ServerResponse {
+        try {
+            return self.handleRequest(req);
+        } catch (e) {
+            return self.onError(req, e);
+        }
+    }
+
+    // 全局异常处理钩子（可 setErrorHandler 定制；重写本方法亦可）。
+    // 默认兜底：500 "Internal Server Error"（与历史行为一致）。
+    // lambda 形态经 self["errHandler"] 下标取值后动态调用——点语法会把
+    // 字段持有的函数当方法名分派而找不到实现（同 BoundAdapter 教训）
+    func onError(req: ServerRequest, e): ServerResponse {
+        if (self.errHandler != null) {
+            if (type(self.errHandler) == "func") { return self["errHandler"](req, e); }
+            return self.errHandler.onError(req, e);
+        }
+        r = ServerResponse(500);
+        r.text("Internal Server Error");
+        return r;
+    }
+
     // ---- 应用扫描：执行编译期生成的引导函数 ----
 
     // scan 是否应自动执行：配置 autoScan 缺省为 true；值必须是布尔值
@@ -259,8 +544,8 @@ public class WebApplication extends ServiceApplication {
         return self;
     }
 
-    // 主循环：进入 accept 循环前按配置执行引导（autoScan=false 时跳过，
-    // 由用户在合适时机手动 scan），随后复用 ServiceApplication 的 accept 骨架
+    // 主循环：进入 reactor 事件循环前按配置执行引导（autoScan=false 时跳过，
+    // 由用户在合适时机手动 scan），随后复用 ServiceApplication 的 reactor+协程骨架
     func run() {
         if (self.autoScanEnabled()) { self.scan(); }
         super.run();
@@ -367,7 +652,7 @@ public class WebApplication extends ServiceApplication {
         return h.serve(req);
     }
 
-    // ---- 请求分派（核心扩展点，连接线程内调用）----
+    // ---- 请求分派（核心扩展点，连接协程内调用）----
     // 顺序：精确表 O(1) → 模式表注册序首个匹配 → onNotFound。
     // 子类重写可实现任意分派逻辑（中间件、前缀匹配、重写等），
     // 需要回退默认行为时调 super.handleRequest(req)。
@@ -397,9 +682,33 @@ public class WebApplication extends ServiceApplication {
         return resp;
     }
 
-    // 连接处理器工厂重写：换入 HTTP 连接线程（run 主循环继承自 ServiceApplication）
+    // 连接处理器工厂重写：换入 HTTP 连接协程（run 主循环继承自 ServiceApplication）
     func createHandler(conn) {
         return HttpConnectionHandler(self, conn);
+    }
+
+    // 并发超限拒绝钩子重写：TCP 直接关闭对 HTTP 客户端不透明，
+    // 改回明确的 503 Service Unavailable。
+    // 注意关闭顺序：连接接收缓冲里还有客户端已发的请求字节时直接
+    // close() 会触发 RST（冲掉未送达的 503），故写响应后先限时排空
+    // 接收缓冲（50ms 小超时读，超时/EOF 即停），再 close（对端可能
+    // 已断开，全程失败忽略）
+    func onRejectConnection(conn) {
+        try {
+            r = ServerResponse(503);
+            r.setHeader("Connection", "close");
+            r.text("Service Unavailable: too many concurrent connections / 并发连接数已达上限");
+            r.sendTo(conn);
+            conn.setOption("recvTimeout", 50);
+            guard = 0;
+            while (guard < 16) {
+                d = conn.recv(4096);
+                if (d == "") { break; }   // 对端已关闭
+                guard = guard + 1;        // 限时排空，防对端恶意持续发数据
+            }
+        } catch (e) { x = 1; }
+        conn.close();
+        return self;
     }
 
     @FuncAlias("toStr")

@@ -121,6 +121,26 @@ void gc_unregister_thread_keep_protect(void);
 typedef void (*GCGlobalRootScanFn)(void);
 void gc_register_global_root_scan(GCGlobalRootScanFn fn);
 
+/* ---- 协程栈根注册（有栈协程 yield 时冻结栈扫描）----
+ * 有栈协程（lm_co）yield 时整条 C 调用栈冻结，栈上可能持有 GC 用户对象指针
+ * （C 局部 Value 变量）。若不注册扫描，yield 期间其他线程触发 GC 会漏标
+ * 这些根 → sweep 误回收 → UAF。
+ *
+ * gc_register_coroutine(stack_top, stack_bottom)：yield 前调用，把挂起协程的
+ *   栈区间 [stack_bottom, stack_top] 挂进全局协程栈表。stack_top 为栈基址
+ *   （高地址，mmap 区末），stack_bottom 为 yield 时的栈指针（低地址）。
+ *   GC 标记阶段保守扫描该区间，复用 GCThreadEntry 的 c_stack_top/c_stack_sp 路径。
+ * gc_unregister_coroutine(stack_top)：resume 返回后调用，移除匹配 entry。
+ *
+ * 设计说明：不使用 gc_enter_native_block 包裹 yield。swapcontext 返回后
+ *   reactor 主循环继续运行并可能变更 GC 根，at_safepoint=1 会误报安全点 →
+ *   并发 GC 扫描期间根被修改 → UAF。STW 轮询由 reactor 主循环每轮
+ *   gc_stw_check_fast() 承担，与 VM 解释循环的 gc_stw_check 一致。
+ *   本 API 仅覆盖挂起协程的冻结栈；运行中协程的 C 栈扫描由 reactor 线程的
+ *   GCThreadEntry + VM 解释循环 gc_stw_check 覆盖（Phase 4 VM 集成时验证）。 */
+void gc_register_coroutine(void* stack_top, void* stack_bottom);
+void gc_unregister_coroutine(void* stack_top);
+
 /* 协作式 STW 安全点：VM 解释循环每条指令前调用，GC 运行时自旋等待 */
 void gc_stw_check(void);
 

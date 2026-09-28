@@ -1,0 +1,149 @@
+// reuseport_test.lm —— Phase 7.5 单测：SO_REUSEPORT 多线程同端口监听
+// 验证 ServiceApplication 多线程模式（workers > 1）：
+//   [1] 4 worker 同端口 listen（SO_REUSEPORT 生效——否则子 worker bind 失败，
+//       join 时错误重抛），40 个客户端连接全部 echo 成功
+//   [2] 连接分布：acceptTotal 总和 == 连接数，且非全集中单一 worker（弱分布断言）
+//   [3] WebApplication 多线程冒烟：workers=2 的 HTTP 服务路由分派正常
+//       （验证 bindOwner + dispatchWithFilters 委托链路）
+// 运行：./bin/lumyr tests/reuseport_test.lm
+import <App/ServiceApplication>;
+import <App/WebApplication>;
+import <NetWork/Socket>;
+
+// echo handler：收到什么回什么
+class EchoHandler implements ServiceHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data != "") {
+            conn.send(data);
+        }
+    }
+}
+
+// 测试 1 + 2：多线程 echo server（SO_REUSEPORT 同端口 + 连接分布）
+func testMultiWorkerEcho() {
+    print("[1] 4 worker 同端口 echo / multi-worker SO_REUSEPORT echo");
+    port = 19381;
+    app = ServiceApplication("127.0.0.1", port, EchoHandler());
+    app.setWorkers(4);
+    app.startAsync();
+    // 等服务就绪（首个 worker listen 成功即可连，内核只分发给已 listen 的 socket）
+    sleep(300);
+
+    // 40 个客户端顺序连接（主线程非协程，socket 走阻塞路径）
+    total = 40;
+    ok = 0;
+    i = 0;
+    while (i < total) {
+        msg = "ping" + i;
+        cli = ClientSocket("127.0.0.1", port);
+        cli.send(msg);
+        resp = cli.recv(4096);
+        cli.close();
+        if (resp == msg) { ok = ok + 1; }
+        i = i + 1;
+    }
+
+    app.stop();
+    app.join();
+
+    if (ok != total) {
+        print("  FAIL: echo 成功 " + ok + "/" + total);
+        return false;
+    }
+    print("  echo 成功 " + ok + "/" + total + " / echo ok");
+
+    // 分布统计：acceptTotal 总和 == total（必须）。
+    // 分布均匀性是平台相关的：Linux 3.9+ 内核对 SO_REUSEPORT 做 5 元组
+    // hash 负载均衡；macOS/BSD 传统语义仅允许同端口 bind，新连接偏向
+    // 最近 bind 的 socket（不 hash）——故多 worker 分布仅作提示不作断言。
+    // SO_REUSEPORT 生效的硬证据是：4 个 socket 同端口 bind 全部成功
+    // （否则子 worker bind 失败，join 时已重抛）+ echo 全部连通。
+    print("[2] 连接分布 / connection distribution");
+    sum = 0;
+    usedWorkers = 0;
+    dist = "";
+    for w in app.workerList {
+        sum = sum + w.acceptTotal;
+        if (w.acceptTotal > 0) { usedWorkers = usedWorkers + 1; }
+        if (dist != "") { dist = dist + ","; }
+        dist = dist + w.acceptTotal;
+    }
+    print("  worker 分布: [" + dist + "] / distribution");
+    if (sum != total) {
+        print("  FAIL: acceptTotal 总和 " + sum + " != " + total);
+        return false;
+    }
+    if (usedWorkers >= 2) {
+        print("  " + usedWorkers + "/4 worker 分到连接（hash 分发）/ workers used");
+    } else {
+        print("  NOTE: 连接集中单一 worker——macOS SO_REUSEPORT 不做 hash 分发，");
+        print("        Linux 3.9+ 部署环境才有内核级负载均衡 / platform note");
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 3：WebApplication 多线程冒烟（workers=2 的 HTTP 服务）
+func testMultiWorkerHttp() {
+    print("[3] Web 多线程冒烟 / multi-worker HTTP smoke");
+    port = 19382;
+    app = WebApplication("127.0.0.1", port);
+    app.setWorkers(2);
+    // 路由 func 形态契约：必须返回 ServerResponse 对象
+    // （wrapResult 归一仅作用于注解控制器路径，直接注册的 lambda 不归一）
+    app.get("/hello", func(req) {
+        r = ServerResponse(200);
+        r.text("hi-mt");
+        return r;
+    });
+    app.startAsync();
+    sleep(300);
+
+    ok = 0;
+    total = 8;
+    crlf = "" + '\r' + '\n';   // lm 字符串字面量不处理转义，CRLF 用字符字面量拼接
+    req = "GET /hello HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + crlf;
+    i = 0;
+    while (i < total) {
+        cli = ClientSocket("127.0.0.1", port);
+        cli.send(req);
+        // 响应分段回写（headers/body 可能分多次到达），循环 recv 至 EOF
+        // （Connection: close 下服务端回写完即关连接，recv 返回 "" 即止）
+        resp = "";
+        while (true) {
+            chunk = cli.recv(4096);
+            if (chunk == "") { break; }
+            resp = resp + chunk;
+        }
+        cli.close();
+        if (resp.indexOf("200") >= 0 && resp.indexOf("hi-mt") >= 0) { ok = ok + 1; }
+        i = i + 1;
+    }
+
+    app.stop();
+    app.join();
+
+    if (ok != total) {
+        print("  FAIL: HTTP 成功 " + ok + "/" + total);
+        return false;
+    }
+    print("  HTTP 成功 " + ok + "/" + total + " / http ok");
+    print("  PASS");
+    return true;
+}
+
+func main() {
+    pass = 0;
+    fail = 0;
+    if (testMultiWorkerEcho()) { pass = pass + 2; } else { fail = fail + 1; }
+    if (testMultiWorkerHttp()) { pass = pass + 1; } else { fail = fail + 1; }
+    print("----------------------------------------");
+    if (fail == 0) {
+        print("reuseport_test: ALL PASS (" + pass + ")");
+    } else {
+        print("reuseport_test: FAIL (pass=" + pass + ", fail=" + fail + ")");
+    }
+}
+
+main();

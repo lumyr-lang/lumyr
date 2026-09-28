@@ -29,6 +29,12 @@
 #include "lm_file.h"
 #include "lm_formdata.h"
 #include "lm_socket.h"
+#include "lm_reactor.h"   /* Phase 5: reactor API */
+#include "lm_co.h"        /* Phase 5: 协程 API */
+#include "lm_scheduler.h" /* Phase 7.2：per-thread scheduler */
+#include "lm_compute.h"   /* Phase 7.4：compute worker pool */
+#include "lm_cond.h"      /* Phase 7.3：协程条件变量 */
+#include "vm_co.h"         /* Phase 5: 协程 VM 状态 + trampoline */
 #include "lm_type.h"
 #include "lm_json.h"
 #include "lm_xml.h"
@@ -3903,11 +3909,273 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         return 1;
     }
 
+    /* ===== reactor + 协程（Phase 5：暴露给 lm 层）=====
+     * 全局函数形式：recv=val_none，argv[0]=impl 或首参；
+     * lm 层包装为 ReactorInstance.run() { run(impl); } 等。
+     * struct_ptr 包装 C 指针（reactor_t* / lm_co_t*），builtin 内 cast 调 C API。 */
+    case BUILTIN_REACTOR_NEW: {
+        int cap = (argc > 0) ? (int)bi_num_i64(argv[0]) : 65536;
+        lm_reactor_t* r = lm_reactor_new(cap);
+        if(!r) { runtime_error("reactor(capacity) 创建失败 / reactor: creation failed"); }
+        out->type = VAL_STRUCT_PTR;
+        out->v.struct_ptr = r;
+        return 1;
+    }
+    case BUILTIN_REACTOR_DEL: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("destroyReactor(impl) 需 reactor 实例 / destroyReactor: need reactor instance"); }
+        lm_reactor_destroy((lm_reactor_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_REACTOR_RUN: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("run(impl) 需 reactor 实例 / run: need reactor instance"); }
+        /* 进入 reactor 主循环前保存当前 vm_state 作基线；
+         * 协程 yield 时恢复到基线，切回 reactor 主循环；
+         * 返回后恢复基线（防 run 内 vm_state 被改）。 */
+        vm_co_enter_reactor_baseline();
+        lm_reactor_run((lm_reactor_t*)p);
+        vm_co_leave_reactor_baseline();
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_REACTOR_STOP: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("stop(impl) 需 reactor 实例"); }
+        lm_reactor_stop((lm_reactor_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_REACTOR_ADD_TIMER: {
+        if(argc < 3 || argv[0].type != VAL_STRUCT_PTR
+           || argv[2].type != VAL_FUNC || !argv[2].v.func.func_obj) {
+            runtime_error("addTimer(impl, ms, cb) 参数错误 / addTimer: bad args");
+        }
+        uint64_t ms = (uint64_t)bi_num_i64(argv[1]);
+        int id = vm_co_add_timer((lm_reactor_t*)argv[0].v.struct_ptr, ms, argv[2]);
+        *out = lumyr_make_int64(id);
+        return 1;
+    }
+    case BUILTIN_REACTOR_DEL_TIMER: {
+        if(argc < 2 || argv[0].type != VAL_STRUCT_PTR) {
+            runtime_error("delTimer(impl, id) 参数错误");
+        }
+        lm_reactor_del_timer((lm_reactor_t*)argv[0].v.struct_ptr, (int)bi_num_i64(argv[1]));
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SET_SOCKET_REACTOR: {
+        /* 参数为 reactor 实例 → 设全局 reactor；参数为 null/none → 清理全局 reactor
+         * （reactor 生命周期收尾时必须清理，否则 destroy 后 g_socket_reactor 悬空） */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        lm_socket_set_reactor((lm_reactor_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_CO_SPAWN: {
+        if(argc < 1 || argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
+            runtime_error("spawn(f, [arg]) 首参须为函数 / spawn: first arg must be function");
+        }
+        Value arg = (argc >= 2) ? argv[1] : val_none();
+        lm_co_t* co = vm_co_spawn(argv[0], arg);
+        if(!co) { runtime_error("spawn 协程创建失败 / spawn: coroutine creation failed"); }
+        /* Phase 7.2：scheduler 活跃且当前在 reactor 主循环上下文（无协程运行，
+         * current==NULL）时投递到就绪队列，由 reactor 钩子 drain_ready 自动 resume。
+         * 协程内 spawn（current!=NULL，如 accept loop spawn handler）不投递：
+         * 由 spawning 协程显式 resume（h.start 嵌套直连），与既有行为一致；
+         * 且避免在协程栈热点调 mutex 压栈（64KiB 协程栈嵌套 VM 调用本就紧张）。
+         * 无 scheduler（C 测试、非 reactor 上下文）不投递，保持原显式 resume 契约。 */
+        lm_scheduler_t* sched = lm_scheduler_get_current();
+        if (sched && sched->current == NULL) lm_scheduler_post(sched, co);
+        out->type = VAL_STRUCT_PTR;
+        out->v.struct_ptr = co;
+        return 1;
+    }
+    case BUILTIN_CO_RESUME: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("resume(impl) 需协程实例 / resume: need coroutine instance"); }
+        lm_co_resume((lm_co_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_CO_YIELD: {
+        lm_co_yield();
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_CO_CURRENT: {
+        lm_co_t* co = lm_co_current();
+        if(co) {
+            out->type = VAL_STRUCT_PTR;
+            out->v.struct_ptr = co;
+        } else {
+            *out = val_none();
+        }
+        return 1;
+    }
+    case BUILTIN_CO_IS_DEAD: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("isDead(impl) 需协程实例"); }
+        *out = lumyr_make_bool(lm_co_is_dead((lm_co_t*)p));
+        return 1;
+    }
+    case BUILTIN_CO_DESTROY: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("destroy(impl) 需协程实例 / destroy: need coroutine instance"); }
+        lm_co_destroy((lm_co_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    /* Phase 7.2：per-thread scheduler 生命周期 */
+    case BUILTIN_SCHEDULER_NEW: {
+        /* scheduler(reactor)：创建绑定 reactor 的 scheduler，返回指针。
+         * reactor 可为 null（compute 池用，Phase 7.4）。 */
+        lm_reactor_t* r = (lm_reactor_t*)((argc > 0 && argv[0].type == VAL_STRUCT_PTR)
+                                          ? argv[0].v.struct_ptr
+                                          : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL));
+        lm_scheduler_t* s = lm_scheduler_new(r);
+        if(!s) { runtime_error("scheduler 创建失败 / scheduler: creation failed"); }
+        out->type = VAL_STRUCT_PTR;
+        out->v.struct_ptr = s;
+        return 1;
+    }
+    case BUILTIN_SCHEDULER_SET: {
+        /* setScheduler(sched)：置当前线程 TLS + 设 reactor drain 钩子。
+         * 在 reactor.run 前调，使主循环每轮消费就绪队列。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("setScheduler(sched) 需 scheduler 实例"); }
+        lm_scheduler_t* s = (lm_scheduler_t*)p;
+        lm_scheduler_set_current(s);
+        if (s->reactor) {
+            lm_reactor_set_ready_drain(s->reactor,
+                (void(*)(void*))lm_scheduler_drain_ready, s);
+        }
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SCHEDULER_CLEAR: {
+        /* clearScheduler(sched)：清当前线程 TLS + 清 reactor drain 钩子。
+         * reactor.run 退出后（onStop）调，避免悬空钩子。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("clearScheduler(sched) 需 scheduler 实例"); }
+        lm_scheduler_t* s = (lm_scheduler_t*)p;
+        if (s->reactor) lm_reactor_set_ready_drain(s->reactor, NULL, NULL);
+        lm_scheduler_set_current(NULL);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SCHEDULER_DESTROY: {
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("destroyScheduler(sched) 需 scheduler 实例"); }
+        lm_scheduler_destroy((lm_scheduler_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SCHEDULER_POST: {
+        /* postReady(sched, co)：手动投递协程到目标 scheduler 就绪队列。
+         * 跨线程唤醒场景（Phase 7.3 coWakeup）用：线程 A 把协程投递到线程 B 的 scheduler。 */
+        if(argc < 2 || argv[0].type != VAL_STRUCT_PTR || argv[1].type != VAL_STRUCT_PTR) {
+            runtime_error("postReady(sched, co) 参数错误 / postReady: bad args");
+        }
+        lm_scheduler_post((lm_scheduler_t*)argv[0].v.struct_ptr,
+                          (lm_co_t*)argv[1].v.struct_ptr);
+        *out = val_none();
+        return 1;
+    }
+    /* ===== Phase 7.3：跨线程唤醒原语（coWakeup/coCond） ===== */
+    case BUILTIN_CO_WAKEUP: {
+        /* coWakeup(co, sched)：跨线程投递协程到目标 scheduler + 唤醒其 reactor。
+         * 线程 A 协程唤醒线程 B 挂起的协程：post（mutex 保护）后写 reactor
+         * self-pipe，线程 B 的 reactor 立即从 epoll_wait/kevent 返回，
+         * 下一轮 drain_ready resume 协程。 */
+        if(argc < 2 || argv[0].type != VAL_STRUCT_PTR || argv[1].type != VAL_STRUCT_PTR) {
+            runtime_error("coWakeup(co, sched) 参数错误 / coWakeup: bad args");
+        }
+        lm_scheduler_wakeup((lm_scheduler_t*)argv[1].v.struct_ptr,
+                            (lm_co_t*)argv[0].v.struct_ptr);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_COWAKE_COND_NEW: {
+        /* coCond()：创建协程条件变量（wait/signal/broadcast）。 */
+        lm_cond_t* c = lm_cond_new();
+        if(!c) { runtime_error("coCond 创建失败 / coCond: creation failed"); }
+        out->type = VAL_STRUCT_PTR;
+        out->v.struct_ptr = c;
+        return 1;
+    }
+    case BUILTIN_COWAKE_COND_WAIT: {
+        /* cond.wait()：当前协程挂 waiter 队列 + yield（等 signal 唤醒）。
+         * 必须在协程内调用且本线程有 scheduler；否则 no-op。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("cond.wait() 需 cond 实例"); }
+        lm_cond_wait((lm_cond_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_COWAKE_COND_SIGNAL: {
+        /* cond.signal()：唤醒一个 waiter（FIFO 队头，wakeup 到其 scheduler）。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("cond.signal() 需 cond 实例"); }
+        lm_cond_signal((lm_cond_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_COWAKE_COND_BCAST: {
+        /* cond.broadcast()：唤醒全部 waiter。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("cond.broadcast() 需 cond 实例"); }
+        lm_cond_broadcast((lm_cond_t*)p);
+        *out = val_none();
+        return 1;
+    }
+
     /* ===== 线程 / 锁 / 条件变量 / 线程本地存储（kit/runtime 机制层直包装，仅函数形式） ===== */
     case BUILTIN_MUTEX:    *out = lumyr_make_int64(lumyr_mutex_create()); return 1;
     case BUILTIN_RMUTEX:   *out = lumyr_make_int64(lumyr_rmutex_create()); return 1;
     case BUILTIN_RWLOCK:   *out = lumyr_make_int64(lumyr_rwlock_create()); return 1;
     case BUILTIN_SPINLOCK: *out = lumyr_make_int64(lumyr_spinlock_create()); return 1;
+    /* ===== Phase 7.4：compute worker pool ===== */
+    case BUILTIN_COMPUTE_BEGIN: {
+        /* computeBegin()：当前协程迁入 compute 池（不卡 IO reactor）。
+         * 栈内只记老家 + 目标 worker 后 yield；drain_ready 在 resume 返回
+         * （栈已让出）后 post 到 worker——迁移协议见 lm_co.h。 */
+        int rc = lm_compute_begin();
+        if (rc != 0) {
+            if (rc == -2) {
+                runtime_error("computeBegin 嵌套调用（已在 compute 上下文）/ computeBegin: already in compute context");
+            } else if (rc == -3) {
+                runtime_error("compute 池创建失败 / computeBegin: pool creation failed");
+            } else {
+                runtime_error("computeBegin 需在协程内且本线程有 scheduler / computeBegin: must run in coroutine with scheduler");
+            }
+        }
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_COMPUTE_END: {
+        /* computeEnd()：当前协程迁回老家 IO scheduler（worker resume 返回后
+         * post 回家 + self-pipe 唤醒 reactor）。 */
+        if (lm_compute_end() != 0) {
+            runtime_error("computeEnd 需先 computeBegin / computeEnd: must run after computeBegin");
+        }
+        *out = val_none();
+        return 1;
+    }
     case BUILTIN_CONDVAR:  *out = lumyr_make_int64(lumyr_condvar_create()); return 1;
     case BUILTIN_LOCK:
         bi_need_args_mt("lock", argc, 1); bi_need_int_mt("lock", argv[0], 1);
@@ -4252,6 +4520,32 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOCKET_SETOPT: return "setOption";
     case BUILTIN_SOCKET_GETOPT: return "getOption";
     case BUILTIN_SOCKET_FILENO: return "fileno";
+    /* Phase 5: reactor + 协程 */
+    case BUILTIN_REACTOR_NEW: return "reactor";
+    case BUILTIN_REACTOR_DEL: return "destroyReactor";
+    case BUILTIN_REACTOR_RUN: return "run";
+    case BUILTIN_REACTOR_STOP: return "stop";
+    case BUILTIN_REACTOR_ADD_TIMER: return "addTimer";
+    case BUILTIN_REACTOR_DEL_TIMER: return "delTimer";
+    case BUILTIN_SET_SOCKET_REACTOR: return "setSocketReactor";
+    case BUILTIN_CO_SPAWN: return "spawn";
+    case BUILTIN_CO_RESUME: return "resume";
+    case BUILTIN_CO_YIELD: return "yield";
+    case BUILTIN_CO_CURRENT: return "current";
+    case BUILTIN_CO_IS_DEAD: return "isDead";
+    case BUILTIN_CO_DESTROY: return "destroy";
+    case BUILTIN_SCHEDULER_NEW: return "scheduler";
+    case BUILTIN_SCHEDULER_SET: return "setScheduler";
+    case BUILTIN_SCHEDULER_CLEAR: return "clearScheduler";
+    case BUILTIN_SCHEDULER_DESTROY: return "destroyScheduler";
+    case BUILTIN_SCHEDULER_POST: return "postReady";
+    case BUILTIN_CO_WAKEUP: return "coWakeup";
+    case BUILTIN_COWAKE_COND_NEW: return "coCond";
+    case BUILTIN_COWAKE_COND_WAIT: return "wait";
+    case BUILTIN_COWAKE_COND_SIGNAL: return "signal";
+    case BUILTIN_COWAKE_COND_BCAST: return "broadcast";
+    case BUILTIN_COMPUTE_BEGIN: return "computeBegin";
+    case BUILTIN_COMPUTE_END: return "computeEnd";
     default: return "?";
     }
 }

@@ -1,0 +1,115 @@
+// ============================================================
+// WebApplication 过滤器链（WebFilter/FilterChain）端到端测试
+//
+// 真实启动 WebApplication，验证注入过滤器后对 ServerRequest /
+// ServerResponse 的重写能力：
+//   1. 请求改写：pre 阶段改 header、setAttribute 传上下文给处理器
+//   2. 响应改写：post 阶段给响应加 header（含对短路响应、404 的包装）
+//   3. 短路：不调 chain.next 直接回 401（处理器不可达）
+//   4. 洋葱顺序：先注册 = 外层（pre 先跑、post 后跑）
+//   5. 两种过滤器形态：WebFilter 对象 与 lambda（func(req, chain)）
+//   6. 404 兜底响应同样经过滤链
+//
+// 自验证：startAsync 后台启动 → 发请求断言 → stop/join，exit 0。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Http>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// ------------------------------------------------------------
+// 对象形态过滤器（外层）：请求改写 + 响应改写
+// pre：setAttribute("user") + 追加顺序标记 "A" + 注入 X-Trace 请求头
+// post：给最终响应加 X-Wrapped: 1（无论响应来自处理器、短路还是 404）
+// ------------------------------------------------------------
+class TraceFilter implements WebFilter {
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        req.setAttribute("user", "tom");
+        prev = req.getAttribute("order");
+        if (prev == null) { prev = ""; }
+        req.setAttribute("order", prev + "A");
+        req.headers.set("X-Trace", "t1");
+        resp = chain.next(req);
+        resp.setHeader("X-Wrapped", "1");
+        return resp;
+    }
+}
+
+// lambda 形态过滤器（内层）：鉴权短路
+// X-Auth != secret 直接 401（不调 chain.next，处理器不可达）；
+// 放行前追加顺序标记 "B"
+authFilter = (req, chain) => {
+    if (req.header("X-Auth") != "secret") {
+        r = ServerResponse(401);
+        r.text("Unauthorized");
+        return r;
+    }
+    prev = req.getAttribute("order");
+    if (prev == null) { prev = ""; }
+    req.setAttribute("order", prev + "B");
+    return chain.next(req);
+};
+
+// ---- 启动真实服务（先注册 TraceFilter = 外层，再注册 authFilter = 内层）----
+port = 18107;
+base = "http://127.0.0.1:" + port;
+app = WebApplication("127.0.0.1", port);
+app.addFilter(TraceFilter());
+app.addFilter(authFilter);
+
+// 处理器回显：过滤器塞入的 attribute 与改写后的请求头
+app.get("/data", func(req) {
+    r = ServerResponse(200);
+    r.text("user=" + req.getAttribute("user")
+           + ";order=" + req.getAttribute("order")
+           + ";trace=" + req.header("X-Trace"));
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// GET 辅助（可带请求头）
+func getRespH(url, headers) {
+    hreq = HttpRequest<any, any>(url);
+    if (headers != null) {
+        for k in headers.keys() { hreq.setHeader(k, headers[k]); }
+    }
+    return hreq.send();
+}
+
+// ------------------------------------------------------------
+// F1: 鉴权放行 → 命中处理器；请求改写生效（attribute/请求头传递），
+//     响应改写生效（X-Wrapped），洋葱顺序 A 外 B 内
+// ------------------------------------------------------------
+r1 = getRespH(base + "/data", {"X-Auth": "secret"});
+check(r1.statusCode() == 200, "F1 放行应 200，实际: " + r1.statusCode());
+b1 = r1.text();
+check(b1.contains("user=tom"), "F1 处理器应读到过滤器塞入的 user=tom，实际: " + b1);
+check(b1.contains("order=AB"), "F1 洋葱顺序应外层 A 先、内层 B 后，实际: " + b1);
+check(b1.contains("trace=t1"), "F1 处理器应读到过滤器注入的请求头 X-Trace=t1，实际: " + b1);
+check(r1.header("X-Wrapped") == "1", "F1 响应应被外层过滤器加 X-Wrapped=1，实际: " + r1.header("X-Wrapped"));
+
+// ------------------------------------------------------------
+// F2: 未带 X-Auth → 内层短路 401，处理器不可达；
+//     短路响应仍被外层 post 包装（X-Wrapped），证明外层包住内层
+// ------------------------------------------------------------
+r2 = getRespH(base + "/data", null);
+check(r2.statusCode() == 401, "F2 无凭证应短路 401，实际: " + r2.statusCode());
+check(r2.text() == "Unauthorized", "F2 短路响应体应为 Unauthorized");
+check(r2.header("X-Wrapped") == "1", "F2 短路响应也应被外层过滤器包装，实际: " + r2.header("X-Wrapped"));
+
+// ------------------------------------------------------------
+// F3: 404 兜底响应同样经过滤链（post 改写生效）
+// ------------------------------------------------------------
+r3 = getRespH(base + "/nope", {"X-Auth": "secret"});
+check(r3.statusCode() == 404, "F3 未注册路径应 404，实际: " + r3.statusCode());
+check(r3.header("X-Wrapped") == "1", "F3 404 响应也应被外层过滤器包装，实际: " + r3.header("X-Wrapped"));
+
+app.stop();
+app.join();
+
+print("web_filter_test ALL PASS");

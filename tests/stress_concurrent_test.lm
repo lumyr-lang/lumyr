@@ -1,0 +1,113 @@
+// stress_concurrent_test.lm —— Phase 7.6 压测：数千并发长连接（fd 上限提升后）
+// 验证多线程多协程底座在 fd 上限提升后的并发承载能力：
+//   服务端：workers=2 + connCapacity=10240（≥ 本机 maxfilesperproc）
+//           + backlog=4096，循环 echo handler（每连接一个协程驻留）
+//   客户端：N=4000 个长连接同时保持打开（同进程，fd 双倍消耗——
+//           峰值 fd ≈ 2N + 监听/管道 ≈ 8010 < 10240），逐个 echo 验证后统一关闭
+// 观测：连接建立成功率、echo 正确率、worker acceptTotal 分布、峰值内存（shell 侧）
+// 前提：进程 fd 上限 ≥ 2N + 余量（macOS: ulimit -n，本机 maxfilesperproc=10240）
+// 运行：./bin/lumyr tests/stress_concurrent_test.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+// 循环 echo handler：连接驻留，每连接一个协程挂在 recv 上
+class LoopEchoHandler implements ServiceHandler {
+    func serve(conn) {
+        while (true) {
+            data = conn.recv(4096);
+            if (data == "") { break; }
+            conn.send(data);
+        }
+    }
+}
+
+func main() {
+    total = 4000;
+    port = 19400;
+    print("=== Phase 7.6 并发压测 / concurrency stress: " + total + " 长连接 ===");
+
+    app = ServiceApplication({
+        "host": "127.0.0.1",
+        "port": port,
+        "backlog": 4096,
+        "workers": 2,
+        "connCapacity": 10240
+    });
+    app.setHandler(LoopEchoHandler());
+    app.startAsync();
+    sleep(300);
+
+    // 阶段 1：建立 total 条长连接（全部保持打开）
+    print("[1] 建立 " + total + " 条连接 / connecting");
+    clis = [];
+    i = 0;
+    connFail = 0;
+    while (i < total) {
+        try {
+            c = ClientSocket("127.0.0.1", port);
+            clis.add(c);
+        } catch (e) {
+            connFail = connFail + 1;
+        }
+        i = i + 1;
+        if (i % 1000 == 0) { print("  已建立 " + i + " / established"); }
+    }
+    if (connFail > 0) {
+        print("  FAIL: " + connFail + " 条连接建立失败");
+        app.stop();
+        app.join();
+        return false;
+    }
+    print("  " + clis.len() + " 条全部建立 / all connected");
+
+    // 阶段 2：逐连接 echo 验证（服务端 4000 协程并发驻留）
+    print("[2] echo 验证 / echo verify");
+    ok = 0;
+    i = 0;
+    while (i < clis.len()) {
+        msg = "s" + i;
+        clis[i].send(msg);
+        resp = clis[i].recv(4096);
+        if (resp == msg) { ok = ok + 1; }
+        i = i + 1;
+        if (i % 1000 == 0) { print("  已验证 " + i + " / verified"); }
+    }
+    if (ok != total) {
+        print("  FAIL: echo 成功 " + ok + "/" + total);
+        app.stop();
+        app.join();
+        return false;
+    }
+    print("  echo 成功 " + ok + "/" + total + " / echo ok");
+
+    // 阶段 3：统一关闭（服务端 4000 协程读到 EOF 退出回收）
+    print("[3] 关闭全部连接 / closing all");
+    i = 0;
+    while (i < clis.len()) {
+        clis[i].close();
+        i = i + 1;
+    }
+    clis = [];
+    sleep(500);
+
+    app.stop();
+    app.join();
+
+    // 分布统计
+    sum = 0;
+    dist = "";
+    for w in app.workerList {
+        sum = sum + w.acceptTotal;
+        if (dist != "") { dist = dist + ","; }
+        dist = dist + w.acceptTotal;
+    }
+    print("[4] worker 分布: [" + dist + "] / distribution, 总和 " + sum);
+    if (sum != total) {
+        print("  FAIL: acceptTotal 总和 " + sum + " != " + total);
+        return false;
+    }
+    print("=== ALL PASS / 全部通过 ===");
+    return true;
+}
+
+main();

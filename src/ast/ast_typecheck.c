@@ -1039,6 +1039,23 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"UdpSocket", 0, 1}, {"udpSocket", 0, 1},
     {"UnixSocket", 0, 1}, {"unixSocket", 0, 1},
     {"UnixDgramSocket", 0, 1}, {"unixDgramSocket", 0, 1},
+    /* reactor + 协程（Phase 5）：与 ir_compile.c builtin_id_by_name 名表一致 */
+    {"reactor", 1, 1}, {"Reactor", 1, 1},
+    {"run", 1, 1}, {"stop", 1, 1},
+    {"addTimer", 3, 3}, {"delTimer", 2, 2},
+    {"destroyReactor", 1, 1},
+    {"setSocketReactor", 1, 1},
+    {"spawn", 2, 2}, {"resume", 1, 1}, {"coYield", 0, 0},
+    {"current", 0, 0}, {"isDead", 1, 1}, {"destroy", 1, 1},
+    /* Phase 7.2：per-thread scheduler（与 ir_compile.c 名表一致） */
+    {"scheduler", 1, 1}, {"setScheduler", 1, 1},
+    {"clearScheduler", 1, 1}, {"destroyScheduler", 1, 1},
+    {"postReady", 2, 2},
+    /* Phase 7.3：跨线程唤醒原语（与 ir_compile.c 名表一致） */
+    {"coWakeup", 2, 2}, {"coCond", 0, 0},
+    {"coWait", 1, 1}, {"coSignal", 1, 1}, {"coBroadcast", 1, 1},
+    /* Phase 7.4：compute worker pool（与 ir_compile.c 名表一致） */
+    {"computeBegin", 0, 0}, {"computeEnd", 0, 0},
     {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
     {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
     {"append", 2, 2}, {"appendLine", 2, 2},

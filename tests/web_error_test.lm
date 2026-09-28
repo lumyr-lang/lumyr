@@ -1,0 +1,152 @@
+// ============================================================
+// WebApplication 全局异常处理端到端测试
+//
+// 验证错误处理分层：
+//   E1 默认兜底：未 setErrorHandler 时链尾异常 → 500 默认体，
+//      且错误响应回到外层过滤器 post 阶段（可被统一包装）
+//   E2 setErrorHandler(lambda)：自定义错误响应（JSON 错误体）
+//   E3 Error 实例：e.getMessage() 透传到错误响应
+//   E4 setErrorHandler(对象)：implements ErrorHandler 形态
+//   E5 过滤器自身抛错：不进 onError（洋葱外，连接线程兜 500），
+//      且异常穿洋葱时外层过滤器 post 不执行
+//   E6 404 走 onNotFound 正常响应，不进 onError（同样可被过滤器包装）
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Http>;
+import <Function/Error>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 外层过滤器：post 给一切从链尾正常返回的响应（含错误响应、404）加包装头
+class WrapFilter implements WebFilter {
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        resp = chain.next(req);
+        resp.setHeader("X-Err-Wrapped", "1");
+        return resp;
+    }
+}
+
+// 内层过滤器：仅 /fboom 时抛错（模拟过滤器基础设施异常），其余放行
+class BoomFilter implements WebFilter {
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        if (req.path == "/fboom") { throw "filter boom"; }
+        return chain.next(req);
+    }
+}
+
+// ---- 启动真实服务 ----
+port = 18108;
+base = "http://127.0.0.1:" + port;
+app = WebApplication("127.0.0.1", port);
+app.addFilter(WrapFilter());
+app.addFilter(BoomFilter());
+
+// 路由：字符串抛错 / Error 实例抛错 / 正常 / 404（未注册路径）
+app.get("/str-boom", func(req) {
+    throw "boom";
+});
+app.get("/err-boom", func(req) {
+    throw Error("bad input");
+});
+app.get("/ok", func(req) {
+    r = ServerResponse(200);
+    r.text("fine");
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+func getResp(url) {
+    return HttpRequest<any, any>(url).send();
+}
+
+// ------------------------------------------------------------
+// E1: 默认兜底（未 setErrorHandler）：链尾异常 → 500 默认体，
+//     且错误响应回到外层过滤器 post 阶段（X-Err-Wrapped=1）
+// ------------------------------------------------------------
+r1 = getResp(base + "/str-boom");
+check(r1.statusCode() == 500, "E1 链尾异常默认应 500，实际: " + r1.statusCode());
+check(r1.text() == "Internal Server Error", "E1 默认错误体应为 Internal Server Error，实际: " + r1.text());
+check(r1.header("X-Err-Wrapped") == "1",
+      "E1 错误响应应回到外层过滤器 post 被包装，实际: " + r1.header("X-Err-Wrapped"));
+
+// ------------------------------------------------------------
+// E2: setErrorHandler(lambda)：自定义 JSON 错误体，字符串异常消息透传
+// ------------------------------------------------------------
+jsonErrHandler = (req, e) => {
+    msg = e;
+    if (type(e) != "string") { msg = e.getMessage(); }
+    r = ServerResponse(500);
+    r.setHeader("X-Err-From", "onError");
+    r.json({"code": "INTERNAL", "message": msg});
+    return r;
+};
+app.setErrorHandler(jsonErrHandler);
+
+r2 = getResp(base + "/str-boom");
+check(r2.statusCode() == 500, "E2 自定义错误处理应 500，实际: " + r2.statusCode());
+check(r2.header("X-Err-From") == "onError", "E2 应进入 onError 通道，实际: " + r2.header("X-Err-From"));
+b2 = r2.json();
+check(b2["message"] == "boom", "E2 字符串异常消息应透传，实际: " + b2["message"]);
+check(r2.header("X-Err-Wrapped") == "1",
+      "E2 自定义错误响应同样应被外层过滤器包装");
+
+// ------------------------------------------------------------
+// E3: Error 实例：错误处理器经 e.getMessage() 拿到消息
+// ------------------------------------------------------------
+r3 = getResp(base + "/err-boom");
+b3 = r3.json();
+check(b3["message"] == "bad input",
+      "E3 Error 实例消息应经 getMessage 透传，实际: " + b3["message"]);
+
+// ------------------------------------------------------------
+// E4: setErrorHandler(对象)：implements ErrorHandler 形态
+// ------------------------------------------------------------
+class ObjErrHandler implements ErrorHandler {
+    func onError(req: ServerRequest, e): ServerResponse {
+        msg = e;
+        if (type(e) != "string") { msg = e.getMessage(); }
+        r = ServerResponse(500);
+        r.setHeader("X-Err-From", "objOnError");
+        r.text("OBJ:" + msg);
+        return r;
+    }
+}
+app.setErrorHandler(ObjErrHandler());
+
+r4 = getResp(base + "/str-boom");
+check(r4.header("X-Err-From") == "objOnError", "E4 对象形态应生效，实际: " + r4.header("X-Err-From"));
+check(r4.text() == "OBJ:boom", "E4 对象形态错误体，实际: " + r4.text());
+
+// ------------------------------------------------------------
+// E5: 过滤器自身抛错（/fboom 被 BoomFilter 拦截抛出）：
+//     不进 onError（无 X-Err-From），异常穿洋葱外层 post 不执行
+//     （无 X-Err-Wrapped），由连接线程兜 500 默认体
+// ------------------------------------------------------------
+r5 = getResp(base + "/fboom");
+check(r5.statusCode() == 500, "E5 过滤器异常应兜 500，实际: " + r5.statusCode());
+check(r5.text() == "Internal Server Error", "E5 应为连接线程兜底默认体，实际: " + r5.text());
+check(r5.header("X-Err-From") == "", "E5 过滤器异常不应进入 onError，实际: " + r5.header("X-Err-From"));
+check(r5.header("X-Err-Wrapped") == "",
+      "E5 异常穿洋葱时外层过滤器 post 不应执行，实际: " + r5.header("X-Err-Wrapped"));
+
+// ------------------------------------------------------------
+// E6: 404 走 onNotFound 正常响应，不进 onError；仍可被过滤器包装
+// ------------------------------------------------------------
+r6 = getResp(base + "/nope");
+check(r6.statusCode() == 404, "E6 未注册路径应 404，实际: " + r6.statusCode());
+check(r6.header("X-Err-From") == "", "E6 404 不应进入 onError，实际: " + r6.header("X-Err-From"));
+check(r6.header("X-Err-Wrapped") == "1", "E6 404 响应应被外层过滤器包装，实际: " + r6.header("X-Err-Wrapped"));
+
+// 正常响应不受影响（对照）
+r7 = getResp(base + "/ok");
+check(r7.statusCode() == 200 && r7.text() == "fine", "E7 正常路由不受错误处理影响");
+
+app.stop();
+app.join();
+
+print("web_error_test ALL PASS");

@@ -108,6 +108,33 @@ void vm_except_enter_thread_root(void);
 void vm_except_leave_thread_root(void);
 Value vm_except_take_thread_root_error(void);
 
+/* ============================================================
+ * Phase 5: 协程 VM 状态快照
+ * 协程在同线程复用 _Thread_local 异常状态（g_try_stack/g_unwind/g_fin_stack/
+ * g_err_jmp/g_thread_root 等），yield/resume 必须保存/恢复，否则 reactor
+ * resume 不同协程会互相污染（try 链错乱、错误着陆垫错位）。
+ * 链表节点（TryCtxNode/FinNode）不 deep copy，只切换链头指针——
+ * 节点属于各自协程，正常结束 try 栈已空。target_frame 同理（StackFrame 指针）。
+ * ============================================================ */
+typedef struct {
+    void* try_stack;             /* g_try_stack 链头（TryCtxNode*，不透明） */
+    void* fin_stack;             /* g_fin_stack 链头（FinNode*，不透明） */
+    int   unwind_active;         /* g_unwind.active */
+    Value unwind_error;          /* g_unwind.error */
+    Value unwind_throw_val;      /* g_unwind.throw_val */
+    void* unwind_target_frame;    /* g_unwind.target_frame（StackFrame*） */
+    int   unwind_catch_pc;        /* g_unwind.catch_pc */
+    Value current_error;          /* g_current_error */
+    Value current_throw_val;      /* g_current_throw_val */
+    int   thread_root;           /* g_thread_root */
+    Value thread_root_err;       /* g_thread_root_err */
+    int   thread_root_pushed;    /* g_thread_root_pushed */
+} VMExceptState;
+
+void vm_except_save_state(VMExceptState* out);         /* 保存当前 _Thread_local 异常状态到 out */
+void vm_except_restore_state(const VMExceptState* in);  /* 从 in 恢复 _Thread_local 异常状态 */
+void vm_except_clear_state(void);                      /* 清零（reactor 基线：空 try 栈、thread_root=0 等） */
+
 /* 返回值独立化（字符串堆值深拷贝），定义在 vm_exec.c */
 Value ret_value_detach(Value v);
 

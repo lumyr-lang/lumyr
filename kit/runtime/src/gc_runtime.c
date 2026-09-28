@@ -189,6 +189,20 @@ typedef struct GCCFrameEntry {
 
 static GCCFrameEntry* g_gc_cframe_threads = NULL;
 
+/* ---- 协程栈根注册表 ----
+ * 有栈协程（lm_co）yield 时其 C 调用栈冻结，需挂进全局表供 GC 保守扫描。
+ * 与 GCThreadEntry 不同：协程不绑定 pthread_t（运行在 reactor 线程上），
+ * 无 at_safepoint 字段——协程挂起即等同安全点，栈稳定不变，无需 STW 自旋。
+ * stack_top=栈基址（高地址，mmap 区末），stack_bottom=yield 时栈指针（低地址）。
+ * GC 标记阶段遍历本表调 gc_conservative_cstack_scan(top, bottom, NULL)。 */
+typedef struct GCCoroutineEntry {
+    void* stack_top;      /* 栈基址（高地址，mmap 区末） */
+    void* stack_bottom;   /* yield 时栈指针（低地址），保守扫描下界 */
+    struct GCCoroutineEntry* next;
+} GCCoroutineEntry;
+
+static GCCoroutineEntry* g_gc_coroutines = NULL;
+
 /* 当前线程的注册 entry 指针（gc_stw_check 用它们设置 at_safepoint） */
 static _Thread_local GCThreadEntry* tls_cur_vm_entry = NULL;
 static _Thread_local GCCFrameEntry* tls_cur_cf_entry = NULL;
@@ -1887,6 +1901,10 @@ void gc_scan_roots_to_stack(Value* stack, int sp, StackFrame* frame)
     if (tls_cframe && !g_gc_cframe_threads) {
         gc_scan_cframe_chain_to_stack(tls_cframe);
     }
+    /* 扫描挂起协程的冻结 C 栈（yield 期间栈稳定，保守扫描 [bottom, top]） */
+    for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
+        gc_conservative_cstack_scan(e->stack_top, e->stack_bottom, NULL);
+    }
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
 }
@@ -1948,6 +1966,10 @@ static void gc_scan_roots_minor(Value* stack, int sp, StackFrame* frame)
     }
     if (tls_cframe && !g_gc_cframe_threads) {
         gc_scan_cframe_chain_minor(tls_cframe);
+    }
+    /* 扫描挂起协程的冻结 C 栈（yield 期间栈稳定，保守扫描 [bottom, top]） */
+    for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
+        gc_conservative_cstack_scan(e->stack_top, e->stack_bottom, NULL);
     }
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
@@ -2247,6 +2269,24 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
                     }
                 }
                 cf = cf->parent;
+            }
+        }
+
+        /* 扫描挂起协程的冻结 C 栈（递归兼容：直接调 gc_mark_ptr 设黑，不用标记栈）。
+         * 非增量路径用递归 gc_mark，不使用 gc_mark_ptr_to_stack（迭代入栈），
+         * 避免标记栈残留 entries 干扰 gc_sweep。gc_mark_ptr 设 marked=1 即可保活；
+         * 容器子对象由 VM 栈精确扫描覆盖，C 栈保守扫描仅需保活直接引用。 */
+        gc_cstack_set_build();
+        for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
+            if (!e->stack_top) continue;
+            uintptr_t* p = (uintptr_t*)e->stack_top;
+            uintptr_t* end = e->stack_bottom ? (uintptr_t*)e->stack_bottom : p;
+            if (end > p) end = p;
+            for (; p >= end; p--) {
+                uintptr_t word = *p;
+                if (!GC_VALID_PTR((void*)word)) continue;
+                if (!gc_cstack_set_contains((void*)word)) continue;
+                gc_mark_ptr((void*)word);
             }
         }
 
@@ -2718,6 +2758,43 @@ void gc_unregister_cframe_thread(void)
     pthread_mutex_unlock(&g_gc_mutex);
     tls_cur_cf_entry = next_for_self;
     tls_cframe_registered = 0;
+}
+
+/* ============================================================
+ * 协程栈根注册（有栈协程 yield 冻结栈扫描）
+ * ============================================================ */
+void gc_register_coroutine(void* stack_top, void* stack_bottom)
+{
+    if (!stack_top) return;
+    GCCoroutineEntry* e = (GCCoroutineEntry*)malloc(sizeof(GCCoroutineEntry));
+    if (!e) {
+        LOG_ERROR("GC: out of memory registering coroutine\n");
+        abort();
+    }
+    e->stack_top = stack_top;
+    e->stack_bottom = stack_bottom;
+    pthread_mutex_lock(&g_gc_mutex);
+    /* 头插：同一协程多次 yield 时最近注册的在链头，unregister 按 stack_top 匹配移除 */
+    e->next = g_gc_coroutines;
+    g_gc_coroutines = e;
+    pthread_mutex_unlock(&g_gc_mutex);
+}
+
+void gc_unregister_coroutine(void* stack_top)
+{
+    if (!stack_top) return;
+    pthread_mutex_lock(&g_gc_mutex);
+    GCCoroutineEntry** pp = &g_gc_coroutines;
+    while (*pp) {
+        if ((*pp)->stack_top == stack_top) {
+            GCCoroutineEntry* victim = *pp;
+            *pp = victim->next;
+            free(victim);
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    pthread_mutex_unlock(&g_gc_mutex);
 }
 
 /* 统计 */

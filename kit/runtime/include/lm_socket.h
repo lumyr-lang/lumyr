@@ -47,4 +47,18 @@ Value lumyr_socket_get_option(Value v, const char* name);
 // fileno：返回 fd 描述符
 Value lumyr_socket_fileno(Value v);
 
+// 设置 DNS 解析超时（毫秒）：build_inet/connect/bind 在 getaddrinfo 上等的最长时间。
+// 0 = 不限（默认，兼容旧行为）。
+// 跨平台实现用独立线程 + 条件变量超时等待，worker 线程超时后 detach 继续跑
+// （资源泄漏但安全，避免 SIGALRM 中断 getaddrinfo 导致 libc 内部锁死）。
+void lm_socket_set_dns_timeout_ms(int ms);
+
+// 协程模式：设置全局 reactor 实例供 socket API 协程化 fd 事件注册。
+// 协程上下文（lm_co_current() != NULL）且已 set_reactor 时，recv/send/accept/connect
+// 自动走非阻塞 + yield 等事件路径（EAGAIN/EINPROGRESS 挂起协程，事件就绪后 resume 重试）；
+// 否则保持原有阻塞逻辑（兼容 thread-per-conn 路径）。
+// 前向声明 lm_reactor_s（完整定义在 lm_reactor.h），避免本头引入 epoll/kqueue 依赖。
+struct lm_reactor_s;
+void lm_socket_set_reactor(struct lm_reactor_s* r);
+
 #endif // LM_SOCKET_H

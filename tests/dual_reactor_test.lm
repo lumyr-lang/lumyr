@@ -1,0 +1,106 @@
+// dual_reactor_test.lm —— Phase 7.1 lm 层单测：双 reactor 互不覆盖
+// 验证 g_socket_reactor 改 _Thread_local 后，两个 ServiceApplication 各自
+// 在独立线程跑自己的 reactor + echo server，互不覆盖全局指针。
+// 改造前（g_socket_reactor 为进程级全局）：后启动的 setReactor 覆盖前者，
+// 前者 reactor 内 socket 协程化失效（accept/recv 不再 yield）。
+// 改造后：每线程 TLS 独立，两 reactor 并存。
+// 运行：./bin/lumyr tests/dual_reactor_test.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+// echo handler：收到什么回什么
+class EchoHandler implements ServiceHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data != "") {
+            conn.send(data);
+        }
+    }
+}
+
+// 测试 1：双 reactor 并存（两线程各跑一个 echo server）
+func testDualReactor() {
+    print("[1] 双 reactor 并存（两线程各 setReactor + run）/ dual reactor coexistence");
+    port1 = 19001;
+    port2 = 19002;
+    app1 = ServiceApplication("0.0.0.0", port1, EchoHandler());
+    app2 = ServiceApplication("0.0.0.0", port2, EchoHandler());
+    app1.startAsync();
+    app2.startAsync();
+    // 等两个 server 都 bind+listen+reactor 起来
+    sleep(400);
+
+    // 客户端连两个 server 各发一条，验证两 reactor 的协程化 socket 都正常
+    r1 = "";
+    r2 = "";
+    try {
+        cli1 = ClientSocket("127.0.0.1", port1);
+        cli1.send("hello-1");
+        r1 = cli1.recv(1024);
+        cli1.close();
+    } catch (e) {
+        print("  client1 异常 / error: " + e);
+    }
+    try {
+        cli2 = ClientSocket("127.0.0.1", port2);
+        cli2.send("hello-2");
+        r2 = cli2.recv(1024);
+        cli2.close();
+    } catch (e) {
+        print("  client2 异常 / error: " + e);
+    }
+
+    app1.stop();
+    app2.stop();
+    app1.join();
+    app2.join();
+
+    print("  port " + port1 + " recv: " + r1);
+    print("  port " + port2 + " recv: " + r2);
+    ok = (r1 == "hello-1" && r2 == "hello-2");
+    if (ok) {
+        print("  PASS");
+    } else {
+        print("  FAIL: 期望 hello-1 / hello-2");
+    }
+    return ok;
+}
+
+// 测试 2：单 reactor 回归（验证 thread_local 在单线程下行为兼容，不破坏既有）
+func testSingleReactorCompat() {
+    print("[2] 单 reactor 回归（thread_local 单线程兼容）/ single reactor compat");
+    port = 19003;
+    app = ServiceApplication("0.0.0.0", port, EchoHandler());
+    app.startAsync();
+    sleep(300);
+
+    cli = ClientSocket("127.0.0.1", port);
+    cli.send("solo");
+    data = cli.recv(1024);
+    cli.close();
+
+    app.stop();
+    app.join();
+
+    if (data != "solo") {
+        print("  FAIL: 期望 solo，实际 " + data);
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 主入口
+pass = 0;
+total = 2;
+
+if (testDualReactor()) pass++;
+if (testSingleReactorCompat()) pass++;
+
+print("");
+print("Phase 7.1 lm 单测: " + pass + "/" + total + " PASS");
+if (pass == total) {
+    print("ALL PASS / 全部通过");
+} else {
+    print("SOME FAILED / 存在失败");
+}

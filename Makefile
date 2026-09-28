@@ -4,6 +4,11 @@
 CC ?= gcc
 CFLAGS ?= -Wall -Wextra -g -I./src -I./build/gen -I./kit/runtime/include
 
+# 自动头文件依赖标志（独立于 CFLAGS：命令行覆盖 CFLAGS 做 ASAN 等构建时仍生效）：
+# -MMD 编译时输出与 .o 同目录的 .d 依赖文件（只含用户头，不含系统头）；
+# -MP 为每个依赖头生成 phony 目标，头文件被删除后 make 不报错
+DEPFLAGS := -MMD -MP
+
 # ========== 操作系统检测 ==========
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -141,6 +146,22 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_formdata.c
 # socket 网络套接字（TCP/UDP/Unix 域）
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_socket.c
 
+# reactor 底座：epoll/kqueue ET 后端 + 连接池 + 定时器最小堆 + posted 队列
+# 单 reactor 线程跑所有协程（Phase 2 接入），Phase 6 替换 ServiceApplication 的 thread-per-conn
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_reactor.c
+
+# 有栈协程：POSIX ucontext（swapcontext 切栈），让 native 阻塞调用在协程内 yield，
+# reactor 调度回来 resume。mmap + 末页 guard page 防爆栈。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_co.c
+
+# Phase 7.2：per-thread 协程调度器（reactor + 就绪队列 + TLS scheduler）
+# 对标 lthread per-thread IO scheduler，每线程独立 scheduler + reactor，
+# 就绪队列 mutex 保护支持跨线程投递（Phase 7.3 coWakeup 打底）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_scheduler.c
+# Phase 7.3：协程条件变量（wait/signal/broadcast 跨线程唤醒）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_cond.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_compute.c
+
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
 
 # ========== 编译器本体源文件（不含 runtime） ==========
@@ -154,6 +175,11 @@ C_SRCS += $(filter-out $(SRC_DIR)/yacc/lex.yy.c $(SRC_DIR)/yacc/yacc.tab.c, $(wi
 C_SRCS += $(LEX_GEN) $(YACC_GEN_C)
 
 OBJS := $(C_SRCS:.c=.o)
+
+# 编译器自动生成的头文件依赖（.d，与 .o 同目录同名）
+# 首次构建尚不存在；-include 放在本文件末尾——若在此处包含，.d 中的
+# 目标规则（如 ast_interp.o:）位置早于 all，会劫持 make 的默认目标
+DEPS := $(OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d)
 
 # ========== Windows 兼容层 ==========
 WIN_DEPS := prebuilt/windows
@@ -228,9 +254,14 @@ $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 	@mkdir -p $(YACC_DIR)
 	$(FLEX_CMD) -o $@ $<
 
+# ========== 通用 C 编译规则（编译同时生成 .d 头依赖） ==========
+# 覆盖 make 内置不追踪头文件的 %.o: %.c 隐式规则；% 匹配任意源码/生成目录
+%.o: %.c
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+
 # ========== main.o 特殊编译规则（注入生成代码的链接配置） ==========
 src/main.o: src/main.c
-	$(CC) $(CFLAGS) \
+	$(CC) $(CFLAGS) $(DEPFLAGS) \
 	  -DLUMYR_GEN_INC='"$(GEN_INC)"' \
 	  -DLUMYR_GEN_LIB='"$(GEN_LIB)"' \
 	  -DLUMYR_GEN_LDLIBS='"$(LDLIBS)"' \
@@ -239,7 +270,7 @@ src/main.o: src/main.c
 # ========== import.o 特殊编译规则（注入框架路径） ==========
 LUMYR_FRAMEWORK_PATH ?=
 src/parse/import.o: src/parse/import.c src/parse/import.h
-	$(CC) $(CFLAGS) \
+	$(CC) $(CFLAGS) $(DEPFLAGS) \
 	  $(if $(LUMYR_FRAMEWORK_PATH),-DLUMYR_FRAMEWORK_PATH='"$(LUMYR_FRAMEWORK_PATH)"') \
 	  -c -o $@ $<
 
@@ -284,7 +315,7 @@ test: $(TEST_STACKFRAME)
 
 # ========== 清理 ==========
 clean:
-	rm -f $(OBJS) $(RUNTIME_OBJS)
+	rm -f $(OBJS) $(RUNTIME_OBJS) $(DEPS)
 	rm -rf $(BIN_DIR) $(LIB_DIR)
 	@echo "clean done"
 
@@ -292,3 +323,7 @@ distclean: clean
 	rm -f $(LEX_GEN) $(YACC_GEN_C) $(YACC_GEN_H) $(YACC_REPORT)
 	rm -rf $(GEN_DIR)
 	@echo "distclean done: restore to source-only state"
+
+# 头文件自动依赖（必须置于末尾：.d 含显式 .o 规则，放在 all 之前会
+# 改变默认目标；前导 - 忽略首次构建 .d 尚不存在的错误）
+-include $(DEPS)

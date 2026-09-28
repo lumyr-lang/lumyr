@@ -77,6 +77,24 @@ public class ServerSocket implements ServerSocketInterface {
         self.listen(backlog);
     }
 
+    // 4 参构造：reusePort != 0 时在 bind 前设置 SO_REUSEPORT——
+    // 允许多线程/多进程各自 listen 同一端口，由内核按连接 5 元组 hash
+    // 分发到各监听 socket（Phase 7.5 多 reactor 同端口监听的基础）。
+    // 注意必须在 bind 之前设置才生效，故单独开构造形态。
+    func ServerSocket(host: string, port: int, backlog: int, reusePort: int) {
+        self.host = host;
+        self.port = port;
+        self.closed = false;
+        self.sock = TcpSocket();
+        // 服务端惯例：SO_REUSEADDR，允许重启时绑定 TIME_WAIT 残留的端口
+        self.sock.setOption("reuseAddr", 1);
+        if (reusePort != 0) {
+            self.sock.setOption("reusePort", 1);
+        }
+        self.bind(host, port);
+        self.listen(backlog);
+    }
+
     func bind(host: string, port: int) {
         self.sock.bind(host, port);
         return self;

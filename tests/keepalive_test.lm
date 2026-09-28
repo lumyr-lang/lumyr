@@ -1,0 +1,231 @@
+// ============================================================
+// HTTP keep-alive 持久连接端到端测试（Phase 7.7）
+//
+// T1 单连接多请求：HTTP/1.1 默认 keep-alive，同一连接连续 3 请求全 200，
+//    响应带 Connection: keep-alive；最后 Connection: close 收尾（EOF）
+// T2 pipelining：单报文连发两请求，按序收到两响应（连接级读缓冲残留复用）
+// T3 Connection: close：响应带 close 标头且服务端关闭连接（recv 得 EOF）
+// T4 HTTP/1.0 语义：默认关闭；Connection: keep-alive 保持，后续请求可续发
+// T5 空闲超时：keep-alive 空闲超过 keepAliveTimeout（300ms）后服务端
+//    静默关闭连接（无 408，等首字节阶段无未决请求）
+// T6 慢客户端：半截报文停滞超过 requestTimeout（400ms）→ 408 + close
+//    （Slowloris 防护）
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 收发断言 → stop/join。
+// 客户端 setOption recvTimeout 走阻塞模式 SO_RCVTIMEO，防断言失败时
+// 阻塞 recv 永久挂住测试。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <NetWork/NetError>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// raw HTTP 报文（lm 字符串字面量不处理转义，CRLF 用字符字面量拼接）
+crlf = "" + '\r' + '\n';
+
+// HTTP/1.1 GET（不带 Connection 头 → 协议默认 keep-alive）
+func httpGet11(path: string): string {
+    return "GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + crlf;
+}
+
+// HTTP/1.1 GET + Connection: close
+func httpGet11Close(path: string): string {
+    return "GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf;
+}
+
+// 按 Content-Length 精确读一个完整响应（keep-alive 下连接不关闭，不能读到 EOF）。
+// leftover 为单元素数组槽：一次 recv 可能 over-read 到下一响应字节（pipelining），
+// 残留跨调用保留。返回完整响应文本（状态行 + 头 + 体）。
+func readResponse(cli, leftover: array): string {
+    cur = leftover[0];
+    sep = cur.indexOf(crlf + crlf);
+    while (sep < 0) {
+        part = cli.recv(4096);
+        check(part != "", "readResponse: 等待响应头时连接意外关闭");
+        cur = cur + part;
+        sep = cur.indexOf(crlf + crlf);
+    }
+    cl = 0;
+    lines = cur.slice(0, sep).split(crlf);
+    for line in lines {
+        low = line.lower();
+        if (low.startsWith("content-length:")) {
+            cl = (int)line.slice(15, line.len).trim();
+        }
+    }
+    total = sep + 4 + cl;
+    while (cur.len < total) {
+        part = cli.recv(4096);
+        check(part != "", "readResponse: 等待响应体时连接意外关闭");
+        cur = cur + part;
+    }
+    leftover[0] = cur.slice(total, cur.len);
+    return cur.slice(0, total);
+}
+
+// 读到对端关闭（EOF），返回完整响应文本（Connection: close 场景）
+func readAll(cli): string {
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    return all;
+}
+
+// ---- 启动真实服务：keepAliveTimeout=300ms、requestTimeout=400ms ----
+port = 18110;
+app = WebApplication("127.0.0.1", port);
+app.setKeepAliveTimeout(300);
+app.setRequestTimeout(400);
+
+app.get("/a", func(req) {
+    r = ServerResponse(200);
+    r.text("A");
+    return r;
+});
+app.get("/b", func(req) {
+    r = ServerResponse(200);
+    r.text("B");
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 单连接连续 3 请求（HTTP/1.1 默认 keep-alive）
+// ------------------------------------------------------------
+print("[T1] 单连接多请求 / single connection multi-request");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+leftover = [""];
+i = 0;
+while (i < 3) {
+    cli.send(httpGet11("/a"));
+    r = readResponse(cli, leftover);
+    check(r.contains("HTTP/1.1 200"), "T1 响应应 200，实际: [" + r + "]");
+    check(r.slice(r.len - 1, r.len) == "A", "T1 响应体应为 A，实际: [" + r + "]");
+    check(r.lower().contains("connection: keep-alive"), "T1 1.1 默认应保持连接，实际: [" + r + "]");
+    i = i + 1;
+}
+// 收尾：Connection: close → 响应后服务端关闭（EOF）
+cli.send(httpGet11Close("/a"));
+r = readResponse(cli, leftover);
+check(r.lower().contains("connection: close"), "T1 close 请求响应应带 close 标头，实际: [" + r + "]");
+check(cli.recv(4096) == "", "T1 close 后服务端应关闭连接（EOF）");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: pipelining——单报文两请求，按序两响应
+// ------------------------------------------------------------
+print("[T2] pipelining 一报文两请求 / pipelined requests");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send(httpGet11("/a") + httpGet11("/b"));
+leftover = [""];
+r1 = readResponse(cli, leftover);
+r2 = readResponse(cli, leftover);
+check(r1.contains("HTTP/1.1 200"), "T2 首响应应 200，实际: [" + r1 + "]");
+check(r1.slice(r1.len - 1, r1.len) == "A", "T2 首响应体应为 A（按序），实际: [" + r1 + "]");
+check(r2.contains("HTTP/1.1 200"), "T2 次响应应 200，实际: [" + r2 + "]");
+check(r2.slice(r2.len - 1, r2.len) == "B", "T2 次响应体应为 B（按序），实际: [" + r2 + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: Connection: close——响应后连接关闭
+// ------------------------------------------------------------
+print("[T3] Connection: close 语义 / close semantics");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send(httpGet11Close("/b"));
+r = readAll(cli);   // 服务端回写完即关，readAll 到 EOF
+check(r.contains("HTTP/1.1 200"), "T3 响应应 200，实际: [" + r + "]");
+check(r.slice(r.len - 1, r.len) == "B", "T3 响应体应为 B，实际: [" + r + "]");
+check(r.lower().contains("connection: close"), "T3 响应应带 close 标头，实际: [" + r + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: HTTP/1.0——默认关闭；Connection: keep-alive 保持
+// ------------------------------------------------------------
+print("[T4] HTTP/1.0 语义 / HTTP/1.0 semantics");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send("GET /a HTTP/1.0" + crlf + crlf);
+r = readAll(cli);
+check(r.contains("HTTP/1.1 200"), "T4 1.0 响应应 200，实际: [" + r + "]");
+check(r.lower().contains("connection: close"), "T4 1.0 默认应关闭，实际: [" + r + "]");
+cli.close();
+
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send("GET /a HTTP/1.0" + crlf + "Connection: keep-alive" + crlf + crlf);
+leftover = [""];
+r = readResponse(cli, leftover);
+check(r.contains("HTTP/1.1 200"), "T4 1.0 keep-alive 响应应 200，实际: [" + r + "]");
+check(r.lower().contains("connection: keep-alive"), "T4 1.0 显式 keep-alive 应保持，实际: [" + r + "]");
+// 同连接续发第二请求（不带 keep-alive → 响应后关闭）
+cli.send("GET /b HTTP/1.0" + crlf + crlf);
+r = readResponse(cli, leftover);
+check(r.slice(r.len - 1, r.len) == "B", "T4 1.0 第二请求体应为 B，实际: [" + r + "]");
+check(r.lower().contains("connection: close"), "T4 1.0 第二请求默认关闭，实际: [" + r + "]");
+check(cli.recv(4096) == "", "T4 1.0 第二请求后服务端应关闭（EOF）");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: keep-alive 空闲超时——静默关闭（无 408）
+// ------------------------------------------------------------
+print("[T5] 空闲超时自动关闭 / idle keep-alive timeout");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 2000);
+cli.send(httpGet11("/a"));
+leftover = [""];
+r = readResponse(cli, leftover);
+check(r.contains("HTTP/1.1 200"), "T5 首请求应 200，实际: [" + r + "]");
+check(r.lower().contains("connection: keep-alive"), "T5 首请求应保持连接，实际: [" + r + "]");
+sleep(600);   // > keepAliveTimeout=300ms，服务端应已静默关闭
+closed = false;
+try {
+    cli.send(httpGet11("/a"));
+    resp = cli.recv(4096);
+    if (resp == "") { closed = true; }   // 对端已关闭（EOF）
+} catch (e) {
+    // send/recv 抛错（EPIPE/RST）＝连接已被服务端重置关闭；
+    // 但 recv 超时（RECV_TIMEOUT）＝服务端未在 keepAliveTimeout 内关闭 → 失败
+    code = 0;
+    if (type(e) != "string") { code = e.getCode(); }
+    check(code != NetError.RECV_TIMEOUT, "T5 服务端未在 keepAliveTimeout 内关闭空闲连接");
+    closed = true;
+}
+check(closed, "T5 空闲超时后连接应已被服务端关闭");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T6: 慢客户端——半截报文停滞 → requestTimeout → 408 + close
+// ------------------------------------------------------------
+print("[T6] 慢客户端 requestTimeout → 408 / slow client 408");
+slow = ClientSocket("127.0.0.1", port);
+slow.setOption("recvTimeout", 3000);
+slow.send("GET /a HTTP/1.1" + crlf + "Host: t" + crlf);   // 缺结尾空行，报文不完整
+sleep(700);   // > requestTimeout=400ms，等服务端超时回 408 并关闭
+r = readAll(slow);
+check(r.contains("HTTP/1.1 408"), "T6 慢客户端应回 408，实际: [" + r + "]");
+check(r.contains("Request Timeout"), "T6 408 错误体应含 Request Timeout，实际: [" + r + "]");
+check(r.lower().contains("connection: close"), "T6 408 后应关闭连接，实际: [" + r + "]");
+slow.close();
+print("  PASS");
+
+app.stop();
+app.join();
+
+print("keepalive_test ALL PASS");
