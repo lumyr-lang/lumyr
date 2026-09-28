@@ -1,0 +1,148 @@
+// JSON 工具类专项：parse(text, reviver) / stringify(v)，对齐 JS JSON API
+import <Utils/JSON>;
+import <Function/Double>;
+import <Function/Integer>;
+import <Function/Boolean>;
+import <Function/String>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// lumin 字符串无 \" 转义：JSON 引号用 (char)34 拼接
+q = (char)34;
+
+// ===== class 字段直接使用系统类（fromMap 直填场景）=====
+class Customer {
+    name: String;
+    vip: Boolean;
+}
+class Order {
+    title: String;
+    price: Double;
+    count: Integer;
+    paid: Boolean;
+    cust: Customer;
+    tags: array;
+}
+
+// 用户自定义类型（reviver 里用户自己处理自己的类型转换）
+class Money {
+    cents: int;
+    func Money(v) {
+        // JSON 元单位 → 内部分
+        self.cents = (int)(v * 100);
+    }
+}
+
+// reviver 用 lambda（JsonReviver 调用签名形态：编译期校验参数/返回形态）
+moneyRevive = (k, v) => {
+    if (k == "price") { return Money(v); }
+    return v;
+};
+
+// ---------- J1: parse 纯解析（reviver=null）：嵌套 map/array/标量全保留 ----------
+doc = "{"
+      + q + "name" + q + ": " + q + "apple" + q + ", "
+      + q + "price" + q + ": 9.9, "
+      + q + "tags" + q + ": [1.5, 2.5], "
+      + q + "ok" + q + ": true, "
+      + q + "note" + q + ": null}";
+m1 = JSON.parse(doc, null);
+check(m1["name"] == "apple" && m1["price"] == 9.9 && m1["tags"][1] == 2.5
+      && m1["ok"] == true && m1["note"] == null,
+      "J1 纯解析应完整保留结构");
+
+// ---------- J2: parse + reviver：用户在回调里处理自己的类型 ----------
+m2 = JSON.parse(doc, moneyRevive);
+check(type(m2["price"]) == "Money" && m2["price"].cents == 990,
+      "J2 reviver 应把 price 转为 Money 实例，实际: " + type(m2["price"]));
+check(m2["name"] == "apple" && m2["tags"][0] == 1.5,
+      "J2 reviver 未命中的值应原样返回");
+
+// ---------- J3: reviver 自底向上：嵌套结构里的值也能转 ----------
+doc3 = "{" + q + "order" + q + ": {" + q + "price" + q + ": 1.25, " + q + "qty" + q + ": 2}}";
+m3 = JSON.parse(doc3, moneyRevive);
+check(type(m3["order"]["price"]) == "Money" && m3["order"]["price"].cents == 125,
+      "J3 嵌套 map 里的 price 应转为 Money，实际: " + type(m3["order"]["price"]));
+
+// ---------- J4: class 直填：fromMap(JSON.parse(doc, null), "Order") ----------
+doc4 = "{"
+      + q + "title" + q + ": " + q + "book" + q + ", "
+      + q + "price" + q + ": 9.9, "
+      + q + "count" + q + ": 3, "
+      + q + "paid" + q + ": true, "
+      + q + "tags" + q + ": [" + q + "new" + q + "], "
+      + q + "cust" + q + ": {" + q + "name" + q + ": " + q + "tom" + q + ", " + q + "vip" + q + ": true}}";
+o4 = fromMap(JSON.parse(doc4, null), "Order");
+check(type(o4) == "Order", "J4 应构造 Order 实例，实际: " + type(o4));
+check(type(o4.title).contains("String") && o4.title.value == "book",
+      "J4 title 应为 String 实例，实际: " + type(o4.title));
+check(type(o4.price).contains("Double") && o4.price.value == 9.9,
+      "J4 price 应为 Double 实例（系统类字段收 JSON 标量），实际: " + type(o4.price));
+check(type(o4.count).contains("Integer") && o4.count.value == 3,
+      "J4 count 应为 Integer 实例，实际: " + type(o4.count));
+check(type(o4.paid).contains("Boolean") && o4.paid.value == true,
+      "J4 paid 应为 Boolean 实例，实际: " + type(o4.paid));
+check(type(o4.cust) == "Customer" && type(o4.cust.name).contains("String")
+      && o4.cust.name.value == "tom" && o4.cust.vip.value == true,
+      "J4 嵌套 Customer 应递归构造（其字段同为系统类）");
+check(type(o4.tags) == "array" && o4.tags.len == 1 && o4.tags[0] == "new",
+      "J4 容器字段应原样保留");
+
+// ---------- J5: 缺字段：类字段落 null（对齐 DTO 语义）----------
+o5 = fromMap(JSON.parse("{" + q + "title" + q + ": " + q + "x" + q + "}", null), "Order");
+check(o5.title.value == "x" && o5.price == null && o5.count == null
+      && o5.paid == null && o5.cust == null,
+      "J5 缺失类字段应落 null");
+
+// ---------- J6: stringify 序列化 + 往返 ----------
+m6 = {"a": 1, "b": [1.5, true, null], "c": "hi"};
+j6 = JSON.stringify(m6);
+check(j6.contains(q + "hi" + q) && j6.contains("1.5") && j6.contains("true")
+      && j6.contains("null"),
+      "J6 stringify 应产出 JSON 文本，实际: " + j6);
+back6 = JSON.parse(j6, null);
+check(back6["a"] == 1 && back6["b"][0] == 1.5 && back6["b"][1] == true
+      && back6["b"][2] == null && back6["c"] == "hi",
+      "J6 序列化→反序列化应往返一致");
+
+// ---------- J7: reviver 非必传：一参省略（默认 null）与内联 lambda ----------
+m7 = JSON.parse(doc);
+check(m7["name"] == "apple" && m7["price"] == 9.9 && m7["tags"][1] == 2.5,
+      "J7 reviver 省略时应为纯解析");
+m7b = JSON.parse(doc, (k, v) => { return v; });
+check(type(m7b["price"]) == "double" && m7b["tags"][0] == 1.5,
+      "J7 内联 lambda 直传应生效");
+m7c = JSON.parse("{}");
+check(type(m7c) == "map" && m7c.len == 0,
+      "J7 空 JSON 对象一参解析，实际: " + type(m7c));
+
+// ---------- J8: JSONClass 类属性映射：public 字段直接映射 ----------
+o8 = JSONClass.parse(doc4, Order());
+check(type(o8) == "Order", "J8 应构造 Order 实例，实际: " + type(o8));
+check(type(o8.title).contains("String") && o8.title.value == "book",
+      "J8 title 应为 String 实例，实际: " + type(o8.title));
+check(type(o8.price).contains("Double") && o8.price.value == 9.9,
+      "J8 price 应为 Double 实例（系统类字段收 JSON 标量），实际: " + type(o8.price));
+check(type(o8.cust) == "Customer" && o8.cust.name.value == "tom",
+      "J8 嵌套 Customer 应递归映射");
+check(o8.tags.len == 1 && o8.tags[0] == "new", "J8 容器字段应原样保留");
+
+// ---------- J9: private 字段规则：有 setXxx 才映射，无则跳过 ----------
+class Secret {
+    private pin: int;
+    private token: string;
+    func Secret() { }
+    func setPin(p: int) { self.pin = p; }
+    // token 无 setToken → 无法映射
+    func getPin(): int { return self.pin; }
+    func getToken(): string { return self.token; }
+}
+s9 = JSONClass.parse("{" + q + "pin" + q + ": 123, " + q + "token" + q + ": " + q + "abc" + q + "}",
+                     Secret());
+check(type(s9) == "Secret", "J9 应构造 Secret 实例");
+check(s9.getPin() == 123, "J9 有 setPin 的 private 字段应经 setter 映射，实际: " + s9.getPin());
+check(s9.getToken().len == 0, "J9 无 setter 的 private 字段应跳过落零值，实际: [" + s9.getToken() + "]");
+
+print("json_util_test ALL PASS");

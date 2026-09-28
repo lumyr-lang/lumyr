@@ -1,0 +1,178 @@
+// ============================================================
+// 构造器重载分派全覆盖
+// 验证目标：同一类多个构造器，按【实参个数 + 类型 + 顺序】进入正确构造器
+// 覆盖场景：
+//   1. 参数个数不同（1/2/3 参）
+//   2. 同个数但类型不同（int / string / double 三选一）—— 历史崩溃点
+//   3. 多参数混合，按某一位的类型区分（(int,int) vs (int,string)）
+//   4. 默认参数重载 vs 同个数跨族重载（类型优先于 arity）
+//   5. 可变参数构造器（...rest）
+//   6. 继承：子类无构造器复用父类构造器；子类构造器用 super(...)
+//   7. JSON 反序列化路径（fromMap）同样进入正确构造器
+// 手段：每个构造器写入不同的 tag 标记，check 断言实际命中的构造器
+// 注意：class 构造器内写字段必须用 self.字段（裸写会被当作局部变量）
+// ============================================================
+import <Utils/JSON>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// lumin 字符串无 \" 转义：拼 JSON 时引号用 (char)34
+q = (char)34;
+
+// ------------------------------------------------------------
+// 1. 参数个数不同：1 参 / 2 参 / 3 参
+// ------------------------------------------------------------
+class Arity {
+    tag: string;
+    func Arity(a: int) { self.tag = "one:" + a; }
+    func Arity(a: int, b: int) { self.tag = "two:" + (a + b); }
+    func Arity(a: int, b: int, c: int) { self.tag = "three:" + (a + b + c); }
+}
+check(Arity(1).tag == "one:1", "Arity: 1 参应命中 one，实际: " + Arity(1).tag);
+check(Arity(1, 2).tag == "two:3", "Arity: 2 参应命中 two，实际: " + Arity(1, 2).tag);
+check(Arity(1, 2, 3).tag == "three:6", "Arity: 3 参应命中 three，实际: " + Arity(1, 2, 3).tag);
+
+// ------------------------------------------------------------
+// 2. 同个数、类型不同：int / string / double 三选一（历史 SIGSEGV 点）
+// ------------------------------------------------------------
+class Typed {
+    tag: string;
+    func Typed(x: int) { self.tag = "int"; }
+    func Typed(x: string) { self.tag = "str"; }
+    func Typed(x: double) { self.tag = "dbl"; }
+}
+check(Typed(5).tag == "int", "Typed: int 实参应命中 int 版，实际: " + Typed(5).tag);
+check(Typed("hi").tag == "str", "Typed: string 实参应命中 str 版，实际: " + Typed("hi").tag);
+check(Typed(1.5).tag == "dbl", "Typed: double 实参应命中 dbl 版，实际: " + Typed(1.5).tag);
+
+// 标量包装回归：确认不仅进对构造器，值也正确传递
+class Box {
+    kind: string;
+    val: int;
+    text: string;
+    num: double;
+    func Box(x: int) { self.kind = "int"; self.val = x; }
+    func Box(x: string) { self.kind = "str"; self.text = x; }
+    func Box(x: double) { self.kind = "dbl"; self.num = x; }
+}
+bi = Box(42);
+check(bi.kind == "int" && bi.val == 42, "Box(int): 值传递");
+bs = Box("hello");
+check(bs.kind == "str" && bs.text == "hello", "Box(string): 值传递");
+bd = Box(3.14);
+check(bd.kind == "dbl" && bd.num == 3.14, "Box(double): 值传递");
+
+// ------------------------------------------------------------
+// 2b. 同属整数族，但具体类型不同仍须精确区分：bool vs char
+// ------------------------------------------------------------
+class BoolChar {
+    tag: string;
+    v: int;
+    func BoolChar(b: bool) { self.tag = "bool"; self.v = (int)b; }
+    func BoolChar(c: char) { self.tag = "char"; self.v = (int)c; }
+}
+check(BoolChar(true).tag == "bool" && BoolChar(true).v == 1, "BoolChar(true): 应进 bool 版");
+check(BoolChar(false).tag == "bool" && BoolChar(false).v == 0, "BoolChar(false): 应进 bool 版");
+check(BoolChar((char)65).tag == "char" && BoolChar((char)65).v == 65,
+      "BoolChar(char 65): 应进 char 版");
+
+// ------------------------------------------------------------
+// 3. 多参数混合：仅末位类型不同
+// ------------------------------------------------------------
+class Pair {
+    tag: string;
+    func Pair(a: int, b: int) { self.tag = "ii"; }
+    func Pair(a: int, b: string) { self.tag = "is"; }
+}
+check(Pair(1, 2).tag == "ii", "Pair(int,int): 应命中 ii，实际: " + Pair(1, 2).tag);
+check(Pair(1, "x").tag == "is", "Pair(int,string): 应命中 is，实际: " + Pair(1, "x").tag);
+
+// 多参数：首位类型不同（顺序差异），验证不是只看末位
+class Order {
+    tag: string;
+    func Order(a: int, b: string) { self.tag = "int-str"; }
+    func Order(a: string, b: int) { self.tag = "str-int"; }
+}
+check(Order(1, "a").tag == "int-str", "Order(int,string): 顺序分派");
+check(Order("a", 1).tag == "str-int", "Order(string,int): 顺序分派");
+
+// ------------------------------------------------------------
+// 4. 默认参数重载 vs 同个数跨族重载：类型匹配必须优先于"恰好 arity"
+//    （历史缺陷：Def(5) 曾误中 string 版）
+// ------------------------------------------------------------
+class Def {
+    tag: string;
+    func Def(a: int, b: int = 10) { self.tag = "int:" + (a + b); }
+    func Def(a: string) { self.tag = "str:" + a; }
+}
+check(Def(5).tag == "int:15", "Def(5): 应命中 int 带默认参版（15），实际: " + Def(5).tag);
+check(Def(5, 20).tag == "int:25", "Def(5,20): 应命中 int 完整版，实际: " + Def(5, 20).tag);
+check(Def("hi").tag == "str:hi", "Def(hi): 应命中 string 版，实际: " + Def("hi").tag);
+
+// ------------------------------------------------------------
+// 5. 可变参数构造器：剩余实参收集为数组
+// ------------------------------------------------------------
+class Vari {
+    total: int;
+    cnt: int;
+    func Vari(first: int, ...rest) {
+        self.total = first;
+        for (i = 0; i < len(rest); i = i + 1) { self.total = self.total + rest[i]; }
+        self.cnt = len(rest);
+    }
+}
+check(Vari(1, 2, 3).total == 6 && Vari(1, 2, 3).cnt == 2,
+      "Vari(1,2,3): 可变数组求和应为 6、剩余个数 2");
+check(Vari(10).total == 10 && Vari(10).cnt == 0,
+      "Vari(10): 无可变实参时 rest 为空数组");
+
+// ------------------------------------------------------------
+// 6. 继承
+// ------------------------------------------------------------
+class Animal {
+    legs: int;
+    func Animal(n: int) { self.legs = n; }
+}
+// 子类不声明构造器：复用父类构造器
+class Dog extends Animal { }
+check(Dog(4).legs == 4, "Dog(4): 子类无构造器应复用 Animal(int)，实际 legs: " + Dog(4).legs);
+
+// 子类声明构造器：用 super(...) 调用父类构造器
+class Cat extends Animal {
+    name: string;
+    func Cat(n: int, nm: string) { super(n); self.name = nm; }
+}
+cat = Cat(4, "tom");
+check(cat.legs == 4, "Cat: super(n) 应设置父类字段 legs=4，实际: " + cat.legs);
+check(cat.name == "tom", "Cat: 自身字段 name 应设置，实际: " + cat.name);
+
+// ------------------------------------------------------------
+// 7. JSON 反序列化路径（fromMap）：类字段收到标量时，
+//    按个数+类型进入正确构造器
+// ------------------------------------------------------------
+class Wrap {
+    src: string;
+    val: int;
+    func Wrap(x: int) { self.src = "int"; self.val = x; }
+    func Wrap(x: string) { self.src = "str"; self.val = 0; }
+}
+class Holder {
+    w: Wrap;
+}
+
+// JSON 字段为 int：应进入 Wrap(int)
+jInt = "{" + q + "w" + q + ": 5}";
+h1 = fromMap(JSON.parse(jInt, null), "Holder");
+check(type(h1.w) == "Wrap", "JSON int: 字段应构造为 Wrap，实际: " + type(h1.w));
+check(h1.w.src == "int" && h1.w.val == 5,
+      "JSON int: 应进入 int 构造器且值=5，实际 src: " + h1.w.src);
+
+// JSON 字段为 string：应进入 Wrap(string)
+jStr = "{" + q + "w" + q + ": " + q + "hi" + q + "}";
+h2 = fromMap(JSON.parse(jStr, null), "Holder");
+check(h2.w.src == "str",
+      "JSON string: 应进入 string 构造器，实际 src: " + h2.w.src);
+
+print("ctor_overload_test ALL PASS");

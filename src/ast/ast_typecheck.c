@@ -1017,7 +1017,7 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"add", 2, 3}, {"remove", 2, 2}, {"clear", 1, 1},
     {"arr_get", 2, 2}, {"indexOf", 2, 2}, {"set", 0, 32}, {"first", 1, 1}, {"last", 1, 1}, {"has", 0, 32},
     {"flat", 1, 2}, {"qs", 1, 2}, {"addAll", 2, 2}, {"bytes", 1, 32}, {"str", 1, 2},
-    {"json", 1, 2}, {"stringify", 1, 2},
+    {"json", 1, 3}, {"stringify", 1, 2}, {"fromMap", 2, 2},
     {"xml", 1, 2},
     {"encode", 1, 2}, {"decode", 1, 2},
     {"encodeURL", 1, 1}, {"decodeURL", 1, 1},
@@ -1106,31 +1106,12 @@ static int typecheck_call(AstNode* node)
             cap_add(node->u.call.name);
         }
     }
-            // 默认参数填充：如果实参不足，用函数定义中的默认值表达式填充。
-            // 含命名实参时跳过（位置补齐会错位），由 compile_user_call 按形参槽取默认值。
-            {
-                if(sym_has(node->u.call.name) && !args_have_named(node->u.call.args)) {
-                Value fv = sym_get(node->u.call.name);
-                if(fv.type == VAL_FUNC) {
-                    RuntimeFunc* rf = (RuntimeFunc*)fv.v.func.func_obj;
-                    if(interp_func_is_payload(rf)) {
-                        int nargs = typecheck_arg_count(node->u.call.args);
-                        int pcount = interp_func_param_cnt(rf);
-                        // 从缺失的第一个参数开始，逐个填充默认值
-                        for(int pi = nargs; pi < pcount; pi++) {
-                            if(interp_func_param_has_default(rf, pi)) {
-                                AstNode* dv = interp_func_param_default(rf, pi);
-                                if(dv) {
-                                    // 深拷贝默认值表达式，避免与函数定义共享节点导致重复释放
-                                    AstNode* dv_copy = ast_clone_node(dv);
-                                    node->u.call.args = ast_arg_append(node->u.call.args, dv_copy);
-                                }
-                            }
-                        }
-                    }
-                }
-                }
-            }
+            // 默认参数不做 typecheck 期填充（历史实现在此按 sym 表单槽函数的
+            // pcount 给实参注入 null）——它会抢在 ir 期重载解析之前改写实参数，
+            // 使"精确 N 参版"对 N 参调用不可见（ac 被撑大成 pcount），重载路由
+            // 退化为 sym 表覆盖顺序。填补统一由运行期完成：
+            //   位置实参 → vm_exec_call.c 按被调版本形参槽求值默认值绑定；
+            //   命名实参 → compile_user_call 按形参槽取默认值。
             // 实参逐个检查（含嵌套调用）
             err |= typecheck_call_args(node->u.call.args);
             // 函数名：已定义函数 或 赋过函数值的变量 均可（与解释器一致）；

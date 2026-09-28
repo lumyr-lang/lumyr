@@ -38,6 +38,8 @@
 #include "lm_lock.h"
 #include "lm_tls.h"
 #include "vm.h"
+#include "ir_compile.h"
+#include "ast/func_compile.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -918,6 +920,303 @@ static Value bi_json_clean(Value v) {
     }
 }
 
+/* json reviver 单值回调：cb 须为函数值（lambda/func 字面量）。
+ * 调用形态 reviver(key, value[, targetType])：ttype 非 NULL 时第三参传
+ * 字段声明类型名（类属性映射逐字段路径，systemReviver 据此包装系统类）；
+ * 整树预遍历路径传 NULL（无类型语境）。重入执行 VM 函数
+ * （同 builtin 用户方法优先分支的 vm_call_func_value 先例）。 */
+static Value bi_call_reviver(VMExecCtx* ctx, Value cb, Value key, Value v, const char* ttype) {
+    if(cb.type != VAL_FUNC) {
+        runtime_error("json: reviver 须为函数值 / json: reviver must be a function");
+        return val_none();
+    }
+    Value out;
+    Value tv = ttype ? lumyr_make_string(ttype) : val_none();
+    Value args[3] = { key, v, tv };
+    int st = vm_call_func_value(ctx, cb, 3, args, &out);
+    if(st != 1) {
+        runtime_error("json: reviver 调用失败 / json: reviver call failed");
+        return val_none();
+    }
+    return out;
+}
+
+/* json reviver 深度遍历：自底向上（先子后己），每个值回调一次、
+ * 返回值替换原值（对齐 JS JSON.parse(text, reviver) 语义）。
+ * map 键回调 key 为键名；数组元素回调 key 为索引数字。 */
+static Value bi_json_revive(Value v, Value key, Value cb, int depth, VMExecCtx* ctx) {
+    if(depth > 64) {
+        runtime_error("json: reviver 嵌套过深（疑似循环结构）/ json: reviver nesting too deep");
+        return val_none();
+    }
+    if(v.type == VAL_MAP) {
+        Value out = val_map();
+        Value keys = lumyr_map_keys(v);
+        ValueArray* ka = keys.v.array;
+        int n = ka ? ka->len : 0;
+        for(int i = 0; i < n; i++) {
+            Value k = ka->items[i];
+            Value rv = bi_json_revive(lumyr_map_get(v, k), k, cb, depth + 1, ctx);
+            lumyr_map_set(&out, k, rv);
+        }
+        return bi_call_reviver(ctx, cb, key, out, NULL);
+    }
+    if(v.type == VAL_ARRAY) {
+        ValueArray* a = v.v.array;
+        int n = a ? a->len : 0;
+        Value out = val_array(n);
+        for(int i = 0; i < n; i++) {
+            Value idx = lumyr_make_int64(i);
+            out.v.array->items[i] = bi_json_revive(a->items[i], idx, cb, depth + 1, ctx);
+        }
+        return bi_call_reviver(ctx, cb, key, out, NULL);
+    }
+    return bi_call_reviver(ctx, cb, key, v, NULL);
+}
+
+/* ============================================================
+ * 标量 → class 实例：按用户实参调用目标类匹配构造器（运行时构造）
+ * ------------------------------------------------------------
+ * targetInfo  : 实际要构造的类型（决定实例内存布局）；
+ * argc/userArgs: 用户实参（不含 self），如 JSON/DTO 收到的裸标量；
+ * 成功返回新实例，无匹配构造器返回 VAL_NONE。
+ *
+ * 构造器重载选择与编译期 class_new 路径完全一致：
+ *   1. 沿继承链定位构造器属主（首个注册了 "<类>___init__" 的类）；
+ *   2. 枚举 <owner>___init__ / <owner>___init__2/3...，精确 arity 优先，
+ *      其次可变参数（...args）；构造器 self 为第 0 形参，不计入用户 arity；
+ *   3. 实例按实际类型分配（即使构造器继承自父类），self 作为显式首参传入，
+ *      vm_call_func_value 按构造器形参声明类型/顺序自动转换绑定（int→short 等）。
+ * 编译层不写死字段名、字段数或类名——能否由一颗标量构造，完全由类作者
+ * 提供的构造器签名客观决定。
+ * ============================================================ */
+static Value bi_construct_with_args(VMExecCtx* ctx, RuntimeTypeInfo* targetInfo,
+                                    int argc, const Value* userArgs) {
+    if(!targetInfo) return val_none();
+
+    /* 1. 沿继承链定位构造器属主（首个拥有 ___init__ 的类） */
+    char ctorBase[256];
+    RuntimeTypeInfo* owner = NULL;
+    for(RuntimeTypeInfo* cur = targetInfo; cur; cur = cur->parent) {
+        if(!cur->name) continue;
+        snprintf(ctorBase, sizeof ctorBase, "%s___init__", cur->name);
+        if(ir_func_table_lookup(ctorBase)) { owner = cur; break; }
+    }
+    if(!owner) return val_none();
+    snprintf(ctorBase, sizeof ctorBase, "%s___init__", owner->name);
+
+    /* 2. 枚举全部构造器候选 → arity 可行 → 按"运行时实参类型 vs 形参类型"
+     *    评分选唯一最佳（ir_slot_score，算法同编译期构造器选择）。
+     *    支持同 arity 不同类型（Box(int)/Box(string)）按实参真实类型选构造器。
+     *    形参 slot0=self，用户实参对应 slot1+；实参类型取 Value 运行时标签 */
+    BytecodeFunc* candFn[64]; AstNode* candAst[64]; char candNm[64][264];
+    int ncand = 0;
+    for(int ord = 1; ord <= 64; ord++) {
+        char nm[264];
+        if(ord == 1) snprintf(nm, sizeof nm, "%s", ctorBase);
+        else snprintf(nm, sizeof nm, "%s%d", ctorBase, ord);
+        BytecodeFunc* cf = ir_func_table_lookup(nm);
+        AstNode* ca = func_ast_lookup(nm);
+        if(!cf || !ca) break;
+        candFn[ncand] = cf; candAst[ncand] = ca;
+        snprintf(candNm[ncand], sizeof candNm[ncand], "%s", nm);
+        ncand++;
+    }
+    CastKind* argK = (CastKind*)malloc(sizeof(CastKind) * (size_t)(argc > 0 ? argc : 1));
+    for(int i = 0; i < argc; i++)
+        argK[i] = (CastKind)valuetype_to_castkind((int)userArgs[i].type);
+    int best = -1, bestScore = 0, ties = 0;
+    for(int ci = 0; ci < ncand; ci++) {
+        BytecodeFunc* cf = candFn[ci];
+        AstNode* ca = candAst[ci];
+        /* 用户侧形参（去掉 self）：统计必填、可变 */
+        int userPcnt = 0, required = 0, ell = 0;
+        AstNode* p = ca->u.func_def.params;
+        if(p && p->u.param.name && strcmp(p->u.param.name, "self") == 0)
+            p = p->u.param.next;
+        for(; p; p = p->u.param.next) {
+            if(p->u.param.is_ellipsis) { ell = 1; break; }
+            if(!p->u.param.default_val) required++;
+            userPcnt++;
+        }
+        if(argc < required) continue;
+        if(!ell && argc > userPcnt) continue;
+        int typeScore = 0;
+        for(int i = 0; i < argc; i++) {
+            int fslot = i + 1;   /* 跳过 self */
+            CastKind pck = CAST_NONE;
+            if(fslot < cf->param_cnt && fslot < cf->sym_cnt) {
+                int tag = cf->var_type_tags[fslot];
+                pck = (tag >= 0) ? (CastKind)tag : CAST_NONE;
+            }
+            typeScore += ir_slot_score(pck, argK[i]);
+        }
+        /* 两层评分：类型匹配为主键，同类型时精确 arity 优先（同编译期） */
+        int exact = (!ell && argc == userPcnt) ? 1 : 0;
+        int score = typeScore * 10 + (exact ? 0 : 1);
+        if(best < 0 || score < bestScore) { best = ci; bestScore = score; ties = 1; }
+        else if(score == bestScore) ties++;
+    }
+    free(argK);
+    if(best < 0 || ties > 1) return val_none();  /* 无匹配/歧义 → 调用方按类型不符处理 */
+    char selName[264];
+    snprintf(selName, sizeof selName, "%s", candNm[best]);
+
+    /* 3. 分配实际类型实例；GC 保护防止重入执行构造器期间新实例被回收 */
+    Value inst = lumyr_instance_new(targetInfo);
+    if(inst.type == VAL_NONE) return val_none();
+    gc_protect_push(inst);
+
+    /* 构造器函数值：仅携带注册名（self 走显式首参，不绑 bound_self） */
+    RuntimeFunc* ctorRf = (RuntimeFunc*)calloc(1, sizeof(RuntimeFunc));
+    Value fv; memset(&fv, 0, sizeof fv);
+    if(ctorRf) ctorRf->name = strdup(selName);
+    fv.type = VAL_FUNC;
+    fv.v.func.func_obj = ctorRf;
+    fv.v.func.ffi_func = NULL;
+    fv.v.func.is_ffi = 0;
+
+    /* [self, ...用户实参]；vm_call_func_value 按构造器形参类型/顺序转换绑定 */
+    int total = 1 + argc;
+    Value* cargs = (Value*)malloc(sizeof(Value) * (size_t)total);
+    if(!ctorRf || !cargs) {
+        free(cargs);
+        if(ctorRf) { free(ctorRf->name); free(ctorRf); }
+        gc_protect_pop();
+        return val_none();
+    }
+    cargs[0] = inst;
+    for(int i = 0; i < argc; i++) cargs[i + 1] = userArgs[i];
+    Value outv;
+    int st = vm_call_func_value(ctx, fv, total, cargs, &outv);
+    free(cargs);
+    free(ctorRf->name);
+    free(ctorRf);
+    gc_protect_pop();
+    if(st != 1) return val_none();
+    return inst;
+}
+
+/* fromMap 递归：map → class/struct/type 实例（按 RuntimeTypeInfo 字段声明转换）。
+ * 语义对齐 HTTP DTO 绑定：
+ *   - map 缺键 → 字段保持零值（lumyr_instance_new 已清零）；
+ *   - 标量/容器字段 → lumyr_field_set_trusted 按字段类型精确转换写入；
+ *   - 类字段（VAL_STRUCT_PTR/VAL_CLASS_PTR）：值为 map → 递归构造；
+ *     值为标量 → 调用目标类匹配构造器构造（由类作者声明，如 Short(v)）；
+ *     无匹配构造器（类型不符）→ 字段保持零值（不抛错，同 DTO）；
+ *   - 类型名未注册 → 返回 VAL_NONE（调用方决定直通或报错）。 */
+static Value bi_from_map_impl(VMExecCtx* ctx, Value m, const char* tname, int depth) {
+    RuntimeTypeInfo* info = lumyr_type_lookup(tname);
+    if(!info) return val_none();
+    if(depth > 32) {
+        runtime_error("fromMap: 嵌套过深（疑似循环引用）/ fromMap nesting too deep");
+        return val_none();
+    }
+    Value obj = lumyr_instance_new(info);
+    /* 抽象类：lumyr_instance_new 内部已报错，正常不落此分支 */
+    if(obj.type == VAL_NONE) return val_none();
+    for(int i = 0; i < info->nfields; i++) {
+        FieldInfo* f = &info->fields[i];
+        Value k = lumyr_make_string(f->name);
+        if(!lumyr_map_has(m, k)) continue;
+        Value fv = lumyr_map_get(m, k);
+        if(f->valtype == VAL_STRUCT_PTR || f->valtype == VAL_CLASS_PTR) {
+            const char* sub = f->type_name;
+            if(!sub) continue;
+            if(fv.type == VAL_MAP) {
+                Value sub_obj = bi_from_map_impl(ctx, fv, sub, depth + 1);
+                if(sub_obj.type != VAL_NONE)
+                    lumyr_field_set_trusted(obj, f->name, sub_obj, 0);
+                /* 子类型未注册 → 字段保持零值 */
+            } else {
+                /* 标量 → 类字段：调用目标类匹配的单参构造器（由类作者声明） */
+                RuntimeTypeInfo* fti = lumyr_type_lookup(sub);
+                Value w = bi_construct_with_args(ctx, fti, 1, &fv);
+                if(w.type != VAL_NONE)
+                    lumyr_field_set_trusted(obj, f->name, w, 0);
+                /* 无匹配构造器 → 字段保持零值（DTO 类型不符语义） */
+            }
+        } else {
+            lumyr_field_set_trusted(obj, f->name, fv, 0);
+        }
+    }
+    return obj;
+}
+
+/* JSONClass 类属性映射单字段写入：
+ *   private 字段 → 找 setXxx 方法（set + 首字母大写）经绑定方法调用写入，
+ *                  无 setter 则跳过（无法映射，字段保持零值）；
+ *   其余字段     → trusted 直写（同 fromMap） */
+static void bi_bind_field(VMExecCtx* ctx, Value obj, FieldInfo* f, Value v) {
+    if(f->access == ACCESS_PRIVATE) {
+        char sname[128];
+        snprintf(sname, sizeof(sname), "set%c%s",
+                 (char)(f->name[0] >= 'a' && f->name[0] <= 'z' ? f->name[0] - 32 : f->name[0]),
+                 f->name + 1);
+        Value setter;
+        if(!vm_make_bound_method(obj, sname, &setter)) return;  /* 无 setXxx → 无法映射 */
+        Value ign;
+        vm_call_func_value(ctx, setter, 1, &v, &ign);
+        return;
+    }
+    lumyr_field_set_trusted(obj, f->name, v, 0);
+}
+
+/* JSONClass 类属性映射：map → 类实例（json 三参路径，与 fromMap DTO 语义区分）。
+ *   public 字段直写；private 字段走 setXxx（无则跳过）；嵌套类字段递归映射；
+ *   标量 → 类字段：调用目标类匹配构造器构造（由类作者声明，如 Double(v)）后按字段规则写入。
+ * reviver（可无）：逐字段回调 (key, value, 字段声明类型名)——只有实体类才
+ * 知道字段类型（systemReviver 据此把标量包装成系统类实例）；返回值替换绑定值：
+ *   返回实例 → 直接绑定（跳过包装构造）；返回 map → 嵌套类继续递归映射；
+ *   返回标量 → 类字段按原包装构造兜底，普通字段直写 */
+static Value bi_class_bind_impl(VMExecCtx* ctx, Value m, RuntimeTypeInfo* info, int depth, Value reviver) {
+    if(depth > 32) {
+        runtime_error("json: 类属性映射嵌套过深（疑似循环引用）/ json: class mapping nesting too deep");
+        return val_none();
+    }
+    Value obj = lumyr_instance_new(info);
+    if(obj.type == VAL_NONE) return val_none();
+    int has_reviver = (reviver.type == VAL_FUNC);
+    for(int i = 0; i < info->nfields; i++) {
+        FieldInfo* f = &info->fields[i];
+        Value k = lumyr_make_string(f->name);
+        if(!lumyr_map_has(m, k)) continue;
+        Value fv = lumyr_map_get(m, k);
+        if(f->valtype == VAL_STRUCT_PTR || f->valtype == VAL_CLASS_PTR) {
+            const char* sub = f->type_name;
+            if(!sub) continue;
+            RuntimeTypeInfo* fti = lumyr_type_lookup(sub);
+            if(!fti) continue;
+            /* 完整 targetType：字段带泛型实参（tags: Array<Double>）→ "Array<Double>"，
+             * 交 systemReviver 解析后通过容器通用方法逐元素包装；无实参仍为容器名 */
+            char tBuf[256];
+            const char* tFull = sub;
+            if(f->type_args) {
+                snprintf(tBuf, sizeof tBuf, "%s<%s>", sub, f->type_args);
+                tFull = tBuf;
+            }
+            Value rv = fv;
+            if(has_reviver) rv = bi_call_reviver(ctx, reviver, k, fv, tFull);
+            Value sub_obj = val_none();
+            if(rv.type == VAL_MAP) {
+                sub_obj = bi_class_bind_impl(ctx, rv, fti, depth + 1, reviver);
+            } else if(rv.type == VAL_STRUCT_PTR || rv.type == VAL_CLASS_PTR) {
+                sub_obj = rv;   /* reviver 已构造实例（systemReviver 包装系统类） */
+            } else {
+                /* reviver 仍返回标量 → 调用目标类匹配的单参构造器兜底 */
+                sub_obj = bi_construct_with_args(ctx, fti, 1, &rv);
+            }
+            if(sub_obj.type == VAL_NONE) continue;
+            bi_bind_field(ctx, obj, f, sub_obj);
+        } else {
+            Value rv = fv;
+            if(has_reviver) rv = bi_call_reviver(ctx, reviver, k, fv, f->type_name);
+            bi_bind_field(ctx, obj, f, rv);
+        }
+    }
+    return obj;
+}
+
 /* ============================================================
  * 通用深拷贝：所有数据类型 .copy()
  *   标量/不可变数值（int/double/bool/char/bigint/decimal/bytes/complex/calendar）→ 原值
@@ -1345,10 +1644,49 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         return bi_type_err("toJSONString", recv);
     }
-    /* json(s)：解析 JSON 文本 → 值（全局形式 json(s) 与方法形式 s.json() 均用 recv） */
+    /* json(s[, reviver[, proto]])：解析 JSON 文本 → 值（全局形式 json(s) 与方法形式 s.json() 均用 recv）。
+     * 第二参数为 reviver 函数值：
+     *   无 proto → 整树自底向上遍历，每个值回调 reviver(key, value, null) 一次，
+     *              返回值替换原值（对齐 JS JSON.parse reviver 语义；key 为根容器 ""）；
+     *   有 proto → 类属性映射逐字段回调 reviver(key, value, 字段声明类型名)，
+     *              不整树预遍历（避免同值二次回调）。
+     * 第三参数为目标类实例（类型样本，如 Order()）：解析结果按类属性映射为新实例返回——
+     * public 字段直写、private 字段须有 setXxx 才映射（无则跳过），见 bi_class_bind_impl */
     case BUILTIN_JSON:
         if(recv.type != VAL_STRING) return bi_type_err("json", recv);
         *out = lumyr_json_parse(lumyr_str_cstr(&recv));
+        /* 实参存在性按调用形式归一：全局形式 argc 含 receiver（argv[0]=首参），
+         * 方法形式不含。argv[1]=第 2 用户参（reviver）、argv[2]=第 3 用户参（proto） */
+        {
+            int has_reviver = is_method ? (argc >= 1) : (argc >= 2);
+            int has_proto   = is_method ? (argc >= 2) : (argc >= 3);
+            if(has_reviver && argv[1].type != VAL_NONE && argv[1].type != VAL_FUNC) {
+                runtime_error("json: 第二个参数须为 reviver 函数值 / json: the second argument must be a reviver function");
+                return 0;
+            }
+            if(has_proto && argv[2].type != VAL_NONE) {
+                if(argv[2].type != VAL_STRUCT_PTR && argv[2].type != VAL_CLASS_PTR) {
+                    runtime_error("json: 第三个参数须为目标类实例（类型样本）/ json: the third argument must be a target class instance");
+                    return 0;
+                }
+                RuntimeTypeInfo* info = *(RuntimeTypeInfo**)argv[2].v.struct_ptr;
+                if(!info) {
+                    runtime_error("json: 类型样本缺少类型信息 / json: type sample lacks type info");
+                    return 0;
+                }
+                if((*out).type != VAL_MAP) {
+                    runtime_error("json: 类属性映射要求 JSON 顶层为对象 / json: class mapping requires a JSON object at top level");
+                    return 0;
+                }
+                Value reviver = (has_reviver && argv[1].type == VAL_FUNC) ? argv[1] : val_none();
+                *out = bi_class_bind_impl(ctx, *out, info, 0, reviver);
+                return 1;
+            }
+            if(has_reviver && argv[1].type != VAL_NONE) {
+                Value root_key = lumyr_make_string("");
+                *out = bi_json_revive(*out, root_key, argv[1], 0, ctx);
+            }
+        }
         return 1;
     /* stringify(v)：值 → JSON 文本（全局 stringify(v) 与方法 v.stringify() 均用 recv） */
     case BUILTIN_STRINGIFY:
@@ -1363,6 +1701,18 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_XML:
         if(recv.type != VAL_STRING) return bi_type_err("xml", recv);
         *out = lumyr_xml_parse(lumyr_str_cstr(&recv));
+        return 1;
+    /* fromMap(m, typeName)：map → class/struct/type 实例。
+     * 全局形式 fromMap(m, t) 与方法形式 m.fromMap(t) 同约定：
+     * recv=map，argv[1]=类型名（实参自 argv[1] 起）。 */
+    case BUILTIN_FROMMAP:
+        if(recv.type != VAL_MAP) return bi_type_err("fromMap", recv);
+        if(!bi_need_args("fromMap", argc, 1)) return 0;
+        if(argv[1].type != VAL_STRING) {
+            runtime_error("fromMap: 第二个参数须为类型名字符串 / fromMap: type name must be a string");
+            return 0;
+        }
+        *out = bi_from_map_impl(ctx, recv, lumyr_str_cstr(&argv[1]), 0);
         return 1;
     /* copy：所有数据类型深拷贝（无额外参数） */
     case BUILTIN_COPY:
@@ -1789,7 +2139,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             const char* hay = lumyr_str_cstr(&recv);
             const char* needle = lumyr_str_cstr(&argv[1]);
             const char* p = strstr(hay, needle);
-            *out = lumyr_make_int64(p ? (int64_t)(p - hay) : -1);
+            /* 返回码点索引（与 len 的码点语义一致）：命中字节偏移 → 码点数
+             * 换算（continuation byte 10xxxxxx 不计）。此前直接返回字节偏移，
+             * 多字节字符前的命中位置与 len/slice 单位不一致 */
+            if(!p) { *out = lumyr_make_int64(-1); return 1; }
+            int64_t cnt = 0;
+            for(const char* q = hay; q < p; q++) {
+                if(((unsigned char)*q & 0xC0) != 0x80) cnt++;
+            }
+            *out = lumyr_make_int64(cnt);
             return 1;
         }
         if(recv.type != VAL_ARRAY) return bi_type_err("indexOf", recv);
@@ -2402,14 +2760,24 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(start > end) start = end;
         int cnt = (int)(end - start);
         if(recv.type == VAL_STRING) {
-            /* 字符串切片：按字节拷贝（v1 不处理 UTF-8 多字节边界） */
+            /* 字符串切片：字符（UTF-8 码点）语义——start/end 为码点索引，
+             * 与 bi_len_of（lumyr_str_ulen 码点数）单位一致；码点 → 字节
+             * 偏移换算后拷贝（同 lumyr_substr）。此前按字节拷贝却用码点长度
+             * clamp，多字节字符被截断成非法序列（显示 U+FFFD） */
             const char* s = lumyr_str_cstr(&recv);
-            size_t slen = (size_t)n;
             if(!s) { *out = lumyr_make_string(""); return 1; }
-            size_t blen = (start < (int64_t)slen) ? (size_t)(end - start) : 0;
-            char* buf = (char*)malloc(blen + 1);
-            if(blen > 0) memcpy(buf, s + (size_t)start, blen);
-            buf[blen] = '\0';
+            const unsigned char* p = (const unsigned char*)s;
+            int blen = (int)strlen(s);
+            int off0 = 0;
+            for(int64_t k = 0; k < start && off0 < blen; k++)
+                off0 += lumyr_utf8_seqlen(p[off0]);
+            int off1 = off0;
+            for(int64_t k = 0; k < (end - start) && off1 < blen; k++)
+                off1 += lumyr_utf8_seqlen(p[off1]);
+            int outn = off1 - off0;
+            char* buf = (char*)malloc((size_t)outn + 1);
+            if(outn > 0) memcpy(buf, s + off0, (size_t)outn);
+            buf[outn] = '\0';
             *out = lumyr_make_string(buf);
             free(buf);
             return 1;
@@ -3867,6 +4235,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_TOJSON: return "toJSONString";
     case BUILTIN_JSON: return "json";
     case BUILTIN_STRINGIFY: return "stringify";
+    case BUILTIN_FROMMAP: return "fromMap";
     case BUILTIN_XML: return "xml";
     case BUILTIN_COPY: return "copy";
     case BUILTIN_TCP_SOCKET: return "tcpSocket";

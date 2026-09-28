@@ -15,6 +15,14 @@ ExprType c_expr(Ctx* c, AstNode* node);
  * ir_arith 赋值收口据此为 PTR 栈变量标帧类型标签 */
 CastKind c_expr_cast_type(Ctx* c, AstNode* node);
 
+/* 重载匹配评分（构造器/方法/自由函数共用，越小越优）：
+ * ir_ck_family 判类型族（1=整数 2=浮点 3=对象/指针 0=动态）；
+ * ir_slot_score 单个形参位匹配分（精确=0，同族可转换=1，跨族=6） */
+int ir_ck_family(CastKind k);
+int ir_slot_score(CastKind pck, CastKind ack);
+/* 运行时 Value 类型（ValueType）→ CastKind；反序列化构造器实参类型评分用 */
+int valuetype_to_castkind(int vt);
+
 /* 推断表达式持有的自定义类型名（struct/class 实例）
  * 返回 strdup 的类型名（调用方释放）；非实例或类型未知返回 NULL
  * 供 arith_get_expr_type / c_expr_cast_type 共享方法返回类型解析 */

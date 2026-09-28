@@ -190,6 +190,7 @@ int builtin_id_by_name(const char* name) {
         {"toJSONString", BUILTIN_TOJSON},
         {"json", BUILTIN_JSON},
         {"stringify", BUILTIN_STRINGIFY},
+        {"fromMap", BUILTIN_FROMMAP},
         {"xml", BUILTIN_XML},
         {"copy", BUILTIN_COPY},
         /* AI / 线性代数 */
@@ -1590,36 +1591,68 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             char sel_name[sizeof(ctor_base) + 8];
             snprintf(sel_name, sizeof(sel_name), "%s", ctor_base);
             {
-                BytecodeFunc* var_fn = NULL; AstNode* var_ast = NULL; int var_min = -1;
-                BytecodeFunc* prim_fn = ir_func_table_lookup(ctor_base);
-                AstNode* prim_ast = func_ast_lookup(ctor_base);
+                /* 构造器重载选择：枚举全部候选 → arity 可行 → 按"实参类型 vs 形参类型"
+                 * 评分选唯一最佳（算法同自由函数 ol_resolve）。修复同 arity 不同类型
+                 * （如 Box(int)/Box(string)）此前永远命中首个构造器导致类型错配崩溃。
+                 * 形参 slot0=self，用户实参对应 slot1+；实参类型 c_expr_cast_type 推断 */
+                BytecodeFunc* candFn[64]; AstNode* candAst[64]; char candNm[64][264];
+                int ncand = 0;
                 for(int ord = 1; ord <= 64; ord++) {
-                    char nm[(int)sizeof(ctor_base) + 8];
+                    char nm[264];
                     if(ord == 1) snprintf(nm, sizeof(nm), "%s", ctor_base);
                     else snprintf(nm, sizeof(nm), "%s%d", ctor_base, ord);
                     BytecodeFunc* fn = ir_func_table_lookup(nm);
                     AstNode* ast = func_ast_lookup(nm);
                     if(!fn || !ast) break;
-                    /* 形参数（不含 self 首参；ellipsis 记为可变，不计入） */
-                    int np = 0, ell = 0;
-                    for(AstNode* p = ast->u.func_def.params; p; p = p->u.param.next) {
-                        if(p->u.param.name && strcmp(p->u.param.name, "self") == 0 && np == 0) continue;
+                    candFn[ncand] = fn; candAst[ncand] = ast;
+                    snprintf(candNm[ncand], sizeof(candNm[ncand]), "%s", nm);
+                    ncand++;
+                }
+                CastKind* ak = (CastKind*)malloc(sizeof(CastKind) * (size_t)(argc2 > 0 ? argc2 : 1));
+                for(int i = 0; i < argc2; i++)
+                    ak[i] = c_expr_cast_type(c, argv2[i]);
+                int best = -1, bestScore = 0, ties = 0;
+                for(int ci = 0; ci < ncand; ci++) {
+                    BytecodeFunc* fn = candFn[ci];
+                    AstNode* ast = candAst[ci];
+                    /* 用户侧形参（去掉 self）：统计必填、可变 */
+                    int userPcnt = 0, required = 0, ell = 0;
+                    AstNode* p = ast->u.func_def.params;
+                    if(p && p->u.param.name && strcmp(p->u.param.name, "self") == 0)
+                        p = p->u.param.next;
+                    for(; p; p = p->u.param.next) {
                         if(p->u.param.is_ellipsis) { ell = 1; break; }
-                        np++;
+                        if(!p->u.param.default_val) required++;
+                        userPcnt++;
                     }
-                    if(ell) {
-                        if(!var_fn) { var_fn = fn; var_ast = ast; var_min = np; }
-                        continue;
+                    if(argc2 < required) continue;
+                    if(!ell && argc2 > userPcnt) continue;
+                    int typeScore = 0;
+                    for(int i = 0; i < argc2; i++) {
+                        int fslot = i + 1;   /* 跳过 self */
+                        CastKind pck = CAST_NONE;
+                        if(fslot < fn->param_cnt && fslot < fn->sym_cnt) {
+                            int tag = fn->var_type_tags[fslot];
+                            pck = (tag >= 0) ? (CastKind)tag : CAST_NONE;  /* -1=无标注→动态 */
+                        }
+                        typeScore += ir_slot_score(pck, ak[i]);
                     }
-                    if(np == argc2) { ctor_fn = fn; ctor_ast = ast; snprintf(sel_name, sizeof(sel_name), "%s", nm); break; }
+                    /* 两层评分：类型匹配为主键，同类型时精确 arity 优先（同 ol_resolve） */
+                    int exact = (!ell && argc2 == userPcnt) ? 1 : 0;
+                    int score = typeScore * 10 + (exact ? 0 : 1);
+                    if(best < 0 || score < bestScore) { best = ci; bestScore = score; ties = 1; }
+                    else if(score == bestScore) ties++;
                 }
-                if(!ctor_ast && var_fn && argc2 >= var_min) {
-                    ctor_fn = var_fn; ctor_ast = var_ast;
-                    /* 可变重载名：var_fn 的实际注册名（首个可变按声明序可能带 N 后缀） */
-                    const char* vn = var_fn->name ? var_fn->name : ctor_base;
-                    snprintf(sel_name, sizeof(sel_name), "%s", vn);
+                free(ak);
+                if(best >= 0 && ties == 1) {
+                    ctor_fn = candFn[best]; ctor_ast = candAst[best];
+                    snprintf(sel_name, sizeof(sel_name), "%s", candNm[best]);
+                } else {
+                    /* 无唯一最佳（无匹配/歧义）→ 回退主构造，兼容旧行为 */
+                    ctor_fn = ir_func_table_lookup(ctor_base);
+                    ctor_ast = func_ast_lookup(ctor_base);
+                    snprintf(sel_name, sizeof(sel_name), "%s", ctor_base);
                 }
-                if(!ctor_ast) { ctor_fn = prim_fn; ctor_ast = prim_ast; snprintf(sel_name, sizeof(sel_name), "%s", ctor_base); }
             }
             if(ctor_fn && ctor_ast) {
                 /* 加载 self（临时变量）到 PTR 栈 */
@@ -1649,6 +1682,27 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     ai++;
                     p = p->u.param.next;
                 }
+                /* 默认参数填补：实参耗尽但仍有带默认值的形参，编译期求值默认值压栈
+                 * （与自由函数 compile_user_call 一致）；无默认值的必填形参按无兜底原则
+                 * 报错，不静默绑 0。此前缺此步导致 Def(5) 的 b 未绑定被当 0。 */
+                while(p && !p->u.param.is_ellipsis) {
+                    CastKind dck = (slot < ctor_fn->sym_cnt) ? (CastKind)ctor_fn->var_type_tags[slot] : CAST_NONE;
+                    ExprType dparam_et = castkind_to_exprtype(dck);
+                    if(p->u.param.default_val) {
+                        if(dparam_et != EXPR_TYPE_NONE) {
+                            ExprType at = c_expr(c, p->u.param.default_val);
+                            emit_value_cast(c, at, dparam_et);
+                        } else {
+                            c_expr_to_value(c, p->u.param.default_val);
+                        }
+                        stk_tmp[slot] = (int)dparam_et;
+                        slot++;
+                        p = p->u.param.next;
+                    } else {
+                        fprintf(stderr, "IR: 构造 %s 缺少必填参数 / missing required constructor argument\n", tname);
+                        break;
+                    }
+                }
                 /* 可变参数（...args）：与自由函数路径（compile_user_call）语义一致——
                  * 可变构造函数的数组槽总是绑定（实参耗尽时为空数组），否则缺省实参场景
                  * args 槽未被绑定为 none，函数体内 len(args) 直接运行时错误 */
@@ -1665,7 +1719,8 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                 free(argv2);
                 /* emit CALL（ctor 为 void：keep_result=0，CALL 不压返回值）；
                  * total = self + 已绑定实参 +（可变槽数组算 1 个） */
-                int total = 1 + ai + (has_ellipsis ? 1 : 0);
+                /* total = self(1) + 已压栈形参（用户实参+默认参 = slot-1）+ 可变槽数组 */
+                int total = slot + (has_ellipsis ? 1 : 0);
                 int cs = bf_add_callsite(c->fn, sel_name, total, 0, (int)EXPR_TYPE_NONE);
                 CallSite* ctor_csp = &c->fn->callsites[cs];
                 for(int _i = 0; _i < total && _i < 72; _i++)
@@ -3020,10 +3075,13 @@ CastKind c_expr_cast_type(Ctx* c, AstNode* node) {
     if(node->type == AST_VAR) {
         int idx = c_find_var(c, node->u.varname);
         if(idx >= 0) {
-            /* 从 BytecodeFunc 的 var_type_tags 获取 */
+            /* 从 BytecodeFunc 的 var_type_tags 获取；-1=无类型标注（any 动态）
+             * 必须归一 CAST_NONE——裸 -1 在类型族判定里落对象族(3)与 string
+             * 同族，动态实参的重载评分会被"巧合"判成 string 类 */
             int bf_idx = bf_sym(c->fn, node->u.varname);
             if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) {
-                return (CastKind)c->fn->var_type_tags[bf_idx];
+                int tag = c->fn->var_type_tags[bf_idx];
+                return tag < 0 ? CAST_NONE : (CastKind)tag;
             }
         }
     }
@@ -3813,6 +3871,22 @@ static ExprType compile_user_call(Ctx* c, BytecodeFunc* callee, AstNode* def_ast
  * 按 receiver 静态类型解析方法签名 → 参数 typed 路由 → OPC_CALL_METHOD；
  * VM 运行时按 receiver 实际类型（方法表含继承槽位，重写覆盖在原位置）分派 → 多态。
  * keep_result=1 表达式语境压返回值；0 语句语境丢弃。c_expr/c_stmt 共用。 */
+/* 两个方法候选是否同签名：形参数/可变参一致 + 逐槽位 var_type_tags 一致
+ *（-1 无标记归一 CAST_NONE）。跨层同签名是合法覆盖（子类优先，静默取子类）；
+ * 签名不同才是真重载，同分时才涉及歧义判定 */
+static int method_cands_same_sig(RuntimeFunc* a, RuntimeFunc* b) {
+    BytecodeFunc* ba = interp_func_is_payload(a) ? ((InterpFuncPayload*)a->captures)->bytecode : NULL;
+    BytecodeFunc* bb = interp_func_is_payload(b) ? ((InterpFuncPayload*)b->captures)->bytecode : NULL;
+    if(!ba || !bb) return 0;
+    if(ba->param_cnt != bb->param_cnt || ba->has_variadic != bb->has_variadic) return 0;
+    for(int s = 0; s < ba->param_cnt; s++) {
+        int ta = (s < ba->sym_cnt && ba->var_type_tags) ? ba->var_type_tags[s] : -1;
+        int tb = (s < bb->sym_cnt && bb->var_type_tags) ? bb->var_type_tags[s] : -1;
+        if((ta < 0 ? CAST_NONE : (CastKind)ta) != (tb < 0 ? CAST_NONE : (CastKind)tb)) return 0;
+    }
+    return 1;
+}
+
 static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result) {
     AstNode* recv = node->u.method_call.recv;
     const char* mname = node->u.method_call.method;
@@ -3884,19 +3958,104 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
     char* owner = c_expr_owner_type(c, recv);
     TypeDef* td = owner ? type_lookup(owner) : NULL;
 
+    /* 实参个数（含 self 口径）+ 实参静态类型：沿父类链选同名重载版本——
+     * 精确参数个数的候选按逐槽位类型评分选最优（与自由函数 ol_resolve 同一
+     * 评分约定），继承链上同名同参数个数、参数类型/顺序不同的版本据此区分；
+     * 签名不同且类型无法区分（全动态实参同分）取子类首个命中；无精确 arity
+     * 候选退回可行区间（默认参填补）首个命中。编译期选定的静态签名即运行期
+     * 弹栈口径，CALL_METHOD 运行期只做同签名覆盖替换（find_method_override） */
+    int m_argc = 0, m_acap = 0;
+    AstNode** m_argv = NULL;
+    collect_call_args(margs, &m_argv, &m_argc, &m_acap);
+    int argc_with_self = m_argc + 1;
+
     /* 2. 用户类型方法（同名覆盖内置：用户方法优先，沿继承链解析 → 多态） */
     int method_deferred = 0;  /* 方法 AST 已知但 RuntimeFunc 尚未编译（递归自调用） */
-    AstNode* mdef_ast = td ? type_find_method_ast(owner, mname) : NULL;
-    if(td) {
-        BytecodeFunc* def_fn = NULL;
-        if(td->runtime_info) {
-            RuntimeFunc* rf = lumyr_type_find_method(td->runtime_info, mname);
-            if(rf && interp_func_is_payload(rf)) {
-                InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
-                def_fn = pl->bytecode;
+    AstNode* mdef_ast = NULL;
+    BytecodeFunc* def_fn = NULL;
+    RuntimeFunc* rf = NULL;
+    if(td && td->runtime_info) {
+        /* 实参静态类型（不含 self；命名实参取值节点，与 ol_resolve 一致） */
+        CastKind* ak = NULL;
+        if(m_argc > 0) {
+            ak = (CastKind*)malloc(sizeof(CastKind) * (size_t)m_argc);
+            for(int i = 0; i < m_argc; i++) {
+                AstNode* an = m_argv[i];
+                if(an && an->type == AST_ASSIGN) an = an->u.assign.expr;
+                ak[i] = an ? c_expr_cast_type(c, an) : CAST_NONE;
             }
         }
-        if(mdef_ast && !def_fn) method_deferred = 1;  /* 方法在编译中，RuntimeFunc 未就绪 */
+        RuntimeFunc* best_rf = NULL, *fallback_rf = NULL;
+        int best_score = 0;
+        for(RuntimeTypeInfo* t = td->runtime_info; t; t = t->parent) {
+            for(int i = 0; i < t->nmethods; i++) {
+                if(!t->method_names[i] || strcmp(t->method_names[i], mname) != 0) continue;
+                RuntimeFunc* cand = t->methods[i];
+                if(!interp_func_is_payload(cand)) continue;
+                int pc = interp_func_param_cnt(cand);
+                if(pc == argc_with_self) {
+                    int score = -1000;  /* 精确 arity 优先（同 ol_resolve） */
+                    for(int ai = 0; ai < m_argc; ai++) {
+                        CastKind pck = CAST_NONE;
+                        int slot = ai + 1;  /* slot0 = self */
+                        BytecodeFunc* cb = ((InterpFuncPayload*)cand->captures)->bytecode;
+                        if(cb && slot < cb->sym_cnt && cb->var_type_tags[slot] >= 0)
+                            pck = (CastKind)cb->var_type_tags[slot];
+                        score += ir_slot_score(pck, ak ? ak[ai] : CAST_NONE);
+                    }
+                    if(!best_rf || score < best_score) {
+                        best_rf = cand; best_score = score;
+                    } else if(score == best_score && !method_cands_same_sig(best_rf, cand)) {
+                        /* 同分且签名不同：实参全动态时保持子类首个命中（静态分不出，
+                         * 与历史行为一致）；有静态类型仍同分说明类型顺序对称
+                         * （如 (int,string) 与 (string,int) 对 1.5 双向跨族）→ 歧义 */
+                        int all_dyn = 1;
+                        for(int ai = 0; ai < m_argc; ai++)
+                            if(ak && ak[ai] != CAST_NONE) { all_dyn = 0; break; }
+                        if(!all_dyn) {
+                            fprintf(stderr,
+                                "IR: 类 \"%s\" 的方法 \"%s\" 存在多个同样匹配的重载，实参类型无法区分（存在歧义）/ "
+                                "ambiguous overload: multiple same-arity versions of method \"%s\" in class \"%s\" equally match the argument types\n",
+                                td->name ? td->name : "?", mname, mname, td->name ? td->name : "?");
+                            g_ir_compile_error = 1;
+                            free(ak); free(m_argv); free(owner);
+                            return EXPR_TYPE_NONE;
+                        }
+                    }
+                } else {
+                    int req = 0;
+                    for(int pi = 0; pi < pc; pi++)
+                        if(!interp_func_param_has_default(cand, pi)) req++;
+                    if(argc_with_self >= req && argc_with_self <= pc && !fallback_rf) fallback_rf = cand;
+                }
+            }
+        }
+        rf = best_rf ? best_rf : fallback_rf;
+        if(rf && interp_func_is_payload(rf)) {
+            InterpFuncPayload* pl = (InterpFuncPayload*)rf->captures;
+            def_fn = pl->bytecode;
+        }
+        free(ak);
+        /* 由选中的 rf 反查定义层的方法 AST——保证静态签名与参数绑定同源。
+         * 注意 TypeDef->parent 是父类名字符串（非指针），按名逐层解析 */
+        if(def_fn) {
+            for(const char* tn = td->name; tn && !mdef_ast; ) {
+                TypeDef* t = type_lookup(tn);
+                if(!t) break;
+                for(int i = 0; i < t->nmethods; i++) {
+                    if(t->method_funcs && t->method_funcs[i] == rf) {
+                        mdef_ast = t->method_nodes[i];
+                        break;
+                    }
+                }
+                tn = t->parent;  /* 上一层：父类名（NULL 结束） */
+            }
+        }
+    }
+    free(m_argv);
+    m_argv = NULL;
+    if(!mdef_ast && td) mdef_ast = type_find_method_ast_argc(owner, mname, argc_with_self);
+    if(mdef_ast && !def_fn) method_deferred = 1;  /* 方法在编译中，RuntimeFunc 未就绪 */
         if(mdef_ast && def_fn) {
             /* super.method()：静态分派到父类方法（不走多态，避免重写方法无限递归）
              * 栈布局同普通方法：slot0=self（super 加载 self 指针），slot1+=实参；
@@ -3958,7 +4117,6 @@ static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result)
             free(owner);
             return ret;
         }
-    }
 
     /* 3. 内置方法（字符串/数组/字典/高阶/AI 线代/加密编码等）：
      * 编译期静态表解析 BuiltinId（无运行时字符串查表），receiver 与实参全部转 VALUE，
@@ -5556,7 +5714,7 @@ static void ol_insert_bare_alias(BytecodeFunc* fn) {
 }
 
 /* 类型族：1=整数族 2=浮点族 3=对象/指针族 0=动态 */
-static int ck_family(CastKind k) {
+int ir_ck_family(CastKind k) {
     switch(k) {
         case CAST_INT: case CAST_INT_INFER: case CAST_BOOL: case CAST_ASCII: case CAST_CHAR:
         case CAST_BYTE: case CAST_INT8: case CAST_INT16: case CAST_INT32:
@@ -5575,11 +5733,11 @@ static int ck_family(CastKind k) {
 }
 
 /* 单个形参位的匹配评分：越小越优 */
-static int ol_slot_score(CastKind pck, CastKind ack) {
+int ir_slot_score(CastKind pck, CastKind ack) {
     if(pck == CAST_NONE) return 2;                 /* 形参动态：宽松，降权 */
     if(ack == CAST_NONE) return 1;                 /* 实参动态、形参有类型：运行时校验 */
     if(ack == pck) return 0;                       /* 精确匹配 */
-    if(ck_family(ack) == ck_family(pck)) return 1; /* 同族可转换 */
+    if(ir_ck_family(ack) == ir_ck_family(pck)) return 1; /* 同族可转换 */
     return 6;                                      /* 跨族：勉强/差匹配 */
 }
 
@@ -5623,15 +5781,21 @@ static int ol_resolve(Ctx* c, const char* name, AstNode* args, int* status) {
         if(ac < required) continue;
         if(!variadic && ac > pcnt) continue;
 
-        int score = 0;
+        int typeScore = 0;
         for(int i = 0; i < ac; i++) {
             CastKind pck = CAST_NONE;
             if(i < pcnt && i < fn->sym_cnt) {
                 int tag = fn->var_type_tags[i];
                 pck = (tag >= 0) ? (CastKind)tag : CAST_NONE;  /* -1=无标注→动态 */
             }
-            score += ol_slot_score(pck, ak[i]);
+            typeScore += ir_slot_score(pck, ak[i]);
         }
+        /* 评分两层（修复 calc(5) 误中 string 版）：
+         * 主键=类型匹配（typeScore，跨族候选永远差于精确/同族）；
+         * 同类型时次键=精确 arity（exact=0）优先于需默认参填补（=1）。
+         * 此前 -1000 加权会让"跨族但恰好 arity"候选压过"精确匹配但需默认参"候选。 */
+        int exact = (!variadic && ac == pcnt) ? 1 : 0;
+        int score = typeScore * 10 + (exact ? 0 : 1);
         if(best < 0 || score < best_score) {
             best = ci; best_score = score; ties = 1;
         } else if(score == best_score) {

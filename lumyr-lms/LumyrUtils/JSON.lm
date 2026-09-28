@@ -1,0 +1,300 @@
+// ============================================================
+// lumyr-JSON：JSON 工具类（parse / stringify，API 对齐 JS）
+//
+//   JSON.parse(text[, reviver])  反序列化：JSON 文本 → 值
+//     reviver 可选：为回调函数（lambda 或函数值，传 null 亦可）时，
+//     解析结果自底向上遍历，每个值回调 reviver(key, value, null) 一次、
+//     返回值替换原值——对齐 JS JSON.parse(text, reviver) 语义。
+//     回调 key：map 为键名、数组为下标数字、根容器为 ""。
+//     未显式传 reviver 时默认执行 systemReviver（系统类默认处理，见下）；
+//     显式传用户 reviver 时也不会丢弃 systemReviver——链式执行：
+//     systemReviver 先包装系统类，再交用户 reviver 处理业务类型
+//     （系统类规则无需用户重写）。
+//     用户在自己的 reviver 里处理不好直接绑定的类型，例如：
+//       JSON.parse(doc, (k, v) => {
+//           if (k == "price") { return Money(v); }
+//           return v;
+//       })
+//     class/struct 实例整树直填用内置 fromMap：
+//       fromMap(JSON.parse(doc), "Order")
+//     （字段含 Double/Integer 等系统类自动构造，嵌套 class 递归）
+//
+//   JSON.stringify(v)           序列化：值 → JSON 文本
+//
+//   JSONClass.parse(text, proto[, reviver])  类属性映射
+//     proto 传目标类实例（类型样本，仅取类型，如 Order()），返回
+//     映射后的新实例：public 字段直接映射；private 字段须有 setXxx
+//     函数才映射，没有则跳过（无法映射）：
+//       JSONClass.parse(doc, Order())
+//     reviver 契约（三参）：逐字段回调 (key, value, targetType)——
+//     targetType 为字段声明类型名，只有映射实体类时才可感知类型；
+//     未显式传 reviver 时默认执行 systemReviver；显式传用户 reviver 时
+//     systemReviver 仍先执行（链式），系统类规则无需用户重写。
+// ============================================================
+
+import <Function/Double>;
+import <Function/Float>;
+import <Function/Integer>;
+import <Function/Long>;
+import <Function/Short>;
+import <Function/Byte>;
+import <Function/Boolean>;
+import <Function/String>;
+
+// 容器封装类：数组/Set 家族、HashMap 家族、StringBuffer 家族、链表家族
+import <Function/Array>;
+import <Function/ReadWriteArray>;
+import <Function/ConcurrentArray>;
+import <Function/HashSet>;
+import <Function/ReadWriteSet>;
+import <Function/ConcurrentSet>;
+import <Function/HashMap>;
+import <Function/ReadWriteHashMap>;
+import <Function/ConcurrentHashMap>;
+import <Function/StringBuffer>;
+import <Function/ReadWriteStringBuffer>;
+import <Function/ConcurrentStringBuffer>;
+import <Function/LinkedArray>;
+import <Function/ConcurrentLinkedArray>;
+import <Function/ReadWriteLinkedArray>;
+
+// reviver 契约（interface 调用签名）：
+//   普通 parse 预遍历：targetType 传 null（无类型语境）；
+//   JSONClass 类属性映射：targetType 为字段声明类型名
+public interface JsonReviver {
+    (key, value, targetType): any;
+}
+
+// 系统类默认 reviver：实体类字段声明为系统包装类时，把 JSON 原生值包装成
+// 对应实例；其余原值返回。下面所有的 parse 默认都会执行本函数。
+//   标量家族：Double/Float/Integer/Long/Short/Byte/Boolean/String
+//   数组/Set 家族（原生数组→）：Array/ReadWriteArray/ConcurrentArray/
+//            HashSet/ReadWriteSet/ConcurrentSet
+//   HashMap 家族（原生 map→）：HashMap/ReadWriteHashMap/ConcurrentHashMap
+//   StringBuffer 家族（原生 string→）：StringBuffer/ReadWriteStringBuffer/ConcurrentStringBuffer
+//   链表家族（原生数组→无参构造 + 逐个 push）：LinkedArray/
+//            ConcurrentLinkedArray/ReadWriteLinkedArray
+// systemReviver：无用户 reviver 时使用，泛型容器逐元素递归调自身（只走系统包装）
+public func systemReviver(k, v, t) {
+    // 幂等：v 已是字段声明类型的实例 → 原样返回
+    if (t != null && v != null && type(v) == t) { return v; }
+
+    if (t != null && t.contains("<")) {
+        parts = t.split("<");
+        baseName = parts[0];
+        inner = parts[1].split(">")[0];
+
+        // ---- Array 家族 ----
+        if (baseName == "Array" || baseName == "ReadWriteArray" || baseName == "ConcurrentArray") {
+            newArr = [];
+            if (type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    newArr.add(systemReviver(i, v[i], inner));
+                }
+            }
+            if (baseName == "Array") { return Array<>(newArr); }
+            if (baseName == "ReadWriteArray") { return ReadWriteArray<>(newArr); }
+            if (baseName == "ConcurrentArray") { return ConcurrentArray<>(newArr); }
+        }
+
+        // ---- HashMap 家族：逐 value 包装 ----
+        if (baseName == "HashMap" || baseName == "ReadWriteHashMap" || baseName == "ConcurrentHashMap") {
+            vArgs = inner.split(",");
+            vType = vArgs[1].trim();
+            newMap = {};
+            if (type(v) == "map") {
+                ks = v.keys();
+                for (i = 0; i < ks.len; i = i + 1) {
+                    oldK = ks[i];
+                    newMap[oldK] = systemReviver(oldK, v[oldK], vType);
+                }
+            }
+            if (baseName == "HashMap") { return HashMap<>(newMap); }
+            if (baseName == "ReadWriteHashMap") { return ReadWriteHashMap<>(newMap); }
+            if (baseName == "ConcurrentHashMap") { return ConcurrentHashMap<>(newMap); }
+        }
+
+        // ---- HashSet 家族：逐元素包装 ----
+        if (baseName == "HashSet" || baseName == "ReadWriteSet" || baseName == "ConcurrentSet") {
+            newArr = [];
+            if (type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    newArr.add(systemReviver(i, v[i], inner));
+                }
+            }
+            if (baseName == "HashSet") { return HashSet<>(newArr); }
+            if (baseName == "ReadWriteSet") { return ReadWriteSet<>(newArr); }
+            if (baseName == "ConcurrentSet") { return ConcurrentSet<>(newArr); }
+        }
+
+        // ---- LinkedArray 家族 ----
+        if (baseName == "LinkedArray" || baseName == "ConcurrentLinkedArray" || baseName == "ReadWriteLinkedArray") {
+            la = null;
+            if (baseName == "LinkedArray") { la = LinkedArray<>(); }
+            if (baseName == "ConcurrentLinkedArray") { la = ConcurrentLinkedArray<>(); }
+            if (baseName == "ReadWriteLinkedArray") { la = ReadWriteLinkedArray<>(); }
+            if (la != null && type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    la.push(systemReviver(i, v[i], inner));
+                }
+            }
+            return la;
+        }
+    }
+
+    // ---- 标量包装类 ----
+    if (t == "Double") { return Double(v); }
+    if (t == "Float") { return Float(v); }
+    if (t == "Integer") { return Integer(v); }
+    if (t == "Long") { return Long(v); }
+    if (t == "Short") { return Short(v); }
+    if (t == "Byte") { return Byte(v); }
+    if (t == "Boolean") { return Boolean(v); }
+    if (t == "String") { return String(v); }
+
+    // ---- 数组 / Set 家族（原生数组 → 包装类，<> 泛型擦除） ----
+    if (t == "Array") { return Array<>(v); }
+    if (t == "ReadWriteArray") { return ReadWriteArray<>(v); }
+    if (t == "ConcurrentArray") { return ConcurrentArray<>(v); }
+    if (t == "HashSet") { return HashSet<>(v); }
+    if (t == "ReadWriteSet") { return ReadWriteSet<>(v); }
+    if (t == "ConcurrentSet") { return ConcurrentSet<>(v); }
+
+    // ---- HashMap 家族（原生 map → 包装类） ----
+    if (t == "HashMap") { return HashMap<>(v); }
+    if (t == "ReadWriteHashMap") { return ReadWriteHashMap<>(v); }
+    if (t == "ConcurrentHashMap") { return ConcurrentHashMap<>(v); }
+
+    // ---- StringBuffer 家族（原生 string → 包装类） ----
+    if (t == "StringBuffer") { return StringBuffer(v); }
+    if (t == "ReadWriteStringBuffer") { return ReadWriteStringBuffer(v); }
+    if (t == "ConcurrentStringBuffer") { return ConcurrentStringBuffer(v); }
+
+    // ---- 链表家族（无参构造 + 逐个 push 填充） ----
+    if (t == "LinkedArray" || t == "ConcurrentLinkedArray" || t == "ReadWriteLinkedArray") {
+        list = null;
+        if (t == "LinkedArray") { list = LinkedArray<>(); }
+        if (t == "ConcurrentLinkedArray") { list = ConcurrentLinkedArray<>(); }
+        if (t == "ReadWriteLinkedArray") { list = ReadWriteLinkedArray<>(); }
+        if (list != null && type(v) == "array") {
+            for (i = 0; i < v.len; i = i + 1) { list.push(v[i]); }
+        }
+        return list;
+    }
+
+    return v;
+}
+
+// combinedReviver：有用户 reviver 时使用，泛型容器逐元素递归调自身（system + user 链）
+// userReviver 作为参数传递，不依赖全局可变状态，线程安全
+func combinedReviver(k, v, t, userReviver) {
+    // 幂等
+    if (t != null && v != null && type(v) == t) { return v; }
+
+    if (t != null && t.contains("<")) {
+        parts = t.split("<");
+        baseName = parts[0];
+        inner = parts[1].split(">")[0];
+
+        // ---- Array 家族 ----
+        if (baseName == "Array" || baseName == "ReadWriteArray" || baseName == "ConcurrentArray") {
+            newArr = [];
+            if (type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    newArr.add(combinedReviver(i, v[i], inner, userReviver));
+                }
+            }
+            if (baseName == "Array") { return Array<>(newArr); }
+            if (baseName == "ReadWriteArray") { return ReadWriteArray<>(newArr); }
+            if (baseName == "ConcurrentArray") { return ConcurrentArray<>(newArr); }
+        }
+
+        // ---- HashMap 家族 ----
+        if (baseName == "HashMap" || baseName == "ReadWriteHashMap" || baseName == "ConcurrentHashMap") {
+            vArgs = inner.split(",");
+            vType = vArgs[1].trim();
+            newMap = {};
+            if (type(v) == "map") {
+                ks = v.keys();
+                for (i = 0; i < ks.len; i = i + 1) {
+                    oldK = ks[i];
+                    newMap[oldK] = combinedReviver(oldK, v[oldK], vType, userReviver);
+                }
+            }
+            if (baseName == "HashMap") { return HashMap<>(newMap); }
+            if (baseName == "ReadWriteHashMap") { return ReadWriteHashMap<>(newMap); }
+            if (baseName == "ConcurrentHashMap") { return ConcurrentHashMap<>(newMap); }
+        }
+
+        // ---- HashSet 家族 ----
+        if (baseName == "HashSet" || baseName == "ReadWriteSet" || baseName == "ConcurrentSet") {
+            newArr = [];
+            if (type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    newArr.add(combinedReviver(i, v[i], inner, userReviver));
+                }
+            }
+            if (baseName == "HashSet") { return HashSet<>(newArr); }
+            if (baseName == "ReadWriteSet") { return ReadWriteSet<>(newArr); }
+            if (baseName == "ConcurrentSet") { return ConcurrentSet<>(newArr); }
+        }
+
+        // ---- LinkedArray 家族 ----
+        if (baseName == "LinkedArray" || baseName == "ConcurrentLinkedArray" || baseName == "ReadWriteLinkedArray") {
+            la = null;
+            if (baseName == "LinkedArray") { la = LinkedArray<>(); }
+            if (baseName == "ConcurrentLinkedArray") { la = ConcurrentLinkedArray<>(); }
+            if (baseName == "ReadWriteLinkedArray") { la = ReadWriteLinkedArray<>(); }
+            if (la != null && type(v) == "array") {
+                for (i = 0; i < v.len; i = i + 1) {
+                    la.push(combinedReviver(i, v[i], inner, userReviver));
+                }
+            }
+            return la;
+        }
+    }
+
+    // ---- 标量：system 先包装，再交用户 reviver 加工 ----
+    sv = systemReviver(k, v, t);
+    return userReviver(k, sv, t);
+}
+
+public class JSON {
+    // 反序列化：reviver 传 lambda/函数值（JsonReviver 形态），省略或 null 即默认 systemReviver
+    static func parse(s: string) {
+        return json(s, systemReviver);
+    }
+
+    static func parse(s: string, reviver: JsonReviver = null) {
+        if (reviver == null) { return json(s, systemReviver); }
+        // 用户 reviver 非空：combinedReviver 泛型容器逐元素走 system + user 链，
+        // 标量 system 先包装再交用户 reviver 加工
+        combined: JsonReviver = (k, v, t) => {
+            return combinedReviver(k, v, t, reviver);
+        };
+        return json(s, combined);
+    }
+
+    // 序列化：值 → JSON 文本（依赖内置 stringify）
+    static func stringify(v) {
+        return v.stringify();
+    }
+}
+
+public class JSONClass<T> {
+    // 类属性映射：proto 传目标类实例（类型样本，仅取类型，如 Order()），
+    // 返回映射后的新实例——public 字段直接映射；private 字段须有
+    // setXxx 函数才映射，没有则跳过（无法映射，字段落零值）
+    static func parse(s: string, proto: T, reviver: JsonReviver = null): T {
+        if (reviver == null) { return json(s, systemReviver, proto); }
+        combined: JsonReviver = (k, v, t) => {
+            return combinedReviver(k, v, t, reviver);
+        };
+        return json(s, combined, proto);
+    }
+
+    // 序列化：值 → JSON 文本（依赖内置 stringify）
+    static func stringify(v) {
+        return v.stringify();
+    }
+}

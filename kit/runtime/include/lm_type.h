@@ -39,6 +39,11 @@ typedef struct {
     /* 当 valtype 为 VAL_STRUCT_PTR/VAL_CLASS_PTR 时，指向字段的自定义类型名
      * （如 inner: Inner → "Inner"），供方法链调用编译期推断接收者类型；其余类型为 NULL */
     const char* type_name;
+    /* 字段泛型实参原文（逗号分隔，不含尖括号）：仅当字段声明为带实参的泛型
+     * 引用时非 NULL，如 tags: Array<Double> → "Double"、meta: HashMap<string,int>
+     * → "string,int"；tags: Array（实参擦除）或非泛型字段为 NULL。
+     * 供 JSON 类属性映射逐元素按声明类型包装（与 type_name 组合得 "Array<Double>"） */
+    const char* type_args;
     /* 注解（后续扩展，初版 count=0、annotations=NULL） */
     int annotation_count;
     void** annotations;         /* AnnotationInfo* 指针数组（编译器侧管理） */

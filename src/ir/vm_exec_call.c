@@ -215,6 +215,36 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
  * 栈布局（自底向上）：receiver(PTR), 用户实参 slot1..argc-1（栈顶为最后一个）
  * cs->argc 含 receiver；cs->callee 为静态定义内部名 <DefClass>__m__<method>。
  * 实参按静态签名弹栈（重写方法签名兼容）；执行目标按 receiver 实际类型方法表解析 → 多态。 */
+
+/* 沿实际类型链找同签名覆盖：方法名相同 + 形参数/可变参一致 + 逐槽位
+ * var_type_tags 一致（-1 无标记归一 CAST_NONE），子类首个命中。
+ * 签名不同的同名版本不是覆盖——实参已按编译期静态签名弹栈定型，
+ * 跨签名改调会栈型错位（历史段错误根因），找不到时维持编译期选定版本。
+ * 无 argc 语境的查找继续用 lumyr_type_find_method。 */
+static RuntimeFunc* find_method_override(RuntimeTypeInfo* ri, const char* mname, BytecodeFunc* static_fn)
+{
+    if(!ri || !mname || !static_fn) return NULL;
+    int pc = static_fn->param_cnt;
+    for(RuntimeTypeInfo* t = ri; t; t = t->parent) {
+        for(int i = 0; i < t->nmethods; i++) {
+            if(!t->method_names[i] || strcmp(t->method_names[i], mname) != 0) continue;
+            RuntimeFunc* rf = t->methods[i];
+            if(!interp_func_is_payload(rf)) continue;
+            BytecodeFunc* cb = ((InterpFuncPayload*)rf->captures)->bytecode;
+            if(!cb) continue;
+            if(cb->param_cnt != pc || cb->has_variadic != static_fn->has_variadic) continue;
+            int same = 1;
+            for(int s = 0; s < pc && same; s++) {
+                int a = (s < static_fn->sym_cnt && static_fn->var_type_tags) ? static_fn->var_type_tags[s] : -1;
+                int b = (s < cb->sym_cnt && cb->var_type_tags) ? cb->var_type_tags[s] : -1;
+                if((a < 0 ? CAST_NONE : (CastKind)a) != (b < 0 ? CAST_NONE : (CastKind)b)) same = 0;
+            }
+            if(same) return rf;                     /* 同签名覆盖：子类优先 */
+        }
+    }
+    return NULL;
+}
+
 int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
     int cs_idx = in->a;
     CallSite* cs = &ctx->fn->callsites[cs_idx];
@@ -250,10 +280,12 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
         return 0;   /* 不可达 */
     }
 
-    /* 方法名：从静态内部名解析 "__m__" 后缀 */
+    /* 方法名：从静态内部名解析 "__m__" 后缀；沿实际类型链找同签名覆盖
+     * （多态），找不到则维持编译期选定的静态版本——同名不同签名的重载
+     * 版本不会在运行期改调（实参弹栈口径已随静态签名定型） */
     const char* msep = strstr(cs->callee, "__m__");
     const char* mname = msep ? msep + 5 : NULL;
-    RuntimeFunc* actual_rf = mname ? lumyr_type_find_method(ri, mname) : NULL;
+    RuntimeFunc* actual_rf = mname ? find_method_override(ri, mname, static_fn) : NULL;
 
     /* 取实际 BytecodeFunc（解释器方法）；FFI/原生方法当前不走本路径 */
     BytecodeFunc* actual_fn = NULL;
@@ -261,12 +293,7 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
         InterpFuncPayload* pl = (InterpFuncPayload*)actual_rf->captures;
         actual_fn = pl->bytecode;
     }
-    if (!actual_fn) {
-        fprintf(stderr, "VM: 类型 \"%s\" 未找到方法 \"%s\" 的可执行实现\n",
-                ri->name ? ri->name : "?", mname ? mname : "?");
-        free(args);
-        return 0;
-    }
+    if (!actual_fn) actual_fn = static_fn;   /* 无同签名覆盖 → 编译期选定版本 */
 
     /* 4. 建帧绑定（slot0=self, slot1+=实参）并执行实际方法 */
     RetSlot ret;
@@ -796,6 +823,19 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
 
     for(int slot = 0; slot < argc; ++slot) {
         int fslot = slot + slot_off;
+        /* 可变参数：fslot 越过普通形参后，把剩余实参整体组数组绑定到可变槽（一次），
+         * 与 OPC_CALL 编译期路径对齐——否则动态调用（如 JSON 反序列化构造器）
+         * 的 ...rest 永远未绑定，函数体内 len(args)/args[i] 读到空/NULL */
+        if(callee->has_variadic && fslot >= callee->param_cnt) {
+            int varSlot = callee->param_cnt;  /* name_slots - 1 */
+            const char* vname = (varSlot < name_slots && callee->params[varSlot])
+                                ? callee->params[varSlot] : "args";
+            int nrest = argc - slot;
+            Value restArr = val_array(nrest);
+            for(int k = 0; k < nrest; k++) restArr.v.array->items[k] = args[slot + k];
+            stackframe_bind(new_frame, vname, restArr);
+            break;  /* 剩余实参已全部收入可变数组 */
+        }
         const char* pname = (fslot < name_slots && callee->params[fslot])
                             ? callee->params[fslot] : "_";
         CastKind pck = (fslot < callee->param_cnt && fslot < callee->sym_cnt)
@@ -844,6 +884,15 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
             stackframe_bind(new_frame, pname, args[slot]);
             break;
         }
+    }
+
+    /* 可变参数但无剩余实参（普通槽恰好填满或留缺）：可变槽绑定空数组，
+     * 保证函数体内 len(args)==0 而非读到未定义 */
+    if(callee->has_variadic && argc + slot_off <= callee->param_cnt) {
+        int varSlot = callee->param_cnt;
+        const char* vname = (varSlot < name_slots && callee->params[varSlot])
+                            ? callee->params[varSlot] : "args";
+        stackframe_bind(new_frame, vname, val_array(0));
     }
 
     /* 默认参数填补：实参数 < 形参数时，从 AST 求值默认值并绑定。

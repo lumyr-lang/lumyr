@@ -29,6 +29,7 @@ typedef struct {
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）
     CastKind* field_elem_kinds; // 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
     int* field_generic_indices; // 字段→泛型形参索引（-1=非泛型字段；0+=generic_params 中的索引）
+    char** field_type_args;  // 字段泛型实参原文（tags: Array<Double> → "Double"；擦除/非泛型为 NULL）
     int* field_offsets;    // struct 字段偏移量（编译通道用，NULL=未计算）
     /* struct/class 方法 */
     char** method_names;   // 方法名列表（NULL=无方法）
@@ -49,7 +50,7 @@ typedef struct {
 /* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL；
  * elem_kinds 为类型化数组字段的元素 CastKind，与 props 平行，可为 NULL） */
 TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
-                        char** generic_params, int generic_param_count);
+                        char** generic_params, int generic_param_count, char** field_type_args);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */
@@ -62,6 +63,8 @@ struct AstNode* class_find_method_owner(const char* class_name, const char* meth
 void* class_find_method_func(const char* class_name, const char* method_name);
 /* 按类型名（struct/class 统一）查方法 AST，沿继承链回溯（方法调用签名） */
 struct AstNode* type_find_method_ast(const char* type_name, const char* method_name);
+/* 按 argc（含 self）沿父类链选同名方法重载版本：精确参数个数优先，其次可行区间（子类优先） */
+struct AstNode* type_find_method_ast_argc(const char* type_name, const char* method_name, int argc);
 /* 设置 class 构造函数（__init__ 方法） */
 void class_set_constructor(const char* class_name, struct AstNode* constructor_node, void* constructor_func);
 /* 添加 class 构造函数重载（首个成为主构造，后续重载按 <Cls>___init__N 命名） */

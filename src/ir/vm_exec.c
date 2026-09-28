@@ -503,7 +503,8 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
             /* 执行函数返回 0 = VM 层硬错误（错误详情已由执行函数打印）。
              * 无兜底：不可恢复错误必须中止进程并给出非零退出码，
              * 禁止打印后继续执行（否则 CI/脚本会误判成功）。 */
-            fprintf(stderr, "VM: instruction not handled %d at pc %d\n", (int)in.op, ctx->pc-1);
+            fprintf(stderr, "VM: instruction not handled %d at pc %d (func=%s)\n",
+                    (int)in.op, ctx->pc-1, ctx->fn && ctx->fn->name ? ctx->fn->name : "?");
             exit(1);
         }
 

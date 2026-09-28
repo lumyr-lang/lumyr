@@ -752,7 +752,7 @@ int is_socket_ctor_name(const char* name)
 
 /* ===== class 注册 ===== */
 TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
-                        char** generic_params, int generic_param_count)
+                        char** generic_params, int generic_param_count, char** field_type_args)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
@@ -760,6 +760,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     int* merged_access_modifiers = prop_access_modifiers;
     int* merged_const_flags = prop_const_flags;
     char** merged_struct_names = struct_names;
+    char** merged_type_args = field_type_args;
     CastKind* merged_elem_kinds = elem_kinds;
     int merged_nprops = nprops;
 
@@ -775,6 +776,7 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 merged_access_modifiers = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 merged_const_flags = (int*)malloc((size_t)merged_nprops * sizeof(int));
                 merged_struct_names = (char**)calloc((size_t)merged_nprops, sizeof(char*));
+                merged_type_args = (char**)calloc((size_t)merged_nprops, sizeof(char*));
                 {
                     /* 类型化数组元素 CastKind：父类字段继承，子类字段用自有（声明收敛赋值依赖） */
                     CastKind* pe = parent_td->field_elem_kinds;
@@ -792,6 +794,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                     merged_const_flags[i] = parent_td->prop_const_flags ? parent_td->prop_const_flags[i] : 0;
                     if(parent_td->field_struct_names && parent_td->field_struct_names[i])
                         merged_struct_names[i] = strdup(parent_td->field_struct_names[i]);
+                    if(parent_td->field_type_args && parent_td->field_type_args[i])
+                        merged_type_args[i] = strdup(parent_td->field_type_args[i]);
                 }
                 // 子类属性在后
                 for(int i = 0; i < nprops; i++) {
@@ -801,6 +805,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                     merged_const_flags[parent_nprops + i] = prop_const_flags ? prop_const_flags[i] : 0;
                     if(struct_names && struct_names[i])
                         merged_struct_names[parent_nprops + i] = strdup(struct_names[i]);
+                    if(field_type_args && field_type_args[i])
+                        merged_type_args[parent_nprops + i] = strdup(field_type_args[i]);
                 }
             }
         }
@@ -820,6 +826,10 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     /* 设置 field_cast_kinds：根据 ValueType 转换成 CastKind，用于 C 代码生成时生成精确的字段类型 */
     td->field_cast_kinds = (CastKind*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
+    td->field_type_args = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
+    for(int k = 0; k < merged_nprops; k++)
+        if(merged_type_args && merged_type_args[k])
+            td->field_type_args[k] = strdup(merged_type_args[k]);
     td->field_elem_kinds = (CastKind*)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(CastKind));
     td->field_generic_indices = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
     for(int k = 0; k < merged_nprops; k++) td->field_generic_indices[k] = -1;
@@ -900,6 +910,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
                 fields[i].is_const = merged_const_flags ? merged_const_flags[i] : 0;
                 fields[i].type_name = (merged_struct_names && merged_struct_names[i]) ?
                     strdup(merged_struct_names[i]) : NULL;
+                fields[i].type_args = (merged_type_args && merged_type_args[i]) ?
+                    strdup(merged_type_args[i]) : NULL;
                 fields[i].annotation_count = 0;
                 fields[i].annotations = NULL;
                 instance_size += (int)sz;
@@ -1212,6 +1224,35 @@ struct AstNode* type_find_method_ast(const char* type_name, const char* method_n
     }
     if(td->parent) return type_find_method_ast(td->parent, method_name);
     return NULL;
+}
+
+/* 按实参数（含 self）沿父类链选同名方法 AST 版本，与运行期 find_method_by_argc
+ * （vm_exec_call.c）规则一致：每层同名至多一个，跨层同名即重载/覆盖；
+ * 精确参数个数（形参数 == argc）优先返回，其次可行区间（required <= argc <= 形参数）
+ * 取首个命中（子类优先）。无实参个数语境的查找用 type_find_method_ast。
+ * 注意 TypeDef->parent 是父类名字符串（非 TypeDef 指针），须按名逐层解析。 */
+struct AstNode* type_find_method_ast_argc(const char* type_name, const char* method_name, int argc)
+{
+    struct AstNode* fallback = NULL;
+    for(const char* tn = type_name; tn; ) {
+        TypeDef* t = type_lookup(tn);
+        if(!t) break;
+        for(int i = 0; i < t->nmethods; i++) {
+            if(!t->method_names[i] || strcmp(t->method_names[i], method_name) != 0) continue;
+            struct AstNode* def = t->method_nodes[i];
+            if(!def || def->type != AST_FUNC_DEF) continue;  /* 方法在编译中，AST 未就绪 */
+            int pcnt = 0, required = 0;
+            for(struct AstNode* p = def->u.func_def.params; p; p = p->u.param.next) {
+                if(p->u.param.is_ellipsis) break;
+                pcnt++;
+                if(!p->u.param.default_val) required++;
+            }
+            if(pcnt == argc) return def;                /* 精确参数个数 */
+            if(argc >= required && argc <= pcnt && !fallback) fallback = def;
+        }
+        tn = t->parent;  /* 上一层：父类名（NULL 结束） */
+    }
+    return fallback;
 }
 
 int type_implements_interface(const char* type_name, const char* interface_name) {
