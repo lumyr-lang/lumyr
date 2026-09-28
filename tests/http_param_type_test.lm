@@ -65,6 +65,29 @@ class AnyIn {
     a: array;        // array 字段：各元素类型逐个保留
 }
 
+// struct DTO：嵌套 struct + 容器字段（struct 字段无初始化器、不支持 any 字段）
+struct GeoIn {
+    lat: double;
+    lng: double;
+}
+struct PlaceIn {
+    name: string;
+    geo: GeoIn;
+    tags: array;
+}
+
+// struct 全类型矩阵 DTO（struct 无字段初始化器；bigint/decimal/bitdecimal/any
+// 经名字级内置类型识别（yacc.y struct_prop），uint 标注归并 uint64）
+struct NumSIn {
+    i: int;         i8: int8;     i16: int16;   i32: int32;   i64: int64;
+    ui: uint;       u8: uint8;    u16: uint16;  u32: uint32;  u64: uint64;
+    sh: short;      ush: ushort;  l: long;      ll: long long;
+    ul: ulong;      sz: size_t;   sst: ssize_t; by: byte;     uc: uchar;
+    bo: bool;       ch: char;     f: float;     d: double;    ld: long double;
+    s: string;      bin: bytes;   bi: bigint;   dec: decimal; bd: bitdecimal;
+    extra: any;
+}
+
 // 超限数字 body DTO：各整数/高精度类型字段
 class NumIn {
     i: int = 0;
@@ -360,6 +383,117 @@ class ParamController {
     func tQAny2(req, q: any) {
         r = ServerResponse(200);
         r.json({"qt": (q == null) ? "null" : type(q), "qv": q});
+        return r;
+    }
+
+    // GET 实体类接收 query 参数（class DTO 从 queryParams 绑定）
+    @Get("/t/qdto")
+    func tQDto(req, a: AddrIn) {
+        r = ServerResponse(200);
+        r.json({
+            "atype": type(a),
+            "city": a.city, "cityType": type(a.city),
+            "zip": a.zip, "zipType": type(a.zip)
+        });
+        return r;
+    }
+
+    // GET struct 接收 query 参数（struct DTO）
+    @Get("/t/qstruct")
+    func tQStruct(req, p: PlaceIn) {
+        out = {};
+        out["ptype"] = type(p);
+        out["name"] = p.name;
+        g = p.geo;
+        out["geoNull"] = (g == null);
+        tags = p.tags;
+        out["tagsNull"] = (tags == null);
+        if (tags != null) { out["tagsLen"] = tags.len; }
+        r = ServerResponse(200);
+        r.json(out);
+        return r;
+    }
+
+    // POST struct body JSON 绑定（含嵌套 struct）
+    @Post("/t/sdto")
+    func tSDto(req, p: PlaceIn) {
+        out = {};
+        out["ptype"] = type(p);
+        out["name"] = p.name;
+        out["nameType"] = type(p.name);
+        g = p.geo;
+        out["geoType"] = (g == null) ? "null" : type(g);
+        if (g != null) {
+            out["lat"] = g.lat; out["latType"] = type(g.lat);
+            out["lng"] = g.lng;
+        }
+        tags = p.tags;
+        out["tagsType"] = (tags == null) ? "null" : type(tags);
+        if (tags != null) { out["tagsLen"] = tags.len; }
+        r = ServerResponse(200);
+        r.json(out);
+        return r;
+    }
+
+    // POST struct 全类型矩阵（与 /t/num 同矩阵的 struct 版）
+    @Post("/t/snum")
+    func tSNum(req, n: NumSIn) {
+        out = {
+            "it": type(n.i), "is": (string)n.i,
+            "i8t": type(n.i8), "i8s": (string)n.i8,
+            "i16t": type(n.i16), "i16s": (string)n.i16,
+            "i32t": type(n.i32), "i32s": (string)n.i32,
+            "i64t": type(n.i64), "i64s": (string)n.i64,
+            "uit": type(n.ui), "uis": (string)n.ui,
+            "u8t": type(n.u8), "u8s": (string)n.u8,
+            "u16t": type(n.u16), "u16s": (string)n.u16,
+            "u32t": type(n.u32), "u32s": (string)n.u32,
+            "u64t": type(n.u64), "u64s": (string)n.u64,
+            "sht": type(n.sh), "shs": (string)n.sh,
+            "usht": type(n.ush), "ushs": (string)n.ush,
+            "lt": type(n.l), "ls": (string)n.l,
+            "llt": type(n.ll), "lls": (string)n.ll,
+            "ult": type(n.ul), "uls": (string)n.ul,
+            "szt": type(n.sz), "szs": (string)n.sz,
+            "sstt": type(n.sst), "ssts": (string)n.sst,
+            "byt": type(n.by), "bys": (string)n.by,
+            "uct": type(n.uc), "ucs": (string)n.uc,
+            "bot": type(n.bo), "bos": (string)n.bo,
+            "cht": type(n.ch), "chs": (string)n.ch,
+            "ft": type(n.f), "fs": (string)n.f,
+            "dt": type(n.d), "ds": (string)n.d,
+            "ldt": type(n.ld), "lds": (string)n.ld,
+            "st": type(n.s), "sv": n.s,
+            "bint": type(n.bin),
+            "bit": type(n.bi), "dect": type(n.dec), "bdt": type(n.bd),
+            "extrat": type(n.extra)
+        };
+        if (n.bin != null) { out["bins"] = (string)n.bin; }
+        if (n.bi != null) { out["bis"] = (string)n.bi; }
+        if (n.dec != null) { out["decs"] = (string)n.dec; }
+        if (n.bd != null) { out["bds"] = (string)n.bd; }
+        if (n.extra != null && type(n.extra) == "map" && n.extra.contains("k")) {
+            out["extrak"] = n.extra["k"];
+        }
+        r = ServerResponse(200);
+        r.json(out);
+        return r;
+    }
+
+    // GET struct 全类型 query 通道（值全 string 经字段 binder 转换）
+    @Get("/t/qsnum")
+    func tQSNum(req, n: NumSIn) {
+        r = ServerResponse(200);
+        r.json({
+            "it": type(n.i), "is": (string)n.i,
+            "i8t": type(n.i8), "i8s": (string)n.i8,
+            "u64t": type(n.u64), "u64s": (string)n.u64,
+            "ft": type(n.f), "fs": (string)n.f,
+            "bot": type(n.bo), "bos": (string)n.bo,
+            "cht": type(n.ch), "chs": (string)n.ch,
+            "st": type(n.s), "sv": n.s,
+            "dt": type(n.d), "ds": (string)n.d
+        });
         return r;
     }
 }
@@ -1091,6 +1225,146 @@ check(getResp(base + "/api/t/qany").json()["qt"] == "null",
 j48c = getResp(base + "/api/t/qany2?q=abc").json();
 check(j48c["qt"] == "string" && j48c["qv"] == "abc",
       "B48 显式 any 标注应与未标注同语义，实际: " + j48c["qt"] + "/" + j48c["qv"]);
+
+// ---------- B49: GET 实体类接收 query 参数（class DTO ← queryParams）----------
+j49 = getResp(base + "/api/t/qdto?city=HZ&zip=310000").json();
+check(j49["atype"] == "AddrIn" && j49["city"] == "HZ" && j49["cityType"] == "string",
+      "B49 GET class DTO 应绑定 city=HZ，实际: " + j49["atype"] + "/" + j49["city"]);
+check(j49["zip"] == 310000 && j49["zipType"] == "int",
+      "B49 query 字符串应经字段 binder 转 int，实际: "
+      + j49["zipType"] + "/" + j49["zip"]);
+// B49b: query 字段类型不符 → binder null → typed 字段落类型零值（不 400）
+j49b = getResp(base + "/api/t/qdto?city=HZ&zip=abc").json();
+check(j49b["zipType"] == "int" && j49b["zip"] == 0,
+      "B49b query 字段类型不符应落 int 零值 0，实际: "
+      + j49b["zipType"] + "/" + j49b["zip"]);
+// B49c: 字段全缺失 → 落字段默认值
+j49c = getResp(base + "/api/t/qdto").json();
+check(j49c["city"] == "" && j49c["zip"] == 0,
+      "B49c 字段缺失应落默认值，实际: " + j49c["city"] + "/" + j49c["zip"]);
+
+// ---------- B50: POST struct body JSON 绑定（含嵌套 struct）----------
+b50 = postResp(base + "/api/t/sdto",
+               {"name": "西湖", "geo": {"lat": 30.25, "lng": 120.17}, "tags": ["a", "b"]});
+check(b50.statusCode() == 200, "B50 struct body 应 200，实际: " + b50.statusCode());
+j50 = b50.json();
+check(j50["ptype"] == "PlaceIn" && j50["name"] == "西湖" && j50["nameType"] == "string",
+      "B50 struct 应绑定 name=西湖，实际: " + j50["ptype"] + "/" + j50["name"]);
+check(j50["geoType"] == "GeoIn" && j50["lat"] == 30.25 && j50["latType"] == "double"
+      && j50["lng"] == 120.17,
+      "B50 嵌套 struct 应递归绑定，实际: "
+      + j50["geoType"] + "/" + j50["lat"] + "/" + j50["lng"]);
+check(j50["tagsType"] == "array" && j50["tagsLen"] == 2,
+      "B50 struct 容器字段应原样绑定，实际: " + j50["tagsType"] + "/" + j50["tagsLen"]);
+// B50b: struct 标量字段类型不符 → asString 接受数字转换；binder null 落类型零值
+b50b = postResp(base + "/api/t/sdto", {"name": 123, "geo": {"lat": "abc"}});
+j50b = b50b.json();
+check(j50b["nameType"] == "string" && j50b["name"] == "123",
+      "B50b asString 应接受 int 转 string，实际: "
+      + j50b["nameType"] + "/" + j50b["name"]);
+check(j50b["latType"] == "double" && j50b["lat"] == 0.0,
+      "B50b double 字段收非法串应落零值 0.0，实际: "
+      + j50b["latType"] + "/" + j50b["lat"]);
+
+// ---------- B51: GET struct 接收 query 参数 ----------
+j51 = getResp(base + "/api/t/qstruct?name=westlake&tags=[1,2]").json();
+check(j51["ptype"] == "PlaceIn" && j51["name"] == "westlake",
+      "B51 GET struct 应绑定 name=westlake，实际: " + j51["ptype"] + "/" + j51["name"]);
+check(j51["geoNull"] == true,
+      "B51 query 无嵌套字段应落 null，实际: " + j51["geoNull"]);
+check(j51["tagsNull"] == false && j51["tagsLen"] == 2,
+      "B51 query 数组字段应按 JSON 串解析，实际: "
+      + j51["tagsNull"] + "/" + j51["tagsLen"]);
+
+// ---------- B52: POST struct 全类型矩阵（26 种字段类型精确绑定）----------
+b52 = postResp(base + "/api/t/snum", {
+    "i": 42, "i8": 127, "i16": 32767, "i32": 2147483647,
+    "i64": 9223372036854775807, "ui": 4294967296, "u8": 255, "u16": 65535,
+    "u32": 4294967295, "u64": 9223372036854775807, "sh": 32767, "ush": 65535,
+    "l": 12345678901234, "ll": -9223372036854775808, "ul": 9223372036854775807,
+    "sz": 9223372036854775807, "sst": -9223372036854775808, "by": 255, "uc": 255,
+    "bo": true, "ch": "A", "f": 1.5, "d": 3.25, "ld": 2.5,
+    "s": "结构体", "bin": "ab", "bi": big200, "dec": "2.718281828459045",
+    "bd": "1.23456789", "extra": {"k": 9}
+});
+check(b52.statusCode() == 200, "B52 struct 全类型 body 应 200，实际: " + b52.statusCode());
+j52 = b52.json();
+check(j52["it"] == "int" && j52["is"] == "42"
+      && j52["i8t"] == "int8" && j52["i8s"] == "127"
+      && j52["i16s"] == "32767" && j52["i32s"] == "2147483647",
+      "B52 int/int8/int16/int32 应精确，实际: "
+      + j52["it"] + "/" + j52["i8t"] + "/" + j52["i16s"] + "/" + j52["i32s"]);
+check(j52["i64s"] == "9223372036854775807" && j52["lls"] == "-9223372036854775808"
+      && j52["ssts"] == "-9223372036854775808",
+      "B52 int64/long long/ssize_t 极值应精确，实际: "
+      + j52["i64s"] + "/" + j52["lls"] + "/" + j52["ssts"]);
+check(j52["uis"] == "4294967296" && j52["u8s"] == "255" && j52["u16s"] == "65535"
+      && j52["u32s"] == "4294967295" && j52["u64s"] == "9223372036854775807",
+      "B52 无符号族应精确，实际: " + j52["uis"] + "/" + j52["u64s"]);
+check(j52["shs"] == "32767" && j52["ushs"] == "65535" && j52["bys"] == "255"
+      && j52["ucs"] == "255" && j52["ls"] == "12345678901234"
+      && j52["uls"] == "9223372036854775807" && j52["szs"] == "9223372036854775807",
+      "B52 short/ushort/byte/uchar/long/ulong/size_t 应精确，实际: "
+      + j52["ls"] + "/" + j52["uls"]);
+check(j52["bot"] == "bool" && j52["bos"] == "true"
+      && j52["cht"] == "char" && j52["chs"] == "A",
+      "B52 bool/char 应精确，实际: " + j52["bot"] + "/" + j52["cht"]);
+check((j52["fs"] == "1.5" || j52["fs"] == "1.500000") && j52["ds"] == "3.25"
+      && (j52["lds"] == "2.5" || j52["lds"] == "2.500000"),
+      "B52 float/double/long double 应精确，实际: "
+      + j52["fs"] + "/" + j52["ds"] + "/" + j52["lds"]);
+check(j52["st"] == "string" && j52["sv"] == "结构体",
+      "B52 string 中文字段应精确，实际: " + j52["st"] + "/" + j52["sv"]);
+q52 = (char)34;
+check(j52["bint"] == "bytes" && j52["bins"] == "b" + q52 + "ab" + q52,
+      "B52 bytes 字段应收字符串转 bytes，实际: " + j52["bint"] + "/" + j52["bins"]);
+check(j52["bit"] == "bigint" && j52["bis"] == big200,
+      "B52 struct bigint 字段应收 200 位精确，实际: " + j52["bit"] + "/" + j52["bis"]);
+check(j52["dect"] == "decimal" && j52["decs"] == "2.718281828459045",
+      "B52 struct decimal 字段应精确，实际: " + j52["dect"] + "/" + j52["decs"]);
+check(j52["bdt"] == "bitdecimal" && j52["bds"] == "1.23456789",
+      "B52 struct bitdecimal 字段应精确，实际: " + j52["bdt"] + "/" + j52["bds"]);
+check(j52["extrat"] == "map" && j52["extrak"] == 9,
+      "B52 struct any 字段应保留原结构，实际: " + j52["extrat"] + "/" + j52["extrak"]);
+
+// ---------- B53: struct 全类型越界/非法 → 落类型零值（不报错）----------
+b53 = postResp(base + "/api/t/snum", {
+    "i8": 128, "u8": 256, "sh": -32769, "f": "abc", "bo": "yes",
+    "ch": "AB", "u64": big50, "sst": negbig50
+});
+check(b53.statusCode() == 200, "B53 struct 越界 body 应 200（落零值），实际: " + b53.statusCode());
+j53 = b53.json();
+check(j53["i8s"] == "0" && j53["u8s"] == "0" && j53["shs"] == "0",
+      "B53 窄类型越界应落 0，实际: " + j53["i8s"] + "/" + j53["u8s"] + "/" + j53["shs"]);
+check((j53["fs"] == "0" || j53["fs"] == "0.000000") && j53["bos"] == "false"
+      && j53["u64s"] == "0" && j53["ssts"] == "0",
+      "B53 float/bool/u64/sst 非法应落零值，实际: "
+      + j53["fs"] + "/" + j53["bos"] + "/" + j53["u64s"] + "/" + j53["ssts"]);
+
+// ---------- B54: GET struct 全类型 query 通道（string → 各类型转换）----------
+j54 = getResp(base + "/api/t/qsnum?i=42&i8=100&u64=" + llmax
+              + "&f=1.5&bo=true&ch=A&s=hello&d=2.5").json();
+check(j54["it"] == "int" && j54["is"] == "42"
+      && j54["i8t"] == "int8" && j54["i8s"] == "100"
+      && j54["u64s"] == llmax,
+      "B54 query 整型族应转换精确，实际: " + j54["it"] + "/" + j54["i8t"] + "/" + j54["u64s"]);
+check((j54["fs"] == "1.5" || j54["fs"] == "1.500000") && j54["ds"] == "2.5"
+      && j54["bos"] == "true" && j54["chs"] == "A" && j54["sv"] == "hello",
+      "B54 query float/double/bool/char/string 应转换精确，实际: "
+      + j54["fs"] + "/" + j54["ds"] + "/" + j54["bos"] + "/" + j54["chs"]);
+
+// ---------- B55: query percent-decode（GET 客户端 encode，服务端必须 decode）----------
+j55a = getResp(base + "/api/t/qstruct?name=%E8%A5%BF%E6%B9%96").json();
+check(j55a["name"] == "西湖",
+      "B55 percent-encoded 中文应 decode，实际: " + j55a["name"]);
+j55b = getResp(base + "/api/t/qany?q=a+b%2Bc%25d").json();
+check(j55b["qv"] == "a b+c%d",
+      "B55 + 应转空格、%2B/%25 应 decode，实际: " + j55b["qv"]);
+
+// ---------- B56: raw UTF-8 中文 query（slice/indexOf 码点语义修复验证）----------
+j56 = getResp(base + "/api/t/qstruct?name=西湖&tags=[中文,2]").json();
+check(j56["ptype"] == "PlaceIn" && j56["name"] == "西湖",
+      "B56 raw UTF-8 中文 query 应原样，实际: " + j56["name"]);
 
 // ---- 关闭服务 ----
 app.stop();

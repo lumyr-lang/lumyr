@@ -75,7 +75,10 @@ static const char* binder_name_for_cast(CastKind ck);
  *   - 未标注/容器字段：直接赋值（保留 JSON 原结构）。
  * 类未注册返回 NULL（调用方报编译错误）。 */
 static AstNode* build_model_builder(const char* cls) {
+    /* class 与 struct 均可作 DTO（struct 实例同样支持无参构造 +
+     * 下标字段赋值；注意 struct 不支持 any 字段，按声明类型绑定） */
     TypeDef* td = class_lookup(cls);
+    if(!td) td = struct_lookup(cls);
     if(!td) return NULL;
     /* 入口校验：m 必须是 map（JSON 对象）。数组/标量流入时统一抛 TypeError
      * → 适配层异常 → 500；否则数组/字符串因自带 contains 静默产出空实例、
@@ -100,7 +103,8 @@ static AstNode* build_model_builder(const char* cls) {
          * （内置类型名残留场景不算嵌套，按声明 cast kind 走标量/动态绑定） */
         const char* nested_raw = (td->field_struct_names && td->field_struct_names[i])
                                  ? td->field_struct_names[i] : NULL;
-        const char* nested = (nested_raw && class_lookup(nested_raw)) ? nested_raw : NULL;
+        const char* nested = (nested_raw && (class_lookup(nested_raw)
+                             || struct_lookup(nested_raw))) ? nested_raw : NULL;
         CastKind ck = td->field_cast_kinds ? td->field_cast_kinds[i] : CAST_NONE;
         const char* binder = nested ? NULL : binder_name_for_cast(ck);
 
@@ -194,14 +198,15 @@ static int ensure_model_builder(const char* cls,
                                 AstNode** pFuncs) {
     if(str_in_list(*pDone, *pN, cls)) { return 1; }
     TypeDef* td = class_lookup(cls);
+    if(!td) td = struct_lookup(cls);
     if(!td) { return 0; }
     /* 先确保嵌套模型的反序列化函数存在（编译时即可解析名字）。
      * field_struct_names 可能残留内置类型名（如旧解析把 bigint 当自定义名），
-     * 仅对真实注册类递归，其余按动态字段处理 */
+     * 仅对真实注册类/struct 递归，其余按动态字段处理 */
     for(int i = 0; i < td->nprops; i++) {
         const char* nest = (td->field_struct_names && td->field_struct_names[i])
                            ? td->field_struct_names[i] : NULL;
-        if(nest && class_lookup(nest) &&
+        if(nest && (class_lookup(nest) || struct_lookup(nest)) &&
            !ensure_model_builder(nest, pDone, pN, pCap, pFuncs)) {
             return 0;
         }
@@ -461,7 +466,13 @@ AstNode* boot_gen_inject(AstNode* root, int print_only) {
                             dp->name, c->class_name, rt->method_name, dp->type);
                     return NULL;
                 }
-                AstNode* jcall = ast_method_call(ast_var(strdup("req")), strdup("json"), NULL);
+                /* GET 无 body：类参数从 query 参数 map 绑定（值全为字符串，
+                 * 经各字段声明类型的 RequestBinder 转换，与 path/query 通道同源）；
+                 * 其余方法从 JSON body 绑定 */
+                const char* srcMethod = (rt->verb && strcmp(rt->verb, "GET") == 0)
+                                        ? "queryParams" : "json";
+                AstNode* jcall = ast_method_call(ast_var(strdup("req")),
+                                                 strdup(srcMethod), NULL);
                 AstNode* bind = ast_assign(strdup(abuf),
                                            ast_call(model_builder_name(dp->type), jcall));
                 adapterBody = adapterBody ? ast_seq(adapterBody, bind) : bind;

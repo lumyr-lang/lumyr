@@ -105,8 +105,47 @@ public class HttpSpec {
         return "application/octet-stream";
     }
 
+    // 十六进制字符值（0-9/a-f/A-F），非法返回 -1
+    public static func hexVal(c) {
+        if (c >= 48 && c <= 57) { return c - 48; }
+        if (c >= 65 && c <= 70) { return c - 55; }
+        if (c >= 97 && c <= 102) { return c - 87; }
+        return -1;
+    }
+
+    // URL percent 解码：%XX → 字节（UTF-8 序列还原为字符），+ → 空格
+    // （application/x-www-form-urlencoded 惯例；GET query 经客户端 percent-encode，
+    //   服务端必须解码才能取回原文）。非法 % 序列原样保留
+    public static func urlDecode(s: string): string {
+        if (s.indexOf("%") < 0 && s.indexOf("+") < 0) { return s; }
+        b = bytes(s);
+        arr = [];
+        i = 0;
+        while (i < b.len) {
+            c = b[i];
+            if (c == 37 && i + 2 < b.len) {
+                hi = HttpSpec.hexVal(b[i + 1]);
+                lo = HttpSpec.hexVal(b[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    arr.add(hi * 16 + lo);
+                    i = i + 3;
+                } else {
+                    arr.add(c);
+                    i = i + 1;
+                }
+            } else if (c == 43) {
+                arr.add(32);
+                i = i + 1;
+            } else {
+                arr.add(c);
+                i = i + 1;
+            }
+        }
+        return bytes(arr).decode();
+    }
+
     // 解析查询字符串 / form-urlencoded 为 map
-    // "a=1&b=2&flag" → {"a": "1", "b": "2", "flag": ""}
+    // "a=1&b=2&flag" → {"a": "1", "b": "2", "flag": ""}（键值均经 percent-decode）
     // Url.queryParams / ServerRequest.queryParams / FormParser 共用此实现
     public static func parseQuery(queryString: string): map {
         out = {};
@@ -115,9 +154,10 @@ public class HttpSpec {
         for seg in segs {
             eq = seg.indexOf("=");
             if (eq >= 0) {
-                out[seg.slice(0, eq)] = seg.slice(eq + 1, seg.len);
+                out[HttpSpec.urlDecode(seg.slice(0, eq))] =
+                    HttpSpec.urlDecode(seg.slice(eq + 1, seg.len));
             } else if (seg != "") {
-                out[seg] = "";
+                out[HttpSpec.urlDecode(seg)] = "";
             }
         }
         return out;

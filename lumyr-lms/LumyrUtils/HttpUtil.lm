@@ -228,15 +228,20 @@ public class HttpUtil {
         return url + "?" + q;
     }
 
-    // query 字符串解析："a=1&b=x" → {"a": "1", "b": "x"}（值均为字符串，不解码）
+    // query 字符串解析："a=1&b=x" → {"a": "1", "b": "x"}（值均为字符串；
+    // 键值均经 percent-decode，与 HttpSpec.parseQuery 解码语义一致）
     public static func parseQuery(q: string): map {
         out = {};
         if (q == "") { return out; }
         segs = q.split("&");
         for seg in segs {
             kv = seg.split("=");
-            if (kv.len > 1) { out[kv[0]] = kv.slice(1, kv.len).join("="); }
-            else if (kv.len == 1 && kv[0] != "") { out[kv[0]] = ""; }
+            if (kv.len > 1) {
+                out[HttpSpec.urlDecode(kv[0])] =
+                    HttpSpec.urlDecode(kv.slice(1, kv.len).join("="));
+            } else if (kv.len == 1 && kv[0] != "") {
+                out[HttpSpec.urlDecode(kv[0])] = "";
+            }
         }
         return out;
     }
