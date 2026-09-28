@@ -252,7 +252,7 @@ static void vm_co_trampoline(void* arg) {
     stackframe_destroy(co_ctx.frame);
     free(sc);
     (void)jumped;
-    /* entry 返回 → co_trampoline 设 DEAD → uc_link 自动切回 resume_ctx */
+    /* entry 返回 → co_trampoline 设 DEAD → 显式 lm_ctx_jump 切回 resume_ctx（Phase 8.1） */
 }
 
 /* ============================================================

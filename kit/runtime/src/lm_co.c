@@ -1,10 +1,10 @@
-// lm_co.c —— 有栈协程实现（POSIX ucontext）
-// 参考 libco/libhv withloop 思路：swapcontext 切换栈，yield 时整条 C 调用栈冻结。
+// lm_co.c —— 有栈协程实现（Phase 8.1：fcontext 汇编切换，ucontext 可回退）
+// 参考 libco/libhv withloop 思路：切换栈，yield 时整条 C 调用栈冻结。
 // 协程内调 lm_co_yield 切回 resume 调用方（reactor 主循环）；
 // reactor 调度回来 lm_co_resume 从 yield 点继续。
 //
-// 协程指针通过 makecontext 的 2 个 unsigned int 参数传递（拼 64 位指针），
-// 避免 g_startup_co 全局变量的多协程 spawn 竞态（spawn A → spawn B 覆盖 → resume A 读错）。
+// 协程指针经 lm_ctx_make 的 arg 参数传入 trampoline（fcontext 走伪造帧寄存器槽，
+// ucontext 走 makecontext int 参数拆拼），避免 g_startup_co 全局变量的多协程 spawn 竞态。
 //
 // 栈分配：mmap size + page，末页（高地址方向）mprotect PROT_NONE 作 guard page，
 // 爆栈时触发 SIGSEGV 而非静默破坏内存。
@@ -19,12 +19,13 @@
 
 /* ============================================================
  * ASAN fiber 注解（仅 AddressSanitizer 构建生效，否则为空操作）
- * ucontext swapcontext 切换栈对 ASAN 不可见：协程栈上的合法访问被误判为
+ * 自管栈切换对 ASAN 不可见：协程栈上的合法访问被误判为
  * stack-use-after-scope（google/sanitizers#189 假阳性）。按官方 fiber API
  * 在三个切换点 bookkeeping 告知 ASAN 栈归属：
  *   resume/yield 切走前 __sanitizer_start_switch_fiber（存当前流 fake +
  *   声明目标栈区间）；切入后 __sanitizer_finish_switch_fiber（恢复本流 fake）。
- * entry 经 uc_link 隐式切回时，trampoline 返回前补 start_switch 配对。 */
+ * entry 结束显式切回 resume_ctx 前，trampoline 补 start_switch 配对。
+ * 注解点包在 lm_ctx_jump 调用两侧，与后端（fcontext/ucontext）无关。 */
 #if defined(__has_feature)
 #  if __has_feature(address_sanitizer)
 #    define LM_ASAN_FIBER 1
@@ -103,14 +104,14 @@ void lm_co_set_vm_hooks(lm_co_vm_hook_t on_resume, lm_co_vm_hook_t on_yield,
 }
 
 /* ============================================================
- * 协程 trampoline：makecontext 入口
- * 接收 2 个 unsigned int 拼成 64 位指针（避免全局变量竞态）。
- * entry 返回后由 ucontext 的 uc_link 机制自动 swapcontext 回 resume_ctx。
+ * 协程 trampoline：lm_ctx_make 的 entry，arg 即协程指针（无全局变量竞态）。
+ * entry 返回后显式 lm_ctx_jump 切回 resume_ctx（Phase 8.1 起取代 uc_link
+ * 隐式链回——fcontext 无此机制，显式切换消除"函数返回触发隐式切换"的隐晦路径，
+ * 双后端语义统一）。本函数不得返回（末尾 jump 后 __builtin_unreachable）。
  * ============================================================ */
 
-static void co_trampoline(unsigned int hi, unsigned int lo) {
-    uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
-    lm_co_t* co = (lm_co_t*)p;
+static void co_trampoline(void* arg) {
+    lm_co_t* co = (lm_co_t*)arg;
 #ifdef LM_ASAN_FIBER
     /* 首次切入协程：resume 侧 start_switch 已声明本栈，恢复本协程 fake（初始 NULL） */
     __sanitizer_finish_switch_fiber(co->asan_fake, NULL, NULL);
@@ -121,17 +122,17 @@ static void co_trampoline(unsigned int hi, unsigned int lo) {
     if (co->entry) {
         co->entry(co->arg);
     }
-    /* entry 返回：协程结束，转 DEAD，清 TLS。
-     * uc_link 已设为 &resume_ctx，函数返回后自动 swapcontext 切回。 */
+    /* entry 返回：协程结束，转 DEAD，清 TLS，显式切回 resume 调用方。 */
     co->state = LM_CO_DEAD;
     co_set_current(NULL);
 #ifdef LM_ASAN_FIBER
-    /* 函数返回经 uc_link 隐式 swapcontext 回 resume_ctx：补配对的 start_switch
+    /* 切回 resume_ctx 前补配对的 start_switch
      * （存本协程 fake，声明切回目标 caller 栈） */
     __sanitizer_start_switch_fiber(&co->asan_fake, co->asan_caller_bottom,
                                    co->asan_caller_size);
 #endif
-    /* 函数返回 → ucontext 自动 swapcontext(&co->ctx->uc_link=&resume_ctx) */
+    lm_ctx_jump(&co->ctx, &co->resume_ctx);
+    __builtin_unreachable();   /* DEAD 协程不会被再切入：jump 永不返回 */
 }
 
 /* ============================================================
@@ -188,27 +189,17 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     co->state = LM_CO_READY;
     co->next = NULL;
 
-    /* makecontext：ucontext_t 的 uc_stack.ss_sp 设为栈基址（高地址），
-     * 实际栈从 ss_sp 向下生长；ss_size 为可用区大小。
-     * 注意：不同平台对 ss_sp 语义略异，POSIX 规定 ss_sp 为最低地址（可用区起），
-     * 但 glibc 与 macOS 实测：ss_sp 设为栈基址（高地址）+ ss_size，ucontext 自管生长。
-     * 兼容写法：ss_sp = mmap_base（可用区起），ss_size = stack_size。 */
-    getcontext(&co->ctx);
-    co->ctx.uc_stack.ss_sp = mmap_base;
-    co->ctx.uc_stack.ss_size = stack_size;
-    co->ctx.uc_link = &co->resume_ctx;   /* entry 返回后自动切回 resume_ctx */
-    /* 拆 64 位指针为 2 个 unsigned int 传给 trampoline */
-    uintptr_t p = (uintptr_t)co;
-    unsigned int hi = (unsigned int)(p >> 32);
-    unsigned int lo = (unsigned int)(p & 0xFFFFFFFFu);
-    makecontext(&co->ctx, (void(*)(void))co_trampoline, 2, hi, lo);
+    /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
+     * 从 co_trampoline(co) 开始执行（fcontext 在栈顶伪造帧；ucontext 包装
+     * getcontext/makecontext）。entry 返回由 trampoline 显式切回 resume_ctx。 */
+    lm_ctx_make(&co->ctx, mmap_base, stack_size, co_trampoline, co);
     return co;
 }
 
 void lm_co_resume(lm_co_t* co) {
     if (!co || co->state == LM_CO_DEAD) return;
     /* Phase 7.2：scheduler 投递在 SPAWN 时做（BUILTIN_CO_SPAWN 检查
-     * sched->current==NULL 时 post 到就绪队列），resume 走纯直连 swapcontext
+     * sched->current==NULL 时 post 到就绪队列），resume 走纯直连切换
      * 路径——reactor drain_ready 钩子直接调本函数消费就绪队列。
      * 协程内 spawn（current!=NULL）不投递，由 spawning 协程显式 resume。 */
     /* 保存当前（resume 调用方）上下文到 co->resume_ctx，切到 co->ctx。
@@ -237,7 +228,7 @@ void lm_co_resume(lm_co_t* co) {
     __sanitizer_start_switch_fiber(caller ? &caller->asan_fake : &tl_main_fake,
                                    co->stack_top, co->stack_size);
 #endif
-    swapcontext(&co->resume_ctx, &co->ctx);
+    lm_ctx_jump(&co->resume_ctx, &co->ctx);
 #ifdef LM_ASAN_FIBER
     /* 协程 yield/结束切回这里：恢复 caller 自己的 fake */
     __sanitizer_finish_switch_fiber(caller ? caller->asan_fake : tl_main_fake,
@@ -281,7 +272,7 @@ void lm_co_yield(void) {
     __sanitizer_start_switch_fiber(&co->asan_fake, co->asan_caller_bottom,
                                    co->asan_caller_size);
 #endif
-    swapcontext(&co->ctx, &co->resume_ctx);  /* 切回 resume 调用方 */
+    lm_ctx_jump(&co->ctx, &co->resume_ctx);  /* 切回 resume 调用方 */
 #ifdef LM_ASAN_FIBER
     /* 被 resume 切回：恢复本协程 fake */
     __sanitizer_finish_switch_fiber(co->asan_fake, NULL, NULL);

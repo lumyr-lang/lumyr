@@ -1,4 +1,4 @@
-// lm_co.h —— 有栈协程（POSIX ucontext）
+// lm_co.h —— 有栈协程（切换层：Phase 8.1 起默认 fcontext 汇编切换）
 // 让 native 阻塞调用（如 recv/send）在协程内 yield，reactor 调度回来 resume。
 // C 调用栈被冻结，yield 点继续执行——VM 的 C 递归调用栈（vm_exec_loop →
 // vm_bind_and_run → lumyr_socket_recv → lm_co_yield）跨 yield 完整保留，
@@ -7,27 +7,16 @@
 // 协程挂起时整条 C 调用栈冻结，GC 必须把该栈当根扫（Phase 3 gc_register_coroutine）。
 //
 // 栈分配：mmap + 末页 guard page（PROT_NONE），深递归爆栈触发 SIGSEGV 而非静默破坏。
-// 默认 64KiB，可配。
+// 默认 128KiB，可配。
 //
-// 注：macOS ucontext 标记 deprecated 但仍可用；Linux 完美支持。
+// 切换原语见 lm_coro_ctx.h：默认 fcontext 纯用户态汇编切换（x86_64/arm64），
+// -DLM_CTX_UCONTEXT 回退 POSIX ucontext（排障对照）。
 #ifndef LM_CO_H
 #define LM_CO_H
 
-/* macOS ucontext 标记 deprecated 但仍可用；需定义 _XOPEN_SOURCE 才能 include ucontext.h。
- * 同时定义 _DARWIN_C_SOURCE 让 BSD 符号（如 MAP_ANON）可见，否则 _XOPEN_SOURCE 会隐藏。
- * Linux 无此要求。定义在头文件顶部，所有 include 本头的编译单元自动生效。 */
-#ifdef __APPLE__
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE 700
-#endif
-#ifndef _DARWIN_C_SOURCE
-#define _DARWIN_C_SOURCE 1
-#endif
-#endif
-
 #include <stdint.h>
 #include <stddef.h>
-#include <ucontext.h>
+#include "lm_coro_ctx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,8 +33,8 @@ typedef struct lm_co_s {
     int co_id;
     void* stack_mmap;        /* mmap 起点（低地址），用于 munmap */
     size_t stack_size;      /* 可用栈大小（不含 guard page） */
-    ucontext_t ctx;          /* 协程上下文（makecontext 写入） */
-    ucontext_t resume_ctx;   /* resume 调用方的上下文（yield 切回） */
+    lm_ctx_t ctx;            /* 协程上下文（lm_ctx_make 写入 / lm_ctx_jump 保存） */
+    lm_ctx_t resume_ctx;     /* resume 调用方的上下文（yield / DEAD 切回目标） */
     lm_co_state_t state;
     void (*entry)(void*);   /* 协程入口 */
     void* arg;

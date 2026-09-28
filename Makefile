@@ -150,9 +150,22 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_socket.c
 # 单 reactor 线程跑所有协程（Phase 2 接入），Phase 6 替换 ServiceApplication 的 thread-per-conn
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_reactor.c
 
-# 有栈协程：POSIX ucontext（swapcontext 切栈），让 native 阻塞调用在协程内 yield，
+# 有栈协程：切换层 lm_coro_ctx.h（Phase 8.1 起默认 fcontext 汇编切换，
+# -DLM_CTX_UCONTEXT 回退 ucontext），让 native 阻塞调用在协程内 yield，
 # reactor 调度回来 resume。mmap + 末页 guard page 防爆栈。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_co.c
+# Phase 8.1：切换原语（lm_ctx_make 伪造帧 + ucontext 回退实现）
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_ctx.c
+# fcontext 汇编切换：按架构选源（.S 内经 cpp 判断，-DLM_CTX_UCONTEXT 时为空）。
+# Windows（无 ucontext、ABI 不同）暂不接入。
+RUNTIME_ASM :=
+ifneq (,$(filter $(OS_NAME),macos linux))
+ifeq ($(ARCH),x86_64)
+    RUNTIME_ASM := $(RUNTIME_DIR)/src/lm_ctx_jump_x86_64.S
+else ifneq (,$(filter $(ARCH),arm64 aarch64))
+    RUNTIME_ASM := $(RUNTIME_DIR)/src/lm_ctx_jump_arm64.S
+endif
+endif
 
 # Phase 7.2：per-thread 协程调度器（reactor + 就绪队列 + TLS scheduler）
 # 对标 lthread per-thread IO scheduler，每线程独立 scheduler + reactor，
@@ -162,7 +175,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_scheduler.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_cond.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_compute.c
 
-RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o)
+RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 
 # ========== 编译器本体源文件（不含 runtime） ==========
 C_SRCS := $(wildcard $(SRC_DIR)/ast/*.c)
@@ -258,6 +271,15 @@ $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 # 覆盖 make 内置不追踪头文件的 %.o: %.c 隐式规则；% 匹配任意源码/生成目录
 %.o: %.c
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+
+# 汇编源（.S 经 C 预处理器处理，-DLM_CTX_UCONTEXT 等开关经 CFLAGS 传入）
+%.o: %.S
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+
+# lm_co.c 协程实现：显式保留帧指针（GC 冻结栈 __builtin_frame_address 取帧、
+# 栈回溯均依赖完整帧链；fcontext 切换后不依赖此标志但保留以防御 -O 级调整）
+kit/runtime/src/lm_co.o: kit/runtime/src/lm_co.c
+	$(CC) $(CFLAGS) $(DEPFLAGS) -fno-omit-frame-pointer -c -o $@ $<
 
 # ========== main.o 特殊编译规则（注入生成代码的链接配置） ==========
 src/main.o: src/main.c
