@@ -282,8 +282,12 @@ int main(int argc, char** argv) {
                     if(!gen_cc) gen_cc = "gcc";
                     if(!gen_cflags) gen_cflags = "-O2";
                     /* 链接配置由 Makefile 注入（GEN_INC/GEN_LIB/LDLIBS），消除跨平台硬编码 */
+                    /* Phase 8.12 约束4：生成代码强制 -fno-omit-frame-pointer——
+                     * GC 保守扫描依赖完整帧链（寄存器独存的 Value 指针会漏根）。
+                     * 置于 gen_cflags 之后：GCC 同名旗标后者生效，LM_GEN_CFLAGS
+                     * 环境变量无法覆盖本条款。 */
                     snprintf(cmd, sizeof(cmd),
-                             "%s -std=gnu11 %s %s %s %s -o %s -lruntime %s",
+                             "%s -std=gnu11 %s -fno-omit-frame-pointer %s %s %s -o %s -lruntime %s",
                              gen_cc, gen_cflags, LUMYR_GEN_INC, LUMYR_GEN_LIB,
                              c_path, exe_path, LUMYR_GEN_LDLIBS);
                     int sys_ret = system(cmd);
