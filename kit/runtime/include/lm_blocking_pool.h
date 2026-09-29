@@ -46,6 +46,11 @@ int lm_blocking_pool_size(void);
 /* 池内空闲线程数（监控用）。 */
 int lm_blocking_pool_idle(void);
 
+/* Phase 8.13：查询协程的 blocking 任务是否仍在册（队列中或执行中）。
+ * sysmon stuck 协程检测用：在册 = 回投尚未发生 = 协程悬挂属正常等待；
+ * 不在册且协程仍 SUSPENDED 未入队 = 回投丢失（疑似丢唤醒）。 */
+int lm_blocking_pool_task_pending(lm_co_t* co);
+
 #ifdef __cplusplus
 }
 #endif

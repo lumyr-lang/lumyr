@@ -157,6 +157,32 @@ static void co_registry_remove(lm_co_t* co) {
     lm_sched_stats_co_destroyed();   /* Phase 8.11：存活协程计数 */
 }
 
+/* Phase 8.13：持锁遍历全部存活协程（sysmon stuck 扫描用）。
+ * 与 lm_co_reap_idle 同模式：destroy 阻塞于 g_co_reg_lock，保证回调期间
+ * co 不被释放（无快照 UAF 窗口）。回调约束与锁序见头文件注释。 */
+void lm_co_registry_foreach(lm_co_foreach_fn fn, void* ctx) {
+    if (!fn) return;
+    pthread_mutex_lock(&g_co_reg_lock);
+    for (lm_co_t* co = g_co_reg_head; co; co = co->reg_next) {
+        fn(co, ctx);
+    }
+    pthread_mutex_unlock(&g_co_reg_lock);
+}
+
+/* Phase 8.13：等待退出时释放 waiting_sched 的登记引用。
+ * 锁内 exchange：sysmon stuck 扫描持同锁遍历并 retain waiting_sched，
+ * 互斥保证 sysmon retain 时 co 必仍持有登记引用（scheduler 不可能在
+ * 扫描方 retain 前被释放）。release 放锁外：release 可能触发 scheduler
+ * 真销毁（取 scheduler 注册表锁），缩短本锁持有时间。 */
+void lm_co_release_waiting_sched(lm_co_t* co) {
+    if (!co) return;
+    pthread_mutex_lock(&g_co_reg_lock);
+    struct lm_scheduler_s* ws = atomic_exchange_explicit(&co->waiting_sched, NULL,
+                                                         memory_order_acq_rel);
+    pthread_mutex_unlock(&g_co_reg_lock);
+    if (ws) lm_scheduler_release(ws);
+}
+
 /* ============================================================
  * 协程 trampoline：lm_ctx_make 的 entry，arg 即协程指针（无全局变量竞态）。
  * entry 返回后显式 lm_ctx_jump 切回 resume_ctx（Phase 8.1 起取代 uc_link
@@ -235,6 +261,10 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     co->swap_buffer = NULL;
     co->swap_size = 0;
     atomic_init(&co->swap_state, LM_CO_SWAP_NORMAL);
+    /* Phase 8.13：等待源登记字段初始化（calloc 已清零，显式 init 表意）。 */
+    atomic_init(&co->wait_kind, LM_WAIT_NONE);
+    atomic_init(&co->waiting_sched, NULL);
+    atomic_init(&co->stuck_votes, 0);
     co_registry_add(co);
 
     /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
@@ -273,6 +303,10 @@ lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class) {
     co->swap_buffer = NULL;
     co->swap_size = 0;
     atomic_init(&co->swap_state, LM_CO_SWAP_NORMAL);
+    /* Phase 8.13：等待源登记字段初始化（calloc 已清零，显式 init 表意）。 */
+    atomic_init(&co->wait_kind, LM_WAIT_NONE);
+    atomic_init(&co->waiting_sched, NULL);
+    atomic_init(&co->stuck_votes, 0);
     co_registry_add(co);
     lm_ctx_make(&co->ctx, st.mmap_base, st.stack_size, co_trampoline, co);
     return co;
@@ -521,21 +555,32 @@ void lm_co_destroy(lm_co_t* co) {
     struct lm_scheduler_s* hs = atomic_exchange_explicit(&co->home_sched, NULL,
                                                          memory_order_acq_rel);
     if (hs) lm_scheduler_release(hs);
+    /* Phase 8.13：butex 等待登记时 retain 的 waiting_sched 引用兜底释放
+     *（正常等待退出路径已 lm_co_release_waiting_sched；此处覆盖协程仍挂在
+     * butex 上被强制 destroy 的异常路径）。协程已先从注册表摘除（本函数开头
+     * co_registry_remove），sysmon 扫描不再能触及本 co，无 retain 竞态，
+     * 直接 exchange+release 即可（无需再过注册表锁）。 */
+    struct lm_scheduler_s* ws = atomic_exchange_explicit(&co->waiting_sched, NULL,
+                                                         memory_order_acq_rel);
+    if (ws) lm_scheduler_release(ws);
 
     /* Phase 8.8：协程仍挂在 fd 等待字上被强制 destroy（accept/handler 挂起协程
      * 随框架 destroyActive / acceptCo.destroy 释放，未走 co_wait_fd_timeout 正常
      * cleanup）→ 清理等待，防后续 close_notify 读到悬垂 co（UAF）。
      * CAS WAITING(self)→CLOSED 解仲裁（事件/超时/close 三方见此字非 WAITING 不再
      * 争抢本协程），并清 conn->co 使 close_notify 空指针短路。
-     * 同线程串行：destroy 与 close_notify 均在协程所属 reactor 线程，无竞态。 */
-    _Atomic uintptr_t* ww = co->waiting_word;
-    if (ww) {
+     * 同线程串行：destroy 与 close_notify 均在协程所属 reactor 线程，无竞态。
+     * Phase 8.13：本清理仅对 fd 等待（wait_kind==LM_WAIT_FD）生效——
+     * butex 等待登记的 waiting_word 指向 32 位 butex 字，8 字节 CAS 会越界
+     * 读写相邻内存；butex 路径由 waiting_sched 引用托管（上方已清理）。 */
+    _Atomic uintptr_t* ww = atomic_load_explicit(&co->waiting_word, memory_order_acquire);
+    if (ww && atomic_load_explicit(&co->wait_kind, memory_order_acquire) == LM_WAIT_FD) {
         lm_connection_t* wconn = (lm_connection_t*)co->waiting_conn;
         uintptr_t exp = (uintptr_t)co;
         atomic_compare_exchange_strong_explicit(ww, &exp, LM_FD_CLOSED,
                                                 memory_order_acq_rel, memory_order_acquire);
         if (wconn && wconn->co == co) wconn->co = NULL;
-        co->waiting_word = NULL;
+        atomic_store_explicit(&co->waiting_word, NULL, memory_order_release);
         co->waiting_conn = NULL;
     }
 

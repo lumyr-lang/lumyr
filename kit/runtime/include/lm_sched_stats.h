@@ -36,6 +36,10 @@ typedef struct lm_sched_stats_global_s {
     _Atomic long live_co;               /* 存活协程数（对齐 bthread_count） */
     _Atomic uint64_t force_yield_count; /* reduction 预算耗尽强制让出重入队总次数 */
     _Atomic uint64_t long_sched_count;  /* 长调度墙钟告警总次数（8.5 C 落地） */
+    /* Phase 8.13：sysmon 确认的 stuck 协程（丢唤醒）累计次数。
+     * 等待源已完成但协程仍悬挂、连续两轮扫描确认才 +1（两轮确认吸收
+     * 投递在飞瞬态，正常负载恒为 0；>0 即存在唤醒协议 bug 或救援事件）。 */
+    _Atomic uint64_t stuck_co_count;
     /* pending_time 直方图（对齐 LatencyRecorder）：ready→被执行延迟分布。
      * trace 线程每轮打印后清零（窗口语义）；trace 未启用时累计不清零。 */
     _Atomic uint64_t pending_buckets[LM_SCHED_PENDING_BUCKETS];
@@ -60,6 +64,16 @@ static inline void lm_sched_stats_force_yield(void) {
 static inline void lm_sched_stats_long_sched(void) {
     atomic_fetch_add_explicit(&g_lm_sched_stats.long_sched_count, 1,
                               memory_order_relaxed);
+}
+
+/* Phase 8.13：stuck 协程计数——sysmon 确认丢唤醒时 +1；查询返回累计值。 */
+static inline void lm_sched_stats_stuck_add(long n) {
+    atomic_fetch_add_explicit(&g_lm_sched_stats.stuck_co_count, (uint64_t)n,
+                              memory_order_relaxed);
+}
+static inline long lm_sched_stats_stuck_co(void) {
+    return (long)atomic_load_explicit(&g_lm_sched_stats.stuck_co_count,
+                                      memory_order_relaxed);
 }
 
 /* 记录一次 pending_time（ready→被执行，ns）。lm_co_resume 热点调用：

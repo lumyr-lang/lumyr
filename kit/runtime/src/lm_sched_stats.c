@@ -87,10 +87,11 @@ static void trace_print_once(trace_util_t* utils, int* util_n) {
     }
 
     /* 全局行：scheduler 构成 / 存活协程 / 全局溢出深度 / blocking 池 /
-     * reduction 账本 / pending 分位数（调度器健康度第一指标）。 */
+     * reduction 账本 / pending 分位数（调度器健康度第一指标）。
+     * Phase 8.13：stuck 计数（sysmon 丢唤醒确认累计，正常负载恒 0）。 */
     fprintf(stderr,
         "[sched-trace] scheds=%d(io=%d,compute=%d) live_co=%ld overflow=%ld "
-        "blocking=%d/%d force_yield=%llu long_sched=%llu "
+        "blocking=%d/%d force_yield=%llu long_sched=%llu stuck=%llu "
         "pending n=%llu avg=%lluus p50=%lluus p99=%lluus\n",
         n, io_n, worker_n,
         atomic_load_explicit(&g_lm_sched_stats.live_co, memory_order_relaxed),
@@ -99,6 +100,8 @@ static void trace_print_once(trace_util_t* utils, int* util_n) {
         (unsigned long long)atomic_load_explicit(&g_lm_sched_stats.force_yield_count,
                                                  memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&g_lm_sched_stats.long_sched_count,
+                                                 memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&g_lm_sched_stats.stuck_co_count,
                                                  memory_order_relaxed),
         (unsigned long long)pcount,
         pcount ? (unsigned long long)(psum / 1000 / pcount) : 0ULL,

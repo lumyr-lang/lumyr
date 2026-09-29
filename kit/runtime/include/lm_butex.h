@@ -69,6 +69,22 @@ long lm_butex_empty_wakes(void);
 /* 线程等待者实际陷入平台阻塞 syscall 的次数（futex/__ulock_wait）。 */
 long lm_butex_park_syscalls(void);
 
+/* ============================================================
+ * Phase 8.13：sysmon stuck 协程检测/救援支持
+ * ============================================================ */
+struct lm_co_s;   /* 文件域前向声明（避免包含 lm_co.h 形成头文件环） */
+
+/* lm_butex_check_waiter：查询协程是否为指定 butex 字的在表等待者。
+ *   返回 0 = 在表且未被唤醒（正常等待中）；1 = 在表但 woke=1（现行协议
+ *   不变量下不可达，防御性保留）；-1 = 不在表（entry 已被摘队：投递在飞
+ *   瞬态或丢唤醒稳态，由 sysmon 连续两轮疑似确认区分）。
+ *
+ * lm_butex_debug_drop_waiter：调试/测试专用——摘队 + 置 woke=1 + 不 post，
+ *   模拟「唤醒方已消费 entry 但投递丢失」，供 sysmon 救援路径端到端测试。
+ *   ⚠ 仅限测试代码调用，生产路径禁用。 */
+int lm_butex_check_waiter(volatile _Atomic uint32_t* addr, struct lm_co_s* co);
+void lm_butex_debug_drop_waiter(volatile _Atomic uint32_t* addr, struct lm_co_s* co);
+
 #ifdef __cplusplus
 }
 #endif

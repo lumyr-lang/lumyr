@@ -334,8 +334,13 @@ int lm_co_try_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
 
 void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co) {
     if (!s || !co) return;
-    if (co->queued) return;   /* 防重复入队 */
-    co->queued = 1;
+    /* 防重复入队：CAS 占住入队权（0→1）。Phase 8.13 起跨线程并发 post
+     * 成为现实场景（sysmon stuck 救援重投 vs 迟到的真唤醒投递）——
+     * 非原子 check-then-set 会双过，同协程重复入队将导致两个线程并发
+     * resume 同一条栈（灾难性）。CAS 失败 = 已在某个就绪队列，直接返回。 */
+    int expectedQ = 0;
+    if (!atomic_compare_exchange_strong_explicit(&co->queued, &expectedQ, 1,
+            memory_order_acq_rel, memory_order_acquire)) return;
     co->next = NULL;
     /* Phase 8.11：记录就绪起点（pending_time 起算点）。 */
     atomic_store_explicit(&co->ready_ts, lm_now_ns(), memory_order_relaxed);

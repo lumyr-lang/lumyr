@@ -220,6 +220,19 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
     pthread_mutex_unlock(&g_buckets[idx].lock);
 
     if (co) {
+        /* Phase 8.13：等待源登记（sysmon stuck 检测/救援）。
+         * entry 已在桶内（检测方 lm_butex_check_waiter 可查到「正常等待中」）。
+         * 登记等待字（waiting_word=butex 字地址）+ retain 唤醒目标 scheduler
+         *（waiting_sched，救援重投用）；顺序：指针字段先置、wait_kind 最后
+         * store-release（sysmon acquire 读 kind 后必见指针字段）。
+         * 注：waiting_word 复用 8.8 的回溯字段，但 butex 字是 32 位——
+         * lm_co_destroy 的 fd 等待字 8 字节 CAS 清理由 wait_kind!=LM_WAIT_FD
+         * 短路，不会误触本字。 */
+        atomic_store_explicit(&co->waiting_word,
+                              (_Atomic uintptr_t*)(void*)addr, memory_order_release);
+        lm_scheduler_retain(sched);
+        atomic_store_explicit(&co->waiting_sched, sched, memory_order_release);
+        atomic_store_explicit(&co->wait_kind, LM_WAIT_BUTEX, memory_order_release);
         /* 协程等待：yield 切回本线程 scheduler，循环至真唤醒。
          * 伪唤醒（调度层双投递陈旧条目 resume，entry 未被摘队）时 woke=0 →
          * 再 yield 续等（entry 仍在桶内，无需重入队）；真 wake 摘队置 woke=1
@@ -228,6 +241,12 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
         while (atomic_load_explicit(&e->woke, memory_order_acquire) == 0) {
             lm_co_yield();
         }
+        /* Phase 8.13：等待源清除（与登记顺序相反）：先释放 waiting_sched
+         *（注册表锁内 exchange，与 sysmon 持锁扫描互斥），再清等待字，
+         * 最后清 wait_kind。 */
+        lm_co_release_waiting_sched(co);
+        atomic_store_explicit(&co->waiting_word, NULL, memory_order_release);
+        atomic_store_explicit(&co->wait_kind, LM_WAIT_NONE, memory_order_release);
         entry_release(e);   /* wake 摘队时 +ref，通知完已 release；此处 drop wait 引用 */
         return 1;
     }
@@ -344,4 +363,54 @@ int lm_futex_wake(volatile _Atomic uint32_t* word) {
     if (!word) return 0;
     if (!platform_available()) return 0;
     return (int)platform_wake_raw(word);
+}
+
+/* ============================================================
+ * Phase 8.13：sysmon stuck 协程检测/救援支持
+ * ============================================================ */
+
+/* 查询协程是否为指定 butex 字的在表等待者。
+ * 返回：0 = 在表且 woke=0（正常等待中，唤醒尚未发生）；
+ *       1 = 在表但 woke=1（现行协议不变量下不可达：wake 在桶锁内摘队、
+ *          锁外才置 woke=1，故持锁观察到在表 entry 必 woke=0；保留该分支
+ *          防御未来协议变体）；
+ *      -1 = 不在表（entry 已被 wake 摘队：投递在飞瞬态 或 丢唤醒稳态，
+ *          由 sysmon 连续两轮疑似确认区分）。
+ * 桶锁内查找，与 wait 入队 / wake 摘队串行。 */
+int lm_butex_check_waiter(volatile _Atomic uint32_t* addr, lm_co_t* co) {
+    if (!addr || !co) return -1;
+    unsigned idx = bucket_index(addr);
+    int rc = -1;
+    pthread_mutex_lock(&g_buckets[idx].lock);
+    for (butex_entry_t* e = g_buckets[idx].head; e; e = e->next) {
+        if (e->key == addr && e->co == co) {
+            rc = atomic_load_explicit(&e->woke, memory_order_acquire) ? 1 : 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_buckets[idx].lock);
+    return rc;
+}
+
+/* 调试/测试专用：模拟「唤醒方已摘队置 woke=1 但投递丢失」。
+ * 摘队 + 置 woke=1 + 【不】post——协程将永久悬挂在 yield 循环，
+ * 直到 sysmon stuck 检测确认后救援重投（重投后协程见 woke=1 正常退出）。
+ * 引用计数：摘队不做 wake 侧的 +1（无通知阶段），wait 侧退出时 release
+ * 即销毁——与正常 wake 路径净效果一致，无泄漏。
+ * ⚠ 仅限测试代码调用（stuck_co_test），生产路径禁用。 */
+void lm_butex_debug_drop_waiter(volatile _Atomic uint32_t* addr, lm_co_t* co) {
+    if (!addr || !co) return;
+    unsigned idx = bucket_index(addr);
+    pthread_mutex_lock(&g_buckets[idx].lock);
+    butex_entry_t** pp = &g_buckets[idx].head;
+    while (*pp) {
+        if ((*pp)->key == addr && (*pp)->co == co) {
+            butex_entry_t* e = *pp;
+            *pp = e->next;   /* 摘队（不 +ref：wait 侧那份引用即全部） */
+            atomic_store_explicit(&e->woke, 1, memory_order_release);
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    pthread_mutex_unlock(&g_buckets[idx].lock);
 }

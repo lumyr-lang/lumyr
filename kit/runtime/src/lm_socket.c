@@ -259,15 +259,20 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
         lm_reactor_free_connection(g_socket_reactor, conn);
         return -1;
     }
-    /* Phase 8.8：注册等待字回溯，供协程强制 destroy 时安全解仲裁 */
-    co->waiting_word = word;
+    /* Phase 8.8：注册等待字回溯，供协程强制 destroy 时安全解仲裁。
+     * Phase 8.13：同步登记等待源类别（sysmon stuck 检测）——
+     * 顺序：先等待指针字段、最后 store-release wait_kind（sysmon acquire
+     * 读 kind 后必见指针字段）；清除顺序相反（先清指针、最后清 kind）。 */
+    atomic_store_explicit(&co->waiting_word, word, memory_order_release);
     co->waiting_conn = conn;
+    atomic_store_explicit(&co->wait_kind, LM_WAIT_FD, memory_order_release);
     if (lm_reactor_add(g_socket_reactor, conn, events) != 0) {
         /* add 失败：CAS WAITING→NIL 回滚（此时三方尚未注册，必赢）再归还 */
         uintptr_t exp = (uintptr_t)co;
         atomic_compare_exchange_strong_explicit(word, &exp, LM_FD_NIL,
                 memory_order_acq_rel, memory_order_acquire);
-        co->waiting_word = NULL;
+        atomic_store_explicit(&co->waiting_word, NULL, memory_order_release);
+        atomic_store_explicit(&co->wait_kind, LM_WAIT_NONE, memory_order_release);
         lm_reactor_free_connection(g_socket_reactor, conn);
         return -1;
     }
@@ -293,7 +298,8 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
             uintptr_t exp = (uintptr_t)co;
             atomic_compare_exchange_strong_explicit(word, &exp, LM_FD_NIL,
                     memory_order_acq_rel, memory_order_acquire);
-            co->waiting_word = NULL;
+            atomic_store_explicit(&co->waiting_word, NULL, memory_order_release);
+            atomic_store_explicit(&co->wait_kind, LM_WAIT_NONE, memory_order_release);
             lm_reactor_free_connection(g_socket_reactor, conn);
             return -1;
         }
@@ -319,9 +325,12 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
             free(waitCtx);
         }
     }
-    /* Phase 8.8：清理等待字回溯（协程已恢复，无 destroy 解仲裁需求） */
-    co->waiting_word = NULL;
+    /* Phase 8.8：清理等待字回溯（协程已恢复，无 destroy 解仲裁需求）。
+     * Phase 8.13：先清指针字段、最后清类别（与登记顺序相反）——sysmon
+     * 读到 kind==FD 时 waiting_word 必仍有效或为 NULL（NULL 则跳过本轮）。 */
+    atomic_store_explicit(&co->waiting_word, NULL, memory_order_release);
     co->waiting_conn = NULL;
+    atomic_store_explicit(&co->wait_kind, LM_WAIT_NONE, memory_order_release);
     lm_reactor_free_connection(g_socket_reactor, conn);
     return (state == LM_FD_READY) ? 0 : (state == LM_FD_TIMEOUT) ? 1 : -1;
 }

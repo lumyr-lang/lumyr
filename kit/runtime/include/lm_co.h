@@ -52,8 +52,11 @@ typedef struct lm_co_s {
     void* vm_state;
     /* Phase 7.2：scheduler 就绪队列入队标记，防重复入队。
      * post 时置 1，pop 时清 0。无 scheduler 时恒 0（直连 resume 无入队）。
-     * 放在 vm_state 之后，不改变 vm_state 偏移（排查 _ctx_done 崩溃）。 */
-    int queued;
+     * 放在 vm_state 之后，不改变 vm_state 偏移（排查 _ctx_done 崩溃）。
+     * Phase 8.13：原子化——跨线程并发 post（sysmon stuck 救援重投 vs 迟到的
+     * 真唤醒投递）下，非原子 check-then-set 会双过导致同协程重复入队、
+     * 两线程并发 resume 同一条栈；lm_scheduler_post 改用 CAS 占位。 */
+    _Atomic int queued;
     /* Phase 7.4：compute 池迁移标记（加在结构体末尾，不改变现有字段偏移——ABI 原则）。
      * home_sched：computeBegin 时记录老家 IO scheduler（非空 = 协程处于 compute 池）；
      * migrate_sched：yield 让出后由调度方 post 到的目标 scheduler。
@@ -119,8 +122,10 @@ typedef struct lm_co_s {
      * 指针，cleanup 时清空。协程仍挂起在等待字上被强制 destroy（accept/handler
      * 挂起协程随框架 destroyActive/acceptCo.destroy 释放）时，lm_co_destroy 据此
      * CAS 解仲裁 + 清 conn->co，防 close_notify 唤醒已释放的悬垂协程（UAF）。
-     * 无等待时恒 NULL。 */
-    _Atomic uintptr_t* waiting_word;
+     * 无等待时恒 NULL。
+     * Phase 8.13：指针自身原子化（_Atomic 限定符置于 * 后：原子指针指向
+     * 原子字）——sysmon stuck 扫描跨线程读本字段，与等待登记/清除方并发。 */
+    _Atomic uintptr_t* _Atomic waiting_word;
     void* waiting_conn;
     /* Phase 8.11：就绪时间戳（结构体末尾追加，ABI 不变）。
      * post/post_local/post_lifo 入队时记录 CLOCK_MONOTONIC ns；
@@ -128,6 +133,23 @@ typedef struct lm_co_s {
      * （ready→被执行延迟）记入全局直方图（lm_sched_stats）。
      * 0 = 不在就绪队列（直连 resume 路径不统计）。跨线程写（投递方）/读（resume 方）。 */
     _Atomic uint64_t ready_ts;
+    /* Phase 8.13：等待源登记 + stuck 检测字段（结构体末尾追加，ABI 不变）。
+     * wait_kind：协程挂起时登记的等待源类别（LM_WAIT_*），sysmon stuck 扫描
+     *   据此校验「等待源状态 vs 协程状态」一致性——精确检测丢唤醒，不依赖
+     *   超时猜测（长 idle 连接挂起数小时是正常态，不误报）。
+     *   登记顺序：先写等待指针字段（waiting_word/waiting_sched）、最后
+     *   store-release wait_kind；清除顺序相反。sysmon acquire 读 kind 后
+     *   必见指针字段。
+     * waiting_sched：butex 等待登记时 retain 的唤醒目标 scheduler，供 sysmon
+     *   救援重投用；等待退出时经 lm_co_release_waiting_sched 在注册表锁内
+     *   exchange NULL 后 release（与 sysmon 持锁扫描互斥，关闭
+     *   「扫描方 retain vs 等待方 release」竞态导致的 scheduler UAF）。
+     * stuck_votes：sysmon 连续疑似计数（>=2 才确认告警）——吸收
+     *   「源侧刚完成、投递在飞」的 µs 级瞬态窗口（扫描间隔 1s 下瞬态
+     *   不可能跨两轮）。仅 sysmon 单线程读写。 */
+    _Atomic int wait_kind;
+    _Atomic(struct lm_scheduler_s*) waiting_sched;
+    _Atomic int stuck_votes;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);
@@ -214,6 +236,14 @@ typedef void (*lm_co_entry_t)(void*);
 #define LM_CO_SWAP_SWAPPED       2
 #define LM_CO_SWAP_SWAPPING_IN   3
 
+/* Phase 8.13：等待源类别（lm_co_t.wait_kind 字段取值）。
+ * 挂起路径在让出前登记、恢复后清除；sysmon 按类别做「源状态 vs 协程状态」
+ * 一致性校验（检测丢唤醒）。 */
+#define LM_WAIT_NONE     0   /* 未挂起/未登记 */
+#define LM_WAIT_FD       1   /* fd 事件等待（co_wait_fd_timeout；waiting_word=conn 方向字） */
+#define LM_WAIT_BUTEX    2   /* butex 用户态同步原语等待（cond/channel/join；waiting_word=butex 字） */
+#define LM_WAIT_BLOCKING 3   /* blocking 池任务回投等待（lm_co_await_blocking） */
+
 /* Phase 8.6：idle 换出阈值。SUSPENDED 且 now-last_resume_ns 超此值则换出候选。
  * 默认 30s（调研 §8.6）。reaper 每 LM_REAP_SCAN_INTERVAL_NS 扫描一次注册表。 */
 #define LM_REAP_IDLE_THRESHOLD_NS  (30ULL * 1000000000ULL)  /* 30s */
@@ -278,6 +308,25 @@ lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class);
 typedef int (*lm_co_can_swap_fn)(lm_co_t* co);
 void lm_co_set_can_swap_hook(lm_co_can_swap_fn fn);
 void lm_co_reap_idle(uint64_t now_ns);
+
+/* ============================================================
+ * Phase 8.13: 协程注册表遍历 + 等待源登记支持（sysmon stuck 扫描用）
+ *
+ * lm_co_registry_foreach：持 g_co_reg_lock 遍历全部存活协程并逐个执行
+ *   fn(co, ctx)——与 lm_co_reap_idle 同模式：destroy 阻塞于锁，保证回调
+ *   期间 co 不被释放（无「快照后遍历」的 UAF 窗口）。
+ *   回调约束：短小、禁 malloc/睡眠/长阻塞；允许取 butex 桶锁 / blocking
+ *   池锁 / scheduler ready 锁（锁序 registry → 它们，反向路径不存在，
+ *   无死锁环）。
+ *
+ * lm_co_release_waiting_sched：等待退出路径专用——在注册表锁内
+ *   exchange waiting_sched=NULL 后 release。sysmon stuck 扫描持同一把锁
+ *   遍历并 retain waiting_sched，互斥关闭「扫描方 retain vs 等待方
+ *   release」竞态（防 scheduler 被提前释放后 sysmon retain 悬垂指针）。
+ * ============================================================ */
+typedef void (*lm_co_foreach_fn)(lm_co_t* co, void* ctx);
+void lm_co_registry_foreach(lm_co_foreach_fn fn, void* ctx);
+void lm_co_release_waiting_sched(lm_co_t* co);
 
 #ifdef __cplusplus
 }

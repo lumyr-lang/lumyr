@@ -48,13 +48,42 @@ static lm_blocking_pool_t g_pool = {
     .n = 0, .idle = 0, .stop = 0
 };
 
-/* 取一个任务（mutex 保护）。队列空返回 NULL。 */
+/* Phase 8.13：执行中任务登记（sysmon stuck 检测用）。
+ * 「任务在册」= 队列中（head 链）∪ 执行中（本数组）；等待协程挂起期间
+ * 任务必在册，不在册且协程仍悬挂 = 回投丢失（stuck）。
+ * 槽位上限 = worker 数上限 LM_BLOCKING_MAX（每 worker 同时只执行一个任务，
+ * 必有余槽）；g_pool.mutex 保护，与队列出队同一临界区登记（无不在册窗口）。 */
+static lm_co_t* g_running[LM_BLOCKING_MAX];
+
+/* 执行结束清除登记（done_cb 回投完成后调）。g_pool.mutex 保护。 */
+static void running_del(lm_co_t* co) {
+    if (!co) return;
+    pthread_mutex_lock(&g_pool.mutex);
+    for (int i = 0; i < LM_BLOCKING_MAX; i++) {
+        if (g_running[i] == co) { g_running[i] = NULL; break; }
+    }
+    pthread_mutex_unlock(&g_pool.mutex);
+}
+
+/* 取一个任务（mutex 保护）。队列空返回 NULL。
+ * Phase 8.13：出队即在同一临界区登记到 g_running——任务从「队列中」到
+ * 「执行中」无不在册窗口，task_pending 任一时刻查询结果一致。 */
 static lm_blocking_task_t* pool_pop_task(void) {
     pthread_mutex_lock(&g_pool.mutex);
     lm_blocking_task_t* t = g_pool.head;
     if (t) {
         g_pool.head = t->next;
         if (!g_pool.head) g_pool.tail = NULL;
+        if (t->co) {
+            int registered = 0;
+            for (int i = 0; i < LM_BLOCKING_MAX; i++) {
+                if (!g_running[i]) { g_running[i] = t->co; registered = 1; break; }
+            }
+            /* 槽满不登记（理论不可达：worker 数 ≤ MAX 且每人只跑一个）。
+             * 漏登记后果：sysmon 对该 co 疑似 stuck 一票，下轮任务完成
+             * 出册后协程已恢复即清零——两轮确认吸收，无误告警。 */
+            (void)registered;
+        }
     }
     pthread_mutex_unlock(&g_pool.mutex);
     return t;
@@ -83,6 +112,10 @@ static void* blocking_worker_main(void* arg) {
             atomic_fetch_sub_explicit(&g_pool.idle, 1, memory_order_relaxed);
             void* result = t->fn(t->arg);
             if (t->done_cb) t->done_cb(t->co, result);
+            /* Phase 8.13：回投完成后才清除执行中登记——done_cb 已 post
+             *（co->queued=1），此后 sysmon 见该 co 恒 queued 或已恢复，
+             * 不会出现「不在册且未入队」的误疑似窗口。 */
+            running_del(t->co);
             free(t);
             atomic_fetch_add_explicit(&g_pool.idle, 1, memory_order_relaxed);
             continue;
@@ -147,6 +180,25 @@ int lm_blocking_pool_idle(void) {
     return atomic_load_explicit(&g_pool.idle, memory_order_relaxed);
 }
 
+/* Phase 8.13：查询协程的 blocking 任务是否仍在册（队列中或执行中）。
+ * sysmon stuck 检测用：在册 = 回投尚未发生 = 协程悬挂属正常等待；
+ * 不在册且协程仍 SUSPENDED 未入队 = 回投丢失（疑似 stuck）。 */
+int lm_blocking_pool_task_pending(lm_co_t* co) {
+    if (!co) return 0;
+    int found = 0;
+    pthread_mutex_lock(&g_pool.mutex);
+    for (lm_blocking_task_t* t = g_pool.head; t; t = t->next) {
+        if (t->co == co) { found = 1; break; }
+    }
+    if (!found) {
+        for (int i = 0; i < LM_BLOCKING_MAX; i++) {
+            if (g_running[i] == co) { found = 1; break; }
+        }
+    }
+    pthread_mutex_unlock(&g_pool.mutex);
+    return found;
+}
+
 /* ============================================================
  * 协程同步等待封装（lm_co_await_blocking）
  * 机制：把用户 fn + 参数 + 目标 scheduler 装入 awaitCtx 提交，
@@ -196,8 +248,15 @@ int lm_co_await_blocking(lm_blocking_fn fn, void* arg, void** resultOut) {
         free(c);
         return -2;
     }
+    /* Phase 8.13：登记等待源（任务已在池队列，task_pending 可查）。
+     * 顺序：submit 先于 wait_kind——sysmon 见到 BLOCKING 时任务必已在册，
+     * 无「已登记但未提交」的误疑似窗口。恢复后清除。
+     * 注：本路径不设 waiting_sched——await 无重查循环（yield 返回即读
+     * result），重投不安全，sysmon 对 BLOCKING 仅告警不救援。 */
+    atomic_store_explicit(&co->wait_kind, LM_WAIT_BLOCKING, memory_order_release);
     /* 让出本线程；完成回投后由 drain resume 续行。 */
     lm_co_yield();
+    atomic_store_explicit(&co->wait_kind, LM_WAIT_NONE, memory_order_release);
     if (resultOut) *resultOut = c->result;
     free(c);
     return 0;
