@@ -3991,9 +3991,19 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
          * 协程内 spawn（current!=NULL，如 accept loop spawn handler）不投递：
          * 由 spawning 协程显式 resume（h.start 嵌套直连），与既有行为一致；
          * 且避免在协程栈热点调 mutex 压栈（64KiB 协程栈嵌套 VM 调用本就紧张）。
-         * 无 scheduler（C 测试、非 reactor 上下文）不投递，保持原显式 resume 契约。 */
+         * 无 scheduler（C 测试、非 reactor 上下文）不投递，保持原显式 resume 契约。
+         *
+         * Phase 7.x reactor bug 修复：判断依据从 sched->current 改为 lm_co_current()。
+         * sched->current 仅在 drain_ready 钩子内被设，epoll 事件回调（co_resume_handler）
+         * 同步调 lm_co_resume 时不设 sched->current——导致协程内 spawn 被误判为
+         * "reactor 主循环上下文"投递到就绪队列，引发 dual-resume（acceptor spawn
+         * handler 后被 drain_ready 误 resume，handler 在 epoll 事件未就绪时被唤醒，
+         * recv EAGAIN → 重注册 → 等 30s timer → 客户端超时关闭 → EOF → 500）。
+         * lm_co_current() 是 TLS 指针，所有 resume 路径（drain_ready / 事件回调 /
+         * 嵌套 resume）都经 lm_co_resume 内 co_set_current 设值，语义准确反映
+         * "当前线程正在运行的协程"，是判断 spawn 上下文的正确依据。 */
         lm_scheduler_t* sched = lm_scheduler_get_current();
-        if (sched && sched->current == NULL) lm_scheduler_post_local(sched, co);
+        if (sched && !lm_co_current()) lm_scheduler_post_local(sched, co);
         out->type = VAL_STRUCT_PTR;
         out->v.struct_ptr = co;
         return 1;
