@@ -2116,7 +2116,12 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             return EXPR_TYPE_NONE;
         }
         /* ++ / --：var++ / ++var / var-- / --var
-         * 简化语义：作为语句时不区分前置/后置（结果丢弃）；作为表达式时后置返回原值，前置返回新值（暂未实现精确语义，统一按前置处理） */
+         * 简化语义：暂不区分前置/后置，统一按前置处理（返回新值）。
+         * 关键契约：c_expr 返回类型 T ⇒ 对应栈上留一个 T 结果（净 +1），
+         * 以便表达式语句的 OPC_POP 能正确丢弃、表达式上下文能取值。
+         * 历史缺陷：仅 LOAD+ADD+STORE（净 0）却返回 INT/DOUBLE，导致
+         * c_stmt 发 OPC_POP 弹空栈，inline 调用（INT64 为全局共享栈）时
+         * 偷弹调用方值，造成算术结果出现垃圾指针值。 */
         if(op == OP_POST_INC || op == OP_PRE_INC || op == OP_POST_DEC || op == OP_PRE_DEC) {
             AstNode* child = node->u.uny.child;
             int is_inc = (op == OP_POST_INC || op == OP_PRE_INC);
@@ -2130,6 +2135,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_PUSH_INT64_CONST, 1, 0);
                     emit(c, is_inc ? OPC_INT64_ADD : OPC_INT64_SUB, 0, 0);
                     emit(c, OPC_STORE_INT64_VAR, idx, 0);
+                    emit(c, OPC_LOAD_INT64_VAR, idx, 0);   /* 留结果值，兑现返回 INT 契约 */
                 } else if(vt == EXPR_TYPE_DOUBLE) {
                     /* 1.0 走常量池 → PUSH_CONST_IDX 压入 DOUBLE 栈 */
                     int kc = bf_add_double_const(c->fn, 1.0);
@@ -2137,12 +2143,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
                     emit(c, OPC_PUSH_CONST_IDX, kc, 0);
                     emit(c, is_inc ? OPC_DOUBLE_ADD : OPC_DOUBLE_SUB, 0, 0);
                     emit(c, OPC_STORE_DOUBLE_VAR, idx, 0);
+                    emit(c, OPC_LOAD_DOUBLE_VAR, idx, 0);  /* 留结果值，兑现返回 DOUBLE 契约 */
                 } else {
                     /* VALUE 栈：动态 1 + add/sub */
                     emit(c, OPC_LOAD_VAR, idx, 0);
                     emit(c, OPC_PUSH_INT_VAL, 1, 0);
                     emit(c, is_inc ? OPC_VADD : OPC_VSUB, 0, 0);
                     emit(c, OPC_STORE_VAR, idx, 0);
+                    emit(c, OPC_LOAD_VAR, idx, 0);         /* 留结果值，兑现返回 NONE(VALUE) 契约 */
                 }
                 return vt;
             }

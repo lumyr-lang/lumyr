@@ -1,0 +1,58 @@
+// 最小复现 readFrom 上下文：静态方法 + array 形参 + int 形参 + while 循环 + inline 算术
+// 预期 headerEnd=22 total=26（Linux x86_64 bug 时会得到垃圾值）
+//
+// 模拟报文：GET / HTTP/1.1\r\nHost: a\r\n\r\n  共 27 字节，无 Content-Length
+crlf = "" + '\r' + '\n';
+
+class B {
+    public static func findHeaderEnd(buf: array): int {
+        if (buf.len < 4) { return -1; }
+        i = 0;
+        last = buf.len - 4;
+        while (i <= last) {
+            if (buf[i] == 13 && buf[i + 1] == 10 && buf[i + 2] == 13 && buf[i + 3] == 10) {
+                return i;
+            }
+            i = i + 1;
+        }
+        return -1;
+    }
+
+    public static func headerContentLength(buf: array, headerEnd: int): int {
+        harr = [];
+        i = 0;
+        while (i < headerEnd) { harr.add(buf[i]); i = i + 1; }
+        headStr = bytes(harr).decode();
+        lines = headStr.split(crlf);
+        for line in lines {
+            low = line.lower();
+            if (low.startsWith("content-length:")) {
+                return (int)line.slice(15, line.len).trim();
+            }
+        }
+        return 0;
+    }
+}
+
+// 直接构造字节数组：GET / HTTP/1.1\r\nHost: a\r\n\r\n
+// 71='G' 69='E' 84='T' 32=' ' 47='/' 32=' ' 72='H' 84='T' 84='T' 80='P' 47='/' 49='1' 46='.' 49='1'
+// 13 10 72='H' 111='o' 115='s' 116='t' 58=':' 32=' ' 97='a' 13 10 13 10
+raw = [71, 69, 84, 32, 47, 32, 72, 84, 84, 80, 47, 49, 46, 49, 13, 10, 72, 111, 115, 116, 58, 32, 97, 13, 10, 13, 10];
+buf = [];
+i = 0;
+while (i < raw.len) { buf.add(raw[i]); i = i + 1; }
+print("buf.len=" + buf.len + " expect 27");
+
+headerEnd = B.findHeaderEnd(buf);
+print("headerEnd=" + headerEnd + " expect 22");
+
+// inline 路径——预期 total=26
+total = headerEnd + 4 + B.headerContentLength(buf, headerEnd);
+print("inline total=" + total + " expect 26");
+if (total == 26) { print("PASS inline"); } else { print("FAIL inline got " + total); }
+
+// local 路径对照
+cl = B.headerContentLength(buf, headerEnd);
+total2 = headerEnd + 4 + cl;
+print("local total2=" + total2 + " expect 26");
+if (total2 == 26) { print("PASS local"); } else { print("FAIL local got " + total2); }
