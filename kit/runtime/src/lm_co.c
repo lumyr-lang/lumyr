@@ -11,6 +11,7 @@
 #include "lm_co.h"
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳 */
 #include "lm_stack_pool.h" /* Phase 8.6 C：per-thread 栈池 */
+#include "lm_scheduler.h"  /* 销毁时释放 migrate_sched/home_sched 的 scheduler 引用 */
 #include "gc_runtime.h"
 
 #include <stdlib.h>
@@ -473,6 +474,18 @@ void lm_co_destroy(lm_co_t* co) {
         };
         lm_stack_pool_return(&st);
     }
+    /* 引用计数兜底：正常路径 handle_migrate 已消费 migrate_sched、computeEnd
+     * 已转移 home_sched；此处覆盖异常路径（co 未 resume 即销毁、迁移协议中断），
+     * 释放遗留引用防 scheduler 泄漏。 */
+    if (co->migrate_sched) {
+        lm_scheduler_release(co->migrate_sched);
+        co->migrate_sched = NULL;
+    }
+    if (co->home_sched) {
+        lm_scheduler_release(co->home_sched);
+        co->home_sched = NULL;
+    }
+
     free(co);
 }
 

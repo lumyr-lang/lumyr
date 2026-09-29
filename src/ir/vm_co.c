@@ -350,6 +350,9 @@ static void vm_co_timer_cb(lm_timer_id_t timer_id, void* arg) {
             /* yield 的协程泄漏（无 reactor 就绪队列管理）——Phase 5 简化 */
         }
     }
+    /* 释放 vm_co_add_timer 捕获时的引用（post 全部完成后才减，
+     * 保证回调期间 scheduler 不会被 destroyScheduler 提前 free）。 */
+    lm_scheduler_release(tc->sched);
     free(tc);
 }
 
@@ -361,9 +364,16 @@ lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb) {
     if(!tc) return LM_TIMER_INVALID_ID;
     tc->func = cb;
     /* add 调用发生在 reactor 线程（addTimer builtin），此刻 scheduler TLS
-     * 已由 setScheduler 设定——捕获为回调协程的目标 scheduler。 */
+     * 已由 setScheduler 设定——捕获为回调协程的目标 scheduler。
+     * 捕获即 retain（必须在挂入 timer 系统前持引用，否则 destroyScheduler
+     * 可与回调并发 free 结构 → lm_scheduler_post UAF / 唤醒丢失挂死），
+     * 回调结束 release；add 失败路径同样 release 防泄漏。 */
     tc->sched = lm_scheduler_get_current();
+    lm_scheduler_retain(tc->sched);
     lm_timer_id_t id = lm_reactor_add_timer(r, ms, vm_co_timer_cb, tc);
-    if(id == LM_TIMER_INVALID_ID) { free(tc); return LM_TIMER_INVALID_ID; }
+    if(id == LM_TIMER_INVALID_ID) {
+        lm_scheduler_release(tc->sched);
+        free(tc); return LM_TIMER_INVALID_ID;
+    }
     return id;
 }

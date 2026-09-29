@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include "lm_timer.h"   /* Phase 8.4：定时器集中化，add_timer/del_timer 转发 lm_timer_* */
 
 #ifdef __cplusplus
@@ -124,6 +125,10 @@ struct lm_reactor_s {
      * 无 scheduler 时为 NULL，主循环行为不变（既有单线程不破坏）。 */
     void (*ready_drain_cb)(void* data);
     void* ready_drain_data;
+    /* 异步唤醒源引用计数：创建时 =1（owner 引用）。scheduler 绑定时 retain、
+     * 销毁时 release——timer 回调经 scheduler->reactor 写 self-pipe 唤醒时，
+     * 只要 scheduler 活着 reactor 必活（修复 r.destroy() 与回调并发的 UAF）。 */
+    _Atomic int refcnt;
 };
 
 /* ============================================================
@@ -134,7 +139,15 @@ struct lm_reactor_s {
  * 内部创建 backend_fd（epoll_create/kqueue），分配连接池 + 定时器堆 + posted 队列。
  * 失败返回 NULL。 */
 lm_reactor_t* lm_reactor_new(int conn_capacity);
+
+/* 销毁 reactor（release 语义）：引用归零才真正释放；scheduler 绑定期间
+ * 持引用，r.destroy() 只减不 free，异步唤醒（timer 回调）不会踩已释放结构。 */
 void lm_reactor_destroy(lm_reactor_t* r);
+
+/* 引用计数：scheduler 等异步唤醒源绑定 reactor 时 retain、解绑时 release。
+ * retain/release 必须严格配对，否则泄漏或提前释放。 */
+void lm_reactor_retain(lm_reactor_t* r);
+void lm_reactor_release(lm_reactor_t* r);
 
 /* 取/归还连接对象（从连接池）：取按 fd 索引且置 fd；归还入 free list。
  * 取时连接对象字段未清零（用户自己初始化 read_handler/write_handler/data）。 */

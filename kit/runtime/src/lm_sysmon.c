@@ -83,7 +83,7 @@ static int sysmon_scan_once(uint64_t now_ns) {
         if (!co->migrate_sched) {
             lm_scheduler_t* target = lm_compute_pool_scheduler();
             if (target) {
-                co->migrate_sched = target;
+                lm_co_set_migrate_sched(co, target);   /* 持目标引用，消费方 handle_migrate 释放 */
                 fprintf(stderr,
                     "[sysmon] force-migrate co=%p from io-sched=%p to compute-sched=%p "
                     "(stuck %.2fms)\n",

@@ -476,8 +476,7 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     return r;
 }
 
-void lm_reactor_destroy(lm_reactor_t* r) {
-    if (!r) return;
+static void reactor_destroy_internal(lm_reactor_t* r) {
     if (r->actions && r->actions->fini) r->actions->fini(r);
     /* fini 已关 backend_fd，wake read 端注册随之失效；关管道两端 */
     if (r->wake_pipe[0] >= 0) { close(r->wake_pipe[0]); r->wake_pipe[0] = -1; }
@@ -486,6 +485,26 @@ void lm_reactor_destroy(lm_reactor_t* r) {
     free(r->posted_accept);
     free(r->posted_events);
     free(r);
+}
+
+void lm_reactor_retain(lm_reactor_t* r) {
+    if (!r) return;
+    atomic_fetch_add_explicit(&r->refcnt, 1, memory_order_relaxed);
+}
+
+void lm_reactor_release(lm_reactor_t* r) {
+    if (!r) return;
+    /* acq_rel：归零线程看到此前所有持有者对结构的写；销毁与其余 release 串行。 */
+    if (atomic_fetch_sub_explicit(&r->refcnt, 1, memory_order_acq_rel) == 1) {
+        reactor_destroy_internal(r);
+    }
+}
+
+void lm_reactor_destroy(lm_reactor_t* r) {
+    /* release 语义：owner 引用减一；scheduler（及其异步唤醒源）持引用期间
+     * 只减不 free，推迟到最后一个 release——修复 r.destroy() 与 timer 回调
+     * 经 scheduler->reactor 写 self-pipe 并发的 use-after-free。 */
+    lm_reactor_release(r);
 }
 
 void lm_reactor_stop(lm_reactor_t* r) {

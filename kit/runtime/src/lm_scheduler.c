@@ -235,14 +235,16 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     /* Phase 8.5 D：schedtick/tick_ns 初始化（calloc 已零化 atomic，显式记时间）。 */
     atomic_store_explicit(&s->schedtick, 0, memory_order_relaxed);
     atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
+    /* owner 引用：异步唤醒源（timer 回调）额外 retain/release 配对，
+     * 引用归零才真销毁（见 lm_scheduler_destroy 注释）。 */
+    atomic_store_explicit(&s->refcnt, 1, memory_order_relaxed);
     sched_registry_add(s);
     /* Phase 8.5 D：懒启动 sysmon 守护线程（幂等，首次 scheduler 创建时启动）。 */
     lm_sysmon_start();
     return s;
 }
 
-void lm_scheduler_destroy(lm_scheduler_t* s) {
-    if (!s) return;
+static void sched_destroy_internal(lm_scheduler_t* s) {
     /* 先从注册表注销（锁内置 NULL 槽位），再释放结构——
      * 窃取者持注册表锁遍历，注销后不会再拿到本 scheduler 指针。 */
     sched_registry_remove(s);
@@ -250,7 +252,49 @@ void lm_scheduler_destroy(lm_scheduler_t* s) {
      * 队列内残留协程由 owner 自行 destroy，scheduler 仅释放自身结构。 */
     lm_wsq_destroy(&s->wsq);
     pthread_mutex_destroy(&s->ready_mutex);
+    /* 解绑 reactor 引用（引用归零时 reactor 在此真正销毁） */
+    lm_reactor_release(s->reactor);
     free(s);
+}
+
+void lm_scheduler_retain(lm_scheduler_t* s) {
+    if (!s) return;
+    atomic_fetch_add_explicit(&s->refcnt, 1, memory_order_relaxed);
+}
+
+void lm_scheduler_release(lm_scheduler_t* s) {
+    if (!s) return;
+    /* acq_rel：归零线程看到此前所有持有者对结构的写（post 入队等），
+     * 销毁与其余 release 串行化。归零后执行真实销毁。 */
+    if (atomic_fetch_sub_explicit(&s->refcnt, 1, memory_order_acq_rel) == 1) {
+        sched_destroy_internal(s);
+    }
+}
+
+void lm_scheduler_destroy(lm_scheduler_t* s) {
+    /* release 语义：owner 引用减一；timer 回调等异步源持引用期间
+     * 只减不 free，推迟到最后一个 release（修复 destroyScheduler 与
+     * timer 回调并发 post 的 use-after-free / 唤醒丢失挂死）。 */
+    lm_scheduler_release(s);
+}
+
+/* 协程迁移/回家字段写入（引用计数版）：release 旧值 + retain 新值。
+ * 见 lm_scheduler.h 注释。字段消费点（handle_migrate/computeEnd）取出后
+ * 置 NULL 并 release，引用随消费转交/归还。 */
+void lm_co_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
+    if (!co) return;
+    struct lm_scheduler_s* old = co->migrate_sched;
+    if (s) lm_scheduler_retain(s);
+    co->migrate_sched = s;
+    if (old) lm_scheduler_release(old);
+}
+
+void lm_co_set_home_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
+    if (!co) return;
+    struct lm_scheduler_s* old = co->home_sched;
+    if (s) lm_scheduler_retain(s);
+    co->home_sched = s;
+    if (old) lm_scheduler_release(old);
 }
 
 /* ============================================================
@@ -568,6 +612,8 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
  *   post 内 cond signal 唤醒 worker）。 */
 void lm_scheduler_handle_migrate(lm_co_t* co) {
     if (!co || !co->migrate_sched) return;
+    /* 消费迁移引用：target 的引用由 set_migrate_sched 持有，post 完成后
+     * 归还（post 后 co 由目标队列持有，sched 自身存活由 owner 保证）。 */
     lm_scheduler_t* target = co->migrate_sched;
     co->migrate_sched = NULL;
     if (!target->reactor && !co->pinned && co->stealable) {
@@ -575,6 +621,7 @@ void lm_scheduler_handle_migrate(lm_co_t* co) {
     } else {
         lm_scheduler_wakeup(target, co);
     }
+    lm_scheduler_release(target);
 }
 
 void lm_scheduler_stop(lm_scheduler_t* s) {

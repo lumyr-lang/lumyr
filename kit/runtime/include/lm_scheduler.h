@@ -53,6 +53,11 @@ typedef struct lm_scheduler_s {
      * tick_ns：最近一次 schedtick 变动的单调时间，判定是否超时用。 */
     _Atomic uint64_t schedtick;
     _Atomic uint64_t tick_ns;
+    /* 异步唤醒源引用计数（timer 回调 vs destroyScheduler 竞态修复）：
+     * 创建时 =1（owner 引用）；retain/release 配对；release 归零才真销毁。
+     * TimerCbCtx 捕获 sched 时 retain、回调结束 release——回调在飞期间
+     * destroyScheduler 只减不 free，post 不会踩已释放结构。 */
+    _Atomic int refcnt;
 } lm_scheduler_t;
 
 /* LIFO slot 每调度轮连续消费配额（对齐 Tokio MAX_LIFO_POLLS_PER_TICK=3，
@@ -79,10 +84,23 @@ typedef struct lm_scheduler_s {
  * 只是不能被其他 scheduler 偷到）。失败返回 NULL。 */
 lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor);
 
-/* 销毁 scheduler：先从全局注册表注销（防窃取者访问已释放结构），
- * 不销毁 reactor（reactor 由 caller 管），不销毁队列内协程
- * （协程由 owner 管，如 lm Coroutine 实例 destroy）。 */
+/* 销毁 scheduler（release 语义）：引用计数归零才真正释放——先从全局注册表
+ * 注销（防窃取者访问已释放结构），不销毁 reactor（reactor 由 caller 管），
+ * 不销毁队列内协程（协程由 owner 管，如 lm Coroutine 实例 destroy）。
+ * 若有异步唤醒源（timer 回调）持引用，实际 free 推迟到最后一个 release。 */
 void lm_scheduler_destroy(lm_scheduler_t* s);
+
+/* 引用计数：异步唤醒源（timer 回调 ctx 等）在捕获 sched 指针前 retain、
+ * 使用结束 release。retain/release 必须严格配对，否则泄漏或提前释放。 */
+void lm_scheduler_retain(lm_scheduler_t* s);
+void lm_scheduler_release(lm_scheduler_t* s);
+
+/* 协程迁移/回家字段写入（引用计数版）：覆盖前 release 旧 scheduler、
+ * retain 新 scheduler——协程存活期可能长于 scheduler 生命周期（timer 回调
+ * spawn 的协程 post 到即将销毁的 sched 后仍可能被 sysmon 迁移/computeEnd
+ * 回家），裸指针会在 handle_migrate/compute_worker 侧形成 UAF。 */
+void lm_co_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s);
+void lm_co_set_home_sched(struct lm_co_s* co, struct lm_scheduler_s* s);
 
 /* TLS：设置/取当前线程 scheduler。scheduler 运行前置位，退出后清 NULL。
  * spawn/resume 路径通过 get_current 判断是否在 scheduler 上下文。

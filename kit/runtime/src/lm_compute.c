@@ -108,8 +108,10 @@ int lm_compute_begin(void) {
     if (lm_compute_init() != 0 || g_pool.n == 0) return -3;
     lm_scheduler_t* target = g_pool.scheds[g_pool.next % (unsigned)g_pool.n];
     g_pool.next++;
-    co->home_sched = io;              /* 非空 = 处于 compute 池（computeEnd 依据） */
-    co->migrate_sched = target;       /* yield 后 drain_ready post 到该 worker */
+    /* 引用计数化：迁移期间协程持目标 scheduler 引用，timer 回调/其他线程
+     * 并发释放 scheduler 时不会 UAF（compute_test 压测第三层修复）。 */
+    lm_co_set_home_sched(co, io);             /* 非空 = 处于 compute 池（computeEnd 依据） */
+    lm_co_set_migrate_sched(co, target);      /* yield 后 drain_ready post 到该 worker */
     lm_co_yield();
     return 0;
 }
@@ -117,8 +119,9 @@ int lm_compute_begin(void) {
 int lm_compute_end(void) {
     lm_co_t* co = lm_co_current();
     if (!co || !co->home_sched) return -1;  /* 不在 compute 上下文 */
-    co->migrate_sched = co->home_sched;     /* 迁回老家 */
-    co->home_sched = NULL;
+    lm_scheduler_t* home = co->home_sched;
+    lm_co_set_migrate_sched(co, home);  /* 迁回老家：释放 worker 引用 + 转移老家引用 */
+    lm_co_set_home_sched(co, NULL);     /* 清 home 标记，引用已由 migrate_sched 持有 */
     lm_co_yield();   /* worker resume 返回后 post 回家 + 唤醒 IO reactor */
     return 0;
 }
