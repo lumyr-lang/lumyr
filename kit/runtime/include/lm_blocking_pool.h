@@ -33,6 +33,13 @@ typedef void (*lm_blocking_done_cb)(lm_co_t* co, void* result);
 int lm_blocking_submit(lm_blocking_fn fn, void* arg,
                        lm_blocking_done_cb done_cb, lm_co_t* co);
 
+/* 协程内同步等待阻塞调用：fn(arg) 流放 blocking 池执行，当前协程 yield，
+ * 完成后协程被回投到提交时所在 scheduler 续行（调度线程全程不阻塞）。
+ * 结果经 resultOut 输出（可为 NULL）。
+ * 返回 0 成功；-1 不在协程/调度器上下文；-2 提交失败（OOM/池停止）。
+ * 非 0 返回时调用方应自行回退为直接同步执行，保证功能可用。 */
+int lm_co_await_blocking(lm_blocking_fn fn, void* arg, void** resultOut);
+
 /* 池内当前线程数（监控用）。 */
 int lm_blocking_pool_size(void);
 

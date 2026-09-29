@@ -4,6 +4,8 @@
 #include "lm_array.h"
 #include "lm_container.h"
 #include "gc_runtime.h"
+#include "lm_blocking_pool.h" /* Phase 8.5：阻塞 syscall 流放 blocking 池，调度线程不阻塞 */
+#include "lm_scheduler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,49 @@
 #include <errno.h>
 #include <fnmatch.h>
 #include <libgen.h>
+
+/* ============================================================
+ * 路由约定（本文件所有阻塞操作统一遵循）
+ * ------------------------------------------------------------
+ * 每个阻塞操作提供 *_impl 纯实现 + 路由包装：
+ *   - 协程/调度器上下文：lm_co_await_blocking 提交 blocking 池并 yield，
+ *     操作在独立池线程执行，完成回投续行——调度线程不冻结；
+ *   - 非协程（主线程启动）或提交失败：直接执行 impl，功能不降级。
+ * 池线程无协程/调度器上下文，故递归树操作内部调用路由包装时自动走
+ * impl（直接执行），整棵树只占一个池任务、只 yield 一次。
+ * Value/GC 只在协程线程触碰；池任务只做纯 C 操作，结果经 malloc
+ * 缓冲/C 字符串列表（strList）带回。
+ * ============================================================ */
+
+// C 字符串动态列表：阻塞任务内收集路径（不触碰 Value/GC），
+// 回协程后再转换为 VAL_ARRAY
+typedef struct {
+    char** items;
+    int    len;
+    int    cap;
+} strList;
+
+static void strList_init(strList* l) {
+    l->items = NULL; l->len = 0; l->cap = 0;
+}
+
+static int strList_add(strList* l, const char* s) {
+    if (l->len == l->cap) {
+        int ncap = l->cap ? l->cap * 2 : 16;
+        char** ni = (char**)realloc(l->items, (size_t)ncap * sizeof(char*));
+        if (!ni) return -1;
+        l->items = ni; l->cap = ncap;
+    }
+    l->items[l->len] = strdup(s);
+    if (!l->items[l->len]) return -1;
+    l->len++;
+    return 0;
+}
+
+static void strList_free(strList* l) {
+    for (int i = 0; i < l->len; i++) free(l->items[i]);
+    free(l->items);
+}
 
 // ===== 内部辅助 =====
 
@@ -24,28 +69,61 @@ static const char* norm_mode(const char* mode) {
     return "rb";  // 默认读
 }
 
+/* ---- stat 系列：path_exists / path_is_dir / file_size ---- */
+
+static int stat_impl(const char* path, struct stat* st) {
+    return stat(path, st) == 0;
+}
+
+typedef struct {
+    const char*   path;
+    struct stat   st;
+    int           ok;
+} statCtx;
+
+static void* stat_blocking(void* arg) {
+    statCtx* c = (statCtx*)arg;
+    c->ok = stat_impl(c->path, &c->st);
+    return c;
+}
+
+/* 路由版 stat：返回 1 成功 / 0 失败；成功时可选拷贝 stat 结构。 */
+static int run_stat(const char* path, struct stat* out) {
+    statCtx c;
+    c.path = path; c.ok = 0; memset(&c.st, 0, sizeof(c.st));
+    if (lm_co_await_blocking(stat_blocking, &c, NULL) == 0) {
+        if (c.ok && out) memcpy(out, &c.st, sizeof(*out));
+        return c.ok;
+    }
+    struct stat st;
+    int ok = stat_impl(path, &st);
+    if (ok && out) memcpy(out, &st, sizeof(*out));
+    return ok;
+}
+
 // 文件是否存在
 static int path_exists(const char* path) {
-    struct stat st;
-    return stat(path, &st) == 0;
+    return run_stat(path, NULL);
 }
 
 // 是否为目录
 static int path_is_dir(const char* path) {
     struct stat st;
-    if (stat(path, &st) != 0) return 0;
+    if (!run_stat(path, &st)) return 0;
     return S_ISDIR(st.st_mode);
 }
 
 // 获取文件大小（字节）
 static long file_size(const char* path) {
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    if (!run_stat(path, &st)) return -1;
     return (long)st.st_size;
 }
 
-// 读取整个文件到 malloc 缓冲（调用方 free）
-static char* read_whole_file(const char* path, long* out_len) {
+/* ---- 读文件 ---- */
+
+// 读取整个文件到 malloc 缓冲（调用方 free）——纯实现
+static char* read_whole_impl(const char* path, long* out_len) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
@@ -59,6 +137,159 @@ static char* read_whole_file(const char* path, long* out_len) {
     fclose(f);
     if (out_len) *out_len = (long)rd;
     return buf;
+}
+
+typedef struct {
+    const char* path;
+    long        len;
+    char*       buf;
+} readCtx;
+
+static void* read_blocking(void* arg) {
+    readCtx* c = (readCtx*)arg;
+    c->buf = read_whole_impl(c->path, &c->len);
+    return c;
+}
+
+// 读取整个文件到 malloc 缓冲（调用方 free）——路由版
+static char* read_whole_file(const char* path, long* out_len) {
+    readCtx c;
+    c.path = path; c.len = 0; c.buf = NULL;
+    if (lm_co_await_blocking(read_blocking, &c, NULL) == 0) {
+        if (out_len) *out_len = c.len;
+        return c.buf;
+    }
+    return read_whole_impl(path, out_len);
+}
+
+/* ---- 写文件 ---- */
+
+// 将整块缓冲以指定 fopen 模式写入——纯实现，返回 0 成功 / -1 失败（打不开或写不完整）
+static int write_buf_impl(const char* path, const char* mode,
+                          const void* data, size_t len) {
+    FILE* f = fopen(path, mode);
+    if (!f) return -1;
+    size_t wr = fwrite(data ? data : "", 1, len, f);
+    fclose(f);
+    return wr == len ? 0 : -1;
+}
+
+typedef struct {
+    const char* path;
+    const char* mode;
+    const void* data;
+    size_t      len;
+    int         rc;
+} writeCtx;
+
+static void* write_blocking(void* arg) {
+    writeCtx* c = (writeCtx*)arg;
+    c->rc = write_buf_impl(c->path, c->mode, c->data, c->len);
+    return c;
+}
+
+// 路由版整块写入
+static int file_write_buf(const char* path, const char* mode,
+                          const void* data, size_t len) {
+    writeCtx c;
+    c.path = path; c.mode = mode; c.data = data; c.len = len; c.rc = -1;
+    if (lm_co_await_blocking(write_blocking, &c, NULL) == 0) return c.rc;
+    return write_buf_impl(path, mode, data, len);
+}
+
+/* ---- unlink / rename / truncate ---- */
+
+typedef struct {
+    const char* a;
+    const char* b;
+    int64_t     sz;
+    int         rc;
+    int         errNo;   /* 失败时的 errno（池线程 errno 不跨线程可见，显式带回） */
+} fsSysCtx;
+
+static void* unlink_blocking(void* arg) {
+    fsSysCtx* c = (fsSysCtx*)arg;
+    if (unlink(c->a) == 0) { c->rc = 0; }
+    else { c->rc = -1; c->errNo = errno; }
+    return c;
+}
+
+static void file_unlink_route(const char* path, int* rc, int* errNo) {
+    fsSysCtx c;
+    c.a = path; c.b = NULL; c.sz = 0; c.rc = -1; c.errNo = 0;
+    if (lm_co_await_blocking(unlink_blocking, &c, NULL) == 0) {
+        *rc = c.rc; *errNo = c.errNo; return;
+    }
+    if (unlink(path) == 0) { *rc = 0; *errNo = 0; }
+    else { *rc = -1; *errNo = errno; }
+}
+
+static void* rename_blocking(void* arg) {
+    fsSysCtx* c = (fsSysCtx*)arg;
+    if (rename(c->a, c->b) == 0) { c->rc = 0; }
+    else { c->rc = -1; c->errNo = errno; }
+    return c;
+}
+
+static int file_rename_route(const char* a, const char* b, int* errNo) {
+    fsSysCtx c;
+    c.a = a; c.b = b; c.sz = 0; c.rc = -1; c.errNo = 0;
+    if (lm_co_await_blocking(rename_blocking, &c, NULL) == 0) {
+        if (errNo) *errNo = c.errNo;
+        return c.rc;
+    }
+    if (rename(a, b) == 0) { if (errNo) *errNo = 0; return 0; }
+    if (errNo) *errNo = errno;
+    return -1;
+}
+
+static void* truncate_blocking(void* arg) {
+    fsSysCtx* c = (fsSysCtx*)arg;
+    if (truncate(c->a, (off_t)c->sz) == 0) { c->rc = 0; }
+    else { c->rc = -1; c->errNo = errno; }
+    return c;
+}
+
+static int file_truncate_route(const char* path, int64_t sz, int* errNo) {
+    fsSysCtx c;
+    c.a = path; c.b = NULL; c.sz = sz; c.rc = -1; c.errNo = 0;
+    if (lm_co_await_blocking(truncate_blocking, &c, NULL) == 0) {
+        if (errNo) *errNo = c.errNo;
+        return c.rc;
+    }
+    if (truncate(path, (off_t)sz) == 0) { if (errNo) *errNo = 0; return 0; }
+    if (errNo) *errNo = errno;
+    return -1;
+}
+
+/* ---- 单文件复制（read+write 合成一个池任务） ---- */
+
+static int copy_file_impl(const char* src, const char* dest) {
+    long sz = 0;
+    char* content = read_whole_impl(src, &sz);
+    if (!content) return -1;
+    int rc = write_buf_impl(dest, "wb", content, (size_t)sz);
+    free(content);
+    return rc;
+}
+
+typedef struct {
+    const char* src;
+    const char* dest;
+    int         rc;
+} copyFileCtx;
+
+static void* copy_file_blocking(void* arg) {
+    copyFileCtx* c = (copyFileCtx*)arg;
+    c->rc = copy_file_impl(c->src, c->dest);
+    return c;
+}
+
+static int file_copy_route(const char* src, const char* dest) {
+    copyFileCtx c;
+    c.src = src; c.dest = dest; c.rc = -1;
+    if (lm_co_await_blocking(copy_file_blocking, &c, NULL) == 0) return c.rc;
+    return copy_file_impl(src, dest);
 }
 
 // 统一获取文件内容（磁盘 fopen 或内存文件拷贝）到 malloc 缓冲（调用方 free）
@@ -134,8 +365,36 @@ static int norm_line_no(int64_t line_no, int total) {
     return (int)line_no;
 }
 
-// 递归删除目录（rmdir 非递归只删空目录）
-static int remove_dir_recursive(const char* path) {
+// 将字符串数组拼成"每行以 \n 结尾"的 malloc 缓冲（调用方 free）。
+// 必须在协程线程调用（触碰 Value）；拼装结果再整块流放 blocking 池写入。
+static char* join_lines(Value lines, size_t* outLen) {
+    int n = lines.v.array ? lines.v.array->len : 0;
+    size_t total = 0;
+    const char** cstrs = (const char**)calloc((size_t)n, sizeof(char*));
+    if (!cstrs) return NULL;
+    for (int i = 0; i < n; i++) {
+        cstrs[i] = lumyr_str_cstr(&lines.v.array->items[i]);
+        if (!cstrs[i]) cstrs[i] = "";
+        total += strlen(cstrs[i]) + 1;   // +1 给 '\n'
+    }
+    /* total 为全部字节数；+1 给末尾 '\0'（空数组时 total=0 仍需一字节）。 */
+    char* buf = (char*)malloc(total + 1);
+    if (!buf) { free(cstrs); return NULL; }
+    size_t off = 0;
+    for (int i = 0; i < n; i++) {
+        size_t l = strlen(cstrs[i]);
+        memcpy(buf + off, cstrs[i], l);
+        off += l;
+        buf[off++] = '\n';
+    }
+    free(cstrs);
+    *(buf + off) = '\0';   /* 多分配的一字节（0 行时 buf 长度 1） */
+    if (outLen) *outLen = off;
+    return buf;
+}
+
+// 递归删除目录（rmdir 非递归只删空目录）——纯实现（池线程调用）
+static int remove_dir_impl(const char* path) {
     DIR* d = opendir(path);
     if (!d) return -1;
     struct dirent* ent;
@@ -145,7 +404,7 @@ static int remove_dir_recursive(const char* path) {
         char child[4096];
         snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
         if (path_is_dir(child)) {
-            if (remove_dir_recursive(child) != 0) { rc = -1; }
+            if (remove_dir_impl(child) != 0) { rc = -1; }
         } else {
             if (unlink(child) != 0) { rc = -1; }
         }
@@ -155,8 +414,27 @@ static int remove_dir_recursive(const char* path) {
     return rc;
 }
 
-// 递归复制目录到 dest
-static int copy_dir_recursive(const char* src, const char* dest) {
+typedef struct {
+    const char* path;
+    int         rc;
+} dirOpCtx;
+
+static void* remove_dir_blocking(void* arg) {
+    dirOpCtx* c = (dirOpCtx*)arg;
+    c->rc = remove_dir_impl(c->path);
+    return c;
+}
+
+// 递归删除目录——路由版（整棵树一个池任务）
+static int remove_dir_recursive(const char* path) {
+    dirOpCtx c;
+    c.path = path; c.rc = -1;
+    if (lm_co_await_blocking(remove_dir_blocking, &c, NULL) == 0) return c.rc;
+    return remove_dir_impl(path);
+}
+
+// 递归复制目录到 dest——纯实现
+static int copy_dir_impl(const char* src, const char* dest) {
     struct stat st;
     if (stat(src, &st) != 0) return -1;
     // 创建目标目录
@@ -172,27 +450,38 @@ static int copy_dir_recursive(const char* src, const char* dest) {
         snprintf(src_child, sizeof(src_child), "%s/%s", src, ent->d_name);
         snprintf(dst_child, sizeof(dst_child), "%s/%s", dest, ent->d_name);
         if (path_is_dir(src_child)) {
-            if (copy_dir_recursive(src_child, dst_child) != 0) rc = -1;
+            if (copy_dir_impl(src_child, dst_child) != 0) rc = -1;
         } else {
-            // 复制单个文件
-            long sz = 0;
-            char* content = read_whole_file(src_child, &sz);
-            if (content) {
-                FILE* f = fopen(dst_child, "wb");
-                if (f) {
-                    fwrite(content, 1, (size_t)sz, f);
-                    fclose(f);
-                } else rc = -1;
-                free(content);
-            } else rc = -1;
+            // 复制单个文件（read+write 直接走纯实现，本处已在池线程）
+            if (copy_file_impl(src_child, dst_child) != 0) rc = -1;
         }
     }
     closedir(d);
     return rc;
 }
 
-// 递归遍历目录，将所有文件路径追加到 arr
-static void walk_dir_append(const char* path, Value arr) {
+typedef struct {
+    const char* src;
+    const char* dest;
+    int         rc;
+} copyDirCtx;
+
+static void* copy_dir_blocking(void* arg) {
+    copyDirCtx* c = (copyDirCtx*)arg;
+    c->rc = copy_dir_impl(c->src, c->dest);
+    return c;
+}
+
+// 递归复制目录——路由版
+static int copy_dir_recursive(const char* src, const char* dest) {
+    copyDirCtx c;
+    c.src = src; c.dest = dest; c.rc = -1;
+    if (lm_co_await_blocking(copy_dir_blocking, &c, NULL) == 0) return c.rc;
+    return copy_dir_impl(src, dest);
+}
+
+/* 递归遍历目录收集文件路径——纯实现，结果写入 strList（不触碰 Value/GC）。 */
+static void walk_impl(const char* path, strList* out) {
     DIR* d = opendir(path);
     if (!d) return;
     struct dirent* ent;
@@ -201,21 +490,44 @@ static void walk_dir_append(const char* path, Value arr) {
         char child[4096];
         snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
         if (path_is_dir(child)) {
-            walk_dir_append(child, arr);
+            walk_impl(child, out);
         } else {
-            Value s = lumyr_make_string(child);
-            // arr 是 VAL_ARRAY，使用 lumyr_array_add 原地追加（接受 Value* 指针）
-            lumyr_array_add(&arr, s);
+            strList_add(out, child);
         }
     }
     closedir(d);
 }
 
-// 列出目录条目，filter：0=全部，1=只文件，2=只目录
-static Value list_entries(const char* path, int filter) {
-    Value arr = val_array(0);
+typedef struct {
+    const char* path;
+    strList*    out;
+} walkCtx;
+
+static void* walk_blocking(void* arg) {
+    walkCtx* c = (walkCtx*)arg;
+    walk_impl(c->path, c->out);
+    return c;
+}
+
+// 递归遍历目录，将所有文件路径追加到 arr（Value 拼装在协程线程）
+static void walk_dir_append(const char* path, Value arr) {
+    strList out;
+    strList_init(&out);
+    walkCtx c;
+    c.path = path; c.out = &out;
+    if (lm_co_await_blocking(walk_blocking, &c, NULL) != 0) {
+        walk_impl(path, &out);
+    }
+    for (int i = 0; i < out.len; i++) {
+        lumyr_array_add(&arr, lumyr_make_string(out.items[i]));
+    }
+    strList_free(&out);
+}
+
+/* 列出目录条目——纯实现。filter：0=全部，1=只文件，2=只目录。 */
+static void list_impl(const char* path, int filter, strList* out) {
     DIR* d = opendir(path);
-    if (!d) return arr;
+    if (!d) return;
     struct dirent* ent;
     while ((ent = readdir(d)) != NULL) {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
@@ -224,15 +536,42 @@ static Value list_entries(const char* path, int filter) {
         int is_d = path_is_dir(child);
         if (filter == 1 && is_d) continue;
         if (filter == 2 && !is_d) continue;
-        Value s = lumyr_make_string(ent->d_name);
-        lumyr_array_add(&arr, s);
+        strList_add(out, ent->d_name);
     }
     closedir(d);
+}
+
+typedef struct {
+    const char* path;
+    int         filter;
+    strList*    out;
+} listCtx;
+
+static void* list_blocking(void* arg) {
+    listCtx* c = (listCtx*)arg;
+    list_impl(c->path, c->filter, c->out);
+    return c;
+}
+
+// 列出目录条目，filter：0=全部，1=只文件，2=只目录
+static Value list_entries(const char* path, int filter) {
+    strList out;
+    strList_init(&out);
+    listCtx c;
+    c.path = path; c.filter = filter; c.out = &out;
+    if (lm_co_await_blocking(list_blocking, &c, NULL) != 0) {
+        list_impl(path, filter, &out);
+    }
+    Value arr = val_array(out.len);
+    for (int i = 0; i < out.len; i++) {
+        arr.v.array->items[i] = lumyr_make_string(out.items[i]);
+    }
+    strList_free(&out);
     return arr;
 }
 
-// 计算目录直接子条目数
-static int dir_count(const char* path) {
+/* 目录直接子条目数——纯实现 */
+static int dir_count_impl(const char* path) {
     DIR* d = opendir(path);
     if (!d) return 0;
     struct dirent* ent;
@@ -245,8 +584,22 @@ static int dir_count(const char* path) {
     return n;
 }
 
-// 递归计算目录总大小（所有文件字节数之和）
-static int64_t dir_total_size_recurse(const char* path) {
+static void* dir_count_blocking(void* arg) {
+    dirOpCtx* c = (dirOpCtx*)arg;
+    c->rc = dir_count_impl(c->path);
+    return c;
+}
+
+// 计算目录直接子条目数
+static int dir_count(const char* path) {
+    dirOpCtx c;
+    c.path = path; c.rc = 0;
+    if (lm_co_await_blocking(dir_count_blocking, &c, NULL) == 0) return c.rc;
+    return dir_count_impl(path);
+}
+
+/* 递归计算目录总大小——纯实现（所有文件字节数之和） */
+static int64_t dir_total_impl(const char* path) {
     DIR* d = opendir(path);
     if (!d) return 0;
     struct dirent* ent;
@@ -256,7 +609,7 @@ static int64_t dir_total_size_recurse(const char* path) {
         char child[4096];
         snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
         if (path_is_dir(child)) {
-            total += dir_total_size_recurse(child);
+            total += dir_total_impl(child);
         } else {
             total += file_size(child);
         }
@@ -265,9 +618,23 @@ static int64_t dir_total_size_recurse(const char* path) {
     return total;
 }
 
+typedef struct {
+    const char* path;
+    int64_t     total;
+} dirSizeCtx;
+
+static void* dir_total_blocking(void* arg) {
+    dirSizeCtx* c = (dirSizeCtx*)arg;
+    c->total = dir_total_impl(c->path);
+    return c;
+}
+
 static int64_t dir_total_size(const char* path) {
     if (!path_exists(path)) return 0;
-    return dir_total_size_recurse(path);
+    dirSizeCtx c;
+    c.path = path; c.total = 0;
+    if (lm_co_await_blocking(dir_total_blocking, &c, NULL) == 0) return c.total;
+    return dir_total_impl(path);
 }
 
 // ===== file 公共 API =====
@@ -373,9 +740,9 @@ Value lumyr_file_field(Value v, const char* name) {
         return r;
     }
     if (strcmp(name, "mtime") == 0) {
-        /* 最后修改时间（epoch 秒） */
+        /* 最后修改时间（epoch 秒）；run_stat 协程内自动流放 blocking 池 */
         struct stat st;
-        if (stat(o->path, &st) != 0) {
+        if (!run_stat(o->path, &st)) {
             char buf[256];
             snprintf(buf, sizeof buf,
                      "file.mtime：无法读取文件状态 \"%s\" / file.mtime: cannot stat \"%s\"",
@@ -506,18 +873,14 @@ Value lumyr_file_write_all(Value v, const char* content) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("writeAll() 文件对象无效"); return val_none(); }
     const char* m = norm_mode(o->mode);
-    // writeAll 始终覆盖写
-    FILE* f = fopen(o->path, "wb");
-    if (!f) {
+    // writeAll 始终覆盖写；协程内流放 blocking 池，调度线程不阻塞
+    size_t len = content ? strlen(content) : 0;
+    if (file_write_buf(o->path, "wb", content ? content : "", len) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "writeAll() 无法打开文件（写入）: %s", o->path);
+        snprintf(buf, sizeof(buf), "writeAll() 无法打开文件（写入）或写入不完整: %s", o->path);
         runtime_error(buf);
         return val_none();
     }
-    size_t len = content ? strlen(content) : 0;
-    size_t wr = fwrite(content ? content : "", 1, len, f);
-    fclose(f);
-    if (wr != len) { runtime_error("writeAll() 写入不完整"); return val_none(); }
     (void)m;
     return val_none();
 }
@@ -540,20 +903,17 @@ Value lumyr_file_write_line(Value v, int64_t line_no, const char* content) {
     }
     // 替换第 idx 行
     lines.v.array->items[idx] = lumyr_make_string(content ? content : "");
-    // 写回
-    FILE* f = fopen(o->path, "wb");
-    if (!f) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "writeLine() 无法打开文件（写回）: %s", o->path);
-        runtime_error(buf);
+    // 协程线程拼成整块，再流放 blocking 池写入（调度线程不阻塞）
+    size_t bufLen = 0;
+    char* buf = join_lines(lines, &bufLen);
+    if (!buf || file_write_buf(o->path, "wb", buf, bufLen) != 0) {
+        free(buf);
+        char buf2[512];
+        snprintf(buf2, sizeof(buf2), "writeLine() 无法打开文件（写回）或写入失败: %s", o->path);
+        runtime_error(buf2);
         return val_none();
     }
-    for (int i = 0; i < lines.v.array->len; i++) {
-        const char* s = lumyr_str_cstr(&lines.v.array->items[i]);
-        fputs(s ? s : "", f);
-        fputc('\n', f);
-    }
-    fclose(f);
+    free(buf);
     return val_none();
 }
 
@@ -582,20 +942,17 @@ Value lumyr_file_insert_line(Value v, int64_t line_no, const char* content) {
     for (int i = 0; i < idx; i++) result.v.array->items[j++] = lines.v.array->items[i];
     result.v.array->items[j++] = lumyr_make_string(content ? content : "");
     for (int i = idx; i < total; i++) result.v.array->items[j++] = lines.v.array->items[i];
-    /* 写回 */
-    FILE* f = fopen(o->path, "wb");
-    if (!f) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "insertLine() 无法打开文件（写回）: %s", o->path);
-        runtime_error(buf);
+    /* 协程线程拼成整块，流放 blocking 池写回 */
+    size_t bufLen = 0;
+    char* buf = join_lines(result, &bufLen);
+    if (!buf || file_write_buf(o->path, "wb", buf, bufLen) != 0) {
+        free(buf);
+        char buf2[512];
+        snprintf(buf2, sizeof(buf2), "insertLine() 无法打开文件（写回）或写入失败: %s", o->path);
+        runtime_error(buf2);
         return val_none();
     }
-    for (int i = 0; i < new_total; i++) {
-        const char* s = lumyr_str_cstr(&result.v.array->items[i]);
-        fputs(s ? s : "", f);
-        fputc('\n', f);
-    }
-    fclose(f);
+    free(buf);
     return val_none();
 }
 
@@ -604,19 +961,16 @@ Value lumyr_file_write_lines(Value v, Value arr) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("writeLines() 文件对象无效"); return val_none(); }
     if (arr.type != VAL_ARRAY) { runtime_error("writeLines() 参数必须是字符串数组"); return val_none(); }
-    FILE* f = fopen(o->path, "wb");
-    if (!f) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "writeLines() 无法打开文件（写入）: %s", o->path);
-        runtime_error(buf);
+    size_t bufLen = 0;
+    char* buf = join_lines(arr, &bufLen);
+    if (!buf || file_write_buf(o->path, "wb", buf, bufLen) != 0) {
+        free(buf);
+        char buf2[512];
+        snprintf(buf2, sizeof(buf2), "writeLines() 无法打开文件（写入）或写入失败: %s", o->path);
+        runtime_error(buf2);
         return val_none();
     }
-    for (int i = 0; i < arr.v.array->len; i++) {
-        const char* s = lumyr_str_cstr(&arr.v.array->items[i]);
-        fputs(s ? s : "", f);
-        fputc('\n', f);
-    }
-    fclose(f);
+    free(buf);
     return val_none();
 }
 
@@ -624,17 +978,13 @@ Value lumyr_file_append(Value v, const char* content) {
     if (v.type != VAL_FILE) { runtime_error("append() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("append() 文件对象无效"); return val_none(); }
-    FILE* f = fopen(o->path, "ab");
-    if (!f) {
+    size_t len = content ? strlen(content) : 0;
+    if (file_write_buf(o->path, "ab", content ? content : "", len) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "append() 无法打开文件（追加）: %s", o->path);
+        snprintf(buf, sizeof(buf), "append() 无法打开文件（追加）或写入不完整: %s", o->path);
         runtime_error(buf);
         return val_none();
     }
-    size_t len = content ? strlen(content) : 0;
-    size_t wr = fwrite(content ? content : "", 1, len, f);
-    fclose(f);
-    if (wr != len) { runtime_error("append() 写入不完整"); return val_none(); }
     return val_none();
 }
 
@@ -642,17 +992,20 @@ Value lumyr_file_append_line(Value v, const char* content) {
     if (v.type != VAL_FILE) { runtime_error("appendLine() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("appendLine() 文件对象无效"); return val_none(); }
-    FILE* f = fopen(o->path, "ab");
-    if (!f) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "appendLine() 无法打开文件（追加）: %s", o->path);
-        runtime_error(buf);
+    size_t len = content ? strlen(content) : 0;
+    /* 协程线程拼出 content+'\n'，整块流放 blocking 池追加 */
+    char* buf = (char*)malloc(len + 1);
+    if (!buf) { runtime_error("appendLine() 内存不足"); return val_none(); }
+    if (content) memcpy(buf, content, len);
+    buf[len] = '\n';
+    if (file_write_buf(o->path, "ab", buf, len + 1) != 0) {
+        free(buf);
+        char buf2[512];
+        snprintf(buf2, sizeof(buf2), "appendLine() 无法打开文件（追加）或写入失败: %s", o->path);
+        runtime_error(buf2);
         return val_none();
     }
-    size_t len = content ? strlen(content) : 0;
-    fwrite(content ? content : "", 1, len, f);
-    fputc('\n', f);
-    fclose(f);
+    free(buf);
     return val_none();
 }
 
@@ -666,9 +1019,11 @@ Value lumyr_file_delete(Value v) {
     if (v.type != VAL_FILE) { runtime_error("delete() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("delete() 文件对象无效"); return val_none(); }
-    if (unlink(o->path) != 0) {
+    int rc = 0, errNo = 0;
+    file_unlink_route(o->path, &rc, &errNo);
+    if (rc != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "delete() 无法删除文件: %s (%s)", o->path, strerror(errno));
+        snprintf(buf, sizeof(buf), "delete() 无法删除文件: %s (%s)", o->path, strerror(errNo));
         runtime_error(buf);
         return val_none();
     }
@@ -713,16 +1068,12 @@ Value lumyr_file_write_bytes(Value v, Value b) {
     if (b.type != VAL_BYTES) { runtime_error("writeBytes() 参数必须是 bytes 对象"); return val_none(); }
     BytesObj* bo = (BytesObj*)b.v.bytes_obj;
     if (!bo) { runtime_error("writeBytes() bytes 对象无效"); return val_none(); }
-    FILE* f = fopen(o->path, "wb");
-    if (!f) {
+    if (file_write_buf(o->path, "wb", bo->data, (size_t)bo->len) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "writeBytes() 无法打开文件: %s", o->path);
+        snprintf(buf, sizeof(buf), "writeBytes() 无法打开文件或写入不完整: %s", o->path);
         runtime_error(buf);
         return val_none();
     }
-    size_t wr = fwrite(bo->data, 1, (size_t)bo->len, f);
-    fclose(f);
-    if (wr != (size_t)bo->len) { runtime_error("writeBytes() 写入不完整"); return val_none(); }
     return val_none();
 }
 
@@ -731,25 +1082,14 @@ Value lumyr_file_copy_to(Value v, const char* dest) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("copyTo() 文件对象无效"); return val_none(); }
     if (!dest) { runtime_error("copyTo() 目标路径为空"); return val_none(); }
-    long sz = 0;
-    char* content = read_whole_file(o->path, &sz);
-    if (!content) {
+    /* read+write 合成一个 blocking 池任务，协程只 yield 一次 */
+    if (file_copy_route(o->path, dest) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "copyTo() 无法读取源文件: %s", o->path);
+        snprintf(buf, sizeof(buf), "copyTo() 无法读取源文件或无法打开目标文件: %s -> %s",
+                 o->path, dest);
         runtime_error(buf);
         return val_none();
     }
-    FILE* f = fopen(dest, "wb");
-    if (!f) {
-        free(content);
-        char buf[512];
-        snprintf(buf, sizeof(buf), "copyTo() 无法打开目标文件: %s", dest);
-        runtime_error(buf);
-        return val_none();
-    }
-    fwrite(content, 1, (size_t)sz, f);
-    fclose(f);
-    free(content);
     return val_none();
 }
 
@@ -758,9 +1098,11 @@ Value lumyr_file_rename_to(Value v, const char* newPath) {
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("renameTo() 文件对象无效"); return val_none(); }
     if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
-    if (rename(o->path, newPath) != 0) {
+    int errNo = 0;
+    if (file_rename_route(o->path, newPath, &errNo) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)", o->path, newPath, strerror(errno));
+        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)",
+                 o->path, newPath, strerror(errNo));
         runtime_error(buf);
         return val_none();
     }
@@ -776,13 +1118,114 @@ Value lumyr_file_truncate(Value v, int64_t size) {
     if (v.type != VAL_FILE) { runtime_error("truncate() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;
     if (!o || !o->path) { runtime_error("truncate() 文件对象无效"); return val_none(); }
-    if (truncate(o->path, (off_t)size) != 0) {
+    int errNo = 0;
+    if (file_truncate_route(o->path, size, &errNo) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "truncate() 截断失败: %s (%s)", o->path, strerror(errno));
+        snprintf(buf, sizeof(buf), "truncate() 截断失败: %s (%s)", o->path, strerror(errNo));
         runtime_error(buf);
         return val_none();
     }
     return val_none();
+}
+
+/* ============================================================
+ * folder 专用阻塞操作（纯实现 + 池任务，供公共 API 路由）
+ * ============================================================ */
+
+/* mkdir -p：递归创建目录。返回 0 成功；路径已存在（EEXIST）视为成功。 */
+static int mkdir_p_impl(const char* path) {
+    char tmp[4096];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    size_t len = strlen(tmp);
+    if (len == 0) return -1;
+    if (tmp[len - 1] == '/') tmp[len - 1] = '\0';
+    for (char* p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+typedef struct {
+    const char* path;
+    int         rc;
+    int         errNo;
+} folderOpCtx;
+
+static void* mkdir_p_blocking(void* arg) {
+    folderOpCtx* c = (folderOpCtx*)arg;
+    c->rc = mkdir_p_impl(c->path);
+    if (c->rc != 0) c->errNo = errno;
+    return c;
+}
+
+/* 整目录删除：不存在幂等成功。返回 0 成功 / -1 失败。 */
+static int folder_remove_impl(const char* path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (errno == ENOENT) return 0;
+        return -1;
+    }
+    return remove_dir_impl(path);
+}
+
+static void* folder_remove_blocking(void* arg) {
+    folderOpCtx* c = (folderOpCtx*)arg;
+    c->rc = folder_remove_impl(c->path);
+    if (c->rc != 0) c->errNo = errno;
+    return c;
+}
+
+/* glob：直接子条目名与 pattern 匹配，结果写入 strList。 */
+static void glob_impl(const char* path, const char* pattern, strList* out) {
+    DIR* d = opendir(path);
+    if (!d) return;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        if (fnmatch(pattern, ent->d_name, 0) == 0) {
+            strList_add(out, ent->d_name);
+        }
+    }
+    closedir(d);
+}
+
+typedef struct {
+    const char* path;
+    const char* pattern;
+    strList*    out;
+} globCtx;
+
+static void* glob_blocking(void* arg) {
+    globCtx* c = (globCtx*)arg;
+    glob_impl(c->path, c->pattern, c->out);
+    return c;
+}
+
+/* 整目录移动：先 rename（同文件系统快），失败（跨文件系统）则复制+删除。
+ * 返回 0 成功 / -1 失败。纯实现（池线程调用）。 */
+static int folder_move_impl(const char* src, const char* dest) {
+    if (rename(src, dest) == 0) return 0;
+    if (copy_dir_impl(src, dest) != 0) return -1;
+    return remove_dir_impl(src);
+}
+
+typedef struct {
+    const char* src;
+    const char* dest;
+    int         rc;
+    int         errNo;
+} folderMoveCtx;
+
+static void* folder_move_blocking(void* arg) {
+    folderMoveCtx* c = (folderMoveCtx*)arg;
+    c->rc = folder_move_impl(c->src, c->dest);
+    if (c->rc != 0) c->errNo = errno;
+    return c;
 }
 
 // ===== folder 公共 API =====
@@ -863,25 +1306,16 @@ Value lumyr_folder_create(Value v) {
     if (v.type != VAL_FOLDER) { runtime_error("create() 仅适用于 folder 对象"); return val_none(); }
     FolderObj* o = (FolderObj*)v.v.folder_obj;
     if (!o || !o->path) { runtime_error("create() 目录对象无效"); return val_none(); }
-    // 递归创建（类似 mkdir -p）
-    char tmp[4096];
-    snprintf(tmp, sizeof(tmp), "%s", o->path);
-    size_t len = strlen(tmp);
-    if (len == 0) { runtime_error("create() 路径为空"); return val_none(); }
-    if (tmp[len - 1] == '/') tmp[len - 1] = '\0';
-    for (char* p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            mkdir(tmp, 0755);
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "create() 无法创建目录: %s (%s)", o->path, strerror(errno));
-        runtime_error(buf);
+    folderOpCtx c;
+    c.path = o->path; c.rc = -1; c.errNo = 0;
+    if (lm_co_await_blocking(mkdir_p_blocking, &c, NULL) == 0) {
+        if (c.rc == 0) return val_none();
+    } else if (mkdir_p_impl(o->path) == 0) {
         return val_none();
     }
+    char buf[512];
+    snprintf(buf, sizeof(buf), "create() 无法创建目录: %s (%s)", o->path, strerror(c.errNo));
+    runtime_error(buf);
     return val_none();
 }
 
@@ -889,11 +1323,18 @@ Value lumyr_folder_remove(Value v) {
     if (v.type != VAL_FOLDER) { runtime_error("remove() 仅适用于 folder 对象"); return val_none(); }
     FolderObj* o = (FolderObj*)v.v.folder_obj;
     if (!o || !o->path) { runtime_error("remove() 目录对象无效"); return val_none(); }
-    /* 目录不存在时幂等返回（不报错） */
-    if (!path_exists(o->path)) return val_none();
-    if (remove_dir_recursive(o->path) != 0) {
+    folderOpCtx c;
+    c.path = o->path; c.rc = -1; c.errNo = 0;
+    int rc;
+    if (lm_co_await_blocking(folder_remove_blocking, &c, NULL) == 0) {
+        rc = c.rc;
+    } else {
+        rc = folder_remove_impl(o->path);
+        if (rc != 0) c.errNo = errno;
+    }
+    if (rc != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "remove() 无法删除目录: %s (%s)", o->path, strerror(errno));
+        snprintf(buf, sizeof(buf), "remove() 无法删除目录: %s (%s)", o->path, strerror(c.errNo));
         runtime_error(buf);
         return val_none();
     }
@@ -928,21 +1369,23 @@ Value lumyr_folder_move_to(Value v, const char* dest) {
     FolderObj* o = (FolderObj*)v.v.folder_obj;
     if (!o || !o->path) { runtime_error("moveTo() 目录对象无效"); return val_none(); }
     if (!dest) { runtime_error("moveTo() 目标路径为空"); return val_none(); }
-    // 先尝试 rename（同文件系统快），失败则复制+删除
-    if (rename(o->path, dest) == 0) {
-        /* 更新内部路径 */
-        size_t plen = strlen(dest);
-        o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
-        if (o->path) memcpy(o->path, dest, plen + 1);
-        return val_none();
+    /* rename/复制+删除 合为一个池任务，协程只 yield 一次 */
+    folderMoveCtx c;
+    c.src = o->path; c.dest = dest; c.rc = -1; c.errNo = 0;
+    int rc;
+    if (lm_co_await_blocking(folder_move_blocking, &c, NULL) == 0) {
+        rc = c.rc;
+    } else {
+        rc = folder_move_impl(o->path, dest);
+        if (rc != 0) c.errNo = errno;
     }
-    if (copy_dir_recursive(o->path, dest) != 0) {
+    if (rc != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "moveTo() 移动失败: %s -> %s", o->path, dest);
+        snprintf(buf, sizeof(buf), "moveTo() 移动失败: %s -> %s (%s)",
+                 o->path, dest, strerror(c.errNo));
         runtime_error(buf);
         return val_none();
     }
-    remove_dir_recursive(o->path);
     /* 更新内部路径 */
     size_t plen = strlen(dest);
     o->path = (char*)gc_alloc(plen + 1, VAL_STRING);
@@ -955,9 +1398,11 @@ Value lumyr_folder_rename_to(Value v, const char* newPath) {
     FolderObj* o = (FolderObj*)v.v.folder_obj;
     if (!o || !o->path) { runtime_error("renameTo() 目录对象无效"); return val_none(); }
     if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
-    if (rename(o->path, newPath) != 0) {
+    int errNo = 0;
+    if (file_rename_route(o->path, newPath, &errNo) != 0) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)", o->path, newPath, strerror(errno));
+        snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)",
+                 o->path, newPath, strerror(errNo));
         runtime_error(buf);
         return val_none();
     }
@@ -973,17 +1418,17 @@ Value lumyr_folder_glob(Value v, const char* pattern) {
     FolderObj* o = (FolderObj*)v.v.folder_obj;
     if (!o || !o->path) { runtime_error("glob() 目录对象无效"); return val_array(0); }
     if (!pattern) { runtime_error("glob() 模式为空"); return val_array(0); }
-    Value arr = val_array(0);
-    DIR* d = opendir(o->path);
-    if (!d) return arr;
-    struct dirent* ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
-        if (fnmatch(pattern, ent->d_name, 0) == 0) {
-            Value s = lumyr_make_string(ent->d_name);
-            lumyr_array_add(&arr, s);
-        }
+    strList out;
+    strList_init(&out);
+    globCtx c;
+    c.path = o->path; c.pattern = pattern; c.out = &out;
+    if (lm_co_await_blocking(glob_blocking, &c, NULL) != 0) {
+        glob_impl(o->path, pattern, &out);
     }
-    closedir(d);
+    Value arr = val_array(out.len);
+    for (int i = 0; i < out.len; i++) {
+        arr.v.array->items[i] = lumyr_make_string(out.items[i]);
+    }
+    strList_free(&out);
     return arr;
 }

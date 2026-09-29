@@ -13,6 +13,8 @@
 #include "lm_reactor.h"
 #include "lm_co.h"
 #include "lm_scheduler.h"   /* Phase 8.4：timeout/resume 走 scheduler 队列去重 */
+#include "lm_blocking_pool.h" /* blocking 池：getaddrinfo 流放，调度线程不阻塞 */
+#include "lm_timer.h"        /* DNS 超时仲裁（timeout>0 时） */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +22,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -291,6 +294,123 @@ static int build_inet_sync(const char* host, struct sockaddr_in* addr) {
     return 0;
 }
 
+/* ============================================================
+ * 协程路径：getaddrinfo 流放 blocking 池，调度线程不阻塞
+ * ============================================================
+ * 仲裁模型：getaddrinfo 不可中断（见文件头既有结论），故"完成"与"超时"
+ * 两个事件各自 CAS 抢占 ctx.state（0→1 完成 / 0→2 超时），仅赢家回投协程
+ * → 协程只会被唤醒一次，无重复 resume / 丢唤醒。
+ * 超时后 getaddrinfo 仍在 blocking 线程跑完（结果丢弃），与旧超时路径一致。
+ * ctx 引用计数：blocking 完成回调、超时定时器、协程各持一份，
+ * 最后一份释放时销毁——保证协程读结果期间 ctx 不被提前 free。
+ * scheduler 引用：提交时捕获当前 scheduler 并 retain，协程释放 ctx 后 release
+ * （回投动作完成前 scheduler 不会被销毁）。 */
+typedef struct {
+    char*               host;
+    lm_co_t*            co;
+    lm_scheduler_t*     sched;
+    struct sockaddr_in  addr;    /* 解析结果（完成方写入） */
+    int                 rc;      /* 0 成功 / -1 失败 */
+    _Atomic int         state;   /* 0 等待 / 1 完成 / 2 超时 */
+    _Atomic int         refcnt;
+} lm_dns_co_ctx;
+
+static void dns_co_release(lm_dns_co_ctx* c) {
+    if (atomic_fetch_sub_explicit(&c->refcnt, 1, memory_order_acq_rel) == 1) {
+        free(c->host);
+        free(c);
+    }
+}
+
+/* blocking 池任务：在独立池线程跑 getaddrinfo，结果写入 ctx。 */
+static void* dns_co_blocking(void* arg) {
+    lm_dns_co_ctx* c = (lm_dns_co_ctx*)arg;
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = 0;
+    int rc = -1;
+    if (getaddrinfo(c->host, NULL, &hints, &res) == 0 && res) {
+        memcpy(&c->addr, res->ai_addr, sizeof(struct sockaddr_in));
+        rc = 0;
+        freeaddrinfo(res);
+    }
+    c->rc = rc;
+    return c;
+}
+
+/* blocking 完成回调（池线程）：CAS 抢"完成"，赢则回投协程。 */
+static void dns_co_done(lm_co_t* co, void* result) {
+    lm_dns_co_ctx* c = (lm_dns_co_ctx*)result;
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&c->state, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire)) {
+        lm_scheduler_wakeup(c->sched, co);
+    }
+    dns_co_release(c);
+}
+
+/* 超时回调（timer 线程）：CAS 抢"超时"，赢则回投协程。回调不阻塞。 */
+static void dns_co_timeout(lm_timer_id_t id, void* arg) {
+    (void)id;
+    lm_dns_co_ctx* c = (lm_dns_co_ctx*)arg;
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&c->state, &expected, 2,
+            memory_order_acq_rel, memory_order_acquire)) {
+        lm_scheduler_wakeup(c->sched, c->co);
+    }
+    dns_co_release(c);
+}
+
+/* 协程版 build_inet：返回 0 成功 / -1 解析失败 / -2 超时。
+ * 提交失败/OOM 时回退旧 build_inet（可能阻塞调度线程，保证功能可用）。 */
+static int build_inet(const char* host, int port, struct sockaddr_in* addr);
+
+static int build_inet_co(const char* host, int port, struct sockaddr_in* addr,
+                         int timeout) {
+    lm_co_t* co = lm_co_current();
+    lm_scheduler_t* sched = lm_scheduler_get_current();
+    if (!co || !sched) return build_inet(host, port, addr);   /* 保险：调用方已判上下文 */
+    lm_dns_co_ctx* c = (lm_dns_co_ctx*)calloc(1, sizeof(lm_dns_co_ctx));
+    if (!c) return build_inet(host, port, addr);
+    c->host = strdup(host);
+    if (!c->host) { free(c); return build_inet(host, port, addr); }
+    c->co = co;
+    c->sched = sched;
+    /* 初始引用：完成回调 + 协程；超时>0 再加定时器一份。 */
+    atomic_init(&c->state, 0);
+    atomic_init(&c->refcnt, timeout > 0 ? 3 : 2);
+    lm_scheduler_retain(sched);
+    if (lm_blocking_submit(dns_co_blocking, c, dns_co_done, co) != 0) {
+        lm_scheduler_release(sched);
+        free(c->host);
+        free(c);
+        return build_inet(host, port, addr);
+    }
+    if (timeout > 0) {
+        /* 绝对到期 = 当前单调 ms + timeout；lm_now_ns 与 timer 同为 CLOCK_MONOTONIC。 */
+        uint64_t deadline = (uint64_t)(lm_now_ns() / 1000000) + (uint64_t)timeout;
+        if (lm_timer_add(deadline, dns_co_timeout, c) == LM_TIMER_INVALID_ID) {
+            /* 定时器不可用：降级为无超时，撤回定时器引用（仲裁中不会再出现）。 */
+            atomic_fetch_sub_explicit(&c->refcnt, 1, memory_order_acq_rel);
+        }
+    }
+    lm_co_yield();
+    /* 唤醒续行：唯一 CAS 赢家保证只到这里一次。 */
+    int st = atomic_load_explicit(&c->state, memory_order_acquire);
+    int result = -1;
+    if (st == 1 && c->rc == 0) {
+        memcpy(addr, &c->addr, sizeof(*addr));
+        addr->sin_port = htons((uint16_t)port);
+        result = 0;
+    } else if (st == 2) {
+        result = -2;
+    }
+    dns_co_release(c);
+    lm_scheduler_release(sched);
+    return result;
+}
+
 // 解析 host+port → sockaddr_in（IPv4），返回 0 成功，-1 解析失败，-2 超时
 static int build_inet(const char* host, int port, struct sockaddr_in* addr) {
     memset(addr, 0, sizeof(*addr));
@@ -302,6 +422,12 @@ static int build_inet(const char* host, int port, struct sockaddr_in* addr) {
     }
     // 先尝试数字地址（快路径）
     if(inet_pton(AF_INET, host, &addr->sin_addr) == 1) return 0;
+    /* 协程上下文：getaddrinfo 流放 blocking 池 + yield，避免冻结调度线程
+     * （connect/bind/sendto 均经由本函数）；非协程（如主线程启动建 server）
+     * 保持原同步 / 自管线程路径。 */
+    if (lm_co_current() != NULL && lm_scheduler_get_current() != NULL) {
+        return build_inet_co(host, port, addr, g_dns_timeout_ms);
+    }
     int timeout = g_dns_timeout_ms;
     if (timeout <= 0) {
         return build_inet_sync(host, addr);

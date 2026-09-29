@@ -146,3 +146,59 @@ int lm_blocking_pool_size(void) {
 int lm_blocking_pool_idle(void) {
     return atomic_load_explicit(&g_pool.idle, memory_order_relaxed);
 }
+
+/* ============================================================
+ * 协程同步等待封装（lm_co_await_blocking）
+ * 机制：把用户 fn + 参数 + 目标 scheduler 装入 awaitCtx 提交，
+ *   池线程执行完经 await_done 把协程回投目标 scheduler 队列；
+ *   提交方 yield，被 drain 唤醒续行后读结果。
+ * awaitCtx 生命周期：提交方在 yield 返回、读取结果后释放——
+ *   await_done 只回投不释放（协程尚未读到结果）。
+ * scheduler 引用：提交时 retain（防回投前 scheduler 被销毁），
+ *   await_done 回投完成后 release。
+ * ============================================================ */
+typedef struct {
+    lm_blocking_fn  fn;
+    void*           arg;
+    lm_scheduler_t* sched;
+    void*           result;
+} lm_await_ctx;
+
+/* 池线程执行：调用户 fn，把结果存入 ctx（任务 fn 签名要求返回 void*）。 */
+static void* blocking_await_trampoline(void* arg) {
+    lm_await_ctx* c = (lm_await_ctx*)arg;
+    c->result = c->fn(c->arg);
+    return c;
+}
+
+/* 池线程完成回调：回投协程到提交时所在 scheduler，归还 scheduler 引用。
+ * 不释放 ctx：协程续行时要读 result。 */
+static void blocking_await_done(lm_co_t* co, void* result) {
+    lm_await_ctx* c = (lm_await_ctx*)result;
+    lm_scheduler_t* sched = c->sched;
+    if (co) lm_scheduler_wakeup(sched, co);
+    lm_scheduler_release(sched);
+}
+
+int lm_co_await_blocking(lm_blocking_fn fn, void* arg, void** resultOut) {
+    lm_co_t* co = lm_co_current();
+    lm_scheduler_t* sched = lm_scheduler_get_current();
+    if (!co || !sched) return -1;   /* 无协程/调度器上下文：调用方自行同步执行 */
+    lm_await_ctx* c = (lm_await_ctx*)calloc(1, sizeof(lm_await_ctx));
+    if (!c) return -2;
+    c->fn = fn;
+    c->arg = arg;
+    c->sched = sched;
+    lm_scheduler_retain(sched);
+    if (lm_blocking_submit(blocking_await_trampoline, c,
+                           blocking_await_done, co) != 0) {
+        lm_scheduler_release(sched);
+        free(c);
+        return -2;
+    }
+    /* 让出本线程；完成回投后由 drain resume 续行。 */
+    lm_co_yield();
+    if (resultOut) *resultOut = c->result;
+    free(c);
+    return 0;
+}
