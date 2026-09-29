@@ -101,6 +101,12 @@ typedef struct ButexEntry {
     lm_co_t* co;                     /* 非 NULL = 协程等待者；NULL = 线程等待者 */
     lm_scheduler_t* sched;           /* 协程所属 scheduler（唤醒投递目标） */
     _Atomic uint32_t notified;       /* 线程等待者的自有 park 字（0/1） */
+    _Atomic int woke;                /* 协程等待者唤醒源标记（0/1）：wake 摘队后、
+                                      * wakeup 前置 1。wait 侧 yield 循环检查——
+                                      * 伪唤醒（调度层 spawn 双投递陈旧条目把协程
+                                      * resume，但 entry 未被摘队）时 woke=0 续等，
+                                      * 防误判唤醒 + entry 泄漏（与 8.8 fd 等待
+                                      * 三态同源的健壮性防护）。 */
     int fbInited;                    /* pthread cond 保底是否已初始化 */
     pthread_mutex_t fbMutex;
     pthread_cond_t fbCond;
@@ -214,11 +220,14 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
     pthread_mutex_unlock(&g_buckets[idx].lock);
 
     if (co) {
-        /* 协程等待：yield 切回本线程 scheduler。
-         * 安全性说明：唤醒方定向 post 回本协程【自己的】scheduler，消费该队列
-         * 的只可能是当前这条线程（scheduler owner）在本协程 yield 之后——
-         * 不会有其他线程提前 resume 造成双线程同栈。entry 已由唤醒方摘队。 */
-        lm_co_yield();
+        /* 协程等待：yield 切回本线程 scheduler，循环至真唤醒。
+         * 伪唤醒（调度层双投递陈旧条目 resume，entry 未被摘队）时 woke=0 →
+         * 再 yield 续等（entry 仍在桶内，无需重入队）；真 wake 摘队置 woke=1
+         * 后 wakeup，本循环见 woke=1 退出。安全性同原注释：唤醒方定向 post 回
+         * 本协程自己的 scheduler，消费队列的只可能是当前线程，无跨线程同栈。 */
+        while (atomic_load_explicit(&e->woke, memory_order_acquire) == 0) {
+            lm_co_yield();
+        }
         entry_release(e);   /* wake 摘队时 +ref，通知完已 release；此处 drop wait 引用 */
         return 1;
     }
@@ -283,8 +292,10 @@ static int butex_wake_internal(volatile _Atomic uint32_t* addr, int maxCount) {
     while (e) {
         butex_entry_t* next = e->next;
         if (e->co) {
-            /* 定向唤醒：post 回协程所属 scheduler（pinned 定向语义）。
-             * sched 非空由 wait 侧保证。 */
+            /* 定向唤醒：先置 woke=1（标记真唤醒源，wait 侧 yield 循环据此退出），
+             * 再 post 回协程所属 scheduler（pinned 定向语义）。sched 非空由 wait 侧保证。
+             * release 序保证 woke=1 对 wait 侧 acquire 可见先于 resume。 */
+            atomic_store_explicit(&e->woke, 1, memory_order_release);
             lm_scheduler_wakeup(e->sched, e->co);
         } else {
             atomic_store_explicit(&e->notified, 1, memory_order_release);
