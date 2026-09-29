@@ -3956,15 +3956,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             runtime_error("addTimer(impl, ms, cb) 参数错误 / addTimer: bad args");
         }
         uint64_t ms = (uint64_t)bi_num_i64(argv[1]);
-        int id = vm_co_add_timer((lm_reactor_t*)argv[0].v.struct_ptr, ms, argv[2]);
-        *out = lumyr_make_int64(id);
+        lm_timer_id_t id = vm_co_add_timer((lm_reactor_t*)argv[0].v.struct_ptr, ms, argv[2]);
+        *out = lumyr_make_int64((int64_t)id);
         return 1;
     }
     case BUILTIN_REACTOR_DEL_TIMER: {
         if(argc < 2 || argv[0].type != VAL_STRUCT_PTR) {
             runtime_error("delTimer(impl, id) 参数错误");
         }
-        lm_reactor_del_timer((lm_reactor_t*)argv[0].v.struct_ptr, (int)bi_num_i64(argv[1]));
+        lm_reactor_del_timer((lm_reactor_t*)argv[0].v.struct_ptr, (lm_timer_id_t)bi_num_i64(argv[1]));
         *out = val_none();
         return 1;
     }

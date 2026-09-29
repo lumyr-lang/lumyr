@@ -293,11 +293,13 @@ typedef struct {
     Value func;   /* lm 回调函数（VAL_FUNC） */
 } TimerCbCtx;
 
-static void vm_co_timer_cb(int timer_id, void* arg) {
+static void vm_co_timer_cb(lm_timer_id_t timer_id, void* arg) {
     TimerCbCtx* tc = (TimerCbCtx*)arg;
     if(!tc) return;
-    /* spawn 协程跑 cb，传 timer_id 作参数 */
-    Value tid = lumyr_make_int64(timer_id);
+    /* spawn 协程跑 cb，传 timer_id 作参数。
+     * Phase 8.4：本回调在 timer 线程执行（非 reactor 线程）；spawn 的协程
+     * 若不 yield 则同步跑完销毁，若 yield 则泄漏（Phase 5 简化语义不变）。 */
+    Value tid = lumyr_make_int64((int64_t)timer_id);
     lm_co_t* co = vm_co_spawn(tc->func, tid);
     if(co) {
         lm_co_resume(co);  /* 协程跑 cb，可能 yield 切回这里 */
@@ -308,12 +310,13 @@ static void vm_co_timer_cb(int timer_id, void* arg) {
 }
 
 /* BUILTIN_REACTOR_ADD_TIMER 调用：注册 timer，cb 为 lm 函数。
- * 返回 timer_id（>0），失败 -1。 */
-int vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb) {
+ * Phase 8.4：转发到全局 TimerThread。返回 timer_id（>0），
+ * 失败 LM_TIMER_INVALID_ID（0）。 */
+lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb) {
     TimerCbCtx* tc = (TimerCbCtx*)malloc(sizeof(TimerCbCtx));
-    if(!tc) return -1;
+    if(!tc) return LM_TIMER_INVALID_ID;
     tc->func = cb;
-    int id = lm_reactor_add_timer(r, ms, vm_co_timer_cb, tc);
-    if(id <= 0) { free(tc); return -1; }
+    lm_timer_id_t id = lm_reactor_add_timer(r, ms, vm_co_timer_cb, tc);
+    if(id == LM_TIMER_INVALID_ID) { free(tc); return LM_TIMER_INVALID_ID; }
     return id;
 }

@@ -382,94 +382,22 @@ static void process_posted(lm_connection_t** queue, int* pcount) {
 }
 
 /* ============================================================
- * 定时器最小堆
+ * 定时器（Phase 8.4：转发到全局 TimerThread）
+ * reactor 不再维护最小堆，主循环只读 lm_timer_nearest_ms() 原子快照
+ * 算 epoll_wait/kevent 超时；到期回调由 timer 线程直接执行并投递协程
+ * 回归属 scheduler（见 lm_socket.c co_timeout_handler）。
  * ============================================================ */
 
-static void timer_heap_sift_up(lm_reactor_t* r, int i) {
-    while (i > 0) {
-        int parent = (i - 1) / 2;
-        if (r->timer_heap[i].expire_ms >= r->timer_heap[parent].expire_ms) break;
-        lm_timer_t tmp = r->timer_heap[i];
-        r->timer_heap[i] = r->timer_heap[parent];
-        r->timer_heap[parent] = tmp;
-        i = parent;
-    }
+lm_timer_id_t lm_reactor_add_timer(lm_reactor_t* r, uint64_t expire_ms, lm_timer_cb_t cb, void* data) {
+    (void)r;   /* 定时器全局共享，r 参仅兼容既有调用点签名 */
+    if (!cb) return LM_TIMER_INVALID_ID;
+    /* lm_timer_cb_t 与 lm_timer_fn_t 签名一致 (id, data)，强转消除 typedef 差异 */
+    return lm_timer_add(lm_reactor_now_ms() + expire_ms, (lm_timer_fn_t)cb, data);
 }
 
-static void timer_heap_sift_down(lm_reactor_t* r, int i) {
-    for (;;) {
-        int l = 2 * i + 1, rr = 2 * i + 2;
-        int smallest = i;
-        if (l < r->timer_count && r->timer_heap[l].expire_ms < r->timer_heap[smallest].expire_ms) smallest = l;
-        if (rr < r->timer_count && r->timer_heap[rr].expire_ms < r->timer_heap[smallest].expire_ms) smallest = rr;
-        if (smallest == i) break;
-        lm_timer_t tmp = r->timer_heap[i];
-        r->timer_heap[i] = r->timer_heap[smallest];
-        r->timer_heap[smallest] = tmp;
-        i = smallest;
-    }
-}
-
-int lm_reactor_add_timer(lm_reactor_t* r, uint64_t expire_ms, lm_timer_cb_t cb, void* data) {
-    if (!r || !cb) return -1;
-    if (r->timer_count >= r->timer_capacity) {
-        int new_cap = r->timer_capacity * 2 + 64;
-        lm_timer_t* p = (lm_timer_t*)realloc(r->timer_heap, (size_t)new_cap * sizeof(lm_timer_t));
-        if (!p) return -1;
-        r->timer_heap = p;
-        r->timer_capacity = new_cap;
-    }
-    int id = ++r->next_timer_id;
-    lm_timer_t* t = &r->timer_heap[r->timer_count++];
-    t->id = id;
-    t->expire_ms = lm_reactor_now_ms() + expire_ms;
-    t->cb = cb;
-    t->data = data;
-    t->active = 1;
-    timer_heap_sift_up(r, r->timer_count - 1);
-    return id;
-}
-
-void lm_reactor_del_timer(lm_reactor_t* r, int timer_id) {
-    if (!r || timer_id <= 0) return;
-    /* 线性找（堆按 expire 排，不按 id；删除频率低，O(n) 可接受） */
-    for (int i = 0; i < r->timer_count; i++) {
-        if (r->timer_heap[i].id == timer_id) {
-            /* 用堆尾覆盖，再下沉/上浮 */
-            int last = --r->timer_count;
-            if (i == last) return;   /* 删的就是堆尾 */
-            r->timer_heap[i] = r->timer_heap[last];
-            /* 既可能需要上浮（比 parent 小），也可能需要下沉（比 child 大） */
-            timer_heap_sift_up(r, i);
-            timer_heap_sift_down(r, i);
-            return;
-        }
-    }
-}
-
-/* 取堆顶 expire（最近过期），返回剩余 ms；堆空返回 -1（永久阻塞） */
-static int timer_next_timeout_ms(lm_reactor_t* r) {
-    if (r->timer_count == 0) return -1;
-    uint64_t now = lm_reactor_now_ms();
-    uint64_t top = r->timer_heap[0].expire_ms;
-    if (top <= now) return 0;
-    int diff = (int)(top - now);
-    return diff;
-}
-
-/* 派发过期 timer：循环取堆顶，若过期则调 cb 并弹出，未过期则停。 */
-static void timer_expire(lm_reactor_t* r) {
-    uint64_t now = lm_reactor_now_ms();
-    while (r->timer_count > 0 && r->timer_heap[0].expire_ms <= now) {
-        lm_timer_t t = r->timer_heap[0];
-        /* 先弹堆顶（堆尾覆盖+下沉），再调 cb（cb 内可能加新 timer） */
-        int last = --r->timer_count;
-        if (last > 0) {
-            r->timer_heap[0] = r->timer_heap[last];
-            timer_heap_sift_down(r, 0);
-        }
-        if (t.cb) t.cb(t.id, t.data);
-    }
+void lm_reactor_del_timer(lm_reactor_t* r, lm_timer_id_t timer_id) {
+    (void)r;
+    lm_timer_cancel(timer_id);
 }
 
 /* ============================================================
@@ -481,19 +409,15 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     lm_reactor_t* r = (lm_reactor_t*)calloc(1, sizeof(lm_reactor_t));
     if (!r) return NULL;
     r->connections = (lm_connection_t*)calloc((size_t)conn_capacity, sizeof(lm_connection_t));
-    r->timer_heap = (lm_timer_t*)calloc(64, sizeof(lm_timer_t));
     r->posted_accept = (lm_connection_t**)calloc(64, sizeof(lm_connection_t*));
     r->posted_events = (lm_connection_t**)calloc(64, sizeof(lm_connection_t*));
-    if (!r->connections || !r->timer_heap || !r->posted_accept || !r->posted_events) {
-        free(r->connections); free(r->timer_heap);
+    if (!r->connections || !r->posted_accept || !r->posted_events) {
+        free(r->connections);
         free(r->posted_accept); free(r->posted_events);
         free(r);
         return NULL;
     }
     r->conn_capacity = conn_capacity;
-    r->timer_capacity = 64;
-    r->timer_count = 0;
-    r->next_timer_id = 0;
     r->posted_accept_capacity = 64;
     r->posted_accept_count = 0;
     r->posted_events_capacity = 64;
@@ -510,7 +434,7 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     r->actions = lm_reactor_backend();
     r->backend_fd = -1;
     if (r->actions->init(r) != 0) {
-        free(r->connections); free(r->timer_heap);
+        free(r->connections);
         free(r->posted_accept); free(r->posted_events);
         free(r);
         return NULL;
@@ -552,7 +476,6 @@ void lm_reactor_destroy(lm_reactor_t* r) {
     if (r->wake_pipe[0] >= 0) { close(r->wake_pipe[0]); r->wake_pipe[0] = -1; }
     if (r->wake_pipe[1] >= 0) { close(r->wake_pipe[1]); r->wake_pipe[1] = -1; }
     free(r->connections);
-    free(r->timer_heap);
     free(r->posted_accept);
     free(r->posted_events);
     free(r);
@@ -605,14 +528,19 @@ void lm_reactor_run(lm_reactor_t* r) {
          * 每轮顶部显式轮询避免 STW 死锁（GC 等待 reactor 进入安全点）。
          * 非标记期仅一次 volatile 读 + 分支，无函数调用开销。 */
         gc_stw_check_fast();
-        /* 1. 计算最近 timer 剩余作为 epoll_wait/kevent 超时，使 timer 准时派发。
-         * 无 timer 时返回 -1（无限阻塞）——stop() 由 self-pipe 即时唤醒（零延迟），
-         * 故无限阻塞对 stop 安全。但 STW 仍需周期轮询：reactor 阻塞在
-         * epoll_wait 时无法响应 GC STW 请求（gc_stw_check_fast 仅每轮顶部跑），
-         * 故无 timer 时限 cap 1s 保证 STW 延迟 ≤1s（self-pipe 不覆盖 STW，
-         * 因 GC 不持有 reactor 管道句柄，避免跨模块耦合）。 */
-        int timeout_ms = timer_next_timeout_ms(r);
-        if (timeout_ms < 0) timeout_ms = 1000;
+        /* 1. 计算最近 timer 剩余作为 epoll_wait/kevent 超时。
+         * Phase 8.4：timer 集中到全局 TimerThread，reactor 只读原子快照
+         * lm_timer_nearest_ms()（UINT64_MAX=无 timer）。无 timer 时 cap 1s
+         * 保证 STW 延迟 ≤1s（self-pipe 不覆盖 STW）。到期回调由 timer 线程
+         * 直接执行并 wakeup 投递协程回本 reactor，无需本循环派发。 */
+        uint64_t nearest = lm_timer_nearest_ms();
+        int timeout_ms;
+        if (nearest == UINT64_MAX) {
+            timeout_ms = 1000;
+        } else {
+            uint64_t now = lm_reactor_now_ms();
+            timeout_ms = (nearest <= now) ? 0 : (int)(nearest - now);
+        }
         /* 1.5 Phase 7.2：process_events 前先消费 scheduler 就绪队列。
          * 关键时序：spawn 后的协程（如 accept loop）必须先 resume 注册 IO 事件，
          * 否则首轮 process_events 无事件可等会阻塞至 timeout cap（1s），首连接延迟。
@@ -623,9 +551,8 @@ void lm_reactor_run(lm_reactor_t* r) {
         r->actions->process_events(r, timeout_ms);
         /* 3. posted_accept 优先（accept 不能拖延，否则 listener ET 丢事件） */
         process_posted(r->posted_accept, &r->posted_accept_count);
-        /* 4. 过期 timer 派发 */
-        timer_expire(r);
-        /* 5. posted_events（一般事件延后处理，避免回调递归） */
+        /* 4. posted_events（一般事件延后处理，避免回调递归）。
+         * timer 过期派发已移除（由 timer 线程直接执行回调）。 */
         process_posted(r->posted_events, &r->posted_events_count);
     }
 }

@@ -20,9 +20,18 @@
 #include <sys/syscall.h>
 #include <linux/futex.h>
 
-static long platform_park_raw(volatile _Atomic uint32_t* word, uint32_t expected) {
+/* timeout_us：<0 无限等待（pts=NULL），>=0 超时。Phase 8.4 起为
+ * lm_futex_wait 提供超时能力（timer 线程睡到最近到期点）。 */
+static long platform_park_raw(volatile _Atomic uint32_t* word, uint32_t expected,
+                              int64_t timeout_us) {
+    struct timespec ts, *pts = NULL;
+    if (timeout_us >= 0) {
+        ts.tv_sec = (time_t)(timeout_us / 1000000);
+        ts.tv_nsec = (long)(timeout_us % 1000000) * 1000;
+        pts = &ts;
+    }
     return syscall(SYS_futex, (const uint32_t*)word, FUTEX_WAIT_PRIVATE,
-                   expected, NULL, NULL, 0);
+                   expected, pts, NULL, 0);
 }
 
 static long platform_wake_raw(volatile _Atomic uint32_t* word) {
@@ -44,8 +53,15 @@ extern int __ulock_wait(uint32_t operation, void* addr, uint64_t value,
                         uint32_t timeout);
 extern int __ulock_wake(uint32_t operation, void* addr, uint64_t wakeValue);
 
-static long platform_park_raw(volatile _Atomic uint32_t* word, uint32_t expected) {
-    return __ulock_wait(UL_COMPARE_AND_WAIT, (void*)word, (uint64_t)expected, 0);
+static long platform_park_raw(volatile _Atomic uint32_t* word, uint32_t expected,
+                              int64_t timeout_us) {
+    /* __ulock_wait 第 4 参 timeout 为 0 时无限等待；>0 为毫秒。
+     * 微秒向上取整为毫秒，避免 0 被当作无限（0<timeout_us<1000 时至少 1ms）。 */
+    uint32_t timeout_ms = 0;
+    if (timeout_us >= 0) {
+        timeout_ms = (uint32_t)(timeout_us / 1000) + 1;
+    }
+    return __ulock_wait(UL_COMPARE_AND_WAIT, (void*)word, (uint64_t)expected, timeout_ms);
 }
 
 static long platform_wake_raw(volatile _Atomic uint32_t* word) {
@@ -61,7 +77,7 @@ static int g_platformOk = -1;
 static int platform_available(void) {
     if (g_platformOk >= 0) return g_platformOk;
     _Atomic uint32_t probe = 0;
-    long r = platform_park_raw(&probe, 1);
+    long r = platform_park_raw(&probe, 1, -1);
     /* Linux 值不匹配返回 -1/EAGAIN；macOS 返回 0 或 -1（值变语义）。
      * 仅 ENOSYS 判定 syscall 不存在。 */
     if (r < 0 && errno == ENOSYS) {
@@ -87,6 +103,10 @@ typedef struct ButexEntry {
     int fbInited;                    /* pthread cond 保底是否已初始化 */
     pthread_mutex_t fbMutex;
     pthread_cond_t fbCond;
+    _Atomic int refcnt;              /* 引用计数：wait 持 1 + wake 摘队持 1，
+                                      * 双方 release，ref→0 时 destroy。
+                                      * 修复 ASAN UAF：wake 通知阶段读 entry 与
+                                      * 线程醒来 destroy 并发的竞态。 */
     struct ButexEntry* next;
 } butex_entry_t;
 
@@ -116,6 +136,16 @@ static void entry_destroy(butex_entry_t* e) {
         pthread_cond_destroy(&e->fbCond);
     }
     free(e);
+}
+
+/* 引用计数 release：ref→0 时 destroy。
+ * wait 创建持 1，wake 摘队 +1（持有 picked 引用），wake 通知完 release，
+ * wait 退出 release。两路并发 release，最后者 destroy——修复 wake 通知
+ * 阶段读 entry 与线程醒来 destroy 的 UAF 竞态。 */
+static void entry_release(butex_entry_t* e) {
+    if (atomic_fetch_sub_explicit(&e->refcnt, 1, memory_order_acq_rel) == 1) {
+        entry_destroy(e);
+    }
 }
 
 /* ---- S4 统计 ---- */
@@ -152,6 +182,7 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
     e->co = co;
     e->sched = sched;
     atomic_init(&e->notified, 0);
+    atomic_init(&e->refcnt, 1);   /* wait 持 1；wake 摘队 +1，通知完 release */
 
     /* 线程等待者且平台 futex 不可用：准备 pthread cond 保底 */
     int useFallback = (!co && !platform_available());
@@ -187,7 +218,7 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
          * 的只可能是当前这条线程（scheduler owner）在本协程 yield 之后——
          * 不会有其他线程提前 resume 造成双线程同栈。entry 已由唤醒方摘队。 */
         lm_co_yield();
-        entry_destroy(e);
+        entry_release(e);   /* wake 摘队时 +ref，通知完已 release；此处 drop wait 引用 */
         return 1;
     }
 
@@ -203,12 +234,12 @@ int lm_butex_wait(volatile _Atomic uint32_t* addr, uint32_t expected) {
     } else {
         atomic_fetch_add_explicit(&g_parkSyscalls, 1, memory_order_relaxed);
         while (atomic_load_explicit(&e->notified, memory_order_acquire) == 0) {
-            long r = platform_park_raw(&e->notified, 0);
+            long r = platform_park_raw(&e->notified, 0, -1);
             if (r < 0 && errno == ENOSYS) break;  /* 保险：不应发生 */
             /* EINTR / EAGAIN / macOS 值变：recheck notified 后决定去留 */
         }
     }
-    entry_destroy(e);
+    entry_release(e);   /* drop wait 引用；wake 若已摘队+通知完则此处 destroy */
     return 1;
 }
 
@@ -229,6 +260,9 @@ static int butex_wake_internal(volatile _Atomic uint32_t* addr, int maxCount) {
             *pp = e->next;          /* 摘队 */
             e->next = picked;
             picked = e;
+            /* +ref：wake 持 picked 引用，使通知阶段读 entry 时 wait 侧
+             * release 不会先 destroy（修复 UAF）。通知完 entry_release。 */
+            atomic_fetch_add_explicit(&e->refcnt, 1, memory_order_acq_rel);
             count++;
         } else {
             pp = &(*pp)->next;
@@ -242,8 +276,11 @@ static int butex_wake_internal(volatile _Atomic uint32_t* addr, int maxCount) {
         return 0;
     }
 
-    /* 通知阶段放在桶锁外：post/syscall 不阻塞同桶其他 wait/wake */
-    for (butex_entry_t* e = picked; e; e = e->next) {
+    /* 通知阶段放在桶锁外：post/syscall 不阻塞同桶其他 wait/wake。
+     * 先存 next 再 release——release 可能 destroy e 使 e->next 失效。 */
+    butex_entry_t* e = picked;
+    while (e) {
+        butex_entry_t* next = e->next;
         if (e->co) {
             /* 定向唤醒：post 回协程所属 scheduler（pinned 定向语义）。
              * sched 非空由 wait 侧保证。 */
@@ -258,6 +295,8 @@ static int butex_wake_internal(volatile _Atomic uint32_t* addr, int maxCount) {
                 platform_wake_raw(&e->notified);
             }
         }
+        entry_release(e);   /* drop wake 引用；wait 侧 release 时最后者 destroy */
+        e = next;
     }
     return count;
 }
@@ -268,4 +307,29 @@ int lm_butex_wake(volatile _Atomic uint32_t* addr, int maxCount) {
 
 int lm_butex_wake_all(volatile _Atomic uint32_t* addr) {
     return butex_wake_internal(addr, 0x7fffffff);
+}
+
+/* ============================================================
+ * Phase 8.4：裸 futex 等待/唤醒（timer 线程专用）
+ * 见 lm_butex.h 头部契约。仅服务单等待者场景（timer 线程私有 _nsignals），
+ * 不经 entry 表：直接平台 syscall，无分配/摘链开销。
+ * ============================================================ */
+int lm_futex_wait(volatile _Atomic uint32_t* word, uint32_t expected, int64_t timeout_us) {
+    if (!word) return 0;
+    /* 值已变更则不睡（与 lm_butex_wait 同语义，关闭丢唤醒） */
+    if (atomic_load_explicit(word, memory_order_acquire) != expected) return 0;
+    if (!platform_available()) return 0;
+    atomic_fetch_add_explicit(&g_parkSyscalls, 1, memory_order_relaxed);
+    long r = platform_park_raw(word, expected, timeout_us);
+    if (r >= 0) return 1;   /* 被唤醒（macOS __ulock_wait 成功返回 0） */
+    /* r < 0：值变更（EAGAIN）/超时（ETIMEDOUT）/中断（EINTR）。
+     * 统一返回 0，caller recheck 值与时间决定去留——对齐 timer_thread
+     * futex_wait 返回后由 run 循环重新计算最近到期点的语义。 */
+    return 0;
+}
+
+int lm_futex_wake(volatile _Atomic uint32_t* word) {
+    if (!word) return 0;
+    if (!platform_available()) return 0;
+    return (int)platform_wake_raw(word);
 }

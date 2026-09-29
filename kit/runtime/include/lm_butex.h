@@ -47,6 +47,20 @@ int lm_butex_wake(volatile _Atomic uint32_t* addr, int maxCount);
 /* 唤醒同一 addr 上的全部等待者。返回实际唤醒数。 */
 int lm_butex_wake_all(volatile _Atomic uint32_t* addr);
 
+/* ============================================================
+ * Phase 8.4：裸 futex 等待/唤醒（timer 线程专用，无 entry 表）
+ * lm_butex_wait/wake 走哈希分桶 entry 表，支持协程+线程混合队列、
+ * 多等待者广播；但 timer 线程只有一个等待者（自身），且无须协程
+ * 感知——直接走平台 syscall，跳过 entry 表分配/摘链开销。
+ *
+ * lm_futex_wait：仅当 *word == expected 时挂起当前【线程】（非协程）；
+ *   timeout_us < 0 无限等待，>=0 超时返回。返回 0=值已变更未睡或超时
+ *   返回，1=入睡后被唤醒。caller 返回后须自行 recheck 条件与时间。
+ * lm_futex_wake：唤醒一个在 word 上等待的线程。无等待者时无 syscall。
+ * ============================================================ */
+int lm_futex_wait(volatile _Atomic uint32_t* word, uint32_t expected, int64_t timeout_us);
+int lm_futex_wake(volatile _Atomic uint32_t* word);
+
 /* ---- S4 统计（8.11 可观测指标族预留）---- */
 
 /* 无 waiter 的空唤醒次数（wake 调用时桶内无匹配 entry）。 */

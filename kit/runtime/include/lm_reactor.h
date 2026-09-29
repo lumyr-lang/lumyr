@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "lm_timer.h"   /* Phase 8.4：定时器集中化，add_timer/del_timer 转发 lm_timer_* */
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,13 +40,18 @@ typedef enum {
 /* reactor / connection 前向声明 */
 typedef struct lm_reactor_s     lm_reactor_t;
 typedef struct lm_connection_s  lm_connection_t;
+/* Phase 8.4：conn->sched 指针（跨线程超时唤醒投递目标）。前向声明即可，
+ * 不引 lm_scheduler.h 避免循环 include。 */
+typedef struct lm_scheduler_s   lm_scheduler_t;
 
 /* 事件回调：参数 (conn, events, data)。events 为 LM_EVENT_* 位掩码。
  * 在 reactor 主线程上下文执行；如需挂起协程，在回调内调 lm_co_yield。 */
 typedef void (*lm_event_handler_t)(lm_connection_t* conn, uint32_t events, void* data);
 
-/* 定时器回调：参数 (timer_id, data)。在 reactor 主线程上下文执行。 */
-typedef void (*lm_timer_cb_t)(int timer_id, void* data);
+/* 定时器回调：参数 (timer_id, data)。
+ * Phase 8.4：回调在 timer 线程上下文执行（非 reactor 主线程），
+ * MUST NOT block（见 lm_timer.h）。timer_id 为 lm_timer_id_t（64 位）。 */
+typedef void (*lm_timer_cb_t)(lm_timer_id_t timer_id, void* data);
 
 /* ============================================================
  * 连接对象（对齐 nginx ngx_connection_t）
@@ -65,6 +71,8 @@ struct lm_connection_s {
     uint32_t flags;
     int timedout;                   /* 定时器到期标记（连接级超时） */
     void* co;                       /* 所属协程指针（Phase 2 接入前置 NULL） */
+    lm_scheduler_t* sched;          /* Phase 8.4：注册超时时所属 scheduler，
+                                      * 超时回调（timer 线程）据此 wakeup 投递协程 */
     void* data;                     /* 用户自由数据 */
     lm_connection_t* next_free;     /* 连接池 free list 链 */
 };
@@ -88,18 +96,6 @@ typedef struct {
 const lm_event_actions_t* lm_reactor_backend(void);
 
 /* ============================================================
- * 定时器（最小堆）
- * ============================================================ */
-
-typedef struct {
-    int id;                 /* 定时器 ID（>0；0=空槽，-1=未用） */
-    uint64_t expire_ms;     /* 过期绝对时间（单调 ms） */
-    lm_timer_cb_t cb;
-    void* data;
-    int active;             /* 0=空闲，1=在堆中 */
-} lm_timer_t;
-
-/* ============================================================
  * reactor 主对象
  * ============================================================ */
 
@@ -110,11 +106,8 @@ struct lm_reactor_s {
     lm_connection_t* connections;        /* conn_capacity 元数组 */
     int conn_capacity;
     lm_connection_t* free_conns;          /* free list 头（next_free 串联） */
-    /* 定时器最小堆（数组实现，下标 0 起算，parent(i)=(i-1)/2，children 2i+1/2i+2） */
-    lm_timer_t* timer_heap;
-    int timer_count;
-    int timer_capacity;
-    int next_timer_id;                    /* 单调递增，避免复用 */
+    /* Phase 8.4：定时器集中到全局 TimerThread，reactor 不再维护最小堆。
+     * 主循环只读 lm_timer_nearest_ms() 原子快照算 epoll_wait/kevent 超时。 */
     /* posted 队列：accept 优先级高于一般事件（对齐 nginx 双队列） */
     lm_connection_t** posted_accept;
     int posted_accept_count;
@@ -156,11 +149,13 @@ int lm_reactor_del(lm_reactor_t* r, lm_connection_t* c, uint32_t events);
 void lm_reactor_post_accept(lm_reactor_t* r, lm_connection_t* c);
 void lm_reactor_post_event(lm_reactor_t* r, lm_connection_t* c);
 
-/* 定时器：返回 timer_id（>0），失败 -1。
+/* 定时器：转发到全局 TimerThread（Phase 8.4 集中化）。
  * expire_ms 为相对当前时间的过期毫秒数（如 5000 表示 5 秒后到期）。
- * 到期时 cb 在 reactor 主线程调用；cb 内可删除自身 timer_id。 */
-int lm_reactor_add_timer(lm_reactor_t* r, uint64_t expire_ms, lm_timer_cb_t cb, void* data);
-void lm_reactor_del_timer(lm_reactor_t* r, int timer_id);
+ * 到期时 cb 在 timer 线程调用（MUST NOT block，见 lm_timer.h）。
+ * 返回 timer_id（>0），失败 LM_TIMER_INVALID_ID（0）。
+ * r 参保留兼容既有调用点签名，内部忽略（定时器全局共享）。 */
+lm_timer_id_t lm_reactor_add_timer(lm_reactor_t* r, uint64_t expire_ms, lm_timer_cb_t cb, void* data);
+void lm_reactor_del_timer(lm_reactor_t* r, lm_timer_id_t timer_id);
 
 /* 主循环：阻塞至 stop_flag 或所有事件处理完。
  * 每轮：process_events(timeout=最近 timer 剩余) → 处理 posted_accept →

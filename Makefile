@@ -178,6 +178,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_compute.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_wsq.c
 # Phase 8.3：统一 futex 级阻塞原语（butex），cond/worker 睡眠统一入口。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_butex.c
+# Phase 8.4：集中化定时器线程（全局单 TimerThread + 分桶 + 最小堆）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_timer.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

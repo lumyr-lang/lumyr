@@ -12,6 +12,7 @@
 #include "gc_runtime.h"
 #include "lm_reactor.h"
 #include "lm_co.h"
+#include "lm_scheduler.h"   /* Phase 8.4：timeout/resume 走 scheduler 队列去重 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,26 +131,39 @@ static int set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* 协程事件回调：事件就绪时 resume 等待的协程。
- * conn->read_data/write_data 存的是 lm_co_t* 指针（co_wait_fd 注册时设）。
- * lm_co_resume 同步返回（协程 yield 或完成才返回），返回后 reactor 继续处理下一事件。 */
+/* 协程事件回调：fd 事件就绪时把等待的协程投递到 scheduler 就绪队列。
+ * Phase 8.4：不再直接 lm_co_resume——超时回调在 timer 线程跨线程并发，
+ * 两者直接 resume 同一 co 会双线程同栈腐败。统一走 scheduler 队列 +
+ * co->queued 去重：fd 事件（本回调，reactor 线程=owner）走 post_local
+ * 快通道，超时（co_timeout_handler，timer 线程）走 wakeup 跨线程 post；
+ * 先到者 queued=1，后到者 no-op，由 reactor 主循环 step1.5 drain 统一 resume。
+ * 无 scheduler（conn->sched==NULL，Phase 5 简化遗留）：直接 resume（同线程
+ * 串行安全，超时路径已降级不并发）。 */
 static void co_resume_handler(lm_connection_t* conn, uint32_t events, void* data) {
-    (void)conn; (void)events;
+    (void)events;
     lm_co_t* co = (lm_co_t*)data;
-    if (co) lm_co_resume(co);
+    if (!co) return;
+    if (conn->sched) {
+        lm_scheduler_post_local(conn->sched, co);
+    } else {
+        lm_co_resume(co);
+    }
 }
 
-/* 协程超时回调（reactor 一次性定时器到期）：置 conn->timedout=1 并 resume 等待的协程。
- * conn 本轮已入 posted 就绪队列时（READY 标志置位，事件与超时同刻就绪）不直接
- * resume——交由 posted 分派统一 resume，避免定时器回调与事件回调同轮双 resume 竞态；
- * 此时 timedout=1 仍生效，协程清理后按超时返回（同刻边界语义取超时，数据留内核缓冲）。 */
-static void co_timeout_handler(int timer_id, void* data) {
+/* 协程超时回调（Phase 8.4：全局 TimerThread 到期，timer 线程上下文）：
+ * 置 conn->timedout=1 并把协程投递回注册归属 scheduler。
+ * 跨线程（timer→reactor）：走 lm_scheduler_wakeup（post + self-pipe 唤醒目标
+ * reactor），由目标 reactor 主循环 step1.5 drain 统一 resume。queued 去重保证
+ * 与 fd 事件的 post_local 不会双 resume 同一 co。
+ * 无 scheduler（conn->sched==NULL）：仅置 timedout 不 wake——co 留 SUSPENDED，
+ * 降级（文档化：无 scheduler 不支持超时精确唤醒，不腐败栈）。 */
+static void co_timeout_handler(lm_timer_id_t timer_id, void* data) {
     (void)timer_id;
     lm_connection_t* conn = (lm_connection_t*)data;
     conn->timedout = 1;
-    if (conn->flags & LM_CONN_FLAG_READY) return;
+    if (!conn->sched) return;
     lm_co_t* co = (lm_co_t*)conn->co;
-    if (co) lm_co_resume(co);
+    if (co) lm_scheduler_wakeup(conn->sched, co);
 }
 
 /* 协程挂起等 fd 事件（带超时变体）：fd 事件 + reactor 一次性定时器双注册，先到先得。
@@ -176,15 +190,20 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
     conn->read_data  = co;
     conn->write_data = co;
     conn->co = co;
+    /* Phase 8.4：记录所属 scheduler，超时回调（timer 线程跨线程）据此 wakeup
+     * 投递协程回本线程 reactor；fd 事件 handler（reactor 线程=本线程）据此
+     * post_local。无 scheduler（lm_scheduler_get_current()==NULL）时 conn->sched
+     * 保持 NULL，两条路径降级（resume 直接 resume / timeout 仅置标记）。 */
+    conn->sched = lm_scheduler_get_current();
     if (lm_reactor_add(g_socket_reactor, conn, events) != 0) {
         lm_reactor_free_connection(g_socket_reactor, conn);
         return -1;
     }
-    int timer_id = -1;
+    lm_timer_id_t timer_id = LM_TIMER_INVALID_ID;
     if (timeout_ms > 0) {
         timer_id = lm_reactor_add_timer(g_socket_reactor, (uint64_t)timeout_ms,
                                         co_timeout_handler, conn);
-        if (timer_id < 0) {
+        if (timer_id == LM_TIMER_INVALID_ID) {
             lm_reactor_del(g_socket_reactor, conn, conn->active_events);
             lm_reactor_free_connection(g_socket_reactor, conn);
             return -1;
@@ -194,7 +213,7 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
     /* resume 回来：事件已就绪或定时器到期，摘事件 + 摘定时器 + 归还连接池 */
     int timedout = conn->timedout;
     lm_reactor_del(g_socket_reactor, conn, conn->active_events);
-    if (timer_id > 0) lm_reactor_del_timer(g_socket_reactor, timer_id);
+    if (timer_id != LM_TIMER_INVALID_ID) lm_reactor_del_timer(g_socket_reactor, timer_id);
     lm_reactor_free_connection(g_socket_reactor, conn);
     return timedout ? 1 : 0;
 }

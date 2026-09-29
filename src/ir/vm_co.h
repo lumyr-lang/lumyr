@@ -39,8 +39,9 @@ lm_co_t* vm_co_spawn(Value func, Value arg);
 
 /* reactor addTimer(ms, cb) 的 lm 回调封装（BUILTIN_REACTOR_ADD_TIMER 调用）。
  * timer 触发时 spawn 协程跑 cb，传 timer_id 作参数。
- * 返回 timer_id（>0），失败 -1。 */
-int vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb);
+ * Phase 8.4：timer 集中到全局 TimerThread，返回 lm_timer_id_t（>0），
+ * 失败 LM_TIMER_INVALID_ID（0）。 */
+lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb);
 
 #ifdef __cplusplus
 }
