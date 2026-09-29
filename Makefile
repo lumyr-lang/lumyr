@@ -176,6 +176,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_cond.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_compute.c
 # Phase 8.2：Chase-Lev 无锁工作窃取队列（WSQ），lm_scheduler 的本地队列底座。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_wsq.c
+# Phase 8.3：统一 futex 级阻塞原语（butex），cond/worker 睡眠统一入口。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_butex.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

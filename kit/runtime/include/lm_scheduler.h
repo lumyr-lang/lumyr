@@ -34,9 +34,10 @@ typedef struct lm_scheduler_s {
     lm_co_t* ready_tail;        /* 定向队列尾 */
     pthread_mutex_t ready_mutex;/* 保护定向队列（跨线程投递） */
     int stop;                   /* 停止标志（scheduler_stop 置位） */
-    /* Phase 7.4：compute worker 空闲等待 cond（加在末尾）。post 锁内 signal，
-     * 无 waiter 时 no-op；IO scheduler 的 drain 由 reactor 驱动不用它（signal 无害）。 */
-    pthread_cond_t idle_cond;
+    /* Phase 8.3：worker 睡眠改用 butex（替换 Phase 7.4 的 idle_cond）。
+     * pop_blocking 在本字上 lm_butex_wait；post/overflow_wake_one 先改本字
+     * 再 lm_butex_wake——无 waiter 时零系统调用（S4）。 */
+    _Atomic uint32_t sleepWord;
     /* ===== Phase 8.2：WSQ + LIFO slot + 窃取（末尾追加） ===== */
     lm_co_t* lifo_slot;         /* LIFO 单格快通道（同线程唤醒，对齐 Tokio） */
     int lifo_used;              /* 本轮 LIFO 已连续消费数（配额 LM_SCHED_LIFO_QUOTA/轮） */
@@ -112,10 +113,10 @@ lm_co_t* lm_scheduler_pop(lm_scheduler_t* s);
  * IO WSQ 内的中立协程由 compute worker 空闲时偷走。 */
 void lm_scheduler_drain_ready(lm_scheduler_t* s);
 
-/* Phase 7.4 + 8.2：阻塞取任务——compute worker 主循环用。
+/* Phase 7.4 + 8.2/8.3：阻塞取任务——compute worker 主循环用。
  * 顺序：mutex 定向队列 → 本地 WSQ → 全局队列取批灌 WSQ → 批量窃取
- * （随机起点 + 质数步长遍历注册表）→ 全空则 idle_cond 睡眠
- * （sleeping 标志置位，全局队列投递方扫描唤醒；8.3 起换 butex）。
+ * （随机起点 + 质数步长遍历注册表）→ 全空则 sleepWord 上 butex 睡眠
+ * （sleeping 标志置位，全局队列投递方扫描唤醒）。
  * stop 置位且全源空时返回 NULL（worker 退出条件）。 */
 lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s);
 

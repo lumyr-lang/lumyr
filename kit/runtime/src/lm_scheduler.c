@@ -3,6 +3,7 @@
 // 本文件实现：TLS / 生命周期（含注册表注册注销）/ mutex 定向队列 / LIFO slot /
 // 本地 WSQ 投递与溢出 / 全局溢出队列（injector）/ 批量窃取 / drain 与阻塞 pop。
 #include "lm_scheduler.h"
+#include "lm_butex.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -93,15 +94,24 @@ long lm_scheduler_overflow_len(void) {
     return atomic_load_explicit(&g_ov_len, memory_order_acquire);
 }
 
+/* Phase 8.3：唤醒一个已在 sleepWord 上 butex 睡眠的本 scheduler。
+ * 协议：先 fetch_add 改字、后 butex_wake（丢唤醒防护）；worker 未睡时
+ * 仅多一次字递增 + 桶内查找，无系统调用（S4）。 */
+static void sched_wake_parked(lm_scheduler_t* s) {
+    atomic_fetch_add_explicit(&s->sleepWord, 1, memory_order_release);
+    lm_butex_wake(&s->sleepWord, 1);
+}
+
 /* 唤醒一个睡眠中的 compute worker（全局队列投递后）。
  * round-robin 起点扫描注册表找 sleeping 的 compute scheduler（reactor==NULL），
- * signal 其 idle_cond——固定顺序扫描会让注册表靠前的 worker 永远先醒先抢
+ * 唤醒其 sleepWord——固定顺序扫描会让注册表靠前的 worker 永远先醒先抢
  * 全局锁（压测实测独吞 60%），游标轮转对齐 Go wakep 的随机唤醒语义。
  * 找不到（大家都在忙）则跳过——忙碌 worker drain 时会查到全局队列。
  * 唤醒封顶 1 个（对齐 signal_task 封顶语义，防惊群）。 */
 static void overflow_wake_one(void) {
     /* 游标由 g_scheds_mutex 保护（调用路径均经本函数，锁内串行递增） */
     static int g_wake_cursor = 0;
+    lm_scheduler_t* target = NULL;
     pthread_mutex_lock(&g_scheds_mutex);
     int n = g_scheds_n;
     if (n > 0) {
@@ -111,14 +121,14 @@ static void overflow_wake_one(void) {
             lm_scheduler_t* s = g_scheds[(start + k) % n];
             if (s && !s->reactor &&
                 atomic_load_explicit(&s->sleeping, memory_order_acquire)) {
-                pthread_mutex_lock(&s->ready_mutex);
-                pthread_cond_signal(&s->idle_cond);
-                pthread_mutex_unlock(&s->ready_mutex);
+                target = s;
                 break;
             }
         }
     }
     pthread_mutex_unlock(&g_scheds_mutex);
+    /* butex 唤醒放注册表锁外：不持全局锁做 syscall */
+    if (target) sched_wake_parked(target);
 }
 
 /* 全局队列入队（置 queued=1）+ 唤醒一个空闲 worker。 */
@@ -186,14 +196,13 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     s->ready_head = NULL;
     s->ready_tail = NULL;
     pthread_mutex_init(&s->ready_mutex, NULL);
-    pthread_cond_init(&s->idle_cond, NULL);
+    atomic_store_explicit(&s->sleepWord, 0, memory_order_relaxed);
     s->stop = 0;
     /* Phase 8.2 字段 */
     s->lifo_slot = NULL;
     s->lifo_used = 0;
     if (lm_wsq_init(&s->wsq, 0) != 0) {
         pthread_mutex_destroy(&s->ready_mutex);
-        pthread_cond_destroy(&s->idle_cond);
         free(s);
         return NULL;
     }
@@ -213,7 +222,6 @@ void lm_scheduler_destroy(lm_scheduler_t* s) {
      * 队列内残留协程由 owner 自行 destroy，scheduler 仅释放自身结构。 */
     lm_wsq_destroy(&s->wsq);
     pthread_mutex_destroy(&s->ready_mutex);
-    pthread_cond_destroy(&s->idle_cond);
     free(s);
 }
 
@@ -226,6 +234,7 @@ void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co) {
     if (co->queued) return;   /* 防重复入队 */
     co->queued = 1;
     co->next = NULL;
+    int needWake;
     pthread_mutex_lock(&s->ready_mutex);
     if (s->ready_tail) {
         s->ready_tail->next = co;
@@ -233,10 +242,11 @@ void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co) {
         s->ready_head = co;
     }
     s->ready_tail = co;
-    /* Phase 7.4：锁内 signal idle_cond——compute worker 阻塞 pop 时靠它唤醒。
-     * 无 waiter（IO scheduler drain 由 reactor 驱动）时 signal 为 no-op，无害。 */
-    pthread_cond_signal(&s->idle_cond);
+    /* Phase 8.3：仅当本 worker 已在 butex 睡眠时需要唤醒。
+     * sleeping 标志在 pop_blocking 持本锁置位，读取与入队同锁串行。 */
+    needWake = atomic_load_explicit(&s->sleeping, memory_order_acquire);
     pthread_mutex_unlock(&s->ready_mutex);
+    if (needWake) sched_wake_parked(s);
 }
 
 /* Phase 7.3：跨线程唤醒——post + wakeup reactor（定向语义，Phase 8.2 不分流）。
@@ -315,6 +325,7 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
     } else {
         /* 已置 queued=1 的 old 直接走定向入队（绕开 post 的 queued 检查） */
         old->next = NULL;
+        int needWake;
         pthread_mutex_lock(&s->ready_mutex);
         if (s->ready_tail) {
             s->ready_tail->next = old;
@@ -322,8 +333,9 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
             s->ready_head = old;
         }
         s->ready_tail = old;
-        pthread_cond_signal(&s->idle_cond);
+        needWake = atomic_load_explicit(&s->sleeping, memory_order_acquire);
         pthread_mutex_unlock(&s->ready_mutex);
+        if (needWake) sched_wake_parked(s);
     }
 }
 
@@ -405,10 +417,10 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
 
 /* ============================================================
  * Phase 7.4 + 8.2：阻塞 pop——compute worker 主循环用。
- * 顺序：mutex 定向队列 → WSQ → 全局取批灌 WSQ → 窃取 → cond 睡眠。
- * 睡眠丢唤醒防护：sleeping 标志在锁内 recheck 前置位，全局投递方
- * （overflow_push→overflow_wake_one）扫描 sleeping worker 并 signal；
- * recheck 覆盖全部无锁源（WSQ 近似长度 + 全局 len 原子）。
+ * 顺序：mutex 定向队列 → WSQ → 全局取批灌 WSQ → 窃取 → butex 睡眠。
+ * 睡眠丢唤醒防护：sleeping 标志在 ready_mutex 内置位，recheck 覆盖全部
+ * 任务源（ready_head + WSQ 近似长度 + 全局 len 原子）；唤醒方
+ * （post / overflow_wake_one）"先改 sleepWord、后 butex_wake"。
  * ============================================================ */
 lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
     if (!s) return NULL;
@@ -427,13 +439,21 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
         /* 4. 批量窃取 */
         co = sched_steal(s);
         if (co) return co;
-        /* 5. 全源空 → cond 睡眠（8.3 起换 butex） */
+        /* 5. 全源空 → sleepWord 上 butex 睡眠（Phase 8.3）。
+         * sleeping 置位 + recheck 持 ready_mutex，与 post 入队互斥；
+         * expected 锁内读取——唤醒方改字必在 post 之后，若已 post 则
+         * recheck 看到 ready_head 不会睡。wait 期间不持 ready_mutex，
+         * 投递方不被睡眠 worker 阻塞。 */
         pthread_mutex_lock(&s->ready_mutex);
         atomic_store_explicit(&s->sleeping, 1, memory_order_release);
         while (!s->ready_head && !s->stop &&
                lm_wsq_size_approx(&s->wsq) == 0 &&
                atomic_load_explicit(&g_ov_len, memory_order_acquire) == 0) {
-            pthread_cond_wait(&s->idle_cond, &s->ready_mutex);
+            uint32_t expected = atomic_load_explicit(&s->sleepWord,
+                                                    memory_order_acquire);
+            pthread_mutex_unlock(&s->ready_mutex);
+            lm_butex_wait(&s->sleepWord, expected);
+            pthread_mutex_lock(&s->ready_mutex);
         }
         atomic_store_explicit(&s->sleeping, 0, memory_order_release);
         co = s->ready_head;
@@ -475,5 +495,19 @@ void lm_scheduler_handle_migrate(lm_co_t* co) {
 
 void lm_scheduler_stop(lm_scheduler_t* s) {
     if (!s) return;
+    /* 与 pop_blocking 睡眠段共用 ready_mutex 做握手互斥：二者各自先写
+     * 自己的标志（stop / sleeping）再读对方标志，若无锁序列化，x86 TSO
+     * 下双方可能互读对方 store buffer 里的旧值（stop 方读 sleeping=0
+     * 不唤醒、睡眠方读 stop=0 入睡）→ 丢唤醒死锁。持锁后两种交错：
+     *   stop 先拿锁 → 睡眠方锁内 recheck 到 stop 不睡；
+     *   睡眠方先拿锁 → stop 看到 sleeping=1，锁外唤醒（睡眠方解锁后才
+     *   真正 park，其 butex_wait 内部桶锁 recheck 覆盖“先改字后入队”）。
+     * 唤醒放锁外，避免 futex 系统调用与嵌套桶锁压在 ready_mutex 内。 */
+    pthread_mutex_lock(&s->ready_mutex);
     s->stop = 1;
+    int wasSleeping = atomic_load_explicit(&s->sleeping,
+                                           memory_order_acquire);
+    pthread_mutex_unlock(&s->ready_mutex);
+    /* 未睡时无系统调用（S4）；睡则唤醒让其 recheck stop 后退出 */
+    if (wasSleeping) sched_wake_parked(s);
 }

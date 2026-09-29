@@ -1,58 +1,44 @@
-// lm_cond.h —— 协程条件变量（Phase 7.3 跨线程唤醒原语）
-// 对标 lthread lthread_cond_t：wait/signal/broadcast。
+// lm_cond.h —— 协程条件变量（Phase 7.3 引入；Phase 8.3 收敛到 butex）
+// wait/signal/broadcast 全部基于 lm_butex 单原子字实现——
+// 不再维护私有 waiter 队列，唤醒语义（丢唤醒防护、无 waiter 零系统调用）
+// 统一由 butex 提供。
 //
-// 设计要点：
-//   - waiter 队列：lm_cond_node_t 单链（co + sched），mutex 保护。
-//     wait 时挂当前协程到队尾 + yield（切回 reactor 等 signal 唤醒）；
-//     signal 时从队头取一个，wakeup（post 到目标 scheduler + reactor self-pipe）。
-//   - 跨线程：wait 记录协程所属 scheduler（lm_scheduler_get_current），
-//     signal/broadcast 用 lm_scheduler_wakeup 投递到该 scheduler + 唤醒 reactor。
-//     线程 A signal → 线程 B 的 reactor 从 epoll_wait 返回 → drain_ready resume 协程。
-//   - 无 scheduler 时 wait 是 no-op（非 reactor 上下文，C 测试场景）。
+// 语义：
+//   - wait：以当前字值为 expected 调 lm_butex_wait——仅当字未被
+//     signal/broadcast 改变时挂起。须在协程内、scheduler 上下文调用；
+//     非协程/无 scheduler 时不睡立即返回（与旧实现 no-op 等价，
+//     谓词循环调用方按 spurious wakeup 处理）。
+//   - signal：先改字（fetch_add）、后 lm_butex_wake 一个 waiter。
+//   - broadcast：先改字、后 lm_butex_wake_all（一次字变更唤醒全部）。
 //
 // 使用约束：
-//   - wait 必须在协程内调用（lm_co_current != NULL）且有 scheduler。
-//   - signal/broadcast 可在任意线程调用（mutex 保护 waiter 队列）。
-//   - destroy 时 waiter 队列内残留协程由 owner 管（不自动 wakeup，避免语义歧义）。
+//   - 标准谓词循环用法：while (条件不满足) cond.wait()。
+//   - destroy 时仍有等待者的语义不变：由 owner 管（不自动 wakeup）。
 #ifndef LM_COND_H
 #define LM_COND_H
 
-#include "lm_co.h"
-#include "lm_scheduler.h"
-#include <pthread.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct lm_cond_node {
-    lm_co_t* co;                  /* 等待协程 */
-    lm_scheduler_t* sched;        /* 协程所属 scheduler（wait 时记录，signal 时投递目标） */
-    struct lm_cond_node* next;    /* waiter 链 */
-} lm_cond_node_t;
-
 typedef struct lm_cond {
-    lm_cond_node_t* head;         /* waiter 队列头（FIFO） */
-    lm_cond_node_t* tail;         /* waiter 队列尾 */
-    pthread_mutex_t mutex;        /* 保护 waiter 队列（跨线程 signal/broadcast） */
+    _Atomic uint32_t word;        /* butex 状态字：signal/broadcast 递增 */
 } lm_cond_t;
 
 /* 创建条件变量。失败返回 NULL。 */
 lm_cond_t* lm_cond_new(void);
 void lm_cond_destroy(lm_cond_t* cond);
 
-/* wait：挂当前协程到 waiter 队列 + yield（切回 reactor 等 signal 唤醒）。
- * 必须在协程内调用（lm_co_current != NULL）且有 scheduler。
- * 非协程上下文或无 scheduler 时 no-op（C 测试场景）。 */
+/* wait：挂起当前协程直到被 signal/broadcast（语义见文件头）。 */
 void lm_cond_wait(lm_cond_t* cond);
 
-/* signal：唤醒一个 waiter（FIFO 队头）。
- * 从 waiter 队列取一个协程，wakeup 到它的 scheduler + reactor。
- * 可在任意线程调用（mutex 保护）。无 waiter 时 no-op。 */
+/* signal：唤醒一个 waiter。无 waiter 时无系统调用。 */
 void lm_cond_signal(lm_cond_t* cond);
 
-/* broadcast：唤醒全部 waiter。
- * 遍历 waiter 队列，逐个 wakeup。可在任意线程调用。 */
+/* broadcast：唤醒全部 waiter。 */
 void lm_cond_broadcast(lm_cond_t* cond);
 
 #ifdef __cplusplus
