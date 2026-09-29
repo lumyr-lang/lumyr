@@ -97,10 +97,14 @@ da.close(); db.close();
 // ===== 6. 选项与字段 =====
 s = TcpSocket();
 check(s.fileno() > 0, "fileno > 0");
+// setsockopt 语义为"设置下限"，Linux 内核为 SO_SNDBUF/SO_RCVBUF 预留空间，
+// getsockopt 返回值通常是设置值的 2 倍；macOS 返回设置值本身。
+// 故容忍 >= 设置值，不写死平台倍数。 / setsockopt sets a floor; Linux
+// kernel doubles SO_SNDBUF/SO_RCVBUF on getsockopt, macOS returns as-is.
 s.setOption("sndBuf", 8192);
-check(s.getOption("sndBuf") == 8192, "sndBuf roundtrip, got: " + s.getOption("sndBuf"));
+check(s.getOption("sndBuf") >= 8192, "sndBuf roundtrip, got: " + s.getOption("sndBuf"));
 s.setOption("rcvBuf", 4096);
-check(s.getOption("rcvBuf") == 4096, "rcvBuf roundtrip");
+check(s.getOption("rcvBuf") >= 4096, "rcvBuf roundtrip, got: " + s.getOption("rcvBuf"));
 s.close();
 
 // ===== 7. bytes 二进制收发（含 NUL，二进制安全） =====
