@@ -29,7 +29,7 @@ extern "C" {
 
 typedef struct lm_scheduler_s {
     lm_reactor_t* reactor;       /* 绑定 reactor（NULL = compute 池，Phase 7.4） */
-    lm_co_t* current;           /* 当前运行协程（reactor 主循环时 NULL） */
+    _Atomic(lm_co_t*) current;      /* 当前运行协程（reactor 主循环时 NULL）；sysmon 跨线程读，owner 写——原子化 */
     lm_co_t* ready_head;        /* mutex 定向队列头（FIFO 单链，co->next 串联） */
     lm_co_t* ready_tail;        /* 定向队列尾 */
     pthread_mutex_t ready_mutex;/* 保护定向队列（跨线程投递） */
@@ -101,6 +101,10 @@ void lm_scheduler_release(lm_scheduler_t* s);
  * 回家），裸指针会在 handle_migrate/compute_worker 侧形成 UAF。 */
 void lm_co_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s);
 void lm_co_set_home_sched(struct lm_co_s* co, struct lm_scheduler_s* s);
+/* CAS 版：仅当 migrate_sched 当前为 NULL 才设为 s（成功 retain 并返回 1）。
+ * sysmon 强制迁移用——与协程自身 computeBegin 并发写同一字段时，
+ * 避免 check-then-set 双写导致 scheduler 引用泄漏/迁移目标错乱。 */
+int lm_co_try_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s);
 
 /* TLS：设置/取当前线程 scheduler。scheduler 运行前置位，退出后清 NULL。
  * spawn/resume 路径通过 get_current 判断是否在 scheduler 上下文。

@@ -28,6 +28,7 @@ typedef enum {
     LM_CO_RUNNING = 1,   /* 正在执行 */
     LM_CO_SUSPENDED = 2, /* yield 挂起等待事件 */
     LM_CO_DEAD = 3,      /* 已结束（entry 返回或异常） */
+    LM_CO_SWAPPING = 4,  /* reaper 正在搬栈（换出中）；resume 见此态自旋等待 */
 } lm_co_state_t;
 
 typedef struct lm_co_s {
@@ -36,7 +37,7 @@ typedef struct lm_co_s {
     size_t stack_size;      /* 可用栈大小（不含 guard page） */
     lm_ctx_t ctx;            /* 协程上下文（lm_ctx_make 写入 / lm_ctx_jump 保存） */
     lm_ctx_t resume_ctx;     /* resume 调用方的上下文（yield / DEAD 切回目标） */
-    lm_co_state_t state;
+    _Atomic lm_co_state_t state;   /* 原子：resume CAS 抢 RUNNING / reaper CAS 抢 SWAPPING 仲裁栈所有权 */
     void (*entry)(void*);   /* 协程入口 */
     void* arg;
     /* Phase 3 GC 集成时记录栈区间供扫描（挂起时注册给 GC） */
@@ -59,8 +60,8 @@ typedef struct lm_co_s {
      * 迁移协议（对标 lthread PENDING 模式）：协程栈内只设标记 + yield，真正的
      * post 由调度方在 lm_co_resume 返回（栈已让出）后执行——防双线程同栈竞态
      * （若 yield 前 post，worker 可能抢在 yield 前切栈 → 两线程同时在一条栈上）。 */
-    struct lm_scheduler_s* home_sched;
-    struct lm_scheduler_s* migrate_sched;
+    _Atomic(struct lm_scheduler_s*) home_sched;     /* 原子：sysmon 强制迁移与协程 computeBegin/End 并发写 */
+    _Atomic(struct lm_scheduler_s*) migrate_sched;
     /* ASAN fiber 注解状态（仅 ASAN 构建由 lm_co.c 内部读写，恒占字段保持布局一致）：
      * asan_fake 本协程的 fake stack 保存槽；asan_caller_bottom/size 为 resume
      * 调用方栈区间（低地址底 + 大小），yield/结束切回时的目标栈声明。 */
@@ -77,7 +78,9 @@ typedef struct lm_co_s {
      * scheduler post 分流：pinned || !stealable → mutex 定向队列；
      *         中立可偷 → 本线程 WSQ / 跨线程全局队列。 */
     int pinned;
-    int stealable;
+    /* 原子：vm yield_hook（owner 线程）/ reaper（swap_out/in）写，
+     * scheduler post 分流（任意线程）读——TSAN 登记竞态。 */
+    _Atomic int stealable;
     /* Phase 8.5：分通道抢占预算字段（结构体末尾追加，ABI 不变）。
      * reds：当前协程剩余 reduction 预算，resume 时装载 LM_SCHED_REDS(4000)，
      *       VM 通道由派发 handler 在 CALL/RETURN/JMP 回边/BUILTIN 扣减，

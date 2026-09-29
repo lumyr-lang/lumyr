@@ -417,8 +417,18 @@ lm_timer_id_t lm_timer_add(uint64_t deadline_ms, lm_timer_fn_t fn, void* arg) {
     int wake = (deadline_ms < g_timer._nearest_run_time);
     if (wake) g_timer._nearest_run_time = deadline_ms;
     pthread_mutex_unlock(&g_timer.mtx);
+    /* nsignals 必须无条件递增（先入桶后递增，run 循环 4.5 复核协议依赖）。
+     * 它是 run 循环的"任务变更"代计数：仅在 wake 时递增有一个丢唤醒窗口——
+     * add 若落在 run 的 sweep~publish 之间（回调刚触发完、最近到期点尚未
+     * 重算发布），_nearest_run_time 仍是触发前旧值（小于新任务到期点），
+     * wake=0 不递增 → run 复核通过并 park 到旧最近到期点 → 新任务滞留桶中
+     * 直到该旧到期点才被发现（compute_test 心跳链实测停摆 ~10s 至 bailout）。
+     * 无条件递增后：落在 consume~复核间的 add 由复核发现（重跑 consume），
+     * 落在复核~park 间的 add 由 futex 入口值校验发现（值不等立即返回）。
+     * futex_wake 保持条件触发：线程已 park 且新任务晚于其睡眠目标时无需唤起
+     *（其自身超时先到期，醒后 consume 自然取到新任务）。 */
+    atomic_fetch_add_explicit(&g_timer.nsignals, 1, memory_order_release);
     if (wake) {
-        atomic_fetch_add_explicit(&g_timer.nsignals, 1, memory_order_release);
         lm_futex_wake(&g_timer.nsignals);
     }
     return task_id;

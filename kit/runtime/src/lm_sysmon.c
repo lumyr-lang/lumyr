@@ -62,9 +62,8 @@ static int sysmon_scan_once(uint64_t now_ns) {
         if (now_ns - tick_ns <= force_ns) continue;
 
         /* 超时：取当前运行协程。current 为 NULL = 空闲，跳过。
-         * current 由 owner 线程在 resume 前置位、resume 返回后清 NULL；
-         * sysmon 跨线程读指针在 64 位平台对齐访问是原子的（x86/arm）。 */
-        lm_co_t* co = s->current;
+         * current 由 owner 线程在 resume 前置位、resume 返回后清 NULL（原子写）。 */
+        lm_co_t* co = atomic_load_explicit(&s->current, memory_order_acquire);
         if (!co) continue;
 
         found_timeout = 1;
@@ -76,20 +75,17 @@ static int sysmon_scan_once(uint64_t now_ns) {
         if (s->reactor == NULL) continue;
 
         /* Phase 8.5 E：非 pinned + IO 线程卡死 → 强制迁到 compute 池。
-         * 复用迁移协议：写 migrate_sched，协程在下一个让出点（LM_BUMP_REDS
+         * 复用迁移协议：设 migrate_sched，协程在下一个让出点（LM_BUMP_REDS
          * 或自愿 yield）经 handle_migrate 迁走。
-         * 仅当 migrate_sched 为空时才设——若已设（上轮扫描设的，协程尚未
-         * 让出消费），不覆盖，避免 round-robin 换 target 导致协程迟迟不迁。 */
-        if (!co->migrate_sched) {
-            lm_scheduler_t* target = lm_compute_pool_scheduler();
-            if (target) {
-                lm_co_set_migrate_sched(co, target);   /* 持目标引用，消费方 handle_migrate 释放 */
-                fprintf(stderr,
-                    "[sysmon] force-migrate co=%p from io-sched=%p to compute-sched=%p "
-                    "(stuck %.2fms)\n",
-                    (void*)co, (void*)s, (void*)target,
-                    (now_ns - tick_ns) / 1000000.0);
-            }
+         * try_set（CAS 空→target）：若已设（上轮扫描设的，协程尚未让出消费；
+         * 或协程并发 computeBegin 自设）不覆盖——防双写丢 scheduler 引用。 */
+        lm_scheduler_t* target = lm_compute_pool_scheduler();
+        if (target && lm_co_try_set_migrate_sched(co, target)) {
+            fprintf(stderr,
+                "[sysmon] force-migrate co=%p from io-sched=%p to compute-sched=%p "
+                "(stuck %.2fms)\n",
+                (void*)co, (void*)s, (void*)target,
+                (now_ns - tick_ns) / 1000000.0);
         }
     }
     return found_timeout;

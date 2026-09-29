@@ -215,7 +215,7 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     lm_scheduler_t* s = (lm_scheduler_t*)calloc(1, sizeof(lm_scheduler_t));
     if (!s) return NULL;
     s->reactor = reactor;
-    s->current = NULL;
+    atomic_store_explicit(&s->current, NULL, memory_order_relaxed);
     s->ready_head = NULL;
     s->ready_tail = NULL;
     pthread_mutex_init(&s->ready_mutex, NULL);
@@ -278,23 +278,35 @@ void lm_scheduler_destroy(lm_scheduler_t* s) {
     lm_scheduler_release(s);
 }
 
-/* 协程迁移/回家字段写入（引用计数版）：release 旧值 + retain 新值。
+/* 协程迁移/回家字段写入（引用计数版）：原子 exchange 换新值后再 release 旧值。
  * 见 lm_scheduler.h 注释。字段消费点（handle_migrate/computeEnd）取出后
  * 置 NULL 并 release，引用随消费转交/归还。 */
 void lm_co_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
     if (!co) return;
-    struct lm_scheduler_s* old = co->migrate_sched;
     if (s) lm_scheduler_retain(s);
-    co->migrate_sched = s;
+    struct lm_scheduler_s* old = atomic_exchange_explicit(&co->migrate_sched, s,
+                                                          memory_order_acq_rel);
     if (old) lm_scheduler_release(old);
 }
 
 void lm_co_set_home_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
     if (!co) return;
-    struct lm_scheduler_s* old = co->home_sched;
     if (s) lm_scheduler_retain(s);
-    co->home_sched = s;
+    struct lm_scheduler_s* old = atomic_exchange_explicit(&co->home_sched, s,
+                                                          memory_order_acq_rel);
     if (old) lm_scheduler_release(old);
+}
+
+int lm_co_try_set_migrate_sched(struct lm_co_s* co, struct lm_scheduler_s* s) {
+    if (!co || !s) return 0;
+    struct lm_scheduler_s* expected = NULL;
+    if (!atomic_compare_exchange_strong_explicit(&co->migrate_sched, &expected, s,
+                                                 memory_order_acq_rel,
+                                                 memory_order_acquire)) {
+        return 0;   /* 已有迁移目标：不覆盖（引用归属既有设置方/消费方） */
+    }
+    lm_scheduler_retain(s);
+    return 1;
 }
 
 /* ============================================================
@@ -372,7 +384,7 @@ void lm_scheduler_post_local(lm_scheduler_t* s, lm_co_t* co) {
     if (co->queued) return;   /* 防重复入队 */
     /* 分流：pinned || !stealable → mutex 定向队列（栈数据/ fd 亲和本线程）；
      *      中立 → 本地 WSQ（可被窃取）。 */
-    if (co->pinned || !co->stealable) {
+    if (co->pinned || atomic_load_explicit(&co->stealable, memory_order_acquire) == 0) {
         lm_scheduler_post(s, co);
         return;
     }
@@ -392,7 +404,7 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
     if (!old) return;
     /* 旧内容顶出：中立 → WSQ 尾；非中立/pinned → mutex 定向队列
      *（WSQ 只放中立协程，否则窃取者会偷走栈数据绑本线程的协程） */
-    if (!old->pinned && old->stealable) {
+    if (!old->pinned && atomic_load_explicit(&old->stealable, memory_order_acquire)) {
         wsq_push_or_overflow(s, old);
     } else {
         /* 已置 queued=1 的 old 直接走定向入队（绕开 post 的 queued 检查） */
@@ -491,10 +503,11 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
         if (!co) co = lm_scheduler_pop(s);
         if (!co) break;
         /* 置 current=co：使协程内 lm_co_resume 走嵌套直连路径（同步切栈），
-         * 而非再次投递到本队列（否则死循环）。yield 后清 current=NULL。 */
-        s->current = co;
+         * 而非再次投递到本队列（否则死循环）。yield 后清 current=NULL。
+         * 原子写：sysmon 跨线程读 current 判定卡死协程。 */
+        atomic_store_explicit(&s->current, co, memory_order_release);
         lm_co_resume(co);
-        s->current = NULL;
+        atomic_store_explicit(&s->current, NULL, memory_order_release);
         /* Phase 8.5 C：长调度墙钟告警。协程单次 resume 墙钟耗时超过
          * LM_SCHED_LONG_SCHED_MS（默认 50ms）时打告警——通常意味着长 C 内建
          * 未主动让步（应调 LM_BUMP_ALL_REDS），或 sysmon 尚未介入。
@@ -514,7 +527,8 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
          * 仅当无迁移目标时，slice_yield 才重入队本 scheduler 继续轮转。 */
         if (co->slice_yield) {
             co->slice_yield = 0;
-            if (co->state != LM_CO_DEAD && !co->migrate_sched) {
+            if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
+                atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
                 /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
                  * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。
                  * 用 lm_scheduler_post（mutex）而非 post_local（WSQ）。
@@ -611,12 +625,14 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
  *   否则（IO 回家 / pinned）→ wakeup 定向（self-pipe 唤醒 reactor /
  *   post 内 cond signal 唤醒 worker）。 */
 void lm_scheduler_handle_migrate(lm_co_t* co) {
-    if (!co || !co->migrate_sched) return;
-    /* 消费迁移引用：target 的引用由 set_migrate_sched 持有，post 完成后
-     * 归还（post 后 co 由目标队列持有，sched 自身存活由 owner 保证）。 */
-    lm_scheduler_t* target = co->migrate_sched;
-    co->migrate_sched = NULL;
-    if (!target->reactor && !co->pinned && co->stealable) {
+    if (!co) return;
+    /* 消费迁移引用：原子取出并置 NULL；target 的引用由设置方持有，
+     * post 完成后归还（post 后 co 由目标队列持有，sched 自身存活由 owner 保证）。 */
+    lm_scheduler_t* target = atomic_exchange_explicit(&co->migrate_sched, NULL,
+                                                      memory_order_acq_rel);
+    if (!target) return;
+    if (!target->reactor && !co->pinned &&
+        atomic_load_explicit(&co->stealable, memory_order_acquire)) {
         overflow_push(co);
     } else {
         lm_scheduler_wakeup(target, co);

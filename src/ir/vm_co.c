@@ -103,11 +103,11 @@ static void vm_co_yield_hook(lm_co_t* co) {
     VMCoState* st = (VMCoState*)co->vm_state;
     if(!st) return;
     /* 保存协程执行状态（DEAD 时跳过——协程要销毁）*/
-    if(co->state != LM_CO_DEAD) {
+    if(atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD) {
         for(int i = 0; i < 4; i++) st->stack_sp[i] = g_stack_mgr->sp[i];
         st->err_jmp = g_err_jmp;
         vm_except_save_state(&st->except_state);
-        if (co->migrate_sched) {
+        if (atomic_load_explicit(&co->migrate_sched, memory_order_acquire)) {
             st->migrated = 1;
             for (int i = 0; i < STACK_TYPE_COUNT; i++) {
                 int sp = g_stack_mgr->sp[i];
@@ -132,7 +132,7 @@ static void vm_co_yield_hook(lm_co_t* co) {
          * 否则栈数据物理留在本线程栈池 → 只能本线程 resume → 不可窃取。
          * resume hook 消费 mig_copy 后协程重新运行，栈数据回到新线程池，
          * 下次 yield 时本标志按同一规则重判。 */
-        co->stealable = (st->migrated) ? 1 : 0;
+        co->stealable = (st->migrated) ? 1 : 0;   /* _Atomic 字段：裸写即 seq_cst 原子存 */
     }
     /* 恢复 baseline（调用方状态）*/
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->baseline_sp[i];

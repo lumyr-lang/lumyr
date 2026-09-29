@@ -167,14 +167,13 @@ static void co_trampoline(void* arg) {
     /* 首次切入协程：resume 侧 start_switch 已声明本栈，恢复本协程 fake（初始 NULL） */
     __sanitizer_finish_switch_fiber(co->asan_fake, NULL, NULL);
 #endif
-    /* 进入协程：设 TLS，调 entry */
+    /* 进入协程：设 TLS，调 entry（state 已由 resume 方 CAS 写 RUNNING） */
     co_set_current(co);
-    co->state = LM_CO_RUNNING;
     if (co->entry) {
         co->entry(co->arg);
     }
     /* entry 返回：协程结束，转 DEAD，清 TLS，显式切回 resume 调用方。 */
-    co->state = LM_CO_DEAD;
+    atomic_store_explicit(&co->state, LM_CO_DEAD, memory_order_release);
     co_set_current(NULL);
 #ifdef LM_ASAN_FIBER
     /* 切回 resume_ctx 前补配对的 start_switch
@@ -212,7 +211,7 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     co->stack_top  = st.stack_top;   /* 低地址，可用区起 */
     co->entry = entry;
     co->arg = arg;
-    co->state = LM_CO_READY;
+    atomic_store_explicit(&co->state, LM_CO_READY, memory_order_relaxed);
     co->next = NULL;
     /* Phase 8.2：调度分流标志初始化。
      * stealable=1：未运行的协程无 VM 栈数据，任何线程 resume 都安全；
@@ -221,7 +220,7 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
      * 派生的子协程默认同线程亲和；顶层 spawn（无父协程）pinned=0。 */
     lm_co_t* parent = lm_co_current();
     co->pinned = parent ? parent->pinned : 0;
-    co->stealable = 1;
+    atomic_store_explicit(&co->stealable, 1, memory_order_relaxed);
     /* Phase 8.5：reduction 预算初始化。首次 resume 时装载 LM_SCHED_REDS。 */
     co->reds = LM_SCHED_REDS;
     co->last_resume_ns = 0;
@@ -258,11 +257,11 @@ lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class) {
     co->stack_top  = st.stack_top;
     co->entry = entry;
     co->arg = arg;
-    co->state = LM_CO_READY;
+    atomic_store_explicit(&co->state, LM_CO_READY, memory_order_relaxed);
     co->next = NULL;
     lm_co_t* parent = lm_co_current();
     co->pinned = parent ? parent->pinned : 0;
-    co->stealable = 1;
+    atomic_store_explicit(&co->stealable, 1, memory_order_relaxed);
     co->reds = LM_SCHED_REDS;
     co->last_resume_ns = 0;
     atomic_init(&co->preempt_flag, 0);
@@ -320,18 +319,12 @@ static void co_swap_in(lm_co_t* co) {
     free(co->swap_buffer);
     co->swap_buffer = NULL;
     co->swap_size   = 0;
-    co->stealable   = 1;   /* 恢复换出前状态（swap 仅针对 stealable=1 协程） */
+    atomic_store_explicit(&co->stealable, 1, memory_order_release);   /* 恢复换出前状态（swap 仅针对 stealable=1 协程） */
     atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL, memory_order_release);
 }
 
 void lm_co_resume(lm_co_t* co) {
-    if (!co || co->state == LM_CO_DEAD) return;
-    /* Phase 8.6 E：换出态协程 resume 前先换入（从堆 buffer 恢复物理页内容）。
-     * SWAPPING_OUT 态也要等（reaper 正在拷贝，换入需等其完成）。 */
-    int ss = atomic_load_explicit(&co->swap_state, memory_order_acquire);
-    if (ss == LM_CO_SWAP_SWAPPED || ss == LM_CO_SWAP_SWAPPING_OUT) {
-        co_swap_in(co);
-    }
+    if (!co || atomic_load_explicit(&co->state, memory_order_acquire) == LM_CO_DEAD) return;
     /* Phase 7.2：scheduler 投递在 SPAWN 时做（BUILTIN_CO_SPAWN 检查
      * sched->current==NULL 时 post 到就绪队列），resume 走纯直连切换
      * 路径——reactor drain_ready 钩子直接调本函数消费就绪队列。
@@ -340,8 +333,34 @@ void lm_co_resume(lm_co_t* co) {
      * caller 可能是 NULL（reactor 主循环）或另一个协程（协程内嵌套 resume，
      * 如 server_co accept 后 spawn echo_co 并 resume 启动）。 */
     lm_co_t* caller = lm_co_current();
-    lm_co_state_t prev = co->state;
-    co->state = LM_CO_RUNNING;
+    /* Phase 8.6 修复：与 reaper（co_swap_out）的栈仲裁——CAS 抢 RUNNING。
+     * LM_CO_SWAPPING = reaper 正在搬栈：自旋等其完成（<1ms）；完成后
+     * swap_state=SWAPPED，下轮循环先 swap_in 恢复栈内容再 CAS。
+     * 无仲裁时 reaper 可能在 resume 切入前 madvise 清空活栈（compute_test rc=139）。
+     * Phase 8.6 E：换出态协程 resume 前先换入（SWAPPING_OUT 态也要等）。 */
+    lm_co_state_t prev;
+    for (;;) {
+        int ss = atomic_load_explicit(&co->swap_state, memory_order_acquire);
+        if (ss == LM_CO_SWAP_SWAPPED || ss == LM_CO_SWAP_SWAPPING_OUT) {
+            co_swap_in(co);
+        }
+        lm_co_state_t st = atomic_load_explicit(&co->state, memory_order_acquire);
+        if (st == LM_CO_SWAPPING) {
+            struct timespec ts = {0, 1000};   /* 1µs 退避，reaper 拷贝 <1ms */
+            nanosleep(&ts, NULL);
+            continue;
+        }
+        if (st == LM_CO_SUSPENDED || st == LM_CO_READY) {
+            if (atomic_compare_exchange_weak_explicit(&co->state, &st,
+                    LM_CO_RUNNING, memory_order_acq_rel, memory_order_acquire)) {
+                prev = st;
+                break;
+            }
+            continue;
+        }
+        prev = st;   /* 其他态（理论不可达）：保持现行直接覆盖语义 */
+        break;
+    }
     /* Phase 8.5：每次 resume 重装 reduction 预算 + 记录起始时间。
      * 预算耗尽（VM 派发点 / cc 插桩点）在指令边界 lm_co_yield() 让出，
      * 切回这里时重新装载——与 BEAM context_switch→erts_schedule 同语义。 */
@@ -374,10 +393,18 @@ void lm_co_resume(lm_co_t* co) {
                                     NULL, NULL);
 #endif
     /* 协程 yield 或 entry 返回后切回这里。
-     * 协程 yield 时 TLS 已被 yield 清为 NULL（切回前）且 vm_state 已保存 + baseline 已恢复；
-     * entry 返回时 trampoline 已清 TLS，但 _Thread_local 仍是协程最终状态（DEAD 场景），
-     * 这里调 yield_hook(co) 恢复 baseline（co->state==DEAD 时跳过保存，只恢复 baseline）。 */
-    if (co->state == LM_CO_DEAD && g_co_yield_hook) g_co_yield_hook(co);
+     * yield 切回（state 仍 RUNNING）：协程栈此刻已冻结（ctx.sp 已保存），
+     * 由本线程补写 SUSPENDED——reaper 仅见 SUSPENDED 才能 CAS SWAPPING 动栈，
+     * 保证「state 可见 = 栈已冻结」的时序（若由 yield 在 jump 前写，
+     * reaper 可能在栈未冻结时搬栈 + madvise 清空活栈）。
+     * DEAD 切回（trampoline 已写 DEAD）：调 yield_hook 恢复 baseline
+     *（DEAD 时跳过保存，只恢复 baseline——协程要销毁，保存无意义）。 */
+    lm_co_state_t stAfter = atomic_load_explicit(&co->state, memory_order_acquire);
+    if (stAfter == LM_CO_RUNNING) {
+        atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
+    } else if (stAfter == LM_CO_DEAD && g_co_yield_hook) {
+        g_co_yield_hook(co);
+    }
     /* 恢复 caller 的 current：NULL=reactor 主循环无协程上下文；非 NULL=外层协程
      * （嵌套 resume 场景，外层协程继续执行时 lm_co_current() 需返回外层 co，
      * 否则后续 in_co 判定失效走阻塞分支）。 */
@@ -387,8 +414,9 @@ void lm_co_resume(lm_co_t* co) {
 
 void lm_co_yield(void) {
     lm_co_t* co = lm_co_current();
-    if (!co || co->state != LM_CO_RUNNING) return;
-    co->state = LM_CO_SUSPENDED;
+    if (!co || atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_RUNNING) return;
+    /* 注意：SUSPENDED 不在此写——jump 后栈才冻结，由 resume 方切回后补写
+     *（见 lm_co_resume 返回段注释），保证 reaper 见 SUSPENDED 时栈已冻结。 */
     /* yield 前注册冻结栈区间，供 GC 保守扫描（否则 yield 期间 GC 漏标
      * C 局部 Value 变量 → sweep 误回收 → UAF）。
      * stack_top=可用区最高 word（高地址），stack_bottom=当前帧地址（低地址）。
@@ -426,15 +454,15 @@ void lm_co_yield(void) {
     /* 被 resume 切回：恢复本协程 fake */
     __sanitizer_finish_switch_fiber(co->asan_fake, NULL, NULL);
 #endif
-    /* resume 回来后：移除冻结栈注册，恢复 RUNNING 与 TLS（reactor 调度回来继续执行）。
+    /* resume 回来后：移除冻结栈注册，恢复 TLS（reactor 调度回来继续执行）。
+     * state 已由 resume 方 CAS 写 RUNNING，此处不再写。
      * 匹配键须与 register 时一致（stack_base - sizeof(void*)） */
     gc_unregister_coroutine((char*)co->stack_base - sizeof(void*));
-    co->state = LM_CO_RUNNING;
     co_set_current(co);
 }
 
 int lm_co_is_dead(lm_co_t* co) {
-    return co && co->state == LM_CO_DEAD;
+    return co && atomic_load_explicit(&co->state, memory_order_acquire) == LM_CO_DEAD;
 }
 
 void lm_co_destroy(lm_co_t* co) {
@@ -476,15 +504,13 @@ void lm_co_destroy(lm_co_t* co) {
     }
     /* 引用计数兜底：正常路径 handle_migrate 已消费 migrate_sched、computeEnd
      * 已转移 home_sched；此处覆盖异常路径（co 未 resume 即销毁、迁移协议中断），
-     * 释放遗留引用防 scheduler 泄漏。 */
-    if (co->migrate_sched) {
-        lm_scheduler_release(co->migrate_sched);
-        co->migrate_sched = NULL;
-    }
-    if (co->home_sched) {
-        lm_scheduler_release(co->home_sched);
-        co->home_sched = NULL;
-    }
+     * 释放遗留引用防 scheduler 泄漏。原子取出置 NULL，与 sysmon try_set 无竞态。 */
+    struct lm_scheduler_s* ms = atomic_exchange_explicit(&co->migrate_sched, NULL,
+                                                         memory_order_acq_rel);
+    if (ms) lm_scheduler_release(ms);
+    struct lm_scheduler_s* hs = atomic_exchange_explicit(&co->home_sched, NULL,
+                                                         memory_order_acq_rel);
+    if (hs) lm_scheduler_release(hs);
 
     free(co);
 }
@@ -505,10 +531,10 @@ void lm_co_destroy(lm_co_t* co) {
  * 返回 1=已换出，0=未换出（条件不满足/CAS 失败）。
  * ============================================================ */
 static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
-    /* 1. 条件预检（无锁读，快速跳过非候选）。 */
-    if (co->state != LM_CO_SUSPENDED) return 0;
-    if (co->migrate_sched != NULL) return 0;   /* 迁移中，不动其栈 */
-    if (!co->stealable) return 0;               /* 已绑定线程（compute 迁移态），跳过 */
+    /* 1. 条件预检（原子读，快速跳过非候选）。 */
+    if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_SUSPENDED) return 0;
+    if (atomic_load_explicit(&co->migrate_sched, memory_order_acquire) != NULL) return 0;   /* 迁移中，不动其栈 */
+    if (atomic_load_explicit(&co->stealable, memory_order_acquire) == 0) return 0;   /* 已绑定线程（compute 迁移态），跳过 */
     int ss = atomic_load_explicit(&co->swap_state, memory_order_acquire);
     if (ss != LM_CO_SWAP_NORMAL) return 0;     /* 已换出/换入中 */
     /* idle 时长：last_resume_ns 是上次 resume 时间。SUSPENDED 协程若长期未
@@ -523,18 +549,23 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
      * 复杂度高；本期禁用换出（can_swap 未注册时本就跳过，此处双保险）。 */
     return 0;
 #else
-    /* 2. CAS swap_state NORMAL→SWAPPING_OUT（仲裁与唤醒方 swap_in 竞态）。 */
+    /* 2. 栈仲裁①：CAS state SUSPENDED→SWAPPING（修复 resume vs reaper 竞态）。
+     *    resume 侧见 SWAPPING 自旋等待（见 lm_co_resume），CAS 赢则本线程独占协程栈。
+     *    SUSPENDED 由 resume 方在协程 jump 切回后补写（栈已冻结），
+     *    故 CAS 成功即保证栈已冻结（ctx.sp 已保存），可安全 memcpy/madvise。 */
+    {
+        lm_co_state_t expectedSt = LM_CO_SUSPENDED;
+        if (!atomic_compare_exchange_strong_explicit(&co->state, &expectedSt,
+                LM_CO_SWAPPING, memory_order_acq_rel, memory_order_acquire)) {
+            return 0;   /* 被 resume 抢到 RUNNING / 状态已变，放弃 */
+        }
+    }
+    /* 3. 栈仲裁②：CAS swap_state NORMAL→SWAPPING_OUT（仲裁与唤醒方 swap_in 竞态）。 */
     int expected = LM_CO_SWAP_NORMAL;
     if (!atomic_compare_exchange_strong(&co->swap_state, &expected,
                                         LM_CO_SWAP_SWAPPING_OUT)) {
-        return 0;   /* 被唤醒方抢到，放弃 */
-    }
-    /* 3. 复核 state（CAS 后若已被 resume 抢入转 RUNNING，回退）。
-     *    resume 不动 swap_state，故 CAS 成功不代表 state 未变。 */
-    if (co->state != LM_CO_SUSPENDED) {
-        atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
-                              memory_order_release);
-        return 0;
+        atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
+        return 0;   /* 被唤醒方抢到，回退栈仲裁后放弃 */
     }
     /* 4. 计算已用栈深：[ctx.sp（冻结低地址）, stack_base（高地址）)。
      *    fcontext：jump 把 callee-saved 现场 push 到协程栈、ctx.sp 指向保存区
@@ -542,9 +573,10 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
     void* sp = co->ctx.sp;
     void* base = co->stack_base;
     if (!sp || !base || (char*)base <= (char*)sp) {
-        /* 栈深 0 或异常（sp>=base），无可换出。回退。 */
+        /* 栈深 0 或异常（sp>=base），无可换出。回退双重仲裁。 */
         atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
                               memory_order_release);
+        atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
         return 0;
     }
     size_t used = (size_t)((char*)base - (char*)sp);
@@ -553,6 +585,7 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
     if (!buffer) {
         atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
                               memory_order_release);
+        atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
         return 0;
     }
 #ifdef LM_ASAN
@@ -581,9 +614,13 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
      *    swap_in 用同 ctx.sp 恢复内容到原偏移。 */
     co->swap_buffer = buffer;
     co->swap_size   = used;
-    co->stealable   = 0;
+    atomic_store_explicit(&co->stealable, 0, memory_order_release);
     atomic_store_explicit(&co->swap_state, LM_CO_SWAP_SWAPPED,
                           memory_order_release);
+    /* 栈仲裁归还：state 回 SUSPENDED（协程仍挂起，内容已在 buffer）。
+     * 顺序：先 SWAPPED 后 SUSPENDED——resume 循环先查 swap_state 做 swap_in、
+     * 再 CAS state，任意交错都安全。 */
+    atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
     return 1;
 #endif /* LM_CTX_FCONTEXT */
 }

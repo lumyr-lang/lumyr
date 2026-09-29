@@ -72,21 +72,21 @@ static long platform_wake_raw(volatile _Atomic uint32_t* word) {
 #endif
 
 /* 平台 syscall 可用性：-1 未探测 / 1 可用 / 0 ENOSYS 走 pthread cond 保底。
- * 探测用"必不匹配"的期望值——syscall 存在则立即返回，不会真睡。 */
-static int g_platformOk = -1;
+ * 探测用"必不匹配"的期望值——syscall 存在则立即返回，不会真睡。
+ * 原子化：多线程并发首探（butex/timer 线程同时起步）时 TSAN 无竞态；
+ * 探测幂等（结果恒定），原子读写即可，无需 CAS。 */
+static _Atomic int g_platformOk = -1;
 
 static int platform_available(void) {
-    if (g_platformOk >= 0) return g_platformOk;
+    int ok = atomic_load_explicit(&g_platformOk, memory_order_acquire);
+    if (ok >= 0) return ok;
     _Atomic uint32_t probe = 0;
     long r = platform_park_raw(&probe, 1, -1);
     /* Linux 值不匹配返回 -1/EAGAIN；macOS 返回 0 或 -1（值变语义）。
      * 仅 ENOSYS 判定 syscall 不存在。 */
-    if (r < 0 && errno == ENOSYS) {
-        g_platformOk = 0;
-    } else {
-        g_platformOk = 1;
-    }
-    return g_platformOk;
+    ok = (r < 0 && errno == ENOSYS) ? 0 : 1;
+    atomic_store_explicit(&g_platformOk, ok, memory_order_release);
+    return ok;
 }
 
 /* ============================================================
