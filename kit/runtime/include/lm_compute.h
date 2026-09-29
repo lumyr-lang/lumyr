@@ -43,6 +43,37 @@ int lm_compute_end(void);
  * 池未初始化时自动 init；init 失败返回 NULL。返回的 scheduler reactor=NULL。 */
 lm_scheduler_t* lm_compute_pool_scheduler(void);
 
+/* ============================================================
+ * Phase 8.10：线程弹性——按需扩 worker + 硬上限 + 运行期调核
+ * 借鉴 bthread signal_task 不足时 add_workers 当场扩容（task_control.cpp:685-693）
+ * + Go newm/maxmcount=10000 硬上限思路（proc.go:2875、876）。
+ * 弹性只作用于 compute 池与 blocking 池；IO 线程因 SO_REUSEPORT 绑定
+ * listen fd 不参与弹性。
+ * ============================================================ */
+
+/* 硬上限：env LM_MAX_WORKERS 可配，默认 4×CPU 数，封顶 256。
+ * 弹性必须有顶——线程风暴是事故不是弹性（对齐 maxmcount 思路）。 */
+#define LM_MAX_WORKERS_CAP 256
+
+/* 按需扩容 1 个 worker（由 overflow_wake_one 唤醒不足时调用）。
+ * 未达硬上限才扩；新建 worker 即注册进 g_scheds 参与窃取。
+ * 返回 0 成功扩容；-1 已达上限 / 池未初始化 / 创建失败。 */
+int lm_compute_pool_maybe_grow(void);
+
+/* 运行期增 worker：扩容 n 个（受硬上限约束）。返回实际新增数，-1 错误。 */
+int lm_compute_pool_grow(int n);
+
+/* 运行期减 worker：标记 n 个 worker 拒收新任务（reject_new），worker 排空
+ * 本地队列后优雅退出（不做强杀）。从池尾部摘（后进先出）。
+ * 返回实际标记数，-1 错误。至少保留 1 个 worker。 */
+int lm_compute_pool_shrink(int n);
+
+/* 当前 compute worker 数。 */
+int lm_compute_pool_size(void);
+
+/* compute worker 硬上限（max_workers 解析结果）。 */
+int lm_compute_pool_capacity(void);
+
 #ifdef __cplusplus
 }
 #endif

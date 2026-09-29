@@ -6,6 +6,7 @@
 #include "lm_butex.h"
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度墙钟告警 */
 #include "lm_sysmon.h"    /* Phase 8.5 D：sysmon 守护线程懒启动 */
+#include "lm_compute.h"   /* Phase 8.10：overflow_wake_one 唤醒不足时扩容 */
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -151,7 +152,14 @@ static void overflow_wake_one(void) {
     }
     pthread_mutex_unlock(&g_scheds_mutex);
     /* butex 唤醒放注册表锁外：不持全局锁做 syscall */
-    if (target) sched_wake_parked(target);
+    if (target) {
+        sched_wake_parked(target);
+    } else {
+        /* Phase 8.10：找不到 sleeping compute worker（大家都在忙）→ 按需扩容
+         * 1 个 worker。对齐 bthread signal_task 不足时 add_workers 当场扩容
+         * （task_control.cpp:685-693）。受 LM_MAX_WORKERS 硬上限封顶。 */
+        lm_compute_pool_maybe_grow();
+    }
 }
 
 /* 全局队列入队（置 queued=1）+ 唤醒一个空闲 worker。 */
@@ -588,7 +596,10 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
          * 投递方不被睡眠 worker 阻塞。 */
         pthread_mutex_lock(&s->ready_mutex);
         atomic_store_explicit(&s->sleeping, 1, memory_order_release);
+        /* Phase 8.10：reject_new（缩容拒收）不入睡——每次醒来重读原子，
+         * shrink 置位 + wake 后本循环退出，走下方 NULL 返回做优雅退出。 */
         while (!s->ready_head && !s->stop &&
+               !atomic_load_explicit(&s->reject_new, memory_order_acquire) &&
                lm_wsq_size_approx(&s->wsq) == 0 &&
                atomic_load_explicit(&g_ov_len, memory_order_acquire) == 0) {
             uint32_t expected = atomic_load_explicit(&s->sleepWord,
@@ -608,8 +619,9 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
         int stopped = s->stop;
         pthread_mutex_unlock(&s->ready_mutex);
         if (co) return co;
-        /* stop 且全源空：退出（返回 NULL 由 worker 主循环判断 break） */
-        if (stopped &&
+        /* stop 或缩容拒收（reject_new）且全源空：退出（返回 NULL 由 worker
+         * 主循环判断 break）。reject_new 路径即"排空队列后优雅退出"。 */
+        if ((stopped || atomic_load_explicit(&s->reject_new, memory_order_acquire)) &&
             lm_wsq_size_approx(&s->wsq) == 0 &&
             atomic_load_explicit(&g_ov_len, memory_order_acquire) == 0) {
             return NULL;

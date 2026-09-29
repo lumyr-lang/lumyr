@@ -58,6 +58,10 @@ typedef struct lm_scheduler_s {
      * TimerCbCtx 捕获 sched 时 retain、回调结束 release——回调在飞期间
      * destroyScheduler 只减不 free，post 不会踩已释放结构。 */
     _Atomic int refcnt;
+    /* Phase 8.10：运行期缩容拒收标记（结构末尾追加，ABI 原则）。
+     * shrink 置位后：round-robin 分发不再选中本 worker；worker 排空本地队列
+     * 后自行退出（pop_blocking 返回 NULL 即队列空 → 见本标记 break）。 */
+    _Atomic int reject_new;
 } lm_scheduler_t;
 
 /* LIFO slot 每调度轮连续消费配额（对齐 Tokio MAX_LIFO_POLLS_PER_TICK=3，
