@@ -15,6 +15,8 @@
 #ifndef LM_COMPUTE_H
 #define LM_COMPUTE_H
 
+#include "lm_scheduler.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,6 +38,10 @@ int lm_compute_begin(void);
  * reactor）。必须先 computeBegin（home_sched 非空）。
  * 返回 0 成功；-1 不在 compute 上下文。 */
 int lm_compute_end(void);
+
+/* Phase 8.5 E：sysmon 强制迁移用——取一个 compute 池 scheduler（round-robin）。
+ * 池未初始化时自动 init；init 失败返回 NULL。返回的 scheduler reactor=NULL。 */
+lm_scheduler_t* lm_compute_pool_scheduler(void);
 
 #ifdef __cplusplus
 }

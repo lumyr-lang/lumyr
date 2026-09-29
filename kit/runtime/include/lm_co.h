@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>   /* Phase 8.5：preempt_flag _Atomic + atomic_init */
 #include "lm_coro_ctx.h"
 
 #ifdef __cplusplus
@@ -77,9 +78,50 @@ typedef struct lm_co_s {
      *         中立可偷 → 本线程 WSQ / 跨线程全局队列。 */
     int pinned;
     int stealable;
+    /* Phase 8.5：分通道抢占预算字段（结构体末尾追加，ABI 不变）。
+     * reds：当前协程剩余 reduction 预算，resume 时装载 LM_SCHED_REDS(4000)，
+     *       VM 通道由派发 handler 在 CALL/RETURN/JMP 回边/BUILTIN 扣减，
+     *       cc 通道由生成代码在序言/回边扣减（两通道共用同字段）。
+     *       预算耗尽在指令边界 lm_co_yield() 让出——VM 状态一致，无信号强抢。
+     * last_resume_ns：上次 resume 的单调时间（CLOCK_MONOTONIC ns），
+     *       drain 内长调度告警 + sysmon 跨 scheduler 扫描用。
+     * preempt_flag：sysmon 异步置位（cc 通道轮询用；VM 通道走预算耗尽让出，暂不用）。 */
+    int32_t reds;
+    uint64_t last_resume_ns;
+    _Atomic int preempt_flag;
+    /* Phase 8.5：时间片耗尽让出标记。LM_BUMP_REDS 预算耗尽调 lm_co_yield 前置 1，
+     * drain_ready 在 resume 返回后检测：若 slice_yield=1 则重新投递本协程到就绪队列
+     * （协程已让出栈，post 安全），使 tight loop 协程按时间片轮转而非霸占线程。
+     * 事件型 yield（fd/butex/compute 迁移）不设此标记——由事件回调/migrate 重入队。 */
+    int slice_yield;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);
+
+/* Phase 8.5：reduction 预算参数（对齐 BEAM CONTEXT_REDS=4000，erl_vm.h:53）。
+ * LM_SCHED_REDS：每次 resume 装载的预算值；
+ * LM_SCHED_MIN_REDS：最小切换钳制（=CONTEXT_REDS/10=400，erl_process.c:67），
+ *   消耗 < 400 按 400 记账，防"换进即换出"协程白嫖。 */
+#define LM_SCHED_REDS      4000
+#define LM_SCHED_MIN_REDS  (LM_SCHED_REDS / 10)
+
+/* Phase 8.5：reduction 扣减宏（对齐 BEAM bif.h:71 BUMP_REDS / :80 BUMP_ALL_REDS）。
+ * LM_BUMP_REDS(co)：扣 1 预算，归零则在指令边界 lm_co_yield() 让出（VM 状态一致）。
+ *   仅在协程上下文（co != NULL）且 reds > 0 时扣减，避免无协程场景误触发。
+ * LM_BUMP_ALL_REDS(co)：强制清零预算，下次派发点必让出（长 C 内建主动让步用）。
+ * 宏内联零函数调用，扣减与 handler 同栈帧。 */
+#define LM_BUMP_REDS(co) do {                                       \
+    lm_co_t* _co = (co);                                            \
+    if (_co && _co->reds > 0 && --_co->reds <= 0) {                 \
+        _co->slice_yield = 1;   /* 标记时间片耗尽，drain_ready 重入队 */  \
+        lm_co_yield();                                              \
+    }                                                               \
+} while (0)
+
+#define LM_BUMP_ALL_REDS(co) do {                                   \
+    lm_co_t* _co = (co);                                            \
+    if (_co) _co->reds = 0;                                         \
+} while (0)
 
 /* 默认栈大小（128KiB，可配）。深递归 lumin 函数应显式调大。
  * 64KiB 在深嵌套 VM 调用热点（accept loop → createHandler → ctor → spawn，

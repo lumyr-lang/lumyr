@@ -47,6 +47,12 @@ typedef struct lm_scheduler_s {
     uint32_t steal_offset;      /* 窃取质数步长（对齐 _steal_offset） */
     int sched_id;               /* 全局注册表槽位（-1 = 未注册，不参与窃取） */
     _Atomic int sleeping;       /* worker 阻塞睡眠标志（全局队列投递后唤醒扫描用） */
+    /* Phase 8.5 D：sysmon 带外监控字段。
+     * schedtick：drain/pop_blocking 每轮 +1（对齐 Go proc.go:3365），
+     *   sysmon 连续两轮快照相同 → 该 scheduler 卡在单个协程上。
+     * tick_ns：最近一次 schedtick 变动的单调时间，判定是否超时用。 */
+    _Atomic uint64_t schedtick;
+    _Atomic uint64_t tick_ns;
 } lm_scheduler_t;
 
 /* LIFO slot 每调度轮连续消费配额（对齐 Tokio MAX_LIFO_POLLS_PER_TICK=3，
@@ -55,6 +61,18 @@ typedef struct lm_scheduler_s {
 
 /* 批量窃取单批上限（对齐 Go n-n/2 语义 + lumyr 协程迁移成本封顶） */
 #define LM_SCHED_STEAL_MAX_BATCH 32
+
+/* Phase 8.5：抢占与调度监控参数
+ * LM_SCHED_LONG_SCHED_MS：drain 内长调度墙钟告警阈值（>此值打告警，不干预）。
+ *   专抓"C 内建忘 BUMP_REDS"类事故；取较宽松 50ms 避免 C 内建正常长执行误报。
+ * LM_SCHED_FORCE_MIGRATE_MS：sysmon 强制迁移阈值（对齐 Go forcePreemptNS=10ms，
+ *   proc.go:6679）。同 scheduler schedtick 超此时长未动 → 判定卡长协程，
+ *   非 pinned 且 IO 线程的协程写 migrate_sched 迁到 compute 池。
+ * LM_SCHED_DRAIN_GLOBAL_INTERVAL：drain 每 N 轮强制查全局溢出队列
+ *   （对齐 Go proc.go:3458 schedtick%61==0），防全局队列饿死。 */
+#define LM_SCHED_LONG_SCHED_MS        50
+#define LM_SCHED_FORCE_MIGRATE_MS     10
+#define LM_SCHED_DRAIN_GLOBAL_INTERVAL 61
 
 /* 创建 scheduler：绑定 reactor（可为 NULL，compute 池用）。
  * 创建即注册到全局注册表（参与窃取）；注册表满则 sched_id=-1（仍可用，
@@ -137,6 +155,11 @@ long lm_scheduler_overflow_len(void);
 
 /* 已注册 scheduler 数（注册表快照）。 */
 int lm_scheduler_registry_count(void);
+
+/* Phase 8.5 D：sysmon 用——拷贝注册表快照到 out（最多 max 个）。
+ * 返回实际拷贝数。持 g_scheds_mutex 拷贝，sysmon 遍历期间 scheduler 可能
+ * 被注销（置 NULL 槽位），调用方需判空跳过。 */
+int lm_scheduler_registry_snapshot(lm_scheduler_t** out, int max);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,7 @@
 // 栈分配：mmap size + page，末页（高地址方向）mprotect PROT_NONE 作 guard page，
 // 爆栈时触发 SIGSEGV 而非静默破坏内存。
 #include "lm_co.h"
+#include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳 */
 #include "gc_runtime.h"
 
 #include <stdlib.h>
@@ -196,6 +197,11 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     lm_co_t* parent = lm_co_current();
     co->pinned = parent ? parent->pinned : 0;
     co->stealable = 1;
+    /* Phase 8.5：reduction 预算初始化。首次 resume 时装载 LM_SCHED_REDS。 */
+    co->reds = LM_SCHED_REDS;
+    co->last_resume_ns = 0;
+    atomic_init(&co->preempt_flag, 0);
+    co->slice_yield = 0;
 
     /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
      * 从 co_trampoline(co) 开始执行（fcontext 在栈顶伪造帧；ucontext 包装
@@ -216,6 +222,11 @@ void lm_co_resume(lm_co_t* co) {
     lm_co_t* caller = lm_co_current();
     lm_co_state_t prev = co->state;
     co->state = LM_CO_RUNNING;
+    /* Phase 8.5：每次 resume 重装 reduction 预算 + 记录起始时间。
+     * 预算耗尽（VM 派发点 / cc 插桩点）在指令边界 lm_co_yield() 让出，
+     * 切回这里时重新装载——与 BEAM context_switch→erts_schedule 同语义。 */
+    co->reds = LM_SCHED_REDS;
+    co->last_resume_ns = lm_now_ns();
     co_set_current(co);
     /* Phase 5: swapcontext 切到协程前，恢复协程 vm_state 到 _Thread_local
      * （g_stack_mgr sp / g_try_stack / g_unwind / g_err_jmp / g_thread_root 等）。

@@ -178,6 +178,10 @@ void lm_reactor_set_ready_drain(lm_reactor_t* r, void (*cb)(void*), void* data);
 /* 单调时钟（ms），与定时器 expire_ms 同基准。 */
 uint64_t lm_reactor_now_ms(void);
 
+/* Phase 8.5：单调时钟（ns），CLOCK_MONOTONIC。
+ * 长调度墙钟告警 + sysmon schedtick 扫描用，精度高于 ms 版。 */
+uint64_t lm_now_ns(void);
+
 /* ============================================================
  * accept / connect helper（对齐 nginx ngx_event_accept / ngx_event_connect）
  * ============================================================ */

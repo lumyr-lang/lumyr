@@ -15,6 +15,7 @@
 #include "lm_value.h"
 #include "gc_runtime.h"
 #include "lm_type.h"
+#include "lm_co.h"        /* Phase 8.5：lm_co_current() + LM_BUMP_REDS 抢占扣减 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -228,6 +229,9 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
     while (ctx->pc < ctx->fn->code_len) {
         Instruction in = code[ctx->pc++];
         total_instr++;
+        /* Phase 8.5：当前协程（TLS 取一次，派发点 LM_BUMP_REDS 共用）。
+         * 非协程上下文（顶层 VM 执行）为 NULL，LM_BUMP_REDS 内判空跳过。 */
+        lm_co_t* co = lm_co_current();
         int handled = 0;
         if((int)in.op >= 115 && (int)in.op <= 120) {
         }
@@ -381,12 +385,16 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DOUBLE_LE: handled = vm_exec_compare_double_le(ctx, &in); break;
         case OPC_DOUBLE_NE: handled = vm_exec_compare_double_ne(ctx, &in); break;
 
-        /* ===== 控制流 ===== */
-        case OPC_JMP: handled = vm_exec_control_jmp(ctx, &in); break;
-        case OPC_JMP_IF_TRUE: handled = vm_exec_control_jmp_if_true(ctx, &in); break;
-        case OPC_JMP_IF_FALSE: handled = vm_exec_control_jmp_if_false(ctx, &in); break;
-        case OPC_JMP_IF_TRUE_V: handled = vm_exec_control_jmp_if_true_value(ctx, &in); break;
-        case OPC_JMP_IF_FALSE_V: handled = vm_exec_control_jmp_if_false_value(ctx, &in); break;
+        /* ===== 控制流 =====
+         * Phase 8.5：JMP 家族扣 1 reduction（对齐 BEAM 回边扣减，macros.tab）。
+         * 简化实现：所有 JMP（含前向/条件）均扣，保证 tight loop 必撞预算让出；
+         * 前向跳转多扣 1 无害（仅多一次调度机会）。条件跳转未命中也扣 1——
+         * 开销可忽略，正确性优先于"仅回边扣"的微优化。 */
+        case OPC_JMP: LM_BUMP_REDS(co); handled = vm_exec_control_jmp(ctx, &in); break;
+        case OPC_JMP_IF_TRUE: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_true(ctx, &in); break;
+        case OPC_JMP_IF_FALSE: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_false(ctx, &in); break;
+        case OPC_JMP_IF_TRUE_V: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_true_value(ctx, &in); break;
+        case OPC_JMP_IF_FALSE_V: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_false_value(ctx, &in); break;
 
         /* ===== 通用 Value 运算（动态兜底） ===== */
         case OPC_VADD: handled = vm_exec_vadd(ctx, &in); break;
@@ -409,20 +417,24 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_VSHL:  handled = vm_exec_vshl(ctx, &in); break;
         case OPC_VSHR:  handled = vm_exec_vshr(ctx, &in); break;
 
-        /* ===== 函数调用 ===== */
-        case OPC_CALL: handled = vm_exec_call(ctx, &in); break;
-        case OPC_BUILTIN: handled = vm_exec_builtin(ctx, &in); break;
-        case OPC_CALL_BUILTIN_METHOD: handled = vm_exec_builtin_method(ctx, &in); break;
+        /* ===== 函数调用 =====
+         * Phase 8.5：调用类扣 1 reduction（对齐 BEAM DISPATCH/DISPATCH_FUN，
+         * macros.tab:199）。OPC_CALL/CALLV/CALL_METHOD/CALL_METHODV/MKCLOSURE。
+         * C 内建（BUILTIN/CALL_BUILTIN_METHOD）也扣 1（对齐 BEAM BIF BUMP_REDS，bif.h:71）；
+         * 长内建应主动 LM_BUMP_ALL_REDS 强制让出（bif.h:80 BUMP_ALL_REDS）。 */
+        case OPC_CALL: LM_BUMP_REDS(co); handled = vm_exec_call(ctx, &in); break;
+        case OPC_BUILTIN: LM_BUMP_REDS(co); handled = vm_exec_builtin(ctx, &in); break;
+        case OPC_CALL_BUILTIN_METHOD: LM_BUMP_REDS(co); handled = vm_exec_builtin_method(ctx, &in); break;
         case OPC_GETFUNC: handled = vm_exec_getfunc(ctx, &in); break;
-        case OPC_CALLV: handled = vm_exec_callv(ctx, &in); break;
-        case OPC_MKCLOSURE: handled = vm_exec_mkclosure(ctx, &in); break;
+        case OPC_CALLV: LM_BUMP_REDS(co); handled = vm_exec_callv(ctx, &in); break;
+        case OPC_MKCLOSURE: LM_BUMP_REDS(co); handled = vm_exec_mkclosure(ctx, &in); break;
 
         /* ===== struct/class ===== */
         case OPC_LOAD_FIELD: handled = vm_exec_load_field(ctx, &in); break;
         case OPC_STORE_FIELD: handled = vm_exec_store_field(ctx, &in); break;
         case OPC_CLASS_NEW: handled = vm_exec_class_new(ctx, &in); break;
-        case OPC_CALL_METHOD: handled = vm_exec_call_method(ctx, &in); break;
-        case OPC_CALL_METHODV: handled = vm_exec_call_method_dyn(ctx, &in); break;
+        case OPC_CALL_METHOD: LM_BUMP_REDS(co); handled = vm_exec_call_method(ctx, &in); break;
+        case OPC_CALL_METHODV: LM_BUMP_REDS(co); handled = vm_exec_call_method_dyn(ctx, &in); break;
         case OPC_GENERIC_BIND: handled = vm_exec_generic_bind(ctx, &in); break;
 
         /* ===== 打印 ===== */
@@ -433,8 +445,10 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_PRINT_BIGINT: handled = vm_exec_io_print_bigint(ctx, &in); break;
         case OPC_PRINT_DECIMAL: handled = vm_exec_io_print_decimal(ctx, &in); break;
 
-        /* ===== 返回：只结束当前层；按 ExprType 从对应栈弹原始值入返回槽 ===== */
+        /* ===== 返回：只结束当前层；按 ExprType 从对应栈弹原始值入返回槽 =====
+         * Phase 8.5：返回类扣 1 reduction（对齐 BEAM DISPATCH_RETURN，macros.tab:221）。 */
         case OPC_RETURN: {
+            LM_BUMP_REDS(co);
             ExprType et = (ExprType)in.a;
             ret->et = (int)et;
             switch (et) {
@@ -467,6 +481,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         }
 
         case OPC_RETURN_NIL:
+            LM_BUMP_REDS(co);
             ret->et = EXPR_TYPE_NONE;
             ret->v  = val_none();
             vm_except_leave_frame(ctx);

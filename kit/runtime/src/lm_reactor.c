@@ -40,6 +40,13 @@ uint64_t lm_reactor_now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+/* Phase 8.5：单调纳秒时钟（长调度告警 + sysmon 用）。 */
+uint64_t lm_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 /* ============================================================
  * self-pipe（stop() 即时唤醒机制）
  * ============================================================

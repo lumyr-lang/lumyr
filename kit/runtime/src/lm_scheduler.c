@@ -4,9 +4,12 @@
 // 本地 WSQ 投递与溢出 / 全局溢出队列（injector）/ 批量窃取 / drain 与阻塞 pop。
 #include "lm_scheduler.h"
 #include "lm_butex.h"
+#include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度墙钟告警 */
+#include "lm_sysmon.h"    /* Phase 8.5 D：sysmon 守护线程懒启动 */
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
 /* ============================================================
  * TLS：当前线程 scheduler 指针
@@ -73,6 +76,18 @@ int lm_scheduler_registry_count(void) {
     int n = 0;
     for (int i = 0; i < g_scheds_n; i++) {
         if (g_scheds[i]) n++;
+    }
+    pthread_mutex_unlock(&g_scheds_mutex);
+    return n;
+}
+
+/* Phase 8.5 D：sysmon 带外扫描用——持锁拷贝注册表指针快照。 */
+int lm_scheduler_registry_snapshot(lm_scheduler_t** out, int max) {
+    if (!out || max <= 0) return 0;
+    pthread_mutex_lock(&g_scheds_mutex);
+    int n = 0;
+    for (int i = 0; i < g_scheds_n && n < max; i++) {
+        if (g_scheds[i]) out[n++] = g_scheds[i];
     }
     pthread_mutex_unlock(&g_scheds_mutex);
     return n;
@@ -209,7 +224,12 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     s->owner = pthread_self();
     sched_steal_param_init(s);
     atomic_store_explicit(&s->sleeping, 0, memory_order_relaxed);
+    /* Phase 8.5 D：schedtick/tick_ns 初始化（calloc 已零化 atomic，显式记时间）。 */
+    atomic_store_explicit(&s->schedtick, 0, memory_order_relaxed);
+    atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
     sched_registry_add(s);
+    /* Phase 8.5 D：懒启动 sysmon 守护线程（幂等，首次 scheduler 创建时启动）。 */
+    lm_sysmon_start();
     return s;
 }
 
@@ -386,6 +406,10 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
     if (!s) return;
     s->lifo_used = 0;
     for (;;) {
+        /* Phase 8.5 D：每轮 schedtick +1 + 记时间。sysmon 据此检测
+         * scheduler 是否卡在单个协程上（连续两轮 schedtick 未变）。 */
+        atomic_fetch_add_explicit(&s->schedtick, 1, memory_order_relaxed);
+        atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
         lm_co_t* co = NULL;
         /* 1. LIFO slot（每轮配额 LM_SCHED_LIFO_QUOTA，防 ping-pong 饿死队列） */
         if (s->lifo_slot && s->lifo_used < LM_SCHED_LIFO_QUOTA) {
@@ -394,21 +418,53 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
             s->lifo_used++;
             co->queued = 0;
         }
-        /* 2. mutex 定向队列 */
-        if (!co) co = lm_scheduler_pop(s);
-        /* 3. 本地 WSQ */
+        /* 2. 本地 WSQ（可窃取协程：用户 handler / CPU 密集协程）
+         * Phase 8.5：WSQ 提到 mutex 前——slice_yield 重入队走 mutex FIFO，
+         * 让刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑，保证轮转公平。
+         * pinned 协程（mutex）仍在 WSQ 空后立即运行，延迟仅一个 drain 周期。 */
         if (!co) {
             co = (lm_co_t*)lm_wsq_pop(&s->wsq);
             if (co) co->queued = 0;
         }
+        /* 3. mutex 定向队列（pinned + slice_yield 重入队的 FIFO 轮转） */
+        if (!co) co = lm_scheduler_pop(s);
         if (!co) break;
         /* 置 current=co：使协程内 lm_co_resume 走嵌套直连路径（同步切栈），
          * 而非再次投递到本队列（否则死循环）。yield 后清 current=NULL。 */
         s->current = co;
         lm_co_resume(co);
         s->current = NULL;
-        /* Phase 7.4：computeBegin 让出后迁移到 compute worker（此时协程栈
-         * 已让出，post 安全——迁移协议见 lm_co.h）。 */
+        /* Phase 8.5 C：长调度墙钟告警。协程单次 resume 墙钟耗时超过
+         * LM_SCHED_LONG_SCHED_MS（默认 50ms）时打告警——通常意味着长 C 内建
+         * 未主动让步（应调 LM_BUMP_ALL_REDS），或 sysmon 尚未介入。
+         * 仅告警不干预（干预由 sysmon 强制迁移负责，子阶段 E）。 */
+        {
+            uint64_t elapsed_ns = lm_now_ns() - co->last_resume_ns;
+            if (elapsed_ns > (uint64_t)LM_SCHED_LONG_SCHED_MS * 1000000ULL) {
+                fprintf(stderr,
+                    "[sched] long schedule: co=%p elapsed=%.2fms (threshold=%dms)\n",
+                    (void*)co, elapsed_ns / 1000000.0, LM_SCHED_LONG_SCHED_MS);
+            }
+        }
+        /* Phase 8.5：时间片耗尽让出重入队 vs 迁移——互斥。
+         * 若 co->migrate_sched 非空（computeBegin / sysmon 强制迁移），
+         * 由 handle_migrate 投递到目标 scheduler，不再重入队本 scheduler
+         * （否则协程同时在两个队列 → 双线程同栈 UB）。
+         * 仅当无迁移目标时，slice_yield 才重入队本 scheduler 继续轮转。 */
+        if (co->slice_yield) {
+            co->slice_yield = 0;
+            if (co->state != LM_CO_DEAD && !co->migrate_sched) {
+                /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
+                 * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。
+                 * 用 lm_scheduler_post（mutex）而非 post_local（WSQ）。
+                 * 不 break：drain 继续 pop 下一个协程（FIFO 轮转），直到队列空
+                 * 才退出让 reactor 处理 fd/timer 事件。每片仅 4000 reds，fd 延迟
+                 * 不超过一个时间片（微秒级），可接受。 */
+                lm_scheduler_post(s, co);
+            }
+        }
+        /* Phase 7.4 + 8.5 E：computeBegin / sysmon 强制迁移——投递到目标
+         * scheduler（此时协程栈已让出，post 安全——迁移协议见 lm_co.h）。 */
         lm_scheduler_handle_migrate(co);
         /* DEAD 协程不自动销毁：避免与 lm Coroutine.destroy 双重释放。
          * owner（Coroutine 实例 / timer cb）负责 destroy。 */
@@ -425,6 +481,9 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
 lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
     if (!s) return NULL;
     for (;;) {
+        /* Phase 8.5 D：每轮 schedtick +1（同 drain_ready）。 */
+        atomic_fetch_add_explicit(&s->schedtick, 1, memory_order_relaxed);
+        atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
         /* 1. mutex 定向队列（非阻塞试） */
         lm_co_t* co = lm_scheduler_pop(s);
         if (co) return co;

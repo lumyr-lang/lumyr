@@ -180,6 +180,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_wsq.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_butex.c
 # Phase 8.4：集中化定时器线程（全局单 TimerThread + 分桶 + 最小堆）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_timer.c
+# Phase 8.5 D：sysmon 守护线程（带外扫描 + 强制迁移）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sysmon.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

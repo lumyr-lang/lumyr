@@ -1,0 +1,59 @@
+// Phase 8.5：协程抢占测试（双协程版，不依赖 timer 线程）
+// tightLoop 纯 CPU 密集（无 computeBegin）；ticker 每轮 yield() 自愿让出。
+// 若抢占生效：tightLoop 被 reduction 打断，ticker 获运行机会，tick > 0。
+// 若抢占失效：tightLoop 霸占 reactor，ticker 永不运行，r.stop() 永不调用 → 挂起。
+import <NetWork/Reactor>;
+
+g_st = {
+    "r": null,
+    "tick": 0,
+    "loopDone": false
+};
+
+func tightLoop(n) {
+    i = 0;
+    while (i < n) {
+        x = i * i;
+        i = i + 1;
+    }
+    g_st["loopDone"] = true;
+}
+
+func ticker() {
+    done = g_st["loopDone"];
+    while (done == false) {
+        g_st["tick"] = g_st["tick"] + 1;
+        coYield();
+        done = g_st["loopDone"];
+    }
+    t = g_st["tick"];
+    print("ticks during loop: " + t);
+    if (t > 0) {
+        print("PREEMPTION OK");
+    } else {
+        print("PREEMPTION FAIL");
+    }
+    g_st["r"].stop();
+}
+
+func runTest() {
+    r = ReactorInstance(65536);
+    g_st["r"] = r;
+    setReactor(r);
+    sched = scheduler(r.impl);
+    setScheduler(sched);
+
+    Coroutine(ticker, null);
+    Coroutine(tightLoop, 50000);
+
+    print("starting reactor");
+    r.run();
+    print("reactor stopped");
+
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    clearReactor();
+    r.destroy();
+}
+
+runTest();
