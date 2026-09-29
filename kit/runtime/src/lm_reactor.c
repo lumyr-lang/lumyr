@@ -299,16 +299,30 @@ lm_connection_t* lm_reactor_get_connection(lm_reactor_t* r, int fd) {
     c->co = NULL;
     c->data = NULL;
     c->next_free = NULL;
+    /* Phase 8.8：等待字归 NIL，fd_generation bump（slot 每次取用都是生命周期
+     * 变更，使上一轮等待者/回调持有的 gen 快照立即失效） */
+    atomic_store_explicit(&c->rg, LM_FD_NIL, memory_order_release);
+    atomic_store_explicit(&c->wg, LM_FD_NIL, memory_order_release);
+    atomic_fetch_add_explicit(&c->fd_generation, 1, memory_order_acq_rel);
+    c->wait_gen_r = 0;
+    c->wait_gen_w = 0;
     return c;
 }
 
 void lm_reactor_free_connection(lm_reactor_t* r, lm_connection_t* c) {
     if (!r || !c) return;
-    /* 先从 reactor 摘事件（避免悬挂 fd 注册） */
+    /* 先从 reactor 摘事件（避免悬挂 fd 注册；fd 已被 close 时 del 返回
+     * EBADF/ENOENT，忽略——内核在 close 时已自动摘除注册） */
     if (c->active_events) {
         r->actions->del(r, c, c->active_events);
         c->active_events = 0;
         c->flags &= ~LM_CONN_FLAG_ACTIVE;
+    }
+    /* Phase 8.8：归还也是生命周期变更——bump gen 使残留回调的 wait_gen 快照
+     * 失效；清除 fd 映射（仅当映射仍指向本 slot，防误删复用后的新登记） */
+    atomic_fetch_add_explicit(&c->fd_generation, 1, memory_order_acq_rel);
+    if (c->fd >= 0 && c->fd < r->conn_capacity && r->fd_map[c->fd] == c) {
+        r->fd_map[c->fd] = NULL;
     }
     c->fd = -1;
     c->next_free = r->free_conns;
@@ -324,6 +338,12 @@ int lm_reactor_add(lm_reactor_t* r, lm_connection_t* c, uint32_t events) {
     if (r->actions->add(r, c, events) != 0) return -1;
     c->active_events |= events;
     c->flags |= LM_CONN_FLAG_ACTIVE;
+    /* Phase 8.8：add 成功才登记 fd → conn 映射（close 路径据此找到等待中的
+     * conn 做 WAITING→CLOSED 仲裁）。不在 get_connection 登记：add 失败的
+     * 检出会回滚，避免短暂登记覆盖同 fd 既有等待者的映射。 */
+    if (c->fd >= 0 && c->fd < r->conn_capacity) {
+        r->fd_map[c->fd] = c;
+    }
     return 0;
 }
 
@@ -416,10 +436,11 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     lm_reactor_t* r = (lm_reactor_t*)calloc(1, sizeof(lm_reactor_t));
     if (!r) return NULL;
     r->connections = (lm_connection_t*)calloc((size_t)conn_capacity, sizeof(lm_connection_t));
+    r->fd_map = (lm_connection_t**)calloc((size_t)conn_capacity, sizeof(lm_connection_t*));
     r->posted_accept = (lm_connection_t**)calloc(64, sizeof(lm_connection_t*));
     r->posted_events = (lm_connection_t**)calloc(64, sizeof(lm_connection_t*));
-    if (!r->connections || !r->posted_accept || !r->posted_events) {
-        free(r->connections);
+    if (!r->connections || !r->fd_map || !r->posted_accept || !r->posted_events) {
+        free(r->connections); free(r->fd_map);
         free(r->posted_accept); free(r->posted_events);
         free(r);
         return NULL;
@@ -441,7 +462,7 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     r->actions = lm_reactor_backend();
     r->backend_fd = -1;
     if (r->actions->init(r) != 0) {
-        free(r->connections);
+        free(r->connections); free(r->fd_map);
         free(r->posted_accept); free(r->posted_events);
         free(r);
         return NULL;
@@ -482,6 +503,7 @@ static void reactor_destroy_internal(lm_reactor_t* r) {
     if (r->wake_pipe[0] >= 0) { close(r->wake_pipe[0]); r->wake_pipe[0] = -1; }
     if (r->wake_pipe[1] >= 0) { close(r->wake_pipe[1]); r->wake_pipe[1] = -1; }
     free(r->connections);
+    free(r->fd_map);
     free(r->posted_accept);
     free(r->posted_events);
     free(r);

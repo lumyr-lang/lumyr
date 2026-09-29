@@ -61,6 +61,17 @@ typedef void (*lm_timer_cb_t)(lm_timer_id_t timer_id, void* data);
 #define LM_CONN_FLAG_ACTIVE  0x01   /* 已挂载到 reactor（add 成功后置位） */
 #define LM_CONN_FLAG_READY   0x02   /* 已就绪待 posted 处理 */
 
+/* Phase 8.8：fd 等待单字三态状态机的状态值（rg/wg 等待字的低值保留区）。
+ * 等待字取值：LM_FD_NIL（无等待者）/ LM_FD_READY / LM_FD_TIMEOUT / LM_FD_CLOSED，
+ * 或等待协程指针（WAITING，malloc 对齐 ≥16，与 0..3 保留值不冲突）。
+ * 就绪（reactor 线程）/ 超时（timer 线程）/ 关闭（close 路径）三方对同一字
+ * CAS 仲裁：WAITING→X 仅一个赢家，赢家负责唤醒等待协程，输家 no-op。
+ * 状态迁移必须无条件 CAS（不检查其他字段），唤醒才可条件——防丢唤醒。 */
+#define LM_FD_NIL     ((uintptr_t)0)   /* 无等待者 */
+#define LM_FD_READY   ((uintptr_t)1)   /* 事件已就绪 */
+#define LM_FD_TIMEOUT ((uintptr_t)2)   /* 等待已超时 */
+#define LM_FD_CLOSED  ((uintptr_t)3)   /* fd 已关闭（等待被关闭方仲裁终结） */
+
 struct lm_connection_s {
     int fd;                         /* 套接字 fd */
     lm_event_handler_t read_handler;
@@ -70,10 +81,23 @@ struct lm_connection_s {
     uint32_t active_events;         /* 已挂载事件（LM_EVENT_READ/WRITE 位掩码） */
     uint32_t ready_events;         /* 就绪事件（process_events 写入，handler 读取） */
     uint32_t flags;
-    int timedout;                   /* 定时器到期标记（连接级超时） */
+    int timedout;                   /* 定时器到期标记（连接级超时；co_wait 路径 Phase 8.8 起改用 rg/wg 等待字，本字段仅保留兼容） */
     void* co;                       /* 所属协程指针（Phase 2 接入前置 NULL） */
     lm_scheduler_t* sched;          /* Phase 8.4：注册超时时所属 scheduler，
                                       * 超时回调（timer 线程）据此 wakeup 投递协程 */
+    /* Phase 8.8：读/写方向各一个原子等待字（单字三态状态机，uintptr_t 以容纳协程指针）。
+     * 等待协程把自身指针 CAS 进字内（WAITING），三方仲裁见上方状态值注释。
+     * 协程调用点均为单方向等待（connect 写 / accept 读 / send 写 / recv 读），
+     * 故一次等待只用其中一个字。 */
+    _Atomic uintptr_t rg;           /* 读方向等待字 */
+    _Atomic uintptr_t wg;           /* 写方向等待字 */
+    /* Phase 8.8：fd 复用防护单调序号。get_connection / free_connection / close
+     * 通知各 bump 一次；等待者注册时快照到 wait_gen_r/w，事件/超时回调赢 CAS
+     * 后比对——不一致说明等待已随 slot 生命周期变迁失效，放弃唤醒（防 ABA）。 */
+    _Atomic uint64_t fd_generation;
+    uint64_t wait_gen_r;            /* 读方向等待者的 gen 快照（CAS WAITING 前写，
+                                      * happens-before 由 CAS 的 acq_rel 建立） */
+    uint64_t wait_gen_w;            /* 写方向等待者的 gen 快照 */
     void* data;                     /* 用户自由数据 */
     lm_connection_t* next_free;     /* 连接池 free list 链 */
 };
@@ -107,6 +131,13 @@ struct lm_reactor_s {
     lm_connection_t* connections;        /* conn_capacity 元数组 */
     int conn_capacity;
     lm_connection_t* free_conns;          /* free list 头（next_free 串联） */
+    /* Phase 8.8：fd → 当前检出 conn 的映射（conn_capacity 元指针数组）。
+     * 连接池 slot 经 free list 复用后不再与 fd 下标对应，close 路径需凭本映射
+     * 找到正等待该 fd 的 conn 做 WAITING→CLOSED 仲裁。lm_reactor_add 成功时
+     * 登记、free_connection 归还时清除（仅当映射仍指向自己）；仅 reactor 所属
+     * 线程读写（close 通知亦在本线程经 TLS reactor 触达），跨线程 close 取不
+     * 到本映射则跳过。 */
+    lm_connection_t** fd_map;
     /* Phase 8.4：定时器集中到全局 TimerThread，reactor 不再维护最小堆。
      * 主循环只读 lm_timer_nearest_ms() 原子快照算 epoll_wait/kevent 超时。 */
     /* posted 队列：accept 优先级高于一般事件（对齐 nginx 双队列） */

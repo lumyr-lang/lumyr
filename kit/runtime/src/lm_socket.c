@@ -134,48 +134,99 @@ static int set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-/* 协程事件回调：fd 事件就绪时把等待的协程投递到 scheduler 就绪队列。
- * Phase 8.4：不再直接 lm_co_resume——超时回调在 timer 线程跨线程并发，
- * 两者直接 resume 同一 co 会双线程同栈腐败。统一走 scheduler 队列 +
- * co->queued 去重：fd 事件（本回调，reactor 线程=owner）走 post_local
- * 快通道，超时（co_timeout_handler，timer 线程）走 wakeup 跨线程 post；
- * 先到者 queued=1，后到者 no-op，由 reactor 主循环 step1.5 drain 统一 resume。
- * 无 scheduler（conn->sched==NULL，Phase 5 简化遗留）：直接 resume（同线程
- * 串行安全，超时路径已降级不并发）。 */
-static void co_resume_handler(lm_connection_t* conn, uint32_t events, void* data) {
-    (void)events;
+/* Phase 8.8：fd 等待三态单字仲裁（就绪 / 超时 / 关闭 三方抢同一原子字）。
+ *
+ * 模型：等待协程把自身指针 CAS 进 conn 的 rg/wg 字（NIL→WAITING），之后三方
+ * 以 CAS WAITING→X 抢唯一唤醒权：
+ *   - 事件就绪 fd_wait_read_cb/fd_wait_write_cb（reactor 线程）→ LM_FD_READY
+ *   - 超时    fd_wait_timeout_cb（timer 线程，waitCtx 自带方向与 co 快照）→ LM_FD_TIMEOUT
+ *   - 关闭    lumyr_socket_close 路径（协程线程）→ LM_FD_CLOSED
+ * 赢 CAS 者无条件唤醒协程，输家 no-op——协程只被唤醒一次，无重复 resume /
+ * 双不唤醒（与 DNS 仲裁模型一致：CAS 成功本身即"等待仍当前"的完整证明，
+ * 因为协程只在被唤醒后才可能 cleanup/recycle conn）。
+ * fd_generation：注册时快照进 wait_gen_r/w 与 waitCtx，回调 CAS 前预检——
+ * 不一致说明 conn 已经 get/free/close 变迁（slot 复用），陈旧回调不碰等待字。
+ * 状态迁移无条件 CAS，唤醒才可条件（内存序 acq_rel/acquire 保证快照与 sched
+ * 对赢家可见）。
+ *
+ * waitCtx 所有权（与 lm_timer_cancel 返回值语义对齐）：
+ *   - 协程 cleanup：cancel 返回 0（回调保证不运行）→ 协程释放；
+ *     返回 1（running）/ -1（已执行）→ 回调持有/已释放，协程不得再碰。
+ *   - 超时回调：一旦运行即独占，无论 CAS 输赢最后都 free。 */
+typedef struct {
+    lm_connection_t* conn;
+    _Atomic uintptr_t* word;    /* 本次等待的方向字（rg 或 wg） */
+    lm_co_t* co;                /* 等待协程快照（不读 conn->co——复用后会被覆写） */
+    uint64_t gen;               /* 注册时的 fd_generation 快照 */
+} FdWaitCtx;
+
+/* 事件回调共用逻辑（reactor 线程）：CAS WAITING→READY，赢家投递协程。 */
+static void fd_wait_fire_ready(lm_connection_t* conn, _Atomic uintptr_t* word,
+                               uint64_t wait_gen, void* data) {
     lm_co_t* co = (lm_co_t*)data;
     if (!co) return;
-    if (conn->sched) {
-        lm_scheduler_post_local(conn->sched, co);
-    } else {
-        lm_co_resume(co);
+    uintptr_t expected = (uintptr_t)co;
+    int won = atomic_compare_exchange_strong_explicit(word, &expected, LM_FD_READY,
+            memory_order_acq_rel, memory_order_acquire);
+    if (won) {
+        /* 赢了仲裁：gen 新鲜才唤醒（保险比对——单线程 reactor 下事件回调与
+         * 等待协程 cleanup 串行，正常必新鲜；跨场景复用时防陈旧事件误唤醒） */
+        if (wait_gen == atomic_load_explicit(&conn->fd_generation, memory_order_acquire)) {
+            if (conn->sched) {
+                lm_scheduler_post_local(conn->sched, co);
+            } else {
+                lm_co_resume(co);  /* 无 scheduler：同线程串行安全（Phase 5 遗留路径） */
+            }
+        }
     }
+    /* CAS 输了：超时/关闭方已抢先，no-op */
 }
 
-/* 协程超时回调（Phase 8.4：全局 TimerThread 到期，timer 线程上下文）：
- * 置 conn->timedout=1 并把协程投递回注册归属 scheduler。
- * 跨线程（timer→reactor）：走 lm_scheduler_wakeup（post + self-pipe 唤醒目标
- * reactor），由目标 reactor 主循环 step1.5 drain 统一 resume。queued 去重保证
- * 与 fd 事件的 post_local 不会双 resume 同一 co。
- * 无 scheduler（conn->sched==NULL）：仅置 timedout 不 wake——co 留 SUSPENDED，
- * 降级（文档化：无 scheduler 不支持超时精确唤醒，不腐败栈）。 */
-static void co_timeout_handler(lm_timer_id_t timer_id, void* data) {
+static void fd_wait_read_cb(lm_connection_t* conn, uint32_t events, void* data) {
+    (void)events;
+    fd_wait_fire_ready(conn, &conn->rg, conn->wait_gen_r, data);
+}
+
+static void fd_wait_write_cb(lm_connection_t* conn, uint32_t events, void* data) {
+    (void)events;
+    fd_wait_fire_ready(conn, &conn->wg, conn->wait_gen_w, data);
+}
+
+/* 超时回调（timer 线程）：CAS WAITING→TIMEOUT，赢家投递协程。
+ * gen 仅作 CAS 前预检（陈旧定时器不干预复用后的等待字）；
+ * 赢 CAS 后无条件唤醒——CAS 成功即"等待仍当前"的证明（协程只在被唤醒后
+ * 才可能 recycle conn；co 地址 ABA 场景由 gen 预检挡住）。
+ * waitCtx 一旦运行即由本回调独占释放（无论输赢）。 */
+static void fd_wait_timeout_cb(lm_timer_id_t timer_id, void* data) {
     (void)timer_id;
-    lm_connection_t* conn = (lm_connection_t*)data;
-    conn->timedout = 1;
-    if (!conn->sched) return;
-    lm_co_t* co = (lm_co_t*)conn->co;
-    if (co) lm_scheduler_wakeup(conn->sched, co);
+    FdWaitCtx* ctx = (FdWaitCtx*)data;
+    lm_connection_t* conn = ctx->conn;
+    /* 代次预检：conn 已经 get/free/close 变迁（slot 复用）→ 陈旧定时器，
+     * 不碰等待字（字内可能是复用后新等待者的注册） */
+    if (ctx->gen == atomic_load_explicit(&conn->fd_generation, memory_order_acquire)) {
+        uintptr_t expected = (uintptr_t)ctx->co;
+        if (atomic_compare_exchange_strong_explicit(ctx->word, &expected, LM_FD_TIMEOUT,
+                memory_order_acq_rel, memory_order_acquire)) {
+            /* 赢仲裁：无条件唤醒（无 scheduler 时降级不 wake，与旧语义一致） */
+            if (conn->sched) {
+                lm_scheduler_wakeup(conn->sched, ctx->co);  /* 跨线程：post + self-pipe */
+            }
+        }
+        /* CAS 输了：事件/关闭方已抢先，no-op */
+    }
+    free(ctx);
 }
 
-/* 协程挂起等 fd 事件（带超时变体）：fd 事件 + reactor 一次性定时器双注册，先到先得。
- * timeout_ms <= 0 时不注册定时器，退化为无超时等待。
- * 返回 0 事件就绪 / 1 超时 / -1 失败（reactor 未设、连接池满或定时器注册失败）。
+/* 协程挂起等 fd 事件（带超时）：三态单字仲裁版。
+ * 调用点均为单方向等待（connect 写 / accept 读 / send 写 / recv 读），
+ * want_read 优先选 rg 字，否则 wg 字；两方向同传属未定义（本路径不支持）。
+ * 返回 0 事件就绪 / 1 超时 / -1 失败或 fd 已关闭。
  * 必须在协程内调用（lm_co_current() != NULL）。
- * 流程：get_connection（复用时 timedout 已被清零）→ 设 handler/data → add 事件
- * → 注册定时器 → yield → resume 后摘事件 + 摘定时器（已触发时 del 为 no-op，
- * timer_id 单调不复用故无歧义）→ 归还连接池 → 按 timedout 区分返回。 */
+ * 流程：get_connection → gen 快照 → CAS NIL→WAITING(co) → 注册事件 →
+ * 注册集中定时器（waitCtx 带方向）→ yield → resume 后按字终态区分 →
+ * 摘事件（CLOSED 时 fd 已死，del 返回 EBADF 忽略）→ 摘定时器（已触发时
+ * cancel no-op）→ 归还连接池。 */
+
 static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout_ms) {
     lm_co_t* co = lm_co_current();
     if (!co || !g_socket_reactor) return -1;
@@ -185,40 +236,94 @@ static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout
     co->pinned = 1;
     lm_connection_t* conn = lm_reactor_get_connection(g_socket_reactor, fd);
     if (!conn) return -1;
-    uint32_t events = 0;
-    if (want_read)  events |= LM_EVENT_READ;
-    if (want_write) events |= LM_EVENT_WRITE;
-    conn->read_handler  = want_read  ? co_resume_handler : NULL;
-    conn->write_handler = want_write ? co_resume_handler : NULL;
+    /* Phase 8.8：选方向字（调用点均单方向），快照 fd_generation 供回调比对 */
+    _Atomic uintptr_t* word = want_read ? &conn->rg : &conn->wg;
+    uint64_t gen = atomic_load_explicit(&conn->fd_generation, memory_order_acquire);
+    if (want_read) conn->wait_gen_r = gen; else conn->wait_gen_w = gen;
+    /* 登记回调：事件走 fd_wait_*_cb 三态仲裁；data 仍传 co（回调仲裁用）。
+     * conn->sched 记录所属 scheduler，超时回调（timer 线程跨线程）据此 wakeup。 */
+    conn->read_handler  = want_read  ? fd_wait_read_cb  : NULL;
+    conn->write_handler = want_write ? fd_wait_write_cb : NULL;
     conn->read_data  = co;
     conn->write_data = co;
     conn->co = co;
-    /* Phase 8.4：记录所属 scheduler，超时回调（timer 线程跨线程）据此 wakeup
-     * 投递协程回本线程 reactor；fd 事件 handler（reactor 线程=本线程）据此
-     * post_local。无 scheduler（lm_scheduler_get_current()==NULL）时 conn->sched
-     * 保持 NULL，两条路径降级（resume 直接 resume / timeout 仅置标记）。 */
     conn->sched = lm_scheduler_get_current();
-    if (lm_reactor_add(g_socket_reactor, conn, events) != 0) {
+    uint32_t events = 0;
+    if (want_read)  events |= LM_EVENT_READ;
+    if (want_write) events |= LM_EVENT_WRITE;
+    /* CAS NIL→WAITING(co)：占住等待字，三方仲裁的起点。
+     * 失败（理论上不可能，get_connection 刚置 NIL）→ 归还并报错。 */
+    uintptr_t expected = LM_FD_NIL;
+    if (!atomic_compare_exchange_strong_explicit(word, &expected, (uintptr_t)co,
+            memory_order_acq_rel, memory_order_acquire)) {
         lm_reactor_free_connection(g_socket_reactor, conn);
         return -1;
     }
+    /* Phase 8.8：注册等待字回溯，供协程强制 destroy 时安全解仲裁 */
+    co->waiting_word = word;
+    co->waiting_conn = conn;
+    if (lm_reactor_add(g_socket_reactor, conn, events) != 0) {
+        /* add 失败：CAS WAITING→NIL 回滚（此时三方尚未注册，必赢）再归还 */
+        uintptr_t exp = (uintptr_t)co;
+        atomic_compare_exchange_strong_explicit(word, &exp, LM_FD_NIL,
+                memory_order_acq_rel, memory_order_acquire);
+        co->waiting_word = NULL;
+        lm_reactor_free_connection(g_socket_reactor, conn);
+        return -1;
+    }
+    FdWaitCtx* waitCtx = NULL;
     lm_timer_id_t timer_id = LM_TIMER_INVALID_ID;
     if (timeout_ms > 0) {
-        timer_id = lm_reactor_add_timer(g_socket_reactor, (uint64_t)timeout_ms,
-                                        co_timeout_handler, conn);
+        waitCtx = (FdWaitCtx*)malloc(sizeof(FdWaitCtx));
+        if (waitCtx) {
+            waitCtx->conn = conn;
+            waitCtx->word = word;
+            waitCtx->co = co;
+            waitCtx->gen = gen;
+            timer_id = lm_reactor_add_timer(g_socket_reactor, (uint64_t)timeout_ms,
+                                            fd_wait_timeout_cb, waitCtx);
+            if (timer_id == LM_TIMER_INVALID_ID) {
+                free(waitCtx);
+                waitCtx = NULL;
+            }
+        }
         if (timer_id == LM_TIMER_INVALID_ID) {
+            /* 定时器不可用：摘事件 + CAS WAITING→NIL 回滚 + 归还 */
             lm_reactor_del(g_socket_reactor, conn, conn->active_events);
+            uintptr_t exp = (uintptr_t)co;
+            atomic_compare_exchange_strong_explicit(word, &exp, LM_FD_NIL,
+                    memory_order_acq_rel, memory_order_acquire);
+            co->waiting_word = NULL;
             lm_reactor_free_connection(g_socket_reactor, conn);
             return -1;
         }
     }
-    lm_co_yield();  /* 切回 reactor 主循环等事件/超时 */
-    /* resume 回来：事件已就绪或定时器到期，摘事件 + 摘定时器 + 归还连接池 */
-    int timedout = conn->timedout;
+    /* 等待循环：以等待字为唯一真相之源，只有仲裁赢家写入的
+     * READY/TIMEOUT/CLOSED 是终态。resume 回来字仍是 WAITING(co) = 伪唤醒
+     * （调度层既有双投递：spawn 入就绪队列 + 业务层显式 resume，drain 会把
+     * 队列里的陈旧条目再 resume 一次——见 vm_builtin.c BUILTIN_CO_SPAWN 段
+     * 注释；事件注册与定时器仍在位，无需重注册，直接再 yield 继续等）。 */
+    uintptr_t state;
+    for (;;) {
+        lm_co_yield();  /* 切回 reactor 主循环等事件/超时/关闭 */
+        state = atomic_load_explicit(word, memory_order_acquire);
+        if (state != (uintptr_t)co) break;  /* 仲裁赢家写过 → 终态 */
+    }
+    /* 清理（协程续行负责）：摘事件（CLOSED 时 fd 已被 close()，del 返回
+     * EBADF/ENOENT 忽略——内核已自动摘除）；摘定时器——waitCtx 所有权随
+     * cancel 返回值移交：0（回调保证不运行）→ 协程释放；1/-1（运行中/已
+     * 执行）→ 回调持有或已释放，协程不得再碰（防 UAF / double-free）。 */
     lm_reactor_del(g_socket_reactor, conn, conn->active_events);
-    if (timer_id != LM_TIMER_INVALID_ID) lm_reactor_del_timer(g_socket_reactor, timer_id);
+    if (timer_id != LM_TIMER_INVALID_ID) {
+        if (lm_timer_cancel(timer_id) == 0) {
+            free(waitCtx);
+        }
+    }
+    /* Phase 8.8：清理等待字回溯（协程已恢复，无 destroy 解仲裁需求） */
+    co->waiting_word = NULL;
+    co->waiting_conn = NULL;
     lm_reactor_free_connection(g_socket_reactor, conn);
-    return timedout ? 1 : 0;
+    return (state == LM_FD_READY) ? 0 : (state == LM_FD_TIMEOUT) ? 1 : -1;
 }
 
 /* 协程挂起等 fd 事件：注册 want_read/want_write 事件 → yield → resume 后摘事件。
@@ -919,11 +1024,49 @@ Value lumyr_socket_recvfrom(Value v, int maxLen, int flags) {
     return arr;
 }
 
+/* Phase 8.8：close 前通知——对本线程 reactor 中正等待该 fd 的 conn 做
+ * WAITING→CLOSED 仲裁，赢家唤醒等待协程（其 resume 后见 CLOSED 返回 -1，
+ * 不会在死 fd 上重试 syscall）。
+ * 仲裁必须在 close(fd) 之前：close 后 fd 号可能被其他线程复用，fd_map 查找
+ * 会错过或错配，等待协程将挂到超时。
+ * 跨线程 close（close 协程在别的 scheduler 线程）：TLS 取到的是别的 reactor
+ * 或 NULL，找不到本 conn 则跳过——等待协程仍靠超时/事件路径唤醒，
+ * 与既有行为一致（不退化）。 */
+static void fd_wait_close_notify(int fd) {
+    lm_reactor_t* r = g_socket_reactor;
+    if (!r || fd < 0 || fd >= r->conn_capacity) return;
+    lm_connection_t* conn = r->fd_map[fd];
+    if (!conn || conn->fd != fd) return;   /* 无等待者或 slot 已易主 */
+    lm_co_t* co = (lm_co_t*)conn->co;
+    if (!co) return;
+    /* 代次 bump：使等待方注册时快照的 gen 失效（陈旧定时器不再碰等待字） */
+    atomic_fetch_add_explicit(&conn->fd_generation, 1, memory_order_acq_rel);
+    /* 读/写两字各试一次（等待是单方向的，只有其中一个可能处于 WAITING） */
+    for (int i = 0; i < 2; i++) {
+        _Atomic uintptr_t* word = (i == 0) ? &conn->rg : &conn->wg;
+        uintptr_t expected = (uintptr_t)co;
+        if (atomic_compare_exchange_strong_explicit(word, &expected, LM_FD_CLOSED,
+                memory_order_acq_rel, memory_order_acquire)) {
+            /* 赢仲裁：唤醒等待协程。本线程（close 协程与等待协程同属本
+             * reactor 的 scheduler）走 post_local 快通道；conn->sched 为
+             * NULL（无 scheduler 遗留路径）时直接 resume（同线程串行安全）。 */
+            if (conn->sched) {
+                lm_scheduler_post_local(conn->sched, co);
+            } else {
+                lm_co_resume(co);
+            }
+            return;   /* 单方向等待：一个字赢即完成 */
+        }
+        /* CAS 输：该字非 WAITING(co)（NIL 或已被事件/超时仲裁），试下一字 */
+    }
+}
+
 Value lumyr_socket_close(Value v) {
     if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "close() 仅适用于 socket 对象"); return val_none(); }
     SocketObj* o = (SocketObj*)v.v.socket_obj;
     if(!o) return val_none();
     if(!o->closed && o->fd >= 0) {
+        fd_wait_close_notify(o->fd);   /* Phase 8.8：先仲裁唤醒等待协程，再关 fd */
         close(o->fd);
         o->closed = 1;
         o->fd = -1;

@@ -114,6 +114,14 @@ typedef struct lm_co_s {
     _Atomic int swap_state;
     struct lm_co_s* reg_prev;
     struct lm_co_s* reg_next;
+    /* Phase 8.8：fd 等待字回溯（结构体末尾追加，ABI 不变）。
+     * co_wait_fd_timeout 注册等待时记录当前等待的 conn 方向字（rg/wg）与 conn
+     * 指针，cleanup 时清空。协程仍挂起在等待字上被强制 destroy（accept/handler
+     * 挂起协程随框架 destroyActive/acceptCo.destroy 释放）时，lm_co_destroy 据此
+     * CAS 解仲裁 + 清 conn->co，防 close_notify 唤醒已释放的悬垂协程（UAF）。
+     * 无等待时恒 NULL。 */
+    _Atomic uintptr_t* waiting_word;
+    void* waiting_conn;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);

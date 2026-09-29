@@ -445,13 +445,11 @@ void lm_co_yield(void) {
     if (g_co_yield_hook) g_co_yield_hook(co);
     co_set_current(NULL);
 #ifdef LM_ASAN_FIBER
-    /* 切走：存本协程 fake，声明切回 resume 调用方栈（resume 时记录） */
     __sanitizer_start_switch_fiber(&co->asan_fake, co->asan_caller_bottom,
                                    co->asan_caller_size);
 #endif
     lm_ctx_jump(&co->ctx, &co->resume_ctx);  /* 切回 resume 调用方 */
 #ifdef LM_ASAN_FIBER
-    /* 被 resume 切回：恢复本协程 fake */
     __sanitizer_finish_switch_fiber(co->asan_fake, NULL, NULL);
 #endif
     /* resume 回来后：移除冻结栈注册，恢复 TLS（reactor 调度回来继续执行）。
@@ -511,6 +509,23 @@ void lm_co_destroy(lm_co_t* co) {
     struct lm_scheduler_s* hs = atomic_exchange_explicit(&co->home_sched, NULL,
                                                          memory_order_acq_rel);
     if (hs) lm_scheduler_release(hs);
+
+    /* Phase 8.8：协程仍挂在 fd 等待字上被强制 destroy（accept/handler 挂起协程
+     * 随框架 destroyActive / acceptCo.destroy 释放，未走 co_wait_fd_timeout 正常
+     * cleanup）→ 清理等待，防后续 close_notify 读到悬垂 co（UAF）。
+     * CAS WAITING(self)→CLOSED 解仲裁（事件/超时/close 三方见此字非 WAITING 不再
+     * 争抢本协程），并清 conn->co 使 close_notify 空指针短路。
+     * 同线程串行：destroy 与 close_notify 均在协程所属 reactor 线程，无竞态。 */
+    _Atomic uintptr_t* ww = co->waiting_word;
+    if (ww) {
+        lm_connection_t* wconn = (lm_connection_t*)co->waiting_conn;
+        uintptr_t exp = (uintptr_t)co;
+        atomic_compare_exchange_strong_explicit(ww, &exp, LM_FD_CLOSED,
+                                                memory_order_acq_rel, memory_order_acquire);
+        if (wconn && wconn->co == co) wconn->co = NULL;
+        co->waiting_word = NULL;
+        co->waiting_conn = NULL;
+    }
 
     free(co);
 }
