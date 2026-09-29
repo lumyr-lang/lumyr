@@ -186,6 +186,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sysmon.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_blocking_pool.c
 # Phase 8.9：同步原语家族（mutex/semaphore/rwlock/countdown/once），全部建在 butex 之上。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sync.c
+# Phase 8.11：调度器可观测性（指标族 + pending_time 直方图 + trace 调试输出）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sched_stats.c
 # Phase 8.6 B：per-thread 栈池（分级栈复用 + ASAN poison 配对）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_stack_pool.c
 

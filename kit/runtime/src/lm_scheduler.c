@@ -7,6 +7,7 @@
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度墙钟告警 */
 #include "lm_sysmon.h"    /* Phase 8.5 D：sysmon 守护线程懒启动 */
 #include "lm_compute.h"   /* Phase 8.10：overflow_wake_one 唤醒不足时扩容 */
+#include "lm_sched_stats.h" /* Phase 8.11：可观测性记账 + trace 线程懒启动 */
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -119,6 +120,8 @@ long lm_scheduler_overflow_len(void) {
  * 协议：先 fetch_add 改字、后 butex_wake（丢唤醒防护）；worker 未睡时
  * 仅多一次字递增 + 桶内查找，无系统调用（S4）。 */
 static void sched_wake_parked(lm_scheduler_t* s) {
+    /* Phase 8.11：唤醒计数（butex_wake 调用即记，无论是否有 waiter）。 */
+    atomic_fetch_add_explicit(&s->wake_count, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&s->sleepWord, 1, memory_order_release);
     lm_butex_wake(&s->sleepWord, 1);
 }
@@ -166,6 +169,12 @@ static void overflow_wake_one(void) {
 static void overflow_push(lm_co_t* co) {
     co->queued = 1;
     co->next = NULL;
+    /* Phase 8.11：ready_ts 兜底——compute 迁移入全局队列的协程未经 post
+     * （ready_ts==0），在此记录就绪起点；WSQ 溢出搬入的协程已有 ready_ts，
+     * 保留原值（pending 从首次就绪起算，而非从队列间搬移起算）。 */
+    if (atomic_load_explicit(&co->ready_ts, memory_order_relaxed) == 0) {
+        atomic_store_explicit(&co->ready_ts, lm_now_ns(), memory_order_relaxed);
+    }
     pthread_mutex_lock(&g_ov_mutex);
     if (g_ov_tail) {
         g_ov_tail->next = co;
@@ -249,6 +258,8 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     sched_registry_add(s);
     /* Phase 8.5 D：懒启动 sysmon 守护线程（幂等，首次 scheduler 创建时启动）。 */
     lm_sysmon_start();
+    /* Phase 8.11：懒启动 stats trace 线程（幂等；LM_SCHED_DEBUG=trace:N 生效）。 */
+    lm_sched_stats_start();
     return s;
 }
 
@@ -326,6 +337,8 @@ void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co) {
     if (co->queued) return;   /* 防重复入队 */
     co->queued = 1;
     co->next = NULL;
+    /* Phase 8.11：记录就绪起点（pending_time 起算点）。 */
+    atomic_store_explicit(&co->ready_ts, lm_now_ns(), memory_order_relaxed);
     int needWake;
     pthread_mutex_lock(&s->ready_mutex);
     if (s->ready_tail) {
@@ -334,6 +347,8 @@ void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co) {
         s->ready_head = co;
     }
     s->ready_tail = co;
+    /* Phase 8.11：mutex 定向队列深度（锁内更新，trace 线程 relaxed 读）。 */
+    atomic_fetch_add_explicit(&s->ready_len, 1, memory_order_relaxed);
     /* Phase 8.3：仅当本 worker 已在 butex 睡眠时需要唤醒。
      * sleeping 标志在 pop_blocking 持本锁置位，读取与入队同锁串行。 */
     needWake = atomic_load_explicit(&s->sleeping, memory_order_acquire);
@@ -359,6 +374,7 @@ lm_co_t* lm_scheduler_pop(lm_scheduler_t* s) {
         if (!s->ready_head) s->ready_tail = NULL;
         co->next = NULL;
         co->queued = 0;
+        atomic_fetch_sub_explicit(&s->ready_len, 1, memory_order_relaxed);
     }
     pthread_mutex_unlock(&s->ready_mutex);
     return co;
@@ -397,6 +413,8 @@ void lm_scheduler_post_local(lm_scheduler_t* s, lm_co_t* co) {
         return;
     }
     co->queued = 1;
+    /* Phase 8.11：记录就绪起点（pending_time 起算点）。 */
+    atomic_store_explicit(&co->ready_ts, lm_now_ns(), memory_order_relaxed);
     wsq_push_or_overflow(s, co);
     /* WSQ 无锁对本线程 drain 立即可见；compute worker 睡眠时无法被
      * 本调用唤醒（owner 是 IO 线程时无需唤醒自己）——若本 scheduler 是
@@ -407,6 +425,8 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
     if (!s || !co) return;
     if (co->queued) return;
     co->queued = 1;
+    /* Phase 8.11：记录就绪起点（pending_time 起算点）。 */
+    atomic_store_explicit(&co->ready_ts, lm_now_ns(), memory_order_relaxed);
     lm_co_t* old = s->lifo_slot;
     s->lifo_slot = co;
     if (!old) return;
@@ -425,6 +445,7 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
             s->ready_head = old;
         }
         s->ready_tail = old;
+        atomic_fetch_add_explicit(&s->ready_len, 1, memory_order_relaxed);   /* 8.11 */
         needWake = atomic_load_explicit(&s->sleeping, memory_order_acquire);
         pthread_mutex_unlock(&s->ready_mutex);
         if (needWake) sched_wake_parked(s);
@@ -458,8 +479,12 @@ static lm_co_t* sched_steal(lm_scheduler_t* self) {
         uint32_t idx = (start + (uint32_t)i * self->steal_offset) % (uint32_t)n;
         lm_scheduler_t* v = g_scheds[idx];
         if (!v || v == self) continue;
+        /* Phase 8.11：窃取尝试计数（每 victim 探测一次）。 */
+        atomic_fetch_add_explicit(&self->steal_attempts, 1, memory_order_relaxed);
         size_t got = lm_wsq_steal_batch(&v->wsq, batch, LM_SCHED_STEAL_MAX_BATCH);
         if (got == 0) continue;
+        /* Phase 8.11：窃取成功计数（批非空）。 */
+        atomic_fetch_add_explicit(&self->steal_success, 1, memory_order_relaxed);
         /* 灌本地 WSQ 尾部（对齐 runqsteal：灌一半、立即执行其一）；
          * 第一个不入队直接返回执行，减少一次 push/pop。 */
         for (size_t k = 1; k < got; k++) {
@@ -498,6 +523,11 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
             s->lifo_slot = NULL;
             s->lifo_used++;
             co->queued = 0;
+        } else if (s->lifo_slot) {
+            /* Phase 8.11：LIFO 配额触顶——slot 非空但本轮配额已尽，
+             * slot 内协程被让到 WSQ/mutex 之后（每延迟一轮记一次）。 */
+            atomic_fetch_add_explicit(&s->lifo_quota_hits, 1,
+                                      memory_order_relaxed);
         }
         /* 2. 本地 WSQ（可窃取协程：用户 handler / CPU 密集协程）
          * Phase 8.5：WSQ 提到 mutex 前——slice_yield 重入队走 mutex FIFO，
@@ -523,6 +553,7 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
         {
             uint64_t elapsed_ns = lm_now_ns() - co->last_resume_ns;
             if (elapsed_ns > (uint64_t)LM_SCHED_LONG_SCHED_MS * 1000000ULL) {
+                lm_sched_stats_long_sched();   /* Phase 8.11：长调度告警计数 */
                 fprintf(stderr,
                     "[sched] long schedule: co=%p elapsed=%.2fms (threshold=%dms)\n",
                     (void*)co, elapsed_ns / 1000000.0, LM_SCHED_LONG_SCHED_MS);
@@ -537,6 +568,8 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
             co->slice_yield = 0;
             if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
                 atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
+                /* Phase 8.11：强制让出重入队计数（reduction 账本）。 */
+                lm_sched_stats_force_yield();
                 /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
                  * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。
                  * 用 lm_scheduler_post（mutex）而非 post_local（WSQ）。
@@ -615,6 +648,7 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
             if (!s->ready_head) s->ready_tail = NULL;
             co->next = NULL;
             co->queued = 0;
+            atomic_fetch_sub_explicit(&s->ready_len, 1, memory_order_relaxed);   /* 8.11 */
         }
         int stopped = s->stop;
         pthread_mutex_unlock(&s->ready_mutex);

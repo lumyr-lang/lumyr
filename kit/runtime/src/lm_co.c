@@ -12,6 +12,7 @@
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳 */
 #include "lm_stack_pool.h" /* Phase 8.6 C：per-thread 栈池 */
 #include "lm_scheduler.h"  /* 销毁时释放 migrate_sched/home_sched 的 scheduler 引用 */
+#include "lm_sched_stats.h" /* Phase 8.11：存活协程计数 + pending_time 记账 */
 #include "gc_runtime.h"
 
 #include <stdlib.h>
@@ -141,6 +142,7 @@ static void co_registry_add(lm_co_t* co) {
     if (g_co_reg_head) g_co_reg_head->reg_prev = co;
     g_co_reg_head = co;
     pthread_mutex_unlock(&g_co_reg_lock);
+    lm_sched_stats_co_created();   /* Phase 8.11：存活协程计数 */
 }
 
 /* 注册表摘除（destroy 调用）。持锁 O(1) 双向链摘除。 */
@@ -152,6 +154,7 @@ static void co_registry_remove(lm_co_t* co) {
     co->reg_prev = NULL;
     co->reg_next = NULL;
     pthread_mutex_unlock(&g_co_reg_lock);
+    lm_sched_stats_co_destroyed();   /* Phase 8.11：存活协程计数 */
 }
 
 /* ============================================================
@@ -366,6 +369,15 @@ void lm_co_resume(lm_co_t* co) {
      * 切回这里时重新装载——与 BEAM context_switch→erts_schedule 同语义。 */
     co->reds = LM_SCHED_REDS;
     co->last_resume_ns = lm_now_ns();
+    /* Phase 8.11：pending_time 记账——经就绪队列调度的协程（ready_ts!=0）
+     * 统计 ready→被执行延迟入全局直方图；直连 resume（ready_ts==0）跳过。 */
+    {
+        uint64_t rts = atomic_exchange_explicit(&co->ready_ts, 0,
+                                                memory_order_acq_rel);
+        if (rts && co->last_resume_ns > rts) {
+            lm_sched_stats_record_pending_ns(co->last_resume_ns - rts);
+        }
+    }
     co_set_current(co);
     /* Phase 5: swapcontext 切到协程前，恢复协程 vm_state 到 _Thread_local
      * （g_stack_mgr sp / g_try_stack / g_unwind / g_err_jmp / g_thread_root 等）。

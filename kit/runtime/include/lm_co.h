@@ -122,6 +122,12 @@ typedef struct lm_co_s {
      * 无等待时恒 NULL。 */
     _Atomic uintptr_t* waiting_word;
     void* waiting_conn;
+    /* Phase 8.11：就绪时间戳（结构体末尾追加，ABI 不变）。
+     * post/post_local/post_lifo 入队时记录 CLOCK_MONOTONIC ns；
+     * lm_co_resume 抢到 RUNNING 后 exchange 取走清零，差值即 pending_time
+     * （ready→被执行延迟）记入全局直方图（lm_sched_stats）。
+     * 0 = 不在就绪队列（直连 resume 路径不统计）。跨线程写（投递方）/读（resume 方）。 */
+    _Atomic uint64_t ready_ts;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);

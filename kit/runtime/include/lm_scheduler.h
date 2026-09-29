@@ -62,6 +62,17 @@ typedef struct lm_scheduler_s {
      * shrink 置位后：round-robin 分发不再选中本 worker；worker 排空本地队列
      * 后自行退出（pop_blocking 返回 NULL 即队列空 → 见本标记 break）。 */
     _Atomic int reject_new;
+    /* Phase 8.11：可观测性计数器（结构末尾追加，ABI 原则）。
+     * 热路径无锁原子累加（bvar 模式），LM_SCHED_DEBUG=trace:N 线程后台聚合打印。
+     * steal_attempts/success：窃取尝试（每 victim 探测一次）/成功（批非空）次数。
+     * wake_count：sched_wake_parked butex 唤醒次数。
+     * lifo_quota_hits：LIFO 配额触顶次数（消费满 LM_SCHED_LIFO_QUOTA 且 slot 仍占）。
+     * ready_len：mutex 定向队列当前深度（post/pop 持锁更新，trace 线程 relaxed 读）。 */
+    _Atomic uint64_t steal_attempts;
+    _Atomic uint64_t steal_success;
+    _Atomic uint64_t wake_count;
+    _Atomic uint64_t lifo_quota_hits;
+    _Atomic long ready_len;
 } lm_scheduler_t;
 
 /* LIFO slot 每调度轮连续消费配额（对齐 Tokio MAX_LIFO_POLLS_PER_TICK=3，

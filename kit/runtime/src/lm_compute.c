@@ -9,6 +9,7 @@
 #include "lm_co.h"
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度告警 */
 #include "lm_butex.h"     /* Phase 8.10：shrink 时 lm_butex_wake 唤醒待退出 worker */
+#include "lm_sched_stats.h" /* Phase 8.11：reduction 账本 + 长调度告警计数 */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -68,6 +69,7 @@ static void* compute_worker_run(void* arg) {
         {
             uint64_t elapsed_ns = lm_now_ns() - co->last_resume_ns;
             if (elapsed_ns > (uint64_t)LM_SCHED_LONG_SCHED_MS * 1000000ULL) {
+                lm_sched_stats_long_sched();   /* Phase 8.11：长调度告警计数 */
                 fprintf(stderr,
                     "[compute] long schedule: co=%p elapsed=%.2fms (threshold=%dms)\n",
                     (void*)co, elapsed_ns / 1000000.0, LM_SCHED_LONG_SCHED_MS);
@@ -79,6 +81,7 @@ static void* compute_worker_run(void* arg) {
             co->slice_yield = 0;
             if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
                 atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
+                lm_sched_stats_force_yield();   /* Phase 8.11：强制让出计数 */
                 lm_scheduler_post(s, co);
             }
         }
