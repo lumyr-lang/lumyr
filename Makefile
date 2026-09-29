@@ -184,6 +184,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_timer.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sysmon.c
 # Phase 8.5 F：阻塞 syscall 流放池（独立线程池，KEEP_ALIVE=10s）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_blocking_pool.c
+# Phase 8.6 B：per-thread 栈池（分级栈复用 + ASAN poison 配对）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_stack_pool.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

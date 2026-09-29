@@ -197,6 +197,11 @@ static void* timer_run(void* arg) {
          *   时 timeout cap 1s 兜底），不影响正确性。 */
         atomic_store_explicit(&t->nearest_snapshot, UINT64_MAX, memory_order_release);
 
+        /* 1.2 nsignals 基线：必须在 consume 前取样（对齐 brpc timer_thread
+         * run 循环协议）。若 add 的 fetch_add 发生在本轮 consume~publish 之间，
+         * 基线不含该增量，步骤 4.5 复核发现差异即重跑 consume——关闭丢唤醒。 */
+        uint32_t nsignals_base = atomic_load_explicit(&t->nsignals, memory_order_acquire);
+
         /* 2. consume all buckets：取每个桶 head 清空，reset bucket.nearest。
          *   桶内不排序，统一 push 进堆（最小堆保证 pop 顺序正确）。 */
         for (size_t i = 0; i < t->num_buckets; i++) {
@@ -262,10 +267,21 @@ static void* timer_run(void* arg) {
         pthread_mutex_unlock(&t->mtx);
         atomic_store_explicit(&t->nearest_snapshot, nearest, memory_order_release);
 
+        /* 4.5 复核 nsignals：add 侧顺序是"先入桶后 fetch_add"，若增量落在
+         * 基线取样之后、此处复核之前，说明本轮 consume 漏了新任务——重跑。
+         * （丢唤醒根因：旧代码在此处现取 expected，若 add 的 fetch_add+wake
+         * 已发生在 publish 与取样之间，futex 值匹配 → 空堆无限睡眠。
+         * compute_test 首个 add 与线程懒启动首轮循环竞态确定性复现。） */
+        if (atomic_load_explicit(&t->nsignals, memory_order_acquire) != nsignals_base) {
+            continue;
+        }
+
         /* 5. futex_wait 到最近到期点（或无限）。
-         *   expected=当前 nsignals：add 若更早到期会 fetch_add nsignals + wake，
-         *   使 futex_wait 值不匹配立即返回，下一轮 consume 新 task。 */
-        uint32_t expected = atomic_load_explicit(&t->nsignals, memory_order_acquire);
+         *   expected=基线值：add 若更早到期会 fetch_add nsignals + wake，
+         *   使 futex_wait 值不匹配立即返回，下一轮 consume 新 task。
+         *   值校验由 futex/ulock 原子完成（复核后、park 前落下的增量
+         *   会使 *word != expected 而立即返回），无丢失窗口。 */
+        uint32_t expected = nsignals_base;
         if (atomic_load_explicit(&t->stop, memory_order_acquire)) break;
         int64_t timeout_us = -1;   /* 无限 */
         if (nearest != UINT64_MAX) {

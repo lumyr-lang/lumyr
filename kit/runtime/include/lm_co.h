@@ -94,6 +94,23 @@ typedef struct lm_co_s {
      * （协程已让出栈，post 安全），使 tight loop 协程按时间片轮转而非霸占线程。
      * 事件型 yield（fd/butex/compute 迁移）不设此标记——由事件回调/migrate 重入队。 */
     int slice_yield;
+    /* Phase 8.6：栈分级与 idle 换出字段（结构体末尾追加，ABI 不变）。
+     * stack_class：LM_STACK_SMALL(16KiB)/LM_STACK_NORMAL(128KiB)，选栈池桶用。
+     *   spawn 时按 stack_size 推断（≤SMALL→SMALL，否则 NORMAL）。VM 协程维持 NORMAL。
+     * swap_buffer/swap_size：idle 换出时把已用栈段 memcpy 到堆 buffer（libco
+     *   save_stack_buffer 思想降级——仅 idle>30s 执行，非每切换都拷贝）。
+     *   未换出时 swap_buffer=NULL。
+     * swap_state：换出/换入互斥状态机（_Atomic，CAS 仲裁换出与唤醒竞态）：
+     *   0=NORMAL 1=SWAPPING_OUT(reaper 拷贝中) 2=SWAPPED(无栈,buffer 持内容)
+     *   3=SWAPPING_IN(唤醒方拷回中)。resume 入口检测 SWAPPED 触发换入。
+     * reg_prev/reg_next：全局协程注册表 intrusive 链，reaper 扫描 idle 候选用。
+     *   spawn 加头、destroy 摘除，reaper 取快照后无锁遍历。 */
+    int stack_class;
+    void*  swap_buffer;
+    size_t swap_size;
+    _Atomic int swap_state;
+    struct lm_co_s* reg_prev;
+    struct lm_co_s* reg_next;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);
@@ -158,10 +175,37 @@ typedef void (*lm_co_entry_t)(void*);
  * 栈帧较大）会被顶满触发 SIGBUS。128KiB 是 libco 默认值，足够覆盖 4+ 层 VM 嵌套。 */
 #define LM_CO_DEFAULT_STACK_SIZE (128 * 1024)
 
+/* Phase 8.6：栈分级常量（对齐 bthread stack.cpp:34-36 的分级思路）。
+ * LM_STACK_SMALL：IO 连接协程档（16KiB）。mmap 惰性分页使虚拟仅占触页物理。
+ *   注：VM 协程本期维持 NORMAL（深嵌套 VM 帧需 128KiB，见上注）；SMALL 降级
+ *   待栈深 profiling 验证后另立。此常量供栈池分桶 + 轻量 C 协程显式指定。
+ * LM_STACK_NORMAL：VM/计算协程档（128KiB），默认值。 */
+#define LM_STACK_SMALL   (16  * 1024)
+#define LM_STACK_NORMAL  (128 * 1024)
+
+/* Phase 8.6：栈类标记（stack_class 字段取值，选栈池桶用）。 */
+#define LM_STACK_CLASS_SMALL   1
+#define LM_STACK_CLASS_NORMAL  2
+
+/* Phase 8.6：idle 换出状态机（swap_state 字段取值，_Atomic CAS 仲裁换出/换入竞态）。
+ *   NORMAL       0  协程持栈，未换出
+ *   SWAPPING_OUT 1  reaper 正在拷贝栈内容到堆 buffer（唤醒方见此态自旋等 SWAPPED）
+ *   SWAPPED      2  协程无栈，内容在 swap_buffer；resume 入口触发换入
+ *   SWAPPING_IN  3  唤醒方正在从 buffer 拷回池栈（reaper 见此态跳过） */
+#define LM_CO_SWAP_NORMAL        0
+#define LM_CO_SWAP_SWAPPING_OUT  1
+#define LM_CO_SWAP_SWAPPED       2
+#define LM_CO_SWAP_SWAPPING_IN   3
+
+/* Phase 8.6：idle 换出阈值。SUSPENDED 且 now-last_resume_ns 超此值则换出候选。
+ * 默认 30s（调研 §8.6）。reaper 每 LM_REAP_SCAN_INTERVAL_NS 扫描一次注册表。 */
+#define LM_REAP_IDLE_THRESHOLD_NS  (30ULL * 1000000000ULL)  /* 30s */
+#define LM_REAP_SCAN_INTERVAL_NS   (5ULL  * 1000000000ULL)  /* 5s 扫描间隔 */
+
 /* 创建协程：分配 stack（mmap + 末页 guard page），makecontext 设置 entry。
  * 不立即执行，state=READY。返回 NULL 失败。
  * 调用方负责把 co 加入 reactor 就绪队列，reactor 主循环会调 lm_co_resume。
- * stack_size=0 用默认值。 */
+ * stack_size=0 用默认值（NORMAL）。stack_size≤LM_STACK_SMALL 用 SMALL 档。 */
 lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size);
 
 /* resume 协程：从挂起点继续执行；协程内 lm_co_yield 会切回这里。
@@ -198,6 +242,25 @@ void lm_co_destroy(lm_co_t* co);
 typedef void (*lm_co_vm_hook_t)(lm_co_t* co);
 void lm_co_set_vm_hooks(lm_co_vm_hook_t on_resume, lm_co_vm_hook_t on_yield,
                         lm_co_vm_hook_t on_release);
+
+/* ============================================================
+ * Phase 8.6: 栈分级 + idle 换出 API
+ *
+ * spawn_class：显式指定栈档（LM_STACK_CLASS_SMALL/NORMAL），选栈池桶。
+ *   等价 lm_co_spawn(entry,arg,0) 但栈档可控，供轻量 C 协程走 SMALL 档。
+ *
+ * can_swap hook：VM 层注册，reaper 换出前咨询。返回 1 允许换出，
+ *   0 否决（如栈深超阈值、持 cPlist 自引用结构）。未注册时 reaper 不换出
+ *   （runtime 不猜 VM 栈内布局，给 VM 层最终裁量权）。
+ *
+ * lm_co_reap_idle：reaper（sysmon 节流调用）扫描全局协程注册表，
+ *   对 SUSPENDED+idle>LM_REAP_IDLE_THRESHOLD_NS+can_swap 通过的协程换出。
+ *   外部一般不直接调，由 sysmon 内部触发。
+ * ============================================================ */
+lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class);
+typedef int (*lm_co_can_swap_fn)(lm_co_t* co);
+void lm_co_set_can_swap_hook(lm_co_can_swap_fn fn);
+void lm_co_reap_idle(uint64_t now_ns);
 
 #ifdef __cplusplus
 }

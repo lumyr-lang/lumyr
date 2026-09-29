@@ -55,13 +55,14 @@ extern int __ulock_wake(uint32_t operation, void* addr, uint64_t wakeValue);
 
 static long platform_park_raw(volatile _Atomic uint32_t* word, uint32_t expected,
                               int64_t timeout_us) {
-    /* __ulock_wait 第 4 参 timeout 为 0 时无限等待；>0 为毫秒。
-     * 微秒向上取整为毫秒，避免 0 被当作无限（0<timeout_us<1000 时至少 1ms）。 */
-    uint32_t timeout_ms = 0;
+    /* __ulock_wait 第 4 参 timeout 单位为微秒（xnu sys_ulock.c 按微秒换算），
+     * 0 表示无限等待。实测传毫秒会 1000 倍过短（99ms→99µs），timer 线程
+     * 空转 ~16kHz（compute_test 挂死排查定位）。直接透传微秒并截断 uint32。 */
+    uint32_t timeout = 0;
     if (timeout_us >= 0) {
-        timeout_ms = (uint32_t)(timeout_us / 1000) + 1;
+        timeout = (timeout_us > 0xFFFFFFFFLL) ? 0xFFFFFFFFu : (uint32_t)timeout_us;
     }
-    return __ulock_wait(UL_COMPARE_AND_WAIT, (void*)word, (uint64_t)expected, timeout_ms);
+    return __ulock_wait(UL_COMPARE_AND_WAIT, (void*)word, (uint64_t)expected, timeout);
 }
 
 static long platform_wake_raw(volatile _Atomic uint32_t* word) {

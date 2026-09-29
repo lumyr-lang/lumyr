@@ -98,6 +98,10 @@ static int sysmon_scan_once(uint64_t now_ns) {
 static void* sysmon_thread_main(void* arg) {
     (void)arg;
     uint64_t delay_ns = LM_SYSMON_DELAY_MIN_NS;
+    /* Phase 8.6 D：reaper 节流。sysmon 主循环 ~10ms 一轮（满载退避），
+     * reaper 每 LM_REAP_SCAN_INTERVAL_NS(5s) 扫一次全局协程注册表换出 idle。
+     * 用墙钟节流而非计数（delay 在 20µs~10ms 间变化，计数不稳定）。 */
+    uint64_t last_reap_ns = 0;
     while (!atomic_load_explicit(&g_sysmon_stop, memory_order_acquire)) {
         uint64_t now = lm_now_ns();
         int timeout = sysmon_scan_once(now);
@@ -108,6 +112,15 @@ static void* sysmon_thread_main(void* arg) {
             /* 无超时：退避翻倍（封顶 10ms）。 */
             delay_ns *= 2;
             if (delay_ns > LM_SYSMON_DELAY_MAX_NS) delay_ns = LM_SYSMON_DELAY_MAX_NS;
+        }
+        /* Phase 8.6 D：idle 换出扫描（5s 一轮，扫描注册表换出 idle>30s 协程）。
+         * reaper 持注册表锁遍历 + swap_out（GC+pool），与 scheduler 扫描解耦。
+         * 首次 last_reap_ns==0 时跳过（等下一轮基线建立，防启动期误扫）。 */
+        if (last_reap_ns != 0 && (now - last_reap_ns) >= LM_REAP_SCAN_INTERVAL_NS) {
+            lm_co_reap_idle(now);
+            last_reap_ns = now;
+        } else if (last_reap_ns == 0) {
+            last_reap_ns = now;
         }
         /* nanosleep 可被信号中断，此处不重试（短延迟，误差可接受）。 */
         struct timespec ts;

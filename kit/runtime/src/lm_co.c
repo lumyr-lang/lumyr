@@ -10,6 +10,7 @@
 // 爆栈时触发 SIGSEGV 而非静默破坏内存。
 #include "lm_co.h"
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳 */
+#include "lm_stack_pool.h" /* Phase 8.6 C：per-thread 栈池 */
 #include "gc_runtime.h"
 
 #include <stdlib.h>
@@ -38,6 +39,19 @@
 /* 对照开关：-DLM_ASAN_FIBER_OFF 强制关闭注解（排查 ASAN 行为差异用） */
 #ifdef LM_ASAN_FIBER_OFF
 #  undef LM_ASAN_FIBER
+#endif
+/* LM_ASAN：ASAN 构建生效（与 fiber 注解解耦）。co_swap_out 用 unpoison
+ * 规避编译器插桩的局部变量红区（f1/f3）触发的 stack-buffer-underflow 误报。 */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define LM_ASAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(LM_ASAN)
+#  define LM_ASAN 1
+#endif
+#ifdef LM_ASAN
+#include <sanitizer/asan_interface.h>
 #endif
 #ifdef LM_ASAN_FIBER
 #include <sanitizer/common_interface_defs.h>
@@ -105,6 +119,41 @@ void lm_co_set_vm_hooks(lm_co_vm_hook_t on_resume, lm_co_vm_hook_t on_yield,
 }
 
 /* ============================================================
+ * Phase 8.6: 全局协程注册表 + can_swap hook
+ * 注册表为 intrusive 双向链（co->reg_prev/reg_next），reaper 扫描 idle 候选。
+ * spawn 加头、destroy 摘除，reaper 持锁取快照后无锁遍历。
+ * can_swap hook 由 VM 层注册，reaper 换出前咨询（未注册=不换出）。
+ * ============================================================ */
+static pthread_mutex_t g_co_reg_lock = PTHREAD_MUTEX_INITIALIZER;
+static lm_co_t* g_co_reg_head = NULL;
+static lm_co_can_swap_fn g_co_can_swap_hook = NULL;
+
+void lm_co_set_can_swap_hook(lm_co_can_swap_fn fn) {
+    g_co_can_swap_hook = fn;
+}
+
+/* 注册表加入（spawn 调用，已分配 co）。持锁 O(1) 头插。 */
+static void co_registry_add(lm_co_t* co) {
+    co->reg_prev = NULL;
+    pthread_mutex_lock(&g_co_reg_lock);
+    co->reg_next = g_co_reg_head;
+    if (g_co_reg_head) g_co_reg_head->reg_prev = co;
+    g_co_reg_head = co;
+    pthread_mutex_unlock(&g_co_reg_lock);
+}
+
+/* 注册表摘除（destroy 调用）。持锁 O(1) 双向链摘除。 */
+static void co_registry_remove(lm_co_t* co) {
+    pthread_mutex_lock(&g_co_reg_lock);
+    if (co->reg_prev) co->reg_prev->reg_next = co->reg_next;
+    else g_co_reg_head = co->reg_next;   /* 头节点 */
+    if (co->reg_next) co->reg_next->reg_prev = co->reg_prev;
+    co->reg_prev = NULL;
+    co->reg_next = NULL;
+    pthread_mutex_unlock(&g_co_reg_lock);
+}
+
+/* ============================================================
  * 协程 trampoline：lm_ctx_make 的 entry，arg 即协程指针（无全局变量竞态）。
  * entry 返回后显式 lm_ctx_jump 切回 resume_ctx（Phase 8.1 起取代 uc_link
  * 隐式链回——fcontext 无此机制，显式切换消除"函数返回触发隐式切换"的隐晦路径，
@@ -136,35 +185,8 @@ static void co_trampoline(void* arg) {
     __builtin_unreachable();   /* DEAD 协程不会被再切入：jump 永不返回 */
 }
 
-/* ============================================================
- * 栈分配：mmap + 末页 guard page
- * ============================================================ */
-
-/* 分配栈：返回可用区末（高地址，栈基址）；*out_mmap 返回 mmap 起点（低地址，用于 munmap）。
- * 栈从高地址向低地址生长，所以末页（高地址方向）guard，可用区为 [ptr, ptr+stack_size)。
- * 但 mmap 返回的 ptr 是低地址，所以 guard page 在 ptr+stack_size 处。 */
-static void* co_alloc_stack(size_t stack_size, void** out_mmap, size_t* out_total) {
-    long page_l = sysconf(_SC_PAGESIZE);
-    if (page_l <= 0) page_l = 4096;
-    size_t page = (size_t)page_l;
-    if (stack_size < page) stack_size = page;
-    /* 页对齐 stack_size */
-    stack_size = (stack_size + page - 1) & ~(page - 1);
-    /* mmap size + page（末页 guard） */
-    size_t total = stack_size + page;
-    void* p = mmap(NULL, total, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) return NULL;
-    /* 末页（高地址方向：p+stack_size 到 p+stack_size+page）guard */
-    if (mprotect((char*)p + stack_size, page, PROT_NONE) != 0) {
-        munmap(p, total);
-        return NULL;
-    }
-    *out_mmap = p;
-    *out_total = total;
-    /* 栈基址 = 可用区末（高地址），ucontext 用此作为 ss_sp 起点（自管生长方向） */
-    return (char*)p + stack_size;
-}
+/* Phase 8.6 C：栈分配已迁至 lm_stack_pool.c（per-thread 池 + mmap+guard）。
+ * co_alloc_stack 死代码已删除，spawn/spawn_class 走 lm_stack_pool_get。 */
 
 /* ============================================================
  * API
@@ -172,19 +194,21 @@ static void* co_alloc_stack(size_t stack_size, void** out_mmap, size_t* out_tota
 
 lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     if (stack_size == 0) stack_size = LM_CO_DEFAULT_STACK_SIZE;
+    /* Phase 8.6：按 stack_size 推断栈档（≤SMALL→SMALL 桶，否则 NORMAL）。 */
+    int stack_class = (stack_size <= LM_STACK_SMALL) ? LM_STACK_CLASS_SMALL
+                                                     : LM_STACK_CLASS_NORMAL;
     lm_co_t* co = (lm_co_t*)calloc(1, sizeof(lm_co_t));
     if (!co) return NULL;
-    void* mmap_base = NULL;
-    size_t total = 0;
-    void* stack_base = co_alloc_stack(stack_size, &mmap_base, &total);
-    if (!stack_base) {
+    /* Phase 8.6 C：从 per-thread 栈池取栈（池命中复用，池空 mmap 新栈）。 */
+    lm_stack_storage_t st;
+    if (lm_stack_pool_get(stack_class, &st) != 0) {
         free(co);
         return NULL;
     }
-    co->stack_mmap = mmap_base;   /* 低地址，munmap 用 */
-    co->stack_size = stack_size;
-    co->stack_base = stack_base; /* 高地址，栈基址 */
-    co->stack_top = mmap_base;   /* 低地址，可用区起 */
+    co->stack_mmap = st.mmap_base;   /* 低地址，return 到池用 */
+    co->stack_size = st.stack_size;
+    co->stack_base = st.stack_base; /* 高地址，栈基址 */
+    co->stack_top  = st.stack_top;   /* 低地址，可用区起 */
     co->entry = entry;
     co->arg = arg;
     co->state = LM_CO_READY;
@@ -202,16 +226,111 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     co->last_resume_ns = 0;
     atomic_init(&co->preempt_flag, 0);
     co->slice_yield = 0;
+    /* Phase 8.6：栈分级 + 换出字段初始化 + 注册表加入。
+     * swap_state=NORMAL（未换出）；swap_buffer=NULL；reg 链由 co_registry_add 设。 */
+    co->stack_class = stack_class;
+    co->swap_buffer = NULL;
+    co->swap_size = 0;
+    atomic_init(&co->swap_state, LM_CO_SWAP_NORMAL);
+    co_registry_add(co);
 
     /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
      * 从 co_trampoline(co) 开始执行（fcontext 在栈顶伪造帧；ucontext 包装
      * getcontext/makecontext）。entry 返回由 trampoline 显式切回 resume_ctx。 */
-    lm_ctx_make(&co->ctx, mmap_base, stack_size, co_trampoline, co);
+    lm_ctx_make(&co->ctx, st.mmap_base, st.stack_size, co_trampoline, co);
     return co;
+}
+
+/* Phase 8.6：显式指定栈档的 spawn（轻量 C 协程走 SMALL 档）。
+ * size 由 stack_class 决定：SMALL=16KiB / NORMAL=128KiB。 */
+lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class) {
+    lm_co_t* co = (lm_co_t*)calloc(1, sizeof(lm_co_t));
+    if (!co) return NULL;
+    lm_stack_storage_t st;
+    if (lm_stack_pool_get(stack_class, &st) != 0) {
+        free(co);
+        return NULL;
+    }
+    co->stack_mmap = st.mmap_base;
+    co->stack_size = st.stack_size;
+    co->stack_base = st.stack_base;
+    co->stack_top  = st.stack_top;
+    co->entry = entry;
+    co->arg = arg;
+    co->state = LM_CO_READY;
+    co->next = NULL;
+    lm_co_t* parent = lm_co_current();
+    co->pinned = parent ? parent->pinned : 0;
+    co->stealable = 1;
+    co->reds = LM_SCHED_REDS;
+    co->last_resume_ns = 0;
+    atomic_init(&co->preempt_flag, 0);
+    co->slice_yield = 0;
+    co->stack_class = stack_class;
+    co->swap_buffer = NULL;
+    co->swap_size = 0;
+    atomic_init(&co->swap_state, LM_CO_SWAP_NORMAL);
+    co_registry_add(co);
+    lm_ctx_make(&co->ctx, st.mmap_base, st.stack_size, co_trampoline, co);
+    return co;
+}
+
+/* ============================================================
+ * Phase 8.6 E: idle 换入（唤醒方 resume 前调）
+ * DONTNEED 版：mmap 映射保留，swap_out 仅 DONTNEED 物理页 + 内容存 buffer。
+ * 换入只需 memcpy buffer 回原偏移（ctx.sp 不变，基址不变）→ 物理页重新 fault-in。
+ * GC：注销 buffer 区间（协程离开 suspended 态，运行期由线程 GCThreadEntry 扫描，
+ *   不进协程栈表；下次 yield 再注册）。swap_in 与 resume 间无 safepoint，无漏根窗口。
+ * 竞态：CAS SWAPPED→SWAPPING_IN；若 reaper 正在 SWAPPING_OUT，自旋等 SWAPPED。
+ * ============================================================ */
+static void co_swap_in(lm_co_t* co) {
+    /* 等 reaper 完成 swap_out（SWAPPING_OUT→SWAPPED）。短暂自旋，reaper 拷贝<1ms。 */
+    for (;;) {
+        int s = atomic_load_explicit(&co->swap_state, memory_order_acquire);
+        if (s == LM_CO_SWAP_SWAPPED) {
+            int expected = LM_CO_SWAP_SWAPPED;
+            if (atomic_compare_exchange_strong(&co->swap_state, &expected,
+                                                LM_CO_SWAP_SWAPPING_IN)) {
+                break;
+            }
+        } else if (s == LM_CO_SWAP_NORMAL) {
+            /* 他人已换入或 swap_out 已回退，无需换入。 */
+            return;
+        } else {
+            /* SWAPPING_OUT / SWAPPING_IN：短暂退避重试。 */
+            struct timespec ts = {0, 1000};   /* 1µs */
+            nanosleep(&ts, NULL);
+        }
+    }
+    /* 换入：memcpy buffer 内容回原偏移（ctx.sp 不变，基址不变）。
+     * DONTNEED 释放的物理页被 memcpy 写访问重新 fault-in（恢复内容）。 */
+    if (co->swap_buffer && co->swap_size) {
+#ifdef LM_ASAN
+        /* ASAN：swap_out 时已 unpoison 整段，但保险起见再 unpoison 一次
+         *（防 DONTNEED 后 ASAN shadow 状态被改回——实际不会，但 memcpy 写
+         * 回时 ASAN 拦截器可能仍按红区拒绝写入）。 */
+        __asan_unpoison_memory_region(co->ctx.sp, co->swap_size);
+#endif
+        memcpy(co->ctx.sp, co->swap_buffer, co->swap_size);
+    }
+    /* GC 注销 buffer 区间（协程将运行，不进协程栈表）。
+     * buffer 注册键 = buffer+swap_size（swap_out 第 6 步注册时的 stack_top）。 */
+    gc_unregister_coroutine((char*)co->swap_buffer + co->swap_size);
+    free(co->swap_buffer);
+    co->swap_buffer = NULL;
+    co->swap_size   = 0;
+    co->stealable   = 1;   /* 恢复换出前状态（swap 仅针对 stealable=1 协程） */
+    atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL, memory_order_release);
 }
 
 void lm_co_resume(lm_co_t* co) {
     if (!co || co->state == LM_CO_DEAD) return;
+    /* Phase 8.6 E：换出态协程 resume 前先换入（从堆 buffer 恢复物理页内容）。
+     * SWAPPING_OUT 态也要等（reaper 正在拷贝，换入需等其完成）。 */
+    int ss = atomic_load_explicit(&co->swap_state, memory_order_acquire);
+    if (ss == LM_CO_SWAP_SWAPPED || ss == LM_CO_SWAP_SWAPPING_OUT) {
+        co_swap_in(co);
+    }
     /* Phase 7.2：scheduler 投递在 SPAWN 时做（BUILTIN_CO_SPAWN 检查
      * sched->current==NULL 时 post 到就绪队列），resume 走纯直连切换
      * 路径——reactor drain_ready 钩子直接调本函数消费就绪队列。
@@ -319,15 +438,153 @@ int lm_co_is_dead(lm_co_t* co) {
 
 void lm_co_destroy(lm_co_t* co) {
     if (!co) return;
+    /* Phase 8.6：先从全局注册表摘除（reaper 不再扫到本协程）。 */
+    co_registry_remove(co);
     /* Phase 5: 销毁前释放 vm_state（由 vm 层 release hook 释放，
      * 避免泄漏协程专属的 VMCoState 结构）。未注册 hook 时 vm_state==NULL，no-op。 */
     if (co->vm_state && g_co_release_hook) g_co_release_hook(co);
-    if (co->stack_mmap) {
+    /* Phase 8.6：若协程已换出（SWAPPED），栈已归还池/未持有，释放堆 buffer。
+     * 子阶段 C/D 接栈池后：未换出时归还栈到池；换出时 free(buffer)。
+     * 本期仍走 munmap（池化在 B/C 接入）。 */
+    int swapped = atomic_load_explicit(&co->swap_state, memory_order_acquire);
+    if (swapped == LM_CO_SWAP_SWAPPED || swapped == LM_CO_SWAP_SWAPPING_OUT) {
+        /* Phase 8.6 D：换出态——mmap 映射保留（基址不变语义），内容在 buffer。
+         * destroy 需 free buffer + munmap 保留的映射（不再归还池，因内容已废）。 */
+        if (co->swap_buffer) {
+            free(co->swap_buffer);
+            co->swap_buffer = NULL;
+        }
+        if (co->stack_mmap) {
+            long page_l = sysconf(_SC_PAGESIZE);
+            if (page_l <= 0) page_l = 4096;
+            munmap(co->stack_mmap, co->stack_size + (size_t)page_l);
+        }
+    } else if (co->stack_mmap) {
+        /* Phase 8.6 C：未换出的协程归还栈到 per-thread 池（池满才 munmap）。
+         * poison 由 lm_stack_pool_return 内部完成。 */
         long page_l = sysconf(_SC_PAGESIZE);
         if (page_l <= 0) page_l = 4096;
-        size_t page = (size_t)page_l;
-        size_t total = co->stack_size + page;
-        munmap(co->stack_mmap, total);
+        lm_stack_storage_t st = {
+            co->stack_mmap,
+            co->stack_base,
+            co->stack_top,
+            co->stack_size,
+            co->stack_size + (size_t)page_l
+        };
+        lm_stack_pool_return(&st);
     }
     free(co);
+}
+
+/* ============================================================
+ * Phase 8.6 D: idle 换出（libco save_stack_buffer 思想降级——仅 idle>30s 执行）
+ * 在 reaper（sysmon）线程调用，co 不在任何线程栈上（state==SUSPENDED）。
+ *
+ * 步骤（对齐调研 §8.6 第 3 条 + libco co_routine.cpp:618-633）：
+ *   1. 条件预检（SUSPENDED + idle>阈值 + can_swap 通过 + 非迁移中）
+ *   2. CAS swap_state NORMAL→SWAPPING_OUT（仲裁与唤醒方 swap_in 竞态）
+ *   3. 计算已用栈深 used = stack_base - ctx.sp（fcontext 冻结 sp）
+ *   4. malloc 堆 buffer + memcpy 已用栈段
+ *   5. GC：先注册 buffer 区间，再注销旧栈区间（保证任意时刻至少一区注册，
+ *      防 GC 标记窗口漏根 → UAF）
+ *   6. 归还 mmap 栈到池
+ *   7. 清栈字段，置 swap_buffer/size + SWAPPED + stealable=0
+ * 返回 1=已换出，0=未换出（条件不满足/CAS 失败）。
+ * ============================================================ */
+static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
+    /* 1. 条件预检（无锁读，快速跳过非候选）。 */
+    if (co->state != LM_CO_SUSPENDED) return 0;
+    if (co->migrate_sched != NULL) return 0;   /* 迁移中，不动其栈 */
+    if (!co->stealable) return 0;               /* 已绑定线程（compute 迁移态），跳过 */
+    int ss = atomic_load_explicit(&co->swap_state, memory_order_acquire);
+    if (ss != LM_CO_SWAP_NORMAL) return 0;     /* 已换出/换入中 */
+    /* idle 时长：last_resume_ns 是上次 resume 时间。SUSPENDED 协程若长期未
+     * 被 resume，now - last_resume_ns > 阈值即 idle 候选。
+     * last_resume_ns==0 = 从未 resume（READY 不会进 SUSPENDED 分支，防 0 下溢）。 */
+    if (co->last_resume_ns == 0) return 0;
+    if (now_ns - co->last_resume_ns <= LM_REAP_IDLE_THRESHOLD_NS) return 0;
+    /* can_swap hook：VM 层否决则跳过。未注册 hook = 不换出（runtime 不猜栈内布局）。 */
+    if (g_co_can_swap_hook && !g_co_can_swap_hook(co)) return 0;
+#ifndef LM_CTX_FCONTEXT
+    /* ucontext 后端：寄存器现场在 ucontext_t 内不在栈上，换入需重做 makecontext，
+     * 复杂度高；本期禁用换出（can_swap 未注册时本就跳过，此处双保险）。 */
+    return 0;
+#else
+    /* 2. CAS swap_state NORMAL→SWAPPING_OUT（仲裁与唤醒方 swap_in 竞态）。 */
+    int expected = LM_CO_SWAP_NORMAL;
+    if (!atomic_compare_exchange_strong(&co->swap_state, &expected,
+                                        LM_CO_SWAP_SWAPPING_OUT)) {
+        return 0;   /* 被唤醒方抢到，放弃 */
+    }
+    /* 3. 复核 state（CAS 后若已被 resume 抢入转 RUNNING，回退）。
+     *    resume 不动 swap_state，故 CAS 成功不代表 state 未变。 */
+    if (co->state != LM_CO_SUSPENDED) {
+        atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
+                              memory_order_release);
+        return 0;
+    }
+    /* 4. 计算已用栈深：[ctx.sp（冻结低地址）, stack_base（高地址）)。
+     *    fcontext：jump 把 callee-saved 现场 push 到协程栈、ctx.sp 指向保存区
+     *    最低点（lm_coro_ctx.h:43-48），故 [ctx.sp, stack_base) 含全部冻结帧。 */
+    void* sp = co->ctx.sp;
+    void* base = co->stack_base;
+    if (!sp || !base || (char*)base <= (char*)sp) {
+        /* 栈深 0 或异常（sp>=base），无可换出。回退。 */
+        atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
+                              memory_order_release);
+        return 0;
+    }
+    size_t used = (size_t)((char*)base - (char*)sp);
+    /* 5. malloc 堆 buffer + memcpy 已用栈段（对齐 libco save_stack_buffer）。 */
+    void* buffer = malloc(used);
+    if (!buffer) {
+        atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
+                              memory_order_release);
+        return 0;
+    }
+#ifdef LM_ASAN
+    /* ASAN：编译器给协程栈内局部变量插桩的红区（f1=Stack left redzone /
+     * f3=Stack right redzone）会让本函数 memcpy 整段栈触发
+     * stack-buffer-underflow 误报（红区在 sp→base 之间）。
+     * 换出前 unpoison 整个 used 区间清除红区标记 → memcpy 通过；
+     * 后续 madvise DONTNEED 释放物理页，ASAN shadow 仍记 00（addressable），
+     * 但物理页不可访问——swap_in memcpy 写回触发 fault-in 重新分页，
+     * 协程 resume 时编译器插桩在 scope 重入点重建局部变量红区。 */
+    __asan_unpoison_memory_region(sp, used);
+#endif
+    memcpy(buffer, sp, used);
+    /* 6. GC 区间切换（顺序：先注册 buffer，再注销旧栈——保证任意时刻至少
+     *    一区注册，防 GC 标记窗口漏根 → UAF。buffer 内容=旧栈拷贝，双注册
+     *    期间保守扫描重复标根无害）。 */
+    gc_register_coroutine((char*)buffer + used, buffer, NULL);
+    gc_unregister_coroutine((char*)base - sizeof(void*));
+    /* 7. MADV_DONTNEED 释放物理页：内容已在 buffer，mmap 物理页归还内核。
+     *    关键：mmap 映射保留（基址不变），swap_in 直接 memcpy 回原偏移——
+     *    避免 fcontext rbp 绝对指针因基址变化失效（jump 保存/恢复 rbp，
+     *    见 lm_ctx_jump_x86_64.S:33/46）。idle 物理 = buffer(2-4KiB) + 控制块。
+     *    不归还 mmap 到池：保留映射换正确性，vm.max_map_count 由部署调参。 */
+    madvise(co->stack_mmap, co->stack_size, MADV_DONTNEED);
+    /* 8. 置 buffer/size/SWAPPED/stealable=0。栈字段保留（mmap 仍在，基址不变），
+     *    swap_in 用同 ctx.sp 恢复内容到原偏移。 */
+    co->swap_buffer = buffer;
+    co->swap_size   = used;
+    co->stealable   = 0;
+    atomic_store_explicit(&co->swap_state, LM_CO_SWAP_SWAPPED,
+                          memory_order_release);
+    return 1;
+#endif /* LM_CTX_FCONTEXT */
+}
+
+/* Phase 8.6 D：reaper 入口（sysmon 节流调用）。
+ * 持锁遍历注册表：destroy 阻塞于锁，保证遍历期间 co 不被释放（防 UAF）。
+ * 单 sysmon 线程扫描，无并发 reap。swap_out 的慢路径（GC+pool）在锁内，
+ * stall 可接受（5s 一轮，多数协程廉价跳过非 idle 条件）。
+ * 锁序：reaper 持 registry 锁→gc 锁（register/unregister）；无 mutator
+ * 反向持 gc 锁→registry 锁，故无死锁。 */
+void lm_co_reap_idle(uint64_t now_ns) {
+    pthread_mutex_lock(&g_co_reg_lock);
+    for (lm_co_t* co = g_co_reg_head; co; co = co->reg_next) {
+        co_swap_out(co, now_ns);
+    }
+    pthread_mutex_unlock(&g_co_reg_lock);
 }

@@ -15,6 +15,7 @@
 #include "vm_co.h"
 #include "lm_co.h"          /* lm_co_t, lm_co_spawn, lm_co_set_vm_hooks */
 #include "lm_reactor.h"     /* lm_reactor_t, lm_reactor_add_timer */
+#include "lm_scheduler.h"   /* Phase 8.6 修复：timer 回调投递回 reactor（get_current/wakeup） */
 #include "stack_manager.h"  /* g_stack_mgr */
 #include "lumyr_value.h"    /* g_err_jmp, val_none, lumyr_make_string */
 #include "vm_types.h"       /* VMExecCtx, VMExceptState, vm_except_* */
@@ -155,8 +156,39 @@ static void vm_co_release_hook(lm_co_t* co) {
     co->vm_state = NULL;
 }
 
+/* Phase 8.6 F：VM 层换出裁量权（can_swap hook）。
+ * DONTNEED 版换出基址不变（mmap 映射保留），故无栈内自引用/指针重定位问题——
+ * can_swap 仅做策略门限：迁移中途不换、栈深超阈值不换（限 buffer 拷贝成本）。
+ * 未注册时 reaper 不换出（runtime 不猜），故本函数是换出的必要条件。 */
+#define LM_VM_SWAP_MAX_DEPTH (16 * 1024)   /* 栈深上限 16KiB，超此不换（限拷贝成本） */
+
+static int vm_co_can_swap(lm_co_t* co) {
+    if (!co) return 0;
+    if (!co->vm_state) return 1;   /* 纯 C 协程无 VM 状态，DONTNEED 换出安全 */
+    VMCoState* st = (VMCoState*)co->vm_state;
+    /* 迁移中途（mig_copy 非空 = 活数据已搬出，协程处于跨线程迁移态）不换：
+     * 迁移是瞬态，协程即将在目标线程 resume，换出徒增开销。 */
+    for (int i = 0; i < 4; i++) {
+        if (st->mig_copy[i]) return 0;
+    }
+#ifdef LM_CTX_FCONTEXT
+    /* fcontext：ctx.sp 是冻结 sp，栈深 = stack_base - ctx.sp。超阈值不换。 */
+    void* sp = co->ctx.sp;
+    void* base = co->stack_base;
+    if (sp && base && (char*)base > (char*)sp) {
+        size_t used = (size_t)((char*)base - (char*)sp);
+        if (used > LM_VM_SWAP_MAX_DEPTH) return 0;
+    }
+    return 1;
+#else
+    /* ucontext 后端：swap_out 本就禁用（lm_co.c co_swap_out 跳过），否决。 */
+    return 0;
+#endif
+}
+
 void vm_co_hooks_register(void) {
     lm_co_set_vm_hooks(vm_co_resume_hook, vm_co_yield_hook, vm_co_release_hook);
+    lm_co_set_can_swap_hook(vm_co_can_swap);   /* Phase 8.6 F：注册换出裁量 */
 }
 
 /* ============================================================
@@ -284,27 +316,39 @@ lm_co_t* vm_co_spawn(Value func, Value arg) {
 
 /* ============================================================
  * timer 回调：reactor addTimer(ms, cb) 触发时调
- * 在 reactor 主循环上下文执行。spawn 协程跑 cb，传 timer_id 作参数。
- * 协程立即 resume；若 cb 不 yield（快速返回），协程 DEAD 后销毁。
- * 若 cb yield，协程挂起——Phase 5 简化：timer cb 不应 yield（无 fd 事件
- * 关联，reactor 不会 resume 它）。完整方案需 reactor 维护就绪协程队列（Phase 6）。
+ * Phase 8.4 设计（lm_reactor.c 主循环注释）："到期回调由 timer 线程直接执行
+ * 并 wakeup 投递协程回本 reactor"。本函数在 timer 线程执行，职责仅是
+ * spawn 协程 + 投递回 add 时的 scheduler（mutex 定向队列 + wakeup reactor），
+ * 由 reactor 线程 drain_ready resume——绝不在 timer 线程直接 resume：
+ * timer 线程无 VM TLS（g_stack_mgr/globals 根帧上下文），直接 resume 会以
+ * RuntimeError 死亡且错误被吞（compute_test/timer_probe 曾因此挂死：
+ * 回调抛"加法要求数值或字符串操作数"→ r.stop() 未执行）。
+ * yield 的协程由 scheduler 就绪队列管理（修复旧"yield 泄漏"限制）；
+ * DEAD 协程由 GC release hook 回收（与 Coroutine() builtin 同路径）。
  * ============================================================ */
 typedef struct {
     Value func;   /* lm 回调函数（VAL_FUNC） */
+    lm_scheduler_t* sched;   /* add 时的 scheduler（reactor 线程捕获），NULL=无 scheduler 走旧同步路径 */
 } TimerCbCtx;
 
 static void vm_co_timer_cb(lm_timer_id_t timer_id, void* arg) {
     TimerCbCtx* tc = (TimerCbCtx*)arg;
     if(!tc) return;
-    /* spawn 协程跑 cb，传 timer_id 作参数。
-     * Phase 8.4：本回调在 timer 线程执行（非 reactor 线程）；spawn 的协程
-     * 若不 yield 则同步跑完销毁，若 yield 则泄漏（Phase 5 简化语义不变）。 */
+    /* spawn 协程跑 cb，传 timer_id 作参数。spawn 不依赖本线程 VM TLS
+     * （CoSpawnCtx/VMCoState 堆分配 + 协程栈 mmap），跨线程安全。 */
     Value tid = lumyr_make_int64((int64_t)timer_id);
     lm_co_t* co = vm_co_spawn(tc->func, tid);
     if(co) {
-        lm_co_resume(co);  /* 协程跑 cb，可能 yield 切回这里 */
-        if(lm_co_is_dead(co)) lm_co_destroy(co);
-        /* yield 的协程泄漏（无 reactor 就绪队列管理）——Phase 5 简化，文档说明 */
+        if (tc->sched) {
+            /* 投递回 reactor：mutex 定向队列 + wakeup，drain_ready 在
+             * reactor 线程 resume（协程从未运行、无栈数据，跨线程投递安全） */
+            lm_scheduler_wakeup(tc->sched, co);
+        } else {
+            /* 无 scheduler（C 测试/极早期路径）：保持旧同步语义 */
+            lm_co_resume(co);
+            if(lm_co_is_dead(co)) lm_co_destroy(co);
+            /* yield 的协程泄漏（无 reactor 就绪队列管理）——Phase 5 简化 */
+        }
     }
     free(tc);
 }
@@ -316,6 +360,9 @@ lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb) {
     TimerCbCtx* tc = (TimerCbCtx*)malloc(sizeof(TimerCbCtx));
     if(!tc) return LM_TIMER_INVALID_ID;
     tc->func = cb;
+    /* add 调用发生在 reactor 线程（addTimer builtin），此刻 scheduler TLS
+     * 已由 setScheduler 设定——捕获为回调协程的目标 scheduler。 */
+    tc->sched = lm_scheduler_get_current();
     lm_timer_id_t id = lm_reactor_add_timer(r, ms, vm_co_timer_cb, tc);
     if(id == LM_TIMER_INVALID_ID) { free(tc); return LM_TIMER_INVALID_ID; }
     return id;
