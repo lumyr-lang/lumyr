@@ -174,6 +174,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_scheduler.c
 # Phase 7.3：协程条件变量（wait/signal/broadcast 跨线程唤醒）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_cond.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_compute.c
+# Phase 8.2：Chase-Lev 无锁工作窃取队列（WSQ），lm_scheduler 的本地队列底座。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_wsq.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

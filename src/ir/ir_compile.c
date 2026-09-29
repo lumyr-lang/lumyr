@@ -312,6 +312,7 @@ int builtin_id_by_name(const char* name) {
         {"current", BUILTIN_CO_CURRENT},
         {"isDead", BUILTIN_CO_IS_DEAD},
         {"destroy", BUILTIN_CO_DESTROY},           /* co 销毁 */
+        {"coSetPinned", BUILTIN_CO_SET_PINNED},    /* Phase 8.2：协程 pinned 置位 */
         /* Phase 7.2：per-thread scheduler（reactor + 就绪队列 + TLS） */
         {"scheduler", BUILTIN_SCHEDULER_NEW},
         {"setScheduler", BUILTIN_SCHEDULER_SET},

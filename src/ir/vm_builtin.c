@@ -3984,14 +3984,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         Value arg = (argc >= 2) ? argv[1] : val_none();
         lm_co_t* co = vm_co_spawn(argv[0], arg);
         if(!co) { runtime_error("spawn 协程创建失败 / spawn: coroutine creation failed"); }
-        /* Phase 7.2：scheduler 活跃且当前在 reactor 主循环上下文（无协程运行，
+        /* Phase 7.2/8.2：scheduler 活跃且当前在 reactor 主循环上下文（无协程运行，
          * current==NULL）时投递到就绪队列，由 reactor 钩子 drain_ready 自动 resume。
+         * Phase 8.2 起走 post_local 分流：中立协程（未运行无栈数据）进本地 WSQ
+         *（可被窃取），pinned 进 mutex 定向队列。
          * 协程内 spawn（current!=NULL，如 accept loop spawn handler）不投递：
          * 由 spawning 协程显式 resume（h.start 嵌套直连），与既有行为一致；
          * 且避免在协程栈热点调 mutex 压栈（64KiB 协程栈嵌套 VM 调用本就紧张）。
          * 无 scheduler（C 测试、非 reactor 上下文）不投递，保持原显式 resume 契约。 */
         lm_scheduler_t* sched = lm_scheduler_get_current();
-        if (sched && sched->current == NULL) lm_scheduler_post(sched, co);
+        if (sched && sched->current == NULL) lm_scheduler_post_local(sched, co);
         out->type = VAL_STRUCT_PTR;
         out->v.struct_ptr = co;
         return 1;
@@ -4031,6 +4033,17 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                   : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
         if(!p) { runtime_error("destroy(impl) 需协程实例 / destroy: need coroutine instance"); }
         lm_co_destroy((lm_co_t*)p);
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_CO_SET_PINNED: {
+        /* Phase 8.2：coSetPinned(co)——显式 pinned 置位。框架层对 accept loop 等
+         * spawn 后即需钉住本线程的协程调用（fd 等待自动置位覆盖不到
+         *"spawn 后首次 yield 前"的窗口：该窗口内协程在 WSQ 中可被窃取）。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if(!p) { runtime_error("coSetPinned(co) 需协程实例 / coSetPinned: need coroutine instance"); }
+        ((lm_co_t*)p)->pinned = 1;
         *out = val_none();
         return 1;
     }
@@ -4534,6 +4547,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_CO_CURRENT: return "current";
     case BUILTIN_CO_IS_DEAD: return "isDead";
     case BUILTIN_CO_DESTROY: return "destroy";
+    case BUILTIN_CO_SET_PINNED: return "coSetPinned";
     case BUILTIN_SCHEDULER_NEW: return "scheduler";
     case BUILTIN_SCHEDULER_SET: return "setScheduler";
     case BUILTIN_SCHEDULER_CLEAR: return "clearScheduler";

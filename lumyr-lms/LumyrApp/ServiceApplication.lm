@@ -252,6 +252,9 @@ class ServiceWorker {
                 h.start();
             }
         }, self);
+        // Phase 8.2：accept loop 钉住本线程（listen fd 挂本 reactor，
+        // 防 WSQ 窃取窗口——spawn 后首次 yield 前协程可被窃取）
+        coSetPinned(self.acceptCo.impl);
         self.acceptCo.resume();
         self.reactorInst.run();
         // reactor 退出后清理：accept 协程 + listen socket + 挂起 handler 协程
@@ -565,6 +568,8 @@ public class ServiceApplication extends Application {
                 h.start();
             }
         }, self);
+        // Phase 8.2：accept loop 钉住本线程（同 ServiceWorker 处说明）
+        coSetPinned(self.acceptCo.impl);
         self.acceptCo.resume();  // 启动协程跑到第一个 yield（accept 等读事件）
         // 进入 reactor 事件循环（阻塞至 stop）
         self.reactor.run();

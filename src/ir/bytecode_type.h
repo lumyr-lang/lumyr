@@ -561,6 +561,10 @@ typedef enum {
     BUILTIN_CO_CURRENT,          // current() → co 实例或 null
     BUILTIN_CO_IS_DEAD,          // co.isDead(impl) → bool
     BUILTIN_CO_DESTROY,          // co.destroy(impl)
+    /* Phase 8.2：显式 pinned 置位（accept loop 等 spawn 后即需钉住本线程的
+     * 协程——fd 等待自动置位覆盖不到"spawn 后首次 yield 前被窃取"的窗口，
+     * 框架层 spawn 后立即调用）。 */
+    BUILTIN_CO_SET_PINNED,       // coSetPinned(co)：协程 pinned=1（永不入 WSQ/不被窃取）
     /* Phase 7.2：per-thread scheduler（reactor + 就绪队列 + TLS）
      * scheduler(reactor) 创建并返回；setScheduler 绑定当前线程（TLS + drain 钩子）；
      * clearScheduler 解绑；destroyScheduler 销毁。 */

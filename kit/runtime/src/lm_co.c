@@ -188,6 +188,14 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     co->arg = arg;
     co->state = LM_CO_READY;
     co->next = NULL;
+    /* Phase 8.2：调度分流标志初始化。
+     * stealable=1：未运行的协程无 VM 栈数据，任何线程 resume 都安全；
+     *             首次 yield 后由 vm hook 按是否有 mig_copy 重判。
+     * pinned 继承父协程（协程内 spawn 场景）：连接 handler 等 pinned 协程
+     * 派生的子协程默认同线程亲和；顶层 spawn（无父协程）pinned=0。 */
+    lm_co_t* parent = lm_co_current();
+    co->pinned = parent ? parent->pinned : 0;
+    co->stealable = 1;
 
     /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
      * 从 co_trampoline(co) 开始执行（fcontext 在栈顶伪造帧；ucontext 包装
@@ -260,7 +268,17 @@ void lm_co_yield(void) {
      * STW 轮询由 reactor 主循环每轮 gc_stw_check_fast() 承担。 */
     void* curFrame = __builtin_frame_address(0);
     void* scanTop = (char*)co->stack_base - sizeof(void*);
-    gc_register_coroutine(scanTop, curFrame);
+#ifdef LM_CTX_FCONTEXT
+    /* fcontext：jump 把 callee-saved 现场 push 到协程栈、ctx.sp 指向保存区
+     * 最低点。扫描下界必须间接读 ctx.sp（此刻旧值，jump 后才更新为冻结 sp）——
+     * 若下界只到本帧 rbp，寄存器保存区被切出扫描区间：-O2 编译的调用方把
+     * GC 指针驻留 callee-saved 寄存器（%rbx 等）时漏标 → sweep 误回收 → UAF
+     *（co_gc_test -O2 实测定案：Clang 对不取地址的 volatile 局部折叠进 %rbx）。 */
+    gc_register_coroutine(scanTop, curFrame, (void**)&co->ctx.sp);
+#else
+    /* ucontext 回退：寄存器现场在 ucontext_t 内（非栈扫描区间），维持旧行为。 */
+    gc_register_coroutine(scanTop, curFrame, NULL);
+#endif
     /* Phase 5: swapcontext 切回 reactor 前，保存协程 vm_state（g_stack_mgr sp /
      * g_try_stack / g_unwind / g_err_jmp / g_thread_root 等）到 co->vm_state，
      * 并恢复 reactor 基线（thread_root=0、空 try 栈等），避免 reactor 主循环

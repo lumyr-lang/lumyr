@@ -66,6 +66,17 @@ typedef struct lm_co_s {
     void* asan_fake;
     void* asan_caller_bottom;
     size_t asan_caller_size;
+    /* Phase 8.2：调度分流标志（结构体末尾追加，保持既有字段偏移——ABI 原则）。
+     * pinned：业务级定向——协程绑定本线程 reactor 的 fd（fd 等待自动置位、
+     *         accept loop 显式置位、协程内 spawn 继承父值），pinned 协程
+     *         只走目标 scheduler 的 mutex 定向队列，永不入 WSQ / 不被窃取。
+     * stealable：机制级迁移安全——由 vm hook 维护：spawn 时 1（未运行无栈数据），
+     *         yield 时有 mig_copy（compute 迁移）则 1，否则 0（VM 栈数据物理
+     *         绑定本线程栈池，跨线程 resume 必须走 mig_copy 恢复路径）。
+     * scheduler post 分流：pinned || !stealable → mutex 定向队列；
+     *         中立可偷 → 本线程 WSQ / 跨线程全局队列。 */
+    int pinned;
+    int stealable;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);

@@ -162,6 +162,10 @@ static void co_timeout_handler(int timer_id, void* data) {
 static int co_wait_fd_timeout(int fd, int want_read, int want_write, int timeout_ms) {
     lm_co_t* co = lm_co_current();
     if (!co || !g_socket_reactor) return -1;
+    /* Phase 8.2：fd 等待自动置 pinned——本协程的 IO 事件挂在当前线程 reactor 上，
+     * 唤醒必须回到本线程的 scheduler（scheduler post 分流依据，见 lm_co.h）。
+     * 置位后该协程永不入 WSQ / 不被窃取，跨线程 wakeup 走 mutex 定向队列。 */
+    co->pinned = 1;
     lm_connection_t* conn = lm_reactor_get_connection(g_socket_reactor, fd);
     if (!conn) return -1;
     uint32_t events = 0;

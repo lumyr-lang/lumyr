@@ -126,10 +126,18 @@ void gc_register_global_root_scan(GCGlobalRootScanFn fn);
  * （C 局部 Value 变量）。若不注册扫描，yield 期间其他线程触发 GC 会漏标
  * 这些根 → sweep 误回收 → UAF。
  *
- * gc_register_coroutine(stack_top, stack_bottom)：yield 前调用，把挂起协程的
- *   栈区间 [stack_bottom, stack_top] 挂进全局协程栈表。stack_top 为栈基址
+ * gc_register_coroutine(stack_top, stack_bottom, sp_slot)：yield 前调用，把挂起
+ *   协程的栈区间 [stack_bottom, stack_top] 挂进全局协程栈表。stack_top 为栈基址
  *   （高地址，mmap 区末），stack_bottom 为 yield 时的栈指针（低地址）。
  *   GC 标记阶段保守扫描该区间，复用 GCThreadEntry 的 c_stack_top/c_stack_sp 路径。
+ *   sp_slot（Phase 8.2 新增，可为 NULL）：指向"冻结 sp 槽位"的指针（fcontext
+ *   后端为 &co->ctx.sp）。fcontext 切换把 callee-saved 寄存器现场 push 在协程
+ *   栈上、sp 指向保存区——-O2 编译的调用方会把 GC 指针驻留 callee-saved 寄存器
+ *   （如 %rbx），若扫描下界只到 yield 帧 rbp，寄存器保存区被切出区间 → 漏标 →
+ *   sweep 误回收 → UAF（co_gc_test -O2 实测定案）。sp_slot 非 NULL 时扫描下界
+ *   在标记阶段间接读 *sp_slot（注册发生在 lm_ctx_jump 保存现场之前，槽位值
+ *   在 jump 后才是最新冻结 sp，必须间接读）；NULL 时退回 stack_bottom
+ *  （ucontext 回退后端：寄存器现场在 ucontext_t 内，不在栈扫描区间，维持旧行为）。
  * gc_unregister_coroutine(stack_top)：resume 返回后调用，移除匹配 entry。
  *
  * 设计说明：不使用 gc_enter_native_block 包裹 yield。swapcontext 返回后
@@ -138,7 +146,7 @@ void gc_register_global_root_scan(GCGlobalRootScanFn fn);
  *   gc_stw_check_fast() 承担，与 VM 解释循环的 gc_stw_check 一致。
  *   本 API 仅覆盖挂起协程的冻结栈；运行中协程的 C 栈扫描由 reactor 线程的
  *   GCThreadEntry + VM 解释循环 gc_stw_check 覆盖（Phase 4 VM 集成时验证）。 */
-void gc_register_coroutine(void* stack_top, void* stack_bottom);
+void gc_register_coroutine(void* stack_top, void* stack_bottom, void** sp_slot);
 void gc_unregister_coroutine(void* stack_top);
 
 /* 协作式 STW 安全点：VM 解释循环每条指令前调用，GC 运行时自旋等待 */

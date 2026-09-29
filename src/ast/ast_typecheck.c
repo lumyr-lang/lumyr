@@ -1047,6 +1047,7 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"setSocketReactor", 1, 1},
     {"spawn", 2, 2}, {"resume", 1, 1}, {"coYield", 0, 0},
     {"current", 0, 0}, {"isDead", 1, 1}, {"destroy", 1, 1},
+    {"coSetPinned", 1, 1},   /* Phase 8.2：协程 pinned 置位 */
     /* Phase 7.2：per-thread scheduler（与 ir_compile.c 名表一致） */
     {"scheduler", 1, 1}, {"setScheduler", 1, 1},
     {"clearScheduler", 1, 1}, {"destroyScheduler", 1, 1},

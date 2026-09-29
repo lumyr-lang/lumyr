@@ -197,11 +197,24 @@ static GCCFrameEntry* g_gc_cframe_threads = NULL;
  * GC 标记阶段遍历本表调 gc_conservative_cstack_scan(top, bottom, NULL)。 */
 typedef struct GCCoroutineEntry {
     void* stack_top;      /* 栈基址（高地址，mmap 区末） */
-    void* stack_bottom;   /* yield 时栈指针（低地址），保守扫描下界 */
+    void* stack_bottom;   /* yield 时栈指针（低地址），保守扫描下界兜底 */
+    void** sp_slot;       /* Phase 8.2：冻结 sp 间接槽（fcontext 为 &co->ctx.sp）。
+                           * 扫描下界优先取 *sp_slot（含 jump push 的 callee-saved
+                           * 寄存器保存区），NULL/空槽时退回 stack_bottom（ucontext）。 */
     struct GCCoroutineEntry* next;
 } GCCoroutineEntry;
 
 static GCCoroutineEntry* g_gc_coroutines = NULL;
+
+/* 协程冻结栈扫描下界解析（Phase 8.2）：fcontext 路径优先间接读 sp_slot
+ *（lm_ctx_jump 把 callee-saved 寄存器现场 push 到协程栈后，ctx.sp 指向保存区
+ * 最低点；以它为下界，区间 [sp, stack_top] 才覆盖寄存器保存区——只扫到
+ * yield 帧 rbp 会把保存区切出区间，-O2 调用方驻留寄存器的 GC 指针漏标误回收）。
+ * 空槽/NULL（ucontext 后端）退回注册时的 stack_bottom。 */
+static inline void* gc_co_scan_bottom(const GCCoroutineEntry* e) {
+    if (e->sp_slot && *e->sp_slot) return *e->sp_slot;
+    return e->stack_bottom;
+}
 
 /* 当前线程的注册 entry 指针（gc_stw_check 用它们设置 at_safepoint） */
 static _Thread_local GCThreadEntry* tls_cur_vm_entry = NULL;
@@ -1901,9 +1914,10 @@ void gc_scan_roots_to_stack(Value* stack, int sp, StackFrame* frame)
     if (tls_cframe && !g_gc_cframe_threads) {
         gc_scan_cframe_chain_to_stack(tls_cframe);
     }
-    /* 扫描挂起协程的冻结 C 栈（yield 期间栈稳定，保守扫描 [bottom, top]） */
+    /* 扫描挂起协程的冻结 C 栈（yield 期间栈稳定，保守扫描 [bottom, top]）。
+     * 下界经 gc_co_scan_bottom 解析：fcontext 路径含寄存器保存区。 */
     for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
-        gc_conservative_cstack_scan(e->stack_top, e->stack_bottom, NULL);
+        gc_conservative_cstack_scan(e->stack_top, gc_co_scan_bottom(e), NULL);
     }
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
@@ -1969,7 +1983,7 @@ static void gc_scan_roots_minor(Value* stack, int sp, StackFrame* frame)
     }
     /* 扫描挂起协程的冻结 C 栈（yield 期间栈稳定，保守扫描 [bottom, top]） */
     for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
-        gc_conservative_cstack_scan(e->stack_top, e->stack_bottom, NULL);
+        gc_conservative_cstack_scan(e->stack_top, gc_co_scan_bottom(e), NULL);
     }
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
@@ -2280,7 +2294,8 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
         for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
             if (!e->stack_top) continue;
             uintptr_t* p = (uintptr_t*)e->stack_top;
-            uintptr_t* end = e->stack_bottom ? (uintptr_t*)e->stack_bottom : p;
+            void* bot = gc_co_scan_bottom(e);
+            uintptr_t* end = bot ? (uintptr_t*)bot : p;
             if (end > p) end = p;
             for (; p >= end; p--) {
                 uintptr_t word = *p;
@@ -2763,7 +2778,7 @@ void gc_unregister_cframe_thread(void)
 /* ============================================================
  * 协程栈根注册（有栈协程 yield 冻结栈扫描）
  * ============================================================ */
-void gc_register_coroutine(void* stack_top, void* stack_bottom)
+void gc_register_coroutine(void* stack_top, void* stack_bottom, void** sp_slot)
 {
     if (!stack_top) return;
     GCCoroutineEntry* e = (GCCoroutineEntry*)malloc(sizeof(GCCoroutineEntry));
@@ -2773,6 +2788,7 @@ void gc_register_coroutine(void* stack_top, void* stack_bottom)
     }
     e->stack_top = stack_top;
     e->stack_bottom = stack_bottom;
+    e->sp_slot = sp_slot;
     pthread_mutex_lock(&g_gc_mutex);
     /* 头插：同一协程多次 yield 时最近注册的在链头，unregister 按 stack_top 匹配移除 */
     e->next = g_gc_coroutines;

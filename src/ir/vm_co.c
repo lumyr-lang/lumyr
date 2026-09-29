@@ -125,6 +125,13 @@ static void vm_co_yield_hook(lm_co_t* co) {
                 }
             }
         }
+        /* Phase 8.2：维护 stealable（机制级迁移安全标志，scheduler 窃取分流依据）。
+         * 本次 yield 做了 mig_copy（compute 迁移路径）→ 栈数据已在堆上，
+         * 任何线程 resume 都可经 mig_copy 恢复 → 可窃取；
+         * 否则栈数据物理留在本线程栈池 → 只能本线程 resume → 不可窃取。
+         * resume hook 消费 mig_copy 后协程重新运行，栈数据回到新线程池，
+         * 下次 yield 时本标志按同一规则重判。 */
+        co->stealable = (st->migrated) ? 1 : 0;
     }
     /* 恢复 baseline（调用方状态）*/
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->baseline_sp[i];
