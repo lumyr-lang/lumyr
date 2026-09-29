@@ -123,6 +123,35 @@ typedef void (*lm_co_entry_t)(void*);
     if (_co) _co->reds = 0;                                         \
 } while (0)
 
+/* ============================================================
+ * Phase 8.5 I：cc 通道 ABI 契约（编译器生成代码 reduction 扣减）
+ *
+ * cc 通道（ir_cgen 生成的原生代码通道）与 VM 通道共用 lm_co_t.reds 字段。
+ * 契约：cc 通道生成代码在函数序言 + 循环回边生成如下指令序列：
+ *
+ *   ; 函数序言
+ *   mov  rAx, [co + offsetof(reds)]      ; 装载预算
+ *
+ *   ; 循环回边（back-edge）
+ *   dec  rAx                              ; 扣 1
+ *   jnz  .loop_body                       ; >0 继续
+ *   ; 预算耗尽：保存活值到栈帧，调 lm_co_yield
+ *   mov  [co + offsetof(slice_yield)], 1  ; 标记时间片耗尽
+ *   call lm_co_yield                      ; 指令边界让出（栈帧一致）
+ *   ; yield 返回后重装预算（lm_co_resume 已装，cc 侧无需重装）
+ *   mov  rAx, [co + offsetof(reds)]       ; resume 已装 LM_SCHED_REDS
+ *   jmp  .loop_body
+ *
+ * 编译约束：
+ *   1. -fno-omit-frame-pointer（GC 保守扫描需栈帧锚定）
+ *   2. 让出点前所有活 Value 必须溢出到栈帧（寄存器中的 GC 对象
+ *      在 yield 期间可能被回收——保守扫描只扫栈不扫寄存器）
+ *   3. reds 扣减频率：循环回边 + 函数调用点（与 VM 通道 B 步对齐）
+ *   4. 不在纯算术线性无回边代码插桩（无回边 = 有限执行，不会饿死）
+ *
+ * 不写实际插桩代码——ir_cgen 重构时落地。
+ * ============================================================ */
+
 /* 默认栈大小（128KiB，可配）。深递归 lumin 函数应显式调大。
  * 64KiB 在深嵌套 VM 调用热点（accept loop → createHandler → ctor → spawn，
  * 每层 vm_exec_loop + vm_call_func_value + vm_exec_call_method_dyn + builtin_dispatch

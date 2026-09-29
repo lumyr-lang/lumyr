@@ -182,6 +182,8 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_butex.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_timer.c
 # Phase 8.5 D：sysmon 守护线程（带外扫描 + 强制迁移）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_sysmon.c
+# Phase 8.5 F：阻塞 syscall 流放池（独立线程池，KEEP_ALIVE=10s）。
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_blocking_pool.c
 
 RUNTIME_OBJS := $(RUNTIME_SRCS:.c=.o) $(RUNTIME_ASM:.S=.o)
 

@@ -104,6 +104,11 @@ static lm_co_t* g_ov_head = NULL;
 static lm_co_t* g_ov_tail = NULL;
 static pthread_mutex_t g_ov_mutex = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic long g_ov_len = 0;
+/* Phase 8.5 G：全局 spinning 计数（对齐 Go nmspinning，proc.go:3230）。
+ * pop_blocking 窃取前 CAS 0→1，已有 spinner 则跳过窃取直接去睡；
+ * 窃取到任务或睡前清零。overflow_wake_one 在 g_nspinning>0 时跳过唤醒
+ * （spinner 会自行发现全局队列任务，减少惊群）。 */
+static _Atomic int g_nspinning = 0;
 
 long lm_scheduler_overflow_len(void) {
     return atomic_load_explicit(&g_ov_len, memory_order_acquire);
@@ -124,6 +129,9 @@ static void sched_wake_parked(lm_scheduler_t* s) {
  * 找不到（大家都在忙）则跳过——忙碌 worker drain 时会查到全局队列。
  * 唤醒封顶 1 个（对齐 signal_task 封顶语义，防惊群）。 */
 static void overflow_wake_one(void) {
+    /* Phase 8.5 G：已有 spinner 不唤醒（对齐 Go wakep 跳过语义，
+     * proc.go:3230：spinner 会自行发现全局队列任务）。 */
+    if (atomic_load_explicit(&g_nspinning, memory_order_acquire) > 0) return;
     /* 游标由 g_scheds_mutex 保护（调用路径均经本函数，锁内串行递增） */
     static int g_wake_cursor = 0;
     lm_scheduler_t* target = NULL;
@@ -366,10 +374,17 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
  * 批次灌本地 WSQ 尾部（溢出转全局），立即返回第一个执行。
  * ============================================================ */
 static lm_co_t* sched_steal(lm_scheduler_t* self) {
+    /* Phase 8.5 G：CAS g_nspinning 0→1，已有 spinner 则跳过窃取
+     * （对齐 Go proc.go:3230：宁多醒不漏醒，但已有 spinner 时不再唤醒）。 */
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&g_nspinning, &expected, 1)) {
+        return NULL;   /* 已有 spinner 在窃取，无需重复 */
+    }
     pthread_mutex_lock(&g_scheds_mutex);
     int n = g_scheds_n;
     if (n <= 1) {
         pthread_mutex_unlock(&g_scheds_mutex);
+        atomic_store_explicit(&g_nspinning, 0, memory_order_release);
         return NULL;
     }
     lm_co_t* first = NULL;
@@ -393,6 +408,8 @@ static lm_co_t* sched_steal(lm_scheduler_t* self) {
         break;
     }
     pthread_mutex_unlock(&g_scheds_mutex);
+    /* Phase 8.5 G：窃取完成（无论是否偷到）清 spinning 位。 */
+    atomic_store_explicit(&g_nspinning, 0, memory_order_release);
     return first;
 }
 
@@ -480,10 +497,18 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
  * ============================================================ */
 lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
     if (!s) return NULL;
+    uint64_t round = 0;   /* Phase 8.5 H：61 轮计数器 */
     for (;;) {
         /* Phase 8.5 D：每轮 schedtick +1（同 drain_ready）。 */
         atomic_fetch_add_explicit(&s->schedtick, 1, memory_order_relaxed);
         atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
+        /* Phase 8.5 H：每 61 轮优先查全局溢出队列（对齐 Go proc.go:3458
+         * schedtick%61==0），防 WSQ 非空时全局队列饿死。
+         * 只在 compute worker（pop_blocking）加——IO drain_ready 不查全局
+         * （防计算任务卡 reactor）。 */
+        if (++round % LM_SCHED_DRAIN_GLOBAL_INTERVAL == 0) {
+            if (overflow_take_to_wsq(s, LM_SCHED_STEAL_MAX_BATCH) > 0) continue;
+        }
         /* 1. mutex 定向队列（非阻塞试） */
         lm_co_t* co = lm_scheduler_pop(s);
         if (co) return co;
