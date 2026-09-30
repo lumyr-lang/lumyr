@@ -134,6 +134,20 @@ static int set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+/* Phase 8.14：标记当前协程 IO 亲和。
+ * pinned 语义扩展：原义仅"本协程正在等 fd、唤醒须回本线程"；扩展为
+ * "任何在协程内使用 per-thread reactor 网络栈的协程"——其发起的 fd 注册
+ * 挂在本线程 reactor、唤醒经本线程 scheduler，这些上下文无法随协程
+ * 迁移带走（与 Go 全局 netpoll 不同）。一旦置位永久不可被 sysmon
+ * 强制迁移：否则协程落到无 reactor 的 compute 线程后，co_wait_fd 立即
+ * 失败、IO 静默降级阻塞路径，造成批量超时与结果错配。
+ * 调用点：connect/accept/send/recv 的协程入口 + close 通知。
+ * 无协程或本线程无 reactor（thread-per-conn / compute 线程）时不置位。 */
+static void socket_mark_io_affine(void) {
+    lm_co_t* co = lm_co_current();
+    if (co && g_socket_reactor) co->pinned = 1;
+}
+
 /* Phase 8.8：fd 等待三态单字仲裁（就绪 / 超时 / 关闭 三方抢同一原子字）。
  *
  * 模型：等待协程把自身指针 CAS 进 conn 的 rg/wg 字（NIL→WAITING），之后三方
@@ -881,24 +895,29 @@ Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes) {
     SocketObj* o = (SocketObj*)v.v.socket_obj;
     if(!o || o->closed || o->fd < 0) { runtime_error_code(NET_ERR_BAD_STATE, "SocketError", "recv() 套接字无效或已关闭"); return lumyr_make_string(""); }
     if(maxLen <= 0) maxLen = 4096;
-    char* buf = (char*)malloc((size_t)maxLen + 1);
-    if(!buf) { runtime_error_code(NET_ERR_NO_MEMORY, "SocketError", "recv() 内存不足"); return lumyr_make_string(""); }
     int in_co = (lm_co_current() != NULL && g_socket_reactor != NULL);
     if (in_co) {
+        socket_mark_io_affine();
         set_nonblock(o->fd);
     }
-    ssize_t n;
     for (;;) {
+        /* 接收 buffer 生命周期仅限单次 recv 尝试：EAGAIN 挂起前必须释放——
+         * 否则 idle 连接在整个等待期间常驻 ~4KiB heap（malloc(maxLen+1)
+         * 在 macOS 落入 4608B slot；曾导致每连接 +4.5KiB、idle 换出也
+         * 无法回收）。resume 后下一轮重新 malloc，数据真正到达时才持有。 */
+        char* buf = (char*)malloc((size_t)maxLen + 1);
+        if(!buf) { runtime_error_code(NET_ERR_NO_MEMORY, "SocketError", "recv() 内存不足"); return lumyr_make_string(""); }
+        ssize_t n;
         if (in_co) {
             n = recv(o->fd, buf, (size_t)maxLen, flags);
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                /* 协程模式：挂读事件等可读，resume 后重试。
+                /* 协程模式：先释放 buffer 再挂读事件，resume 后重试。
                  * per-socket recvTimeout（SocketObj 字段）走 reactor 定时器：
                  * 超时返回 1，按 NET_ERR_RECV_TIMEOUT 抛错（与阻塞模式
                  * SO_RCVTIMEO 同码，上层 HTTP 408 分派自动生效）。 */
+                free(buf);
                 int wr = co_wait_fd_timeout(o->fd, 1, 0, o->recv_timeout_ms);
                 if (wr != 0) {
-                    free(buf);
                     if (wr == 1) {
                         runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
                     } else {
@@ -923,29 +942,28 @@ Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes) {
                 return lumyr_make_string("");
             }
         }
-        break;  /* 拿到数据或真错或 EOF 都退出 */
-    }
-    if(n < 0) {
+        if(n < 0) {
+            free(buf);
+            sock_error_code("recv", NET_ERR_RECV);
+            return lumyr_make_string("");
+        }
+        if(n == 0) {
+            /* 对端关闭 / EOF */
+            free(buf);
+            o->is_connected = 0;
+            return asBytes ? lumyr_bytes_from_buf(NULL, 0) : lumyr_make_string("");
+        }
+        Value r;
+        if(asBytes) {
+            /* bytes 路径：二进制安全，保留 NUL */
+            r = lumyr_bytes_from_buf((const uint8_t*)buf, (int)n);
+        } else {
+            buf[n] = '\0';
+            r = lumyr_make_string(buf);
+        }
         free(buf);
-        sock_error_code("recv", NET_ERR_RECV);
-        return lumyr_make_string("");
+        return r;
     }
-    if(n == 0) {
-        /* 对端关闭 / EOF */
-        free(buf);
-        o->is_connected = 0;
-        return asBytes ? lumyr_bytes_from_buf(NULL, 0) : lumyr_make_string("");
-    }
-    Value r;
-    if(asBytes) {
-        /* bytes 路径：二进制安全，保留 NUL */
-        r = lumyr_bytes_from_buf((const uint8_t*)buf, (int)n);
-    } else {
-        buf[n] = '\0';
-        r = lumyr_make_string(buf);
-    }
-    free(buf);
-    return r;
 }
 
 Value lumyr_socket_sendto(Value v, const char* data, int len,
@@ -1044,6 +1062,9 @@ Value lumyr_socket_recvfrom(Value v, int maxLen, int flags) {
 static void fd_wait_close_notify(int fd) {
     lm_reactor_t* r = g_socket_reactor;
     if (!r || fd < 0 || fd >= r->conn_capacity) return;
+    /* 发起 close 的协程（如 IO 编排协程）同样 IO 亲和——它在 reactor 语境
+     * 操作 fd，sysmon 不得将其迁走到无 reactor 的 compute 线程。 */
+    socket_mark_io_affine();
     lm_connection_t* conn = r->fd_map[fd];
     if (!conn || conn->fd != fd) return;   /* 无等待者或 slot 已易主 */
     lm_co_t* co = (lm_co_t*)conn->co;

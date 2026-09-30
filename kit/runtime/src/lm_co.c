@@ -676,12 +676,48 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
      *    期间保守扫描重复标根无害）。 */
     gc_register_coroutine((char*)buffer + used, buffer, NULL);
     gc_unregister_coroutine((char*)base - sizeof(void*));
-    /* 7. MADV_DONTNEED 释放物理页：内容已在 buffer，mmap 物理页归还内核。
-     *    关键：mmap 映射保留（基址不变），swap_in 直接 memcpy 回原偏移——
-     *    避免 fcontext rbp 绝对指针因基址变化失效（jump 保存/恢复 rbp，
-     *    见 lm_ctx_jump_x86_64.S:33/46）。idle 物理 = buffer(2-4KiB) + 控制块。
-     *    不归还 mmap 到池：保留映射换正确性，vm.max_map_count 由部署调参。 */
+    /* 7. 释放栈物理页：内容已在 buffer。
+     *
+     *   Linux：madvise(MADV_DONTNEED) 立即丢弃匿名私有页，mmap 映射保留
+     *          （基址不变），swap_in memcpy 写回时重新 zero-fault。
+     *
+     *   macOS(Darwin)：MADV_DONTNEED / MADV_FREE 对匿名页均为惰性回收
+     *          （无内存压力不归还，RSS 实测不降；最小实测 3000 映射
+     *          madvise 返回 0 但 RSS 变化为 0）。改用 munmap + MAP_FIXED
+     *          原地重建映射立即归还物理页，重建后基址不变——fcontext
+     *          jump 保存/恢复 rbp 绝对指针（lm_ctx_jump_x86_64.S:33/46），
+     *          swap_in 仍按 ctx.sp 原偏移 memcpy。
+     *          抢占安全：runtime 内全部 mmap 仅 lm_stack_pool.c 一处且
+     *          NULL hint，不存在精确抢占该 VA 的来源；两条 syscall 紧邻
+     *          无中间操作。munmap 对自有合法映射不会失败；MAP_FIXED 在
+     *          刚释放的空闲 VA 不会持续失败，故失败时退避重试/回退仲裁。
+     *
+     * 不归还 mmap 到池：保留映射换正确性，vm.max_map_count 由部署调参。 */
+#ifdef __APPLE__
+    if (munmap(co->stack_mmap, co->stack_size) != 0) {
+        /* munmap 失败：旧栈完好。逆序恢复 GC 记账（先注册旧栈再注销 buffer），
+         * 释放 buffer，回退双重仲裁后放弃。 */
+        gc_register_coroutine((char*)base - sizeof(void*),
+                              co->stack_mmap, NULL);
+        gc_unregister_coroutine((char*)buffer + used);
+        free(buffer);
+        atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
+                              memory_order_release);
+        atomic_store_explicit(&co->state, LM_CO_SUSPENDED, memory_order_release);
+        return 0;
+    }
+    void* rebuilt;
+    for (;;) {
+        rebuilt = mmap(co->stack_mmap, co->stack_size,
+                       PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+        if (rebuilt != MAP_FAILED) break;
+        struct timespec backoff = {0, 1000000};   /* 1ms 退避 */
+        nanosleep(&backoff, NULL);
+    }
+#else
     madvise(co->stack_mmap, co->stack_size, MADV_DONTNEED);
+#endif
     /* 8. 置 buffer/size/SWAPPED/stealable=0。栈字段保留（mmap 仍在，基址不变），
      *    swap_in 用同 ctx.sp 恢复内容到原偏移。 */
     co->swap_buffer = buffer;

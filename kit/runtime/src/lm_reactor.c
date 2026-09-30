@@ -16,6 +16,7 @@
 #include "gc_runtime.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
@@ -312,9 +313,11 @@ lm_connection_t* lm_reactor_get_connection(lm_reactor_t* r, int fd) {
 void lm_reactor_free_connection(lm_reactor_t* r, lm_connection_t* c) {
     if (!r || !c) return;
     /* 先从 reactor 摘事件（避免悬挂 fd 注册；fd 已被 close 时 del 返回
-     * EBADF/ENOENT，忽略——内核在 close 时已自动摘除注册） */
+     * EBADF/ENOENT，忽略——内核在 close 时已自动摘除注册）。
+     * 走 lm_reactor_del：内含 fd 易主守卫（Phase 8.14），fd 已被复用接管时
+     * 绝不按 fd 发内核 del 误删新等待者注册。 */
     if (c->active_events) {
-        r->actions->del(r, c, c->active_events);
+        (void)lm_reactor_del(r, c, c->active_events);
         c->active_events = 0;
         c->flags &= ~LM_CONN_FLAG_ACTIVE;
     }
@@ -349,6 +352,21 @@ int lm_reactor_add(lm_reactor_t* r, lm_connection_t* c, uint32_t events) {
 
 int lm_reactor_del(lm_reactor_t* r, lm_connection_t* c, uint32_t events) {
     if (!r || !c || !r->actions->del) return -1;
+    /* Phase 8.14：注册所有权守卫。fd_map 是"fd → 当前内核注册主人"的唯一
+     * 事实表：add 成功时登记、free 时按指针相等清除、新 conn add 同 fd 覆盖。
+     * 竞态场景：close(fd=N) 仲裁唤醒旧 waiter 后其 cleanup 排队滞后，
+     * fd=N 被新 socket 立即复用、新 conn 完成 EV_ADD 并接管 fd_map[N]；
+     * 旧 conn 之后才 cleanup。kqueue EV_DELETE / epoll EPOLL_CTL_DEL 只按
+     * ident/fd 定位、不认 conn 指针——若照发会误删新等待者的注册，
+     * 新等待者事件静默、只能退化到超时。
+     * 检测到易主（fd_map 指向别人或已清空）→ 跳过内核 del，仅清本地记账。 */
+    int fdOwned = (c->fd >= 0 && c->fd < r->conn_capacity &&
+                   r->fd_map[c->fd] == c);
+    if (!fdOwned) {
+        c->active_events = 0;
+        c->flags &= ~LM_CONN_FLAG_ACTIVE;
+        return 0;
+    }
     if (r->actions->del(r, c, events) != 0) return -1;
     c->active_events &= ~events;
     if (!c->active_events) c->flags &= ~LM_CONN_FLAG_ACTIVE;

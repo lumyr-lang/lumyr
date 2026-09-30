@@ -89,10 +89,29 @@ typedef struct lm_scheduler_s {
  *   proc.go:6679）。同 scheduler schedtick 超此时长未动 → 判定卡长协程，
  *   非 pinned 且 IO 线程的协程写 migrate_sched 迁到 compute 池。
  * LM_SCHED_DRAIN_GLOBAL_INTERVAL：drain 每 N 轮强制查全局溢出队列
- *   （对齐 Go proc.go:3458 schedtick%61==0），防全局队列饿死。 */
+ *   （对齐 Go proc.go:3458 schedtick%61==0），防全局队列饿死。
+ * 三者均可编译期 -D 覆盖（验收测试用 10ms 口径对齐 S5 等条款）。 */
+#ifndef LM_SCHED_LONG_SCHED_MS
 #define LM_SCHED_LONG_SCHED_MS        50
+#endif
+#ifndef LM_SCHED_FORCE_MIGRATE_MS
 #define LM_SCHED_FORCE_MIGRATE_MS     10
+#endif
+#ifndef LM_SCHED_DRAIN_GLOBAL_INTERVAL
 #define LM_SCHED_DRAIN_GLOBAL_INTERVAL 61
+#endif
+/* Phase 8.14：drain 单次调用 resume 预算（仅 reactor 钩子路径生效，
+ * s->reactor==NULL 的直接调用方保持"跑到队列空"旧语义）。
+ * 根因：drain 原策略"直到队列空才返回"——slice_yield 即刻重入队的自旋
+ * 协程（pinned 不可迁移 / 无 sysmon 时尤其）会把 drain 焊死在主循环
+ * process_events 之前，kqueue/epoll 永不收事件，fd 等待全部退化到超时。
+ * 预算耗尽且仍有就绪工作时，drain 写 reactor self-pipe 后返回：主循环
+ * kevent/epoll_wait 被自唤醒字节立即带出（顺路收走已就绪 fd 事件），
+ * 下一轮继续 drain——fd 事件采集间隔从"永不"变为 ≤每 61 次 resume，
+ * 单个 kevent 立即返回的额外开销可忽略。 */
+#ifndef LM_SCHED_DRAIN_BUDGET
+#define LM_SCHED_DRAIN_BUDGET          61
+#endif
 
 /* 创建 scheduler：绑定 reactor（可为 NULL，compute 池用）。
  * 创建即注册到全局注册表（参与窃取）；注册表满则 sched_id=-1（仍可用，

@@ -511,12 +511,30 @@ static lm_co_t* sched_steal(lm_scheduler_t* self) {
  * 就绪队列消费：drain（IO scheduler，reactor 钩子每轮调用）
  * 顺序：LIFO slot（配额 3/轮）→ mutex 定向队列 → 本地 WSQ pop。
  * 不窃取、不查全局（IO 线程职责是 IO 调度，计算任务由 compute worker 偷）。
+ * Phase 8.14：reactor 钩子路径（s->reactor != NULL）有 resume 预算
+ * LM_SCHED_DRAIN_BUDGET——防 slice_yield 自旋协程把 drain 焊死、
+ * 饿死 process_events 的 fd 事件采集；预算耗尽且仍有工作 → 自唤醒
+ * reactor 后返回（主循环 kevent 立即带出，下轮继续 drain）。
+ * s->reactor==NULL 的直接调用方（测试）保持跑到队列空。
  * ============================================================ */
 
 void lm_scheduler_drain_ready(lm_scheduler_t* s) {
     if (!s) return;
     s->lifo_used = 0;
+    int budget = s->reactor ? LM_SCHED_DRAIN_BUDGET : 0;   /* 0 = 不限（无 reactor） */
     for (;;) {
+        /* Phase 8.14：预算闸门——耗尽且有剩余工作 → 自唤醒 reactor 并返回。
+         * 剩余工作探测用 ready_len 原子 + WSQ 近似长度 + LIFO slot（免锁）；
+         * 与"pop 到空自然退出"等价路径下无新增竞态（跨线程投递方须走
+         * lm_scheduler_wakeup 写 self-pipe，与既有语义一致）。 */
+        if (s->reactor && --budget < 0) {
+            if (s->lifo_slot ||
+                atomic_load_explicit(&s->ready_len, memory_order_acquire) > 0 ||
+                lm_wsq_size_approx(&s->wsq) > 0) {
+                lm_reactor_wakeup(s->reactor);
+            }
+            break;
+        }
         /* Phase 8.5 D：每轮 schedtick +1 + 记时间。sysmon 据此检测
          * scheduler 是否卡在单个协程上（连续两轮 schedtick 未变）。 */
         atomic_fetch_add_explicit(&s->schedtick, 1, memory_order_relaxed);
@@ -578,9 +596,8 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
                 /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
                  * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。
                  * 用 lm_scheduler_post（mutex）而非 post_local（WSQ）。
-                 * 不 break：drain 继续 pop 下一个协程（FIFO 轮转），直到队列空
-                 * 才退出让 reactor 处理 fd/timer 事件。每片仅 4000 reds，fd 延迟
-                 * 不超过一个时间片（微秒级），可接受。 */
+                 * 不立即 break：drain 继续 pop 下一个协程（FIFO 轮转），
+                 * 由顶部预算闸门（Phase 8.14）或队列空退出循环。 */
                 lm_scheduler_post(s, co);
             }
         }
