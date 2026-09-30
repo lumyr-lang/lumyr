@@ -201,6 +201,13 @@ class HttpConnectionHandler {
                 try {
                     req = ServerRequest.readFrom(c, connBuf);
                     resp = h.app.dispatchWithFilters(req);
+                    // P0-3：分派链尾异常标记检查（dispatchCore catch 写入
+                    // req.attributes）→ handler 异常记账落 owner（app/worker
+                    // 均为本线程本地状态，无锁）。每请求 attributes 全新，无残留
+                    errMark = req.attributes["handlerError"];
+                    if (errMark != null) {
+                        h.app.countHandlerError(errMark);
+                    }
                 } catch (e) {
                     failed = true;   // 任何异常响应后关闭连接（同历史行为）
                     // 错误码分派：kit 层 socket 错误（VAL_ERROR）携带 code，与
@@ -502,6 +509,9 @@ public class WebApplication extends ServiceApplication {
         try {
             return self.handleRequest(req);
         } catch (e) {
+            // P0-3：标记请求级异常，连接协程检查后记账。req 归连接协程线程
+            // 所有，此处写入无跨线程竞态；onError 骨架不动（记账与响应转换解耦）
+            req.attributes["handlerError"] = e;
             return self.onError(req, e);
         }
     }

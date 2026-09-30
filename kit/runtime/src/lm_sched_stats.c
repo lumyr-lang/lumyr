@@ -34,6 +34,10 @@ void lm_sched_stats_record_pending_ns(uint64_t ns) {
                               memory_order_relaxed);
 }
 
+const uint64_t* lm_sched_stats_pending_bounds(void) {
+    return g_pending_bounds_us;
+}
+
 /* ============================================================
  * trace 线程：LM_SCHED_DEBUG=trace:N 每 N ms 打印调度器全景。
  * ============================================================ */

@@ -296,16 +296,16 @@ int builtin_id_by_name(const char* name) {
         {"setOption", BUILTIN_SOCKET_SETOPT},
         {"getOption", BUILTIN_SOCKET_GETOPT},
         {"fileno", BUILTIN_SOCKET_FILENO},
-        /* reactor + 协程（Phase 5：大写为主用名，小写驼峰为别名）
+        /* reactor + 协程（Phase 5）
          * 注：reactor 与 co 销毁用不同名避免 builtin id 冲突——
-         * reactor 用 destroyReactor，co 用 destroy */
-        {"reactor", BUILTIN_REACTOR_NEW}, {"Reactor", BUILTIN_REACTOR_NEW},
+         * reactor 用 __private_system__destroy_reactor，co 用 destroy */
+        {"__private_system__reactor_new", BUILTIN_REACTOR_NEW},  /* Reactor.lm ReactorInstance 构造封装 */
         {"run", BUILTIN_REACTOR_RUN},
         {"stop", BUILTIN_REACTOR_STOP},
         {"addTimer", BUILTIN_REACTOR_ADD_TIMER},
         {"delTimer", BUILTIN_REACTOR_DEL_TIMER},
-        {"destroyReactor", BUILTIN_REACTOR_DEL},  /* reactor 销毁 */
-        {"setSocketReactor", BUILTIN_SET_SOCKET_REACTOR},
+        {"__private_system__destroy_reactor", BUILTIN_REACTOR_DEL},  /* reactor 销毁，Reactor.lm destroy 封装 */
+        {"__private_system__set_socket_reactor", BUILTIN_SET_SOCKET_REACTOR},  /* Reactor.lm setReactor/clearReactor 封装 */
         {"spawn", BUILTIN_CO_SPAWN},
         {"resume", BUILTIN_CO_RESUME},
         {"coYield", BUILTIN_CO_YIELD},             /* 协程让出：与 lm 的 yield 关键字（generator 语句）分离 */
@@ -325,9 +325,19 @@ int builtin_id_by_name(const char* name) {
         {"coWait", BUILTIN_COWAKE_COND_WAIT},
         {"coSignal", BUILTIN_COWAKE_COND_SIGNAL},
         {"coBroadcast", BUILTIN_COWAKE_COND_BCAST},
-        /* Phase 7.4：compute worker pool（CPU 密集协程迁入 worker 池） */
-        {"computeBegin", BUILTIN_COMPUTE_BEGIN},
-        {"computeEnd", BUILTIN_COMPUTE_END},
+        /* Phase 7.4：compute worker pool（CPU 密集协程迁入 worker 池，
+         * 私有机制内置，Compute.lm execute 封装） */
+        {"__private_system__compute_begin", BUILTIN_COMPUTE_BEGIN},
+        {"__private_system__compute_end", BUILTIN_COMPUTE_END},
+        /* Phase 8.10/8.11：私有机制内置（__private_system__ 前缀约定：
+         * 不面向用户直接调用，由 lumyr-lms 框架模块封装后暴露） */
+        {"__private_system__compute_pool_size", BUILTIN_COMPUTE_POOL_SIZE},
+        {"__private_system__compute_pool_capacity", BUILTIN_COMPUTE_POOL_CAPACITY},
+        {"__private_system__compute_pool_grow", BUILTIN_COMPUTE_POOL_GROW},
+        {"__private_system__compute_pool_shrink", BUILTIN_COMPUTE_POOL_SHRINK},
+        {"__private_system__sched_stats", BUILTIN_SCHED_STATS},
+        {"__private_system__fd_limit", BUILTIN_FD_LIMIT},   /* fd 软上限查询（App 服务层封装） */
+        {"coSleep", BUILTIN_COSLEEP},   /* 协程友好休眠（App accept 退避/监督用） */
         {NULL, (BuiltinId)-1}
     };
     for(int i = 0; TBL[i].n; i++) {

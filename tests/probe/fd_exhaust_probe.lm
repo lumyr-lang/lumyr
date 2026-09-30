@@ -1,0 +1,34 @@
+// R1/R2 探针：fd 耗尽注入（服务端，配合 fd_flood_client.lm 使用）
+// 运行方式（ulimit 拉低软上限制造 EMFILE）：
+//   (ulimit -n 40 && ./bin/lumyr tests/fd_exhaust_probe.lm) &
+// 预期输出：
+//   FD_LIMIT=40                                  —— R2：私有内置读到 fd 软上限
+//   CAUGHT code=20 errno=24 accepted=N           —— R1：accept EMFILE 细分
+//   PASS fd-exhaust classified                   —— NetError.FD_EXHAUSTED(20) + errno(EMFILE=24)
+import <NetWork/NetError>;
+
+limit = __private_system__fd_limit();
+print("FD_LIMIT=" + limit);
+
+srv = TcpSocket();
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", 19131);
+srv.listen(128);
+
+accepted = 0;
+while (true) {
+    try {
+        conn = srv.accept();
+        accepted = accepted + 1;
+    } catch (e) {
+        print("CAUGHT code=" + e.getCode() + " errno=" + e.getErrno()
+              + " accepted=" + accepted);
+        print("MSG=" + e.getMessage());
+        if (e.getCode() == NetError.FD_EXHAUSTED && e.getErrno() == 24) {
+            print("PASS fd-exhaust classified");
+        } else {
+            print("FAIL unexpected: code=" + e.getCode() + " errno=" + e.getErrno());
+        }
+        break;
+    }
+}

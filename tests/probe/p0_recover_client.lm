@@ -1,0 +1,19 @@
+// P0-1 探针恢复客户端：flood 退出释放 fd 后，验证服务端恢复受理与服务
+// 运行方式：./bin/lumyr tests/probe/p0_recover_client.lm（p0_exhaust_flood.lm 退出后跑）
+try {
+    c = TcpSocket();
+    c.connect("127.0.0.1", 19134);
+    c.send("recover");
+    r = c.recv(100);
+    c.close();
+    print("RECOVER=" + r);
+    if (r == "ok:recover") {
+        print("PASS p0-exhaust-recover");
+    } else {
+        print("FAIL recover=" + r);
+    }
+} catch (e) {
+    msg = "?";
+    if (type(e) != "string") { msg = e.getMessage(); } else { msg = e; }
+    print("FAIL connect error: " + msg);
+}

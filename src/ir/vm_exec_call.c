@@ -345,6 +345,8 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
             outv = lumyr_make_string(recv.v.err.type ? recv.v.err.type : "RuntimeError");
         } else if (strcmp(mname, "getCode") == 0) {
             outv = lumyr_make_int(recv.v.err.code);
+        } else if (strcmp(mname, "getErrno") == 0) {
+            outv = lumyr_make_int(recv.v.err.os_errno);   /* 系统 errno 快照（0=无） */
         } else {
             char buf[512];
             snprintf(buf, sizeof(buf),

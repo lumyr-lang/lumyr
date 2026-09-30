@@ -1,0 +1,22 @@
+// EOF 专项探针（服务端）：验证协程路径 recv 对 FIN/EOF 的感知与 fd 释放
+// client（eof_client.lm）connect 后不 send 直接退出 → 服务端应打出
+//   HANDLER ENTER / RECV len=0 / DONE（无 error 日志）
+import <App/ServiceApplication>;
+
+class ProbeHandler {
+    func serve(conn) {
+        print("HANDLER ENTER");
+        data = conn.recv(4096);
+        print("RECV len=" + data.len);
+        conn.send("ok:" + data);
+    }
+}
+
+app = ServiceApplication("127.0.0.1", 19137, ProbeHandler());
+app.startAsync();
+sleep(500);
+print("READY");
+sleep(6000);
+app.stop();
+app.join();
+print("DONE");

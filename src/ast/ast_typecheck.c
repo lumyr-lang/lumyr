@@ -1040,11 +1040,11 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"UnixSocket", 0, 1}, {"unixSocket", 0, 1},
     {"UnixDgramSocket", 0, 1}, {"unixDgramSocket", 0, 1},
     /* reactor + 协程（Phase 5）：与 ir_compile.c builtin_id_by_name 名表一致 */
-    {"reactor", 1, 1}, {"Reactor", 1, 1},
+    {"__private_system__reactor_new", 1, 1},  /* Reactor.lm 构造封装 */
     {"run", 1, 1}, {"stop", 1, 1},
     {"addTimer", 3, 3}, {"delTimer", 2, 2},
-    {"destroyReactor", 1, 1},
-    {"setSocketReactor", 1, 1},
+    {"__private_system__destroy_reactor", 1, 1},  /* Reactor.lm 封装 */
+    {"__private_system__set_socket_reactor", 1, 1},  /* Reactor.lm 封装 */
     {"spawn", 2, 2}, {"resume", 1, 1}, {"coYield", 0, 0},
     {"current", 0, 0}, {"isDead", 1, 1}, {"destroy", 1, 1},
     {"coSetPinned", 1, 1},   /* Phase 8.2：协程 pinned 置位 */
@@ -1055,8 +1055,16 @@ static const BuiltinSig g_builtin_sigs[] = {
     /* Phase 7.3：跨线程唤醒原语（与 ir_compile.c 名表一致） */
     {"coWakeup", 2, 2}, {"coCond", 0, 0},
     {"coWait", 1, 1}, {"coSignal", 1, 1}, {"coBroadcast", 1, 1},
-    /* Phase 7.4：compute worker pool（与 ir_compile.c 名表一致） */
-    {"computeBegin", 0, 0}, {"computeEnd", 0, 0},
+    /* Phase 7.4：compute worker pool（私有机制内置，与 ir_compile.c 名表一致） */
+    {"__private_system__compute_begin", 0, 0}, {"__private_system__compute_end", 0, 0},
+    /* Phase 8.10/8.11：私有机制内置（__private_system__ 前缀，与 ir_compile.c 名表一致） */
+    {"__private_system__compute_pool_size", 0, 0},
+    {"__private_system__compute_pool_capacity", 0, 0},
+    {"__private_system__compute_pool_grow", 1, 1},
+    {"__private_system__compute_pool_shrink", 1, 1},
+    {"__private_system__sched_stats", 0, 0},
+    {"__private_system__fd_limit", 0, 0},   /* fd 软上限查询（App 服务层封装） */
+    {"coSleep", 1, 1},   /* 协程友好休眠（App accept 退避/监督用） */
     {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
     {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},
     {"append", 2, 2}, {"appendLine", 2, 2},

@@ -1,0 +1,19 @@
+// P0-1 探针洪泛客户端：打满服务端 fd 表并保活（进程退出即释放全部 fd）
+// 60 连接：25 个被 accept（fd 耗尽）+ 35 个进 backlog queue，queue 不满，
+// connect 不阻塞，flood 快速完成（修复前 300 连接版被 queue 满 SYN 重传拖慢）
+ok = 0;
+fail = 0;
+keep = [];   // 保活引用，防 GC 提前关闭连接
+for (i = 0; i < 60; i++) {
+    try {
+        c = TcpSocket();
+        c.connect("127.0.0.1", 19134);
+        keep.add(c);
+        ok = ok + 1;
+    } catch (e) {
+        fail = fail + 1;
+    }
+}
+print("FLOOD ok=" + ok + " fail=" + fail);
+// 保活 3 秒确保服务端命中 EMFILE 退避路径后退出释放
+sleep(3000);

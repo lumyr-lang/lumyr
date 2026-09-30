@@ -1,0 +1,49 @@
+// P0-3 探针：handler 主动抛错 → countHandlerError 记账（error 日志 + errorCount），
+// 异常连接被关闭但服务存活，后续请求正常服务（P0-3 修复前：静默吞掉，排障不可见）
+// 运行方式：./bin/lumyr tests/probe/p0_handler_error_probe.lm
+// 预期输出：
+//   [lumyr-app][error] handler 异常：boom from handler（累计 1）...  —— 记账日志
+//   BOOM-RESP-LEN=0          —— 异常连接被服务端关闭
+//   RECOVER=ok:hello         —— 服务存活
+//   PASS p0-handler-error    —— errorCount==1 且恢复请求成功
+import <App/ServiceApplication>;
+
+class BoomHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data == "boom") {
+            throw "boom from handler";
+        }
+        conn.send("ok:" + data);
+    }
+}
+
+app = ServiceApplication("127.0.0.1", 19135, BoomHandler());
+app.startAsync();
+
+sleep(300);   // 主线程等待服务就绪（非 reactor 线程，阻塞等待无碍）
+
+// 1) 异常请求：handler 抛错 → 服务端关闭连接（客户端 recv 收到 FIN 返回空）
+c1 = TcpSocket();
+c1.connect("127.0.0.1", 19135);
+c1.send("boom");
+r1 = c1.recv(100);
+c1.close();
+print("BOOM-RESP-LEN=" + r1.len);
+
+// 2) 恢复请求：服务存活，正常回声
+c2 = TcpSocket();
+c2.connect("127.0.0.1", 19135);
+c2.send("hello");
+r2 = c2.recv(100);
+c2.close();
+print("RECOVER=" + r2);
+
+// 3) 断言：异常记账 1 次 + 服务存活
+if (app.errorCount == 1 && r2 == "ok:hello") {
+    print("PASS p0-handler-error");
+} else {
+    print("FAIL errorCount=" + app.errorCount + " recover=" + r2);
+}
+app.stop();
+app.join();

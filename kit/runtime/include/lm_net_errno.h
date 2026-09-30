@@ -28,6 +28,8 @@ typedef enum {
     NET_ERR_RECVFROM = 17,
     NET_ERR_SET_OPTION = 18,
     NET_ERR_GET_OPTION = 19,
+    /* 资源耗尽族（专用码，上层按语义精确分派，如 accept 退避；不做文本匹配） */
+    NET_ERR_FD_EXHAUSTED = 20,  /* fd 耗尽（EMFILE/ENFILE，系统 errno 仍随 os_errno 携带） */
     /* 超时族（专用码，上层按语义精确分派，如 HTTP 转 408） */
     NET_ERR_RECV_TIMEOUT = 30,
     NET_ERR_SEND_TIMEOUT = 31,

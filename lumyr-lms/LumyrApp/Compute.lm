@@ -1,7 +1,8 @@
 // ============================================================
 // lumyr-App：ComputeTask<T> 接口 + AbstractCompute<T> 抽象基类
 //           + Compute<T> 计算池封装类
-// 面向对象封装内置 computeBegin / computeEnd（Phase 7.4 compute 池）：
+// 面向对象封装私有机制内置 __private_system__compute_begin/end
+//（Phase 7.4 compute 池）：
 //   ComputeTask<T>        纯 CPU 任务统一契约（返回类型 T 由调用方决定）
 //   AbstractCompute<T>    compute 区间进入/退出公共流程，不能实例化
 //   Compute<T>            构造传入任务，或直接 Compute.exec 静态入口
@@ -11,9 +12,9 @@
 //   LM_MAX_WORKERS 环境变量调上限），跑完迁回老家 IO scheduler——
 //   请求处理器等协程内的 CPU 密集段不再卡 IO reactor；
 //   compute 区间内只能做纯计算，禁止 recv/send/coSleep/timer 等 IO
-//   原语（worker 无 reactor）；必须在协程内调用（主线程裸调运行期
-//   双语报错）；任务抛错时 finally 兜底 computeEnd，协程先迁回老家
-//   再向上传播异常，否则协程滞留 worker、后续 computeBegin 嵌套报错
+//   原语（worker 无 reactor）；必须在协程内调用（主线程裸调双语报错）；
+//   任务抛错时 finally 兜底 compute_end，协程先迁回老家再向上传播异常，
+//   否则协程滞留 worker、后续重入 compute 区间嵌套报错
 //
 // 用法（三模式）：
 //   1. alias：import <App/Compute> as cp; → cp.Compute.exec(task);
@@ -28,8 +29,15 @@
 //   r1 = Compute.exec(FibTask(30));                 // 契约对象
 //   r2 = Compute.exec(func() { return heavy(); });  // func 表达式
 //
-// 注：池容量/扩缩容（lm_compute_pool_grow/shrink）尚未暴露为 lumin
-//     内置，容量调优走 LM_MAX_WORKERS 环境变量
+// 池容量（Phase 8.10 运行期调核，静态方法）：
+//   Compute.poolSize()      当前 worker 数（池未初始化为 0）
+//   Compute.poolCapacity()  worker 硬上限（LM_MAX_WORKERS 解析值，封顶 256）
+//   Compute.grow(n)         扩容 n 个，返回实际新增数（达上限即停）
+//   Compute.shrink(n)       缩容 n 个，返回实际标记数（至少保留 1 个
+//                           worker；worker 排空本地队列后优雅退出）
+//
+// 私有内置约定：底层机制经 __private_system__ 前缀内置暴露给框架模块，
+// 不面向用户直接调用（__private_system__compute_pool_size 等）。
 // ============================================================
 
 // 纯 CPU 任务契约：compute 区间内执行的 run，返回类型 T（由调用方决定）
@@ -40,17 +48,17 @@ public interface ComputeTask<T> {
 // 计算池抽象基类：提供 compute 区间的进入/退出公共流程
 // （抽象类豁免接口方法实现检查：run 由具体子类承担）
 public abstract class AbstractCompute<T> implements ComputeTask<T> {
-    // execute：computeBegin 迁入 worker 池 → run → computeEnd 迁回老家。
-    // finally 兜底：任务抛错也保证 computeEnd 执行（协程迁回老家后再
-    // 传播异常），否则协程滞留 worker、后续 computeBegin 嵌套报错。
+    // execute：compute_begin 迁入 worker 池 → run → compute_end 迁回老家。
+    // finally 兜底：任务抛错也保证 compute_end 执行（协程迁回老家后再
+    // 传播异常），否则协程滞留 worker、后续重入 compute 区间嵌套报错。
     // （VM 跨帧展开 finally 缺陷已修复：try/finally 跨帧必达）
     func execute(): T {
-        computeBegin();
+        __private_system__compute_begin();
         r = null;
         try {
             r = self.run();
         } finally {
-            computeEnd();
+            __private_system__compute_end();
         }
         return r;
     }
@@ -84,5 +92,29 @@ public class Compute<T> extends AbstractCompute<T> {
     // 静态入口：把 task 放进 compute 池同步执行并取回结果
     public static func exec(task: ComputeTask<T>): T {
         return Compute<T>(task).execute();
+    }
+
+    // ===== 池容量（Phase 8.10 运行期调核，封装私有机制内置） =====
+
+    // 当前 worker 数（池未初始化——尚未执行过任何 compute 任务——为 0）
+    public static func poolSize(): int {
+        return __private_system__compute_pool_size();
+    }
+
+    // worker 硬上限：LM_MAX_WORKERS 环境变量解析值（默认 4×CPU，封顶 256）
+    public static func poolCapacity(): int {
+        return __private_system__compute_pool_capacity();
+    }
+
+    // 扩容 n 个 worker，返回实际新增数：受硬上限约束，达顶即停（弹性必须有
+    // 顶——线程风暴是事故不是弹性）；n 非法（负数/非整数）底层双语报错
+    public static func grow(n: int): int {
+        return __private_system__compute_pool_grow(n);
+    }
+
+    // 缩容 n 个 worker，返回实际标记数：从池尾摘（后进先出），至少保留
+    // 1 个 worker；被标记 worker 排空本地队列后优雅退出（不强杀）
+    public static func shrink(n: int): int {
+        return __private_system__compute_pool_shrink(n);
     }
 }

@@ -974,7 +974,8 @@ Value lumyr_index_get(Value c, Value idx) {
         if(strcmp(idxcs, "message") == 0) return lumyr_make_string(c.v.err.message ? c.v.err.message : "");
         if(strcmp(idxcs, "stack") == 0) return lumyr_make_string(c.v.err.stack ? c.v.err.stack : "");
         if(strcmp(idxcs, "code") == 0) return lumyr_make_int(c.v.err.code);
-        runtime_error("错误对象只有 type/message/stack/code 四个字段");
+        if(strcmp(idxcs, "errno") == 0) return lumyr_make_int(c.v.err.os_errno);
+        runtime_error("错误对象只有 type/message/stack/code/errno 五个字段");
         return val_none();
     }
     long long i = array_index_of(idx);

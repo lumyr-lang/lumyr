@@ -438,7 +438,7 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
                 r = lumyr_field_get(arr, fname);
         }
     } else if(arr.type == VAL_ERROR) {
-        /* 错误对象字段访问：type/message/stack（与 kit lumyr_index_get 对齐） */
+        /* 错误对象字段访问：type/message/stack/code/errno（与 kit lumyr_index_get 对齐） */
         if(idx.type != VAL_STRING) {
             vm_except_raise_str(ctx, "TypeError",
                 "错误对象下标必须是字符串键 / error subscript must be a string key");
@@ -451,9 +451,13 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
             r = lumyr_make_string(arr.v.err.message ? arr.v.err.message : "");
         else if(name && strcmp(name, "stack") == 0)
             r = lumyr_make_string(arr.v.err.stack ? arr.v.err.stack : "");
+        else if(name && strcmp(name, "code") == 0)
+            r = lumyr_make_int(arr.v.err.code);
+        else if(name && strcmp(name, "errno") == 0)
+            r = lumyr_make_int(arr.v.err.os_errno);
         else {
             vm_except_raise_str(ctx, "AttributeError",
-                "错误对象只有 type/message/stack 三个字段 / error has only type/message/stack fields");
+                "错误对象只有 type/message/stack/code/errno 五个字段 / error has only type/message/stack/code/errno fields");
             return 1;
         }
     } else {

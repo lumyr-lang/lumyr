@@ -189,6 +189,7 @@ typedef struct {
     char* message;   // 错误消息
     char* stack;     // 调用栈回溯文本（可空）
     int code;        // 错误码（0=无码，与 lm 层 enum 数值对齐；SocketError 等专用码）
+    int os_errno;    // 系统 errno 快照（0=无；socket 等系统调用失败时设置，供上层编程判定资源耗尽等类别）
 } ValueError;
 
 // VAL_FUNC：直接持有独立运行时函数堆对象；FFI 外部函数用 ffi_func 字段

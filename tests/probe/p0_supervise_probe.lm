@@ -1,0 +1,61 @@
+// P0-2 探针：onAccepted 注入异常 → AcceptLoop 监督重启（退避 200ms 后重入循环），
+// 服务不死，后续连接正常受理（修复前：accept 协程死亡，受理永久停止）
+// 运行方式：./bin/lumyr tests/probe/p0_supervise_probe.lm
+// 预期输出：
+//   [lumyr-app][warn] accept 协程异常退出，200ms 后第 1 次重启...  —— 监督重启日志
+//   RECOVER=ok:hello          —— 重启后正常服务
+//   PASS p0-supervise
+import <App/ServiceApplication>;
+
+class EchoHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        conn.send("ok:" + data);
+    }
+}
+
+// 注入：第一次 onAccepted 抛异常（模拟受理路径 bug），之后交回父类正常受理
+class CrashOnceApp extends ServiceApplication {
+    injected: int;
+
+    func CrashOnceApp(host: string, port: int, handler) {
+        super(host, port, handler);
+        self.injected = 0;
+    }
+
+    func onAccepted(conn) {
+        if (self.injected == 0) {
+            self.injected = self.injected + 1;
+            throw "injected onAccepted crash";
+        }
+        return super.onAccepted(conn);
+    }
+}
+
+app = CrashOnceApp("127.0.0.1", 19136, EchoHandler());
+app.startAsync();
+
+sleep(300);
+
+// 1) 注入请求：accept 成功后 onAccepted 抛错（连接无人处理，fd 悬空至进程退出）
+c1 = TcpSocket();
+c1.connect("127.0.0.1", 19136);
+c1.send("crash");
+// 不 recv：该连接被注入异常跳过，服务端未 close
+
+// 2) 等监督退避（200ms）+ 重启完成，发恢复请求
+sleep(1000);
+c2 = TcpSocket();
+c2.connect("127.0.0.1", 19136);
+c2.send("hello");
+r2 = c2.recv(100);
+c2.close();
+print("RECOVER=" + r2);
+
+if (r2 == "ok:hello" && app.injected == 1) {
+    print("PASS p0-supervise");
+} else {
+    print("FAIL recover=" + r2 + " injected=" + app.injected);
+}
+app.stop();
+app.join();

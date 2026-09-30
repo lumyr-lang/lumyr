@@ -152,6 +152,12 @@ typedef struct lm_co_s {
     _Atomic int wait_kind;
     _Atomic(struct lm_scheduler_s*) waiting_sched;
     _Atomic int stuck_votes;
+    /* R3：coSleep 挂起登记（结构体末尾追加，ABI 不变）。
+     * 协程挂起在 coSleep 定时器上时指向 CoSleepCtx（lm_co.c 内部类型），
+     * 正常唤醒/destroy 均经 exchange 取走并取消定时器——防 destroy 后
+     * 定时器回调 wakeup 悬垂协程（UAF）。无挂起时恒 NULL。
+     * 仅协程所属线程（登记/清理）与 destroy 调用方访问，无跨线程读写。 */
+    _Atomic(void*) sleep_ctx;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);
@@ -271,6 +277,12 @@ lm_co_t* lm_co_current(void);
 
 /* 协程是否已结束（DEAD）。 */
 int lm_co_is_dead(lm_co_t* co);
+
+/* R3：协程友好休眠 ms 毫秒——挂起当前协程，集中定时器线程到期投递唤醒，
+ * 不阻塞 reactor 线程（对比 sleep 的 usleep 阻塞语义）。
+ * 返回 0 成功；-1 非协程上下文或无 scheduler；-2 定时器注册失败。
+ * 销毁安全：协程挂起中被 lm_co_destroy 强制销毁时自动取消定时器。 */
+int lm_co_sleep_ms(long long ms);
 
 /* 销毁协程：munmap stack，free struct。
  * DEAD 或 SUSPENDED 状态销毁安全；RUNNING 状态销毁未定义行为。 */

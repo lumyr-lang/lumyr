@@ -34,11 +34,11 @@ g_rDoneArr = [false, false, false, false];
 // 会冻结 reactor 同样时长；ticker 50ms×20=1s → tickAtDone 期望 ~5-8
 func heavyJob(x) {
     t0 = timestamp_ms();
-    computeBegin();
+    __private_system__compute_begin();
     sum = 0;
     i = 0;
     while (i < 2000000) { sum = sum + i; i = i + 1; }
-    computeEnd();
+    __private_system__compute_end();
     // 以下均在老家 reactor 线程写共享状态
     g_st["sum"] = sum;
     g_st["tickAtDone"] = g_st["tick"];
@@ -106,12 +106,12 @@ func testComputeNotBlockIO() {
 // 4 个协程各自 computeBegin 迁池（round-robin 分发到不同 worker），
 // 算不同规模的等差和，computeEnd 回家后上报；最后一个完成时 stop
 func multiJob(idx) {
-    computeBegin();
+    __private_system__compute_begin();
     sum = 0;
     i = 0;
     n = 500000 * (idx + 1);
     while (i < n) { sum = sum + i; i = i + 1; }
-    computeEnd();
+    __private_system__compute_end();
     // 回家（reactor 线程）后写共享状态
     g_rArr[idx] = sum;
     g_rDoneArr[idx] = true;
@@ -172,7 +172,7 @@ func testErrorContext() {
     print("[3] 主线程 computeBegin 报错守卫 / error context guard");
     caught = false;
     try {
-        computeBegin();
+        __private_system__compute_begin();
     } catch (e) {
         caught = true;
     }

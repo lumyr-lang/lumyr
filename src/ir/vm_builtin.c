@@ -33,6 +33,8 @@
 #include "lm_co.h"        /* Phase 5: 协程 API */
 #include "lm_scheduler.h" /* Phase 7.2：per-thread scheduler */
 #include "lm_compute.h"   /* Phase 7.4：compute worker pool */
+#include "lm_sched_stats.h" /* Phase 8.11：调度器可观测性指标族 */
+#include "lm_blocking_pool.h" /* Phase 8.11：blocking 池在役/空闲线程数 */
 #include "lm_cond.h"      /* Phase 7.3：协程条件变量 */
 #include "vm_co.h"         /* Phase 5: 协程 VM 状态 + trampoline */
 #include "lm_type.h"
@@ -52,6 +54,9 @@
 #include <math.h>
 
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <sys/resource.h>   /* getrlimit：fd 软上限查询（__private_system__fd_limit） */
+#endif
 
 /* ===== 整型族元素读取/写入（与 vm_exec_stack.c 同语义，零装箱） ===== */
 
@@ -3914,17 +3919,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
      * lm 层包装为 ReactorInstance.run() { run(impl); } 等。
      * struct_ptr 包装 C 指针（reactor_t* / lm_co_t*），builtin 内 cast 调 C API。 */
     case BUILTIN_REACTOR_NEW: {
+        /* __private_system__reactor_new(cap)：创建 reactor，公开封装为
+         * ReactorInstance 构造（Reactor.lm），报错引用公开名。 */
         int cap = (argc > 0) ? (int)bi_num_i64(argv[0]) : 65536;
         lm_reactor_t* r = lm_reactor_new(cap);
-        if(!r) { runtime_error("reactor(capacity) 创建失败 / reactor: creation failed"); }
+        if(!r) { runtime_error("ReactorInstance(capacity) 创建失败 / ReactorInstance: creation failed"); }
         out->type = VAL_STRUCT_PTR;
         out->v.struct_ptr = r;
         return 1;
     }
     case BUILTIN_REACTOR_DEL: {
+        /* __private_system__destroy_reactor(impl)：销毁 reactor，公开封装为
+         * ReactorInstance.destroy（Reactor.lm）。 */
         void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
                   : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
-        if(!p) { runtime_error("destroyReactor(impl) 需 reactor 实例 / destroyReactor: need reactor instance"); }
+        if(!p) { runtime_error("ReactorInstance.destroy 需 reactor 实例 / ReactorInstance.destroy: need reactor instance"); }
         lm_reactor_destroy((lm_reactor_t*)p);
         *out = val_none();
         return 1;
@@ -4179,27 +4188,174 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_SPINLOCK: *out = lumyr_make_int64(lumyr_spinlock_create()); return 1;
     /* ===== Phase 7.4：compute worker pool ===== */
     case BUILTIN_COMPUTE_BEGIN: {
-        /* computeBegin()：当前协程迁入 compute 池（不卡 IO reactor）。
+        /* __private_system__compute_begin()：当前协程迁入 compute 池（不卡
+         * IO reactor）。公开封装为 Compute.exec，报错引用公开名。
          * 栈内只记老家 + 目标 worker 后 yield；drain_ready 在 resume 返回
          * （栈已让出）后 post 到 worker——迁移协议见 lm_co.h。 */
         int rc = lm_compute_begin();
         if (rc != 0) {
             if (rc == -2) {
-                runtime_error("computeBegin 嵌套调用（已在 compute 上下文）/ computeBegin: already in compute context");
+                runtime_error("Compute.exec 嵌套调用（已在 compute 上下文）/ Compute.exec: already in compute context");
             } else if (rc == -3) {
-                runtime_error("compute 池创建失败 / computeBegin: pool creation failed");
+                runtime_error("compute 池创建失败 / Compute.exec: pool creation failed");
             } else {
-                runtime_error("computeBegin 需在协程内且本线程有 scheduler / computeBegin: must run in coroutine with scheduler");
+                runtime_error("Compute.exec 需在协程内且本线程有 scheduler / Compute.exec: must run in coroutine with scheduler");
             }
         }
         *out = val_none();
         return 1;
     }
     case BUILTIN_COMPUTE_END: {
-        /* computeEnd()：当前协程迁回老家 IO scheduler（worker resume 返回后
-         * post 回家 + self-pipe 唤醒 reactor）。 */
+        /* __private_system__compute_end()：当前协程迁回老家 IO scheduler
+         * （worker resume 返回后 post 回家 + self-pipe 唤醒 reactor）。 */
         if (lm_compute_end() != 0) {
-            runtime_error("computeEnd 需先 computeBegin / computeEnd: must run after computeBegin");
+            runtime_error("Compute.exec 需先进入 compute 上下文 / Compute.exec: no compute context to exit");
+        }
+        *out = val_none();
+        return 1;
+    }
+    /* ===== Phase 8.10：compute 池容量（私有机制内置，公开封装 Compute.poolSize 等） ===== */
+    case BUILTIN_COMPUTE_POOL_SIZE:
+        /* __private_system__compute_pool_size()：当前 worker 数（池未初始化为 0）。 */
+        *out = lumyr_make_int(lm_compute_pool_size());
+        return 1;
+    case BUILTIN_COMPUTE_POOL_CAPACITY:
+        /* __private_system__compute_pool_capacity()：worker 硬上限
+         * （LM_MAX_WORKERS 解析值，封顶 256）。 */
+        *out = lumyr_make_int(lm_compute_pool_capacity());
+        return 1;
+    case BUILTIN_COMPUTE_POOL_GROW: {
+        /* __private_system__compute_pool_grow(n)：扩容 n 个 worker，返回实际
+         * 新增数（受硬上限约束，达顶即停；n<=0 返回 0）。
+         * 公开封装为 Compute.grow，报错引用公开名（用户不直接调私有内置）。 */
+        bi_need_args_mt("Compute.grow", argc, 1);
+        bi_need_int_mt("Compute.grow", argv[0], 1);
+        int n = (int)bi_num_i64(argv[0]);
+        if (n < 0) {
+            runtime_error("Compute.grow(n) 需 n >= 0 / Compute.grow: n must be >= 0");
+        }
+        *out = lumyr_make_int(lm_compute_pool_grow(n));
+        return 1;
+    }
+    case BUILTIN_COMPUTE_POOL_SHRINK: {
+        /* __private_system__compute_pool_shrink(n)：从池尾标记 n 个 worker
+         * 拒收新任务（排空本地队列后优雅退出，不强杀），返回实际标记数
+         * （至少保留 1 个 worker）。公开封装为 Compute.shrink。 */
+        bi_need_args_mt("Compute.shrink", argc, 1);
+        bi_need_int_mt("Compute.shrink", argv[0], 1);
+        int n = (int)bi_num_i64(argv[0]);
+        if (n < 0) {
+            runtime_error("Compute.shrink(n) 需 n >= 0 / Compute.shrink: n must be >= 0");
+        }
+        *out = lumyr_make_int(lm_compute_pool_shrink(n));
+        return 1;
+    }
+    /* ===== Phase 8.11：调度器可观测性（私有机制内置，公开封装 SchedStats 门面） ===== */
+    case BUILTIN_SCHED_STATS: {
+        /* __private_system__sched_stats()：调度器全景快照（对齐
+         * LM_SCHED_DEBUG=trace 打印的字段）。
+         * 全局行：liveCo / forceYield / longSched / stuckCo / overflow /
+         *   blockingSize / blockingIdle / pendingCount / pendingSumNs /
+         *   pendingBuckets（12 桶数组）/ pendingBoundsUs（桶上界 µs 数组）。
+         * per-scheduler 行 scheds[i]：{id, kind, stealAttempts, stealSuccess,
+         *   wakeCount, lifoQuotaHits, readyLen, wsqLen, lifoBusy}。 */
+        Value m = val_map();
+        lm_sched_stats_global_t* gs = &g_lm_sched_stats;
+        lumyr_map_set(&m, lumyr_make_string("liveCo"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->live_co, memory_order_relaxed)));
+        lumyr_map_set(&m, lumyr_make_string("forceYield"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->force_yield_count, memory_order_relaxed)));
+        lumyr_map_set(&m, lumyr_make_string("longSched"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->long_sched_count, memory_order_relaxed)));
+        lumyr_map_set(&m, lumyr_make_string("stuckCo"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->stuck_co_count, memory_order_relaxed)));
+        lumyr_map_set(&m, lumyr_make_string("overflow"),
+                      lumyr_make_int((int)lm_scheduler_overflow_len()));
+        lumyr_map_set(&m, lumyr_make_string("blockingSize"), lumyr_make_int(lm_blocking_pool_size()));
+        lumyr_map_set(&m, lumyr_make_string("blockingIdle"), lumyr_make_int(lm_blocking_pool_idle()));
+        lumyr_map_set(&m, lumyr_make_string("pendingCount"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->pending_count, memory_order_relaxed)));
+        lumyr_map_set(&m, lumyr_make_string("pendingSumNs"),
+                      lumyr_make_int64((int64_t)atomic_load_explicit(&gs->pending_sum_ns, memory_order_relaxed)));
+        Value buckets = val_array(0);
+        for (int i = 0; i < LM_SCHED_PENDING_BUCKETS; i++) {
+            lumyr_array_add(&buckets, lumyr_make_int64((int64_t)atomic_load_explicit(
+                &gs->pending_buckets[i], memory_order_relaxed)));
+        }
+        lumyr_map_set(&m, lumyr_make_string("pendingBuckets"), buckets);
+        const uint64_t* bounds = lm_sched_stats_pending_bounds();
+        Value bounds_arr = val_array(0);
+        for (int i = 0; i < LM_SCHED_PENDING_BUCKETS; i++) {
+            /* 溢出桶哨兵 UINT64_MAX 转换为 int64 最大值：lumin long 为有符号
+             * 64 位，裸转换会得到 -1（负上界误导），钳为 int64 域内"极大值"。 */
+            uint64_t b = bounds[i];
+            lumyr_array_add(&bounds_arr,
+                            b == UINT64_MAX ? lumyr_make_int64(INT64_MAX)
+                                            : lumyr_make_int64((int64_t)b));
+        }
+        lumyr_map_set(&m, lumyr_make_string("pendingBoundsUs"), bounds_arr);
+        /* per-scheduler 行：注册表快照（持锁拷贝，遍历期间注销的槽位为 NULL 跳过）。 */
+        Value rows = val_array(0);
+        lm_scheduler_t* snap[128];
+        int n = lm_scheduler_registry_snapshot(snap, 128);
+        for (int i = 0; i < n; i++) {
+            lm_scheduler_t* s = snap[i];
+            if (!s) continue;
+            Value row = val_map();
+            lumyr_map_set(&row, lumyr_make_string("id"), lumyr_make_int(s->sched_id));
+            lumyr_map_set(&row, lumyr_make_string("kind"),
+                          lumyr_make_string(s->reactor ? "io" : "compute"));
+            lumyr_map_set(&row, lumyr_make_string("stealAttempts"),
+                          lumyr_make_int64((int64_t)atomic_load_explicit(&s->steal_attempts, memory_order_relaxed)));
+            lumyr_map_set(&row, lumyr_make_string("stealSuccess"),
+                          lumyr_make_int64((int64_t)atomic_load_explicit(&s->steal_success, memory_order_relaxed)));
+            lumyr_map_set(&row, lumyr_make_string("wakeCount"),
+                          lumyr_make_int64((int64_t)atomic_load_explicit(&s->wake_count, memory_order_relaxed)));
+            lumyr_map_set(&row, lumyr_make_string("lifoQuotaHits"),
+                          lumyr_make_int64((int64_t)atomic_load_explicit(&s->lifo_quota_hits, memory_order_relaxed)));
+            lumyr_map_set(&row, lumyr_make_string("readyLen"),
+                          lumyr_make_int((int)atomic_load_explicit(&s->ready_len, memory_order_relaxed)));
+            lumyr_map_set(&row, lumyr_make_string("wsqLen"),
+                          lumyr_make_int((int)lm_wsq_size_approx(&s->wsq)));
+            lumyr_map_set(&row, lumyr_make_string("lifoBusy"),
+                          lumyr_make_int(s->lifo_slot ? 1 : 0));
+            lumyr_array_add(&rows, row);
+        }
+        lumyr_map_set(&m, lumyr_make_string("scheds"), rows);
+        *out = m;
+        return 1;
+    }
+    case BUILTIN_FD_LIMIT: {
+        /* __private_system__fd_limit()：进程 fd 软上限（getrlimit RLIMIT_NOFILE）。
+         * App 服务层 fd 预算自检用：启动时校验连接容量与系统 fd 上限余量。
+         * 返回软上限数值；-1 = 无上限（RLIM_INFINITY）、查询失败或平台不支持。 */
+#ifdef _WIN32
+        *out = lumyr_make_int(-1);
+#else
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY) {
+            *out = lumyr_make_int(-1);
+        } else {
+            *out = lumyr_make_int64((int64_t)rl.rlim_cur);
+        }
+#endif
+        return 1;
+    }
+    case BUILTIN_COSLEEP: {
+        /* coSleep(ms)：协程友好休眠——定时器 + yield 挂起，到期由 timer 线程
+         * 投递唤醒，不阻塞 reactor 线程（对比 sleep 的 usleep 全线程阻塞）。
+         * App 服务层 accept 退避/监督重启的睡眠原语。 */
+        bi_need_args_mt("coSleep", argc, 1);
+        bi_need_int_mt("coSleep", argv[0], 1);
+        long long ms = bi_num_i64(argv[0]);
+        if (ms < 0) {
+            runtime_error("coSleep(ms) 需 ms >= 0 / coSleep: ms must be >= 0");
+        }
+        int rc = lm_co_sleep_ms(ms);
+        if (rc == -1) {
+            runtime_error("coSleep 需在带 scheduler 的协程内调用 / coSleep: must run in coroutine with scheduler");
+        } else if (rc == -2) {
+            runtime_error("coSleep 定时器注册失败 / coSleep: timer registration failed");
         }
         *out = val_none();
         return 1;
@@ -4549,13 +4705,13 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOCKET_GETOPT: return "getOption";
     case BUILTIN_SOCKET_FILENO: return "fileno";
     /* Phase 5: reactor + 协程 */
-    case BUILTIN_REACTOR_NEW: return "reactor";
-    case BUILTIN_REACTOR_DEL: return "destroyReactor";
+    case BUILTIN_REACTOR_NEW: return "__private_system__reactor_new";
+    case BUILTIN_REACTOR_DEL: return "__private_system__destroy_reactor";
     case BUILTIN_REACTOR_RUN: return "run";
     case BUILTIN_REACTOR_STOP: return "stop";
     case BUILTIN_REACTOR_ADD_TIMER: return "addTimer";
     case BUILTIN_REACTOR_DEL_TIMER: return "delTimer";
-    case BUILTIN_SET_SOCKET_REACTOR: return "setSocketReactor";
+    case BUILTIN_SET_SOCKET_REACTOR: return "__private_system__set_socket_reactor";
     case BUILTIN_CO_SPAWN: return "spawn";
     case BUILTIN_CO_RESUME: return "resume";
     case BUILTIN_CO_YIELD: return "yield";
@@ -4573,8 +4729,13 @@ const char* builtin_id_name(int id) {
     case BUILTIN_COWAKE_COND_WAIT: return "wait";
     case BUILTIN_COWAKE_COND_SIGNAL: return "signal";
     case BUILTIN_COWAKE_COND_BCAST: return "broadcast";
-    case BUILTIN_COMPUTE_BEGIN: return "computeBegin";
-    case BUILTIN_COMPUTE_END: return "computeEnd";
+    case BUILTIN_COMPUTE_BEGIN: return "__private_system__compute_begin";
+    case BUILTIN_COMPUTE_END: return "__private_system__compute_end";
+    case BUILTIN_COMPUTE_POOL_SIZE: return "__private_system__compute_pool_size";
+    case BUILTIN_COMPUTE_POOL_CAPACITY: return "__private_system__compute_pool_capacity";
+    case BUILTIN_COMPUTE_POOL_GROW: return "__private_system__compute_pool_grow";
+    case BUILTIN_COMPUTE_POOL_SHRINK: return "__private_system__compute_pool_shrink";
+    case BUILTIN_SCHED_STATS: return "__private_system__sched_stats";
     default: return "?";
     }
 }

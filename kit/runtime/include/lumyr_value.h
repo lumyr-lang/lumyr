@@ -11,6 +11,9 @@ void runtime_error(const char* msg);
 // type 为错误类别名（如 "SocketError"），msg 为双语诊断文本。
 // runtime_error（不带码）内部清零 g_err_code，VAL_ERROR.code=0 兼容。
 void runtime_error_code(int code, const char* type, const char* msg);
+// 带错误码 + 系统 errno 的 runtime_error：供系统调用失败点使用，VAL_ERROR
+// 携带 os_errno 快照（0=无），上层 e.getErrno() 编程判定资源耗尽等类别。
+void runtime_error_code_errno(int code, int os_errno, const char* type, const char* msg);
 // 重新抛出 VAL_ERROR（join 子线程错误）：当前线程有 try 着陆点则 longjmp，
 // 否则按未捕获错误打印并退出进程
 void lumyr_rethrow_error(Value err);
@@ -22,6 +25,7 @@ extern _Thread_local jmp_buf* g_err_jmp;
 extern _Thread_local char* g_err_msg;
 extern _Thread_local char* g_err_type;
 extern _Thread_local int g_err_code;
+extern _Thread_local int g_err_os_errno;   /* 系统 errno 快照（0=无；runtime_error* 清零） */
 extern _Thread_local const char** g_trace;
 extern _Thread_local int g_trace_n;
 extern _Thread_local jmp_buf* __g_jbs;

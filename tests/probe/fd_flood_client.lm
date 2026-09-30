@@ -1,0 +1,17 @@
+// R1 探针客户端：打满服务端 fd 表（保持连接不关，直到对端 accept 报 EMFILE）
+// 运行方式：./bin/lumyr tests/fd_flood_client.lm（服务端 fd_exhaust_probe.lm 先起）
+ok = 0;
+fail = 0;
+keep = [];   // 保活引用，防 GC 提前关闭连接
+for (i = 0; i < 300; i++) {
+    try {
+        c = TcpSocket();
+        c.connect("127.0.0.1", 19131);
+        keep.add(c);
+        ok = ok + 1;
+    } catch (e) {
+        if (fail == 0) { print("FIRSTERR type=" + e.getErrType() + " code=" + e.getCode() + " msg=" + e.getMessage()); }
+        fail = fail + 1;
+    }
+}
+print("FLOOD ok=" + ok + " fail=" + fail);

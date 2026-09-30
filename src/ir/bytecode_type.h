@@ -548,13 +548,13 @@ typedef enum {
     BUILTIN_SOCKET_GETOPT,      // s.getOption(name)
     BUILTIN_SOCKET_FILENO,      // s.fileno() → int
     /* ===== reactor + 协程（Phase 5：暴露给 lm 层）===== */
-    BUILTIN_REACTOR_NEW,         // reactor([capacity]) → reactor 实例（ptr）
-    BUILTIN_REACTOR_DEL,         // r.destroy()
+    BUILTIN_REACTOR_NEW,         // __private_system__reactor_new([capacity])：创建 reactor（Reactor.lm 构造封装）
+    BUILTIN_REACTOR_DEL,         // __private_system__destroy_reactor(impl)：销毁 reactor（Reactor.lm destroy 封装）
     BUILTIN_REACTOR_RUN,         // r.run()：进入 reactor 主循环
     BUILTIN_REACTOR_STOP,        // r.stop()
     BUILTIN_REACTOR_ADD_TIMER,   // r.addTimer(impl, ms, cb) → timerId
     BUILTIN_REACTOR_DEL_TIMER,   // r.delTimer(impl, id)
-    BUILTIN_SET_SOCKET_REACTOR,  // setSocketReactor(impl)：socket API 协程化
+    BUILTIN_SET_SOCKET_REACTOR,  // __private_system__set_socket_reactor(impl)：socket API 协程化（Reactor.lm 封装）
     BUILTIN_CO_SPAWN,            // spawn(f, arg) → co 实例（ptr）
     BUILTIN_CO_RESUME,           // co.resume(impl)
     BUILTIN_CO_YIELD,            // yield()：当前协程让出
@@ -582,12 +582,23 @@ typedef enum {
     BUILTIN_COWAKE_COND_WAIT,   // cond.wait()：当前协程挂 waiter 队列 + yield
     BUILTIN_COWAKE_COND_SIGNAL, // cond.signal()：唤醒一个 waiter
     BUILTIN_COWAKE_COND_BCAST,  // cond.broadcast()：唤醒全部 waiter
-    /* ===== Phase 7.4：compute worker pool =====
-     * computeBegin()：当前协程迁入 compute 池（N=CPU 核数 worker，无 reactor），
-     * CPU 密集段不卡 IO reactor；computeEnd()：迁回老家 IO scheduler。
-     * compute_begin/end（迁移协议见 lm_co.h）。 */
-    BUILTIN_COMPUTE_BEGIN,      // computeBegin()：当前协程迁入 compute 池
-    BUILTIN_COMPUTE_END,        // computeEnd()：迁回老家 IO scheduler
+    /* ===== Phase 7.4：compute worker pool（私有机制内置，Compute.lm execute 封装） =====
+     * compute_begin()：当前协程迁入 compute 池（N=CPU 核数 worker，无 reactor），
+     * CPU 密集段不卡 IO reactor；compute_end()：迁回老家 IO scheduler。
+     * 迁移协议见 lm_co.h。 */
+    BUILTIN_COMPUTE_BEGIN,      // __private_system__compute_begin()：当前协程迁入 compute 池（Compute.lm 封装）
+    BUILTIN_COMPUTE_END,        // __private_system__compute_end()：迁回老家 IO scheduler
+    /* ===== Phase 8.10：compute 池容量（运行期调核，私有机制内置） =====
+     * __private_system__ 前缀约定：不面向用户直接调用，由 lumyr-lms
+     * 框架模块（Compute.grow/shrink/poolSize/poolCapacity）封装后暴露。 */
+    BUILTIN_COMPUTE_POOL_SIZE,      // __private_system__compute_pool_size()：当前 worker 数
+    BUILTIN_COMPUTE_POOL_CAPACITY,  // __private_system__compute_pool_capacity()：worker 硬上限
+    BUILTIN_COMPUTE_POOL_GROW,      // __private_system__compute_pool_grow(n)：扩 n，返回实际新增
+    BUILTIN_COMPUTE_POOL_SHRINK,    // __private_system__compute_pool_shrink(n)：缩 n，返回实际标记
+    /* ===== Phase 8.11：调度器可观测性（私有机制内置，SchedStats 门面封装） ===== */
+    BUILTIN_SCHED_STATS,        // __private_system__sched_stats()：全局计数 + pending 直方图 + per-scheduler 行
+    BUILTIN_FD_LIMIT,           // __private_system__fd_limit()：进程 fd 软上限（-1=无上限/不支持，App 服务层封装）
+    BUILTIN_COSLEEP,            // coSleep(ms)：协程友好休眠（定时器+yield，不阻塞 reactor；App 退避用）
     /* ===== 三角/反三角/对数/指数（全局形式透传，1~2 参，返回 double） ===== */
     BUILTIN_SIN,           // sin(x)：正弦（弧度）
     BUILTIN_COS,           // cos(x)：余弦（弧度）

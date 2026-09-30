@@ -1,0 +1,116 @@
+// ============================================================
+// lumyr-Thread：SchedStats 调度器可观测性静态工具类（门面 / Facade）
+// 封装私有内置 __private_system__sched_stats（Phase 8.11 指标族）：全局
+// 计数、pending_time 直方图（ready→被执行排队延迟，调度器健康度第一
+// 指标）、per-scheduler 窃取/唤醒/队列深度行。
+//
+// 私有内置约定：底层机制经 __private_system__ 前缀内置暴露给框架模块，
+// 不面向用户直接调用——用户统一走本门面类。
+//
+// 与 LM_SCHED_DEBUG=trace:N 的关系：trace 是后台周期打印（stderr 排障），
+// 本模块是程序内主动查询（健康检查 / 指标导出），读同一套无锁原子计数器
+// ——热路径零成本，查询不干扰调度。
+//
+// 窗口语义：若 LM_SCHED_DEBUG=trace 已启用，pending 直方图为"距上次
+// trace 打印"的窗口值（trace 打印后清零）；未启用则为进程累计值。
+// 其余计数器恒为进程累计。
+//
+// 快照字段（map）：
+//   liveCo                        存活协程数
+//   forceYield                    reduction 预算耗尽强制让出总次数
+//   longSched                     长调度墙钟告警总次数
+//   stuckCo                       sysmon 确认的 stuck 协程累计（正常负载恒 0）
+//   overflow                      全局溢出队列深度
+//   blockingSize / blockingIdle   blocking 池在役 / 空闲线程数
+//   pendingCount / pendingSumNs   直方图样本数 / 样本总延迟 ns
+//   pendingBuckets                12 桶样本数组（µs 对数桶）
+//   pendingBoundsUs               桶上界 µs 数组（末桶为溢出桶：>1s）
+//   scheds                        per-scheduler 行数组：{id, kind(io/compute),
+//                                 stealAttempts, stealSuccess, wakeCount,
+//                                 lifoQuotaHits, readyLen, wsqLen, lifoBusy}
+//
+// 用法：
+//   import <Thread/SchedStats>;
+//   st = SchedStats.snapshot();
+//   print(SchedStats.summary());
+//   p99 = SchedStats.percentileUs(st, 0.99);   // 排队延迟 p99（µs）
+// ============================================================
+
+public class SchedStats {
+
+    // ========== 快照 ==========
+
+    // 调度器全景快照（只读，任意线程可调；字段见文件头注释）
+    static func snapshot(): map {
+        return __private_system__sched_stats();
+    }
+
+    // 存活协程数
+    static func liveCo(): long {
+        return __private_system__sched_stats()["liveCo"];
+    }
+
+    // 强制让出总次数（reduction 预算耗尽；持续增长 = CPU 密集协程过多）
+    static func forceYield(): long {
+        return __private_system__sched_stats()["forceYield"];
+    }
+
+    // 长调度告警总次数（>50ms 单协程霸占调度；增长 = 有卡长协程）
+    static func longSched(): long {
+        return __private_system__sched_stats()["longSched"];
+    }
+
+    // sysmon 确认的 stuck 协程累计（>0 即存在唤醒协议 bug 或救援事件）
+    static func stuckCo(): long {
+        return __private_system__sched_stats()["stuckCo"];
+    }
+
+    // ========== pending_time 直方图 ==========
+
+    // 平均排队延迟（µs；无样本返回 0）
+    static func pendingAvgUs(): long {
+        st = __private_system__sched_stats();
+        n = st["pendingCount"];
+        if (n == 0) { return 0; }
+        return st["pendingSumNs"] / 1000 / n;
+    }
+
+    // 分位数排队延迟（µs，q ∈ (0,1]，如 0.50 / 0.99；无样本返回 0）。
+    // 对数桶定位：累计样本数满足 cum > total*q 的桶，其上界即分位数
+    // （整数 cum 与 C 侧 floor(total*q)+1 阈值严格等价，与 runtime
+    // trace 线程同口径）。
+    static func percentileUs(st: map, q: double): long {
+        buckets = st["pendingBuckets"];
+        bounds = st["pendingBoundsUs"];
+        total = st["pendingCount"];
+        if (total == 0) { return 0; }
+        need = total * q;
+        cum = 0;
+        i = 0;
+        while (i < buckets.size()) {
+            cum = cum + buckets[i];
+            if (cum > need) {
+                return bounds[i];
+            }
+            i = i + 1;
+        }
+        return bounds[bounds.size() - 1];
+    }
+
+    // ========== 汇总 ==========
+
+    // 单行摘要（对齐 trace 线程全局行口径，供日志 / 健康检查输出）
+    static func summary(): string {
+        st = __private_system__sched_stats();
+        return "[sched-stats] liveCo=" + st["liveCo"]
+             + " overflow=" + st["overflow"]
+             + " blocking=" + st["blockingSize"] + "/" + st["blockingIdle"]
+             + " forceYield=" + st["forceYield"]
+             + " longSched=" + st["longSched"]
+             + " stuck=" + st["stuckCo"]
+             + " pending n=" + st["pendingCount"]
+             + " avg=" + SchedStats.pendingAvgUs() + "us"
+             + " p50=" + SchedStats.percentileUs(st, 0.50) + "us"
+             + " p99=" + SchedStats.percentileUs(st, 0.99) + "us";
+    }
+}

@@ -26,6 +26,7 @@ public enum NetError {
     RECVFROM = 17,
     SET_OPTION = 18,
     GET_OPTION = 19,
+    FD_EXHAUSTED = 20,
     RECV_TIMEOUT = 30,
     SEND_TIMEOUT = 31,
     INVALID_VALUE = 40,

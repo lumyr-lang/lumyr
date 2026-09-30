@@ -1,9 +1,13 @@
 // ============================================================
 // lumyr-Reactor：ReactorInterface + ReactorInstance + Coroutine
 // 面向对象封装内置 reactor + 协程 builtin：
-//   reactor()/run()/stop()/addTimer()/delTimer()/destroyReactor()
-//   setSocketReactor() / spawn()/resume()/coYield()/current()/isDead()/destroy()
+//   __private_system__reactor_new()/run()/stop()/addTimer()/delTimer()
+//   /__private_system__destroy_reactor()
+//   /__private_system__set_socket_reactor() / spawn()/resume()/coYield()/current()/isDead()/destroy()
 // 注：协程让出用 coYield() 而非 yield（lm 的 yield 是 generator 语句关键字，仅限 gen func）
+// 注：reactor 创建/销毁/挂接已按私有机制内置约定更名 __private_system__reactor_new、
+//     __private_system__destroy_reactor、__private_system__set_socket_reactor，
+//     由本模块 ReactorInstance 构造/destroy/setReactor/clearReactor 公开封装
 //
 // 分层：
 //   ReactorInterface   reactor 契约（run/stop/timer/destroy）
@@ -44,12 +48,12 @@ public class ReactorInstance implements ReactorInterface {
 
     // 默认 capacity=65536
     func ReactorInstance() {
-        self.impl = reactor(65536);
+        self.impl = __private_system__reactor_new(65536);
         self.stopped = false;
     }
 
     func ReactorInstance(capacity: int) {
-        self.impl = reactor(capacity);
+        self.impl = __private_system__reactor_new(capacity);
         self.stopped = false;
     }
 
@@ -76,7 +80,7 @@ public class ReactorInstance implements ReactorInterface {
 
     func destroy() {
         if (self.impl != null) {
-            destroyReactor(self.impl);
+            __private_system__destroy_reactor(self.impl);
             self.impl = null;
         }
     }
@@ -116,14 +120,14 @@ public class Coroutine {
 
 // 全局函数：设置 socket API 使用的 reactor 实例
 // 设置后，协程上下文内调 socket.recv/send/accept/connect 自动协程化（yield 等事件）
-// 注：lm 函数名与 builtin 同名会触发递归解析，故本函数名 setReactor 与 builtin setSocketReactor 分离
+// 底层走私有机制内置 __private_system__set_socket_reactor（本函数是公开封装）
 public func setReactor(r: ReactorInstance) {
-    setSocketReactor(r.impl);
+    __private_system__set_socket_reactor(r.impl);
 }
 
 // 全局函数：清理全局 reactor 指针（reactor 生命周期收尾时调）
 // reactor.destroy 前后必须清理 g_socket_reactor，否则 destroy 后悬空指针
 // （后续 socket 操作虽走阻塞路径，但悬空指针是隐患）
 public func clearReactor() {
-    setSocketReactor(null);
+    __private_system__set_socket_reactor(null);
 }

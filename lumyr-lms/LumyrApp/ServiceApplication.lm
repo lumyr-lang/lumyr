@@ -80,10 +80,140 @@
 import <App/Application>;
 import <NetWork/Socket>;
 import <NetWork/Reactor>;
+import <NetWork/NetError>;
 
 // 连接处理器契约：在原始连接上实现自定义协议；返回后连接由框架关闭
 public interface ServiceHandler {
     func serve(conn);
+}
+
+// ============================================================
+// AcceptLoopHost：公共 accept 循环宿主契约（命名接口——循环差异注入点）
+// 单线程模式由 ServiceApplication 实现，多线程模式由 ServiceWorker 实现：
+//   loopRunning        判停（app.running；stop 后 false）
+//   onAccepted(conn)   已受理连接的入队与启动（上限拒绝判定/建协程/计数/start）
+//   onLoopError        循环异常统一挂钩（分级日志；kind 见 AcceptLoop 注释）
+//   countHandlerError  handler 异常记账（owner 本地计数 + error 日志，P0-3）
+// ============================================================
+public interface AcceptLoopHost {
+    func loopRunning(): bool;
+    func onAccepted(conn);
+    func onLoopError(kind: string, msg: string);
+    func countHandlerError(e);
+}
+
+// ============================================================
+// AcceptLoop：公共 accept 循环（P0-4 收敛单/多 worker 两处同构循环）
+// 内置 P0-1 错误分类与 P0-2 监督重启，宿主差异经 AcceptLoopHost 注入。
+//
+// 错误分类（P0-1，对标 nginx/brpc/libhv 共识：accept 出错永不杀循环）：
+//   瞬时类（ECONNABORTED 等其余错误）：error 日志后继续受理
+//   资源耗尽类（NET_ERR_FD_EXHAUSTED，R1 细分码）：warn + 指数退避后继续
+//     ——nginx 对 EMFILE 暂停 accept 防空转（ngx_event_accept.c）；退避
+//     200ms 起步 ×2 封顶 5s，受理成功即复位。退避用 coSleep（定时器挂起，
+//     不阻塞 reactor 线程——sleep 的 usleep 会阻塞整个事件循环，禁用）
+//   致命类（监听套接字失效 BAD_STATE/BAD_FD）：退出循环并经 onLoopError
+//     上报告警；reactor 退出清理链仍可达（stop 语义不受影响）
+//
+// 监督重启（P0-2，对标 OTP transient 语义）：
+//   受理路径意外异常（onAccepted 内 bug 等）→ 指数退避后重入循环（与
+//   "协程死→拉起"可观测语义等价：accept 协程由 reactor 钉住本线程，
+//   循环体重入比重建协程少一次重新 pin 的窗口）；主动 stop 不重启；
+//   强度缺省 5 次/60 秒（OTP 默认 1 次/5 秒偏紧，取宽松工程值并文档化），
+//   超限判服务失败上报——reactor 与既有连接存活，新连接不再受理。
+// ============================================================
+public class AcceptLoop {
+    static BACKOFF_INIT_MS: int = 200;     // 资源耗尽退避起步（毫秒）
+    static BACKOFF_MAX_MS: int = 5000;     // 退避封顶（毫秒）
+    static RESTART_LIMIT: int = 5;         // 监督强度：窗口内最大重启次数
+    static RESTART_WINDOW_MS: int = 60000; // 监督强度窗口（毫秒）
+
+    host: any;           // AcceptLoopHost
+    srv: any;            // listen socket
+    backoffMs: int;      // 当前资源耗尽退避（受理成功复位）
+    restartN: int;       // 监督窗口内已重启次数
+    windowStartMs: int;  // 监督窗口起点（timestamp_ms，0 = 未开窗）
+
+    func AcceptLoop(host, srv) {
+        self.host = host;
+        self.srv = srv;
+        self.backoffMs = AcceptLoop.BACKOFF_INIT_MS;
+        self.restartN = 0;
+        self.windowStartMs = 0;
+    }
+
+    // 错误对象转文本：string 抛出 / VAL_ERROR（builtin）/ Error 实例统一
+    public static func errText(e): string {
+        if (type(e) == "string") { return e; }
+        return e.getMessage();
+    }
+
+    // 单次受理 + 错误分类（P0-1）。返回 false = 退出循环（致命/停机）
+    func acceptOnce(): bool {
+        conn = null;
+        try {
+            conn = self.srv.accept();
+        } catch (e) {
+            code = 0;
+            if (type(e) != "string") { code = e.getCode(); }
+            msg = AcceptLoop.errText(e);
+            if (code == NetError.FD_EXHAUSTED) {
+                self.host.onLoopError("exhausted",
+                    "accept 资源耗尽（fd 耗尽），退避 " + self.backoffMs + "ms 后继续 / accept fd exhausted, backing off: " + msg);
+                coSleep(self.backoffMs);
+                self.backoffMs = self.backoffMs * 2;
+                if (self.backoffMs > AcceptLoop.BACKOFF_MAX_MS) {
+                    self.backoffMs = AcceptLoop.BACKOFF_MAX_MS;
+                }
+                return true;
+            }
+            if (code == NetError.BAD_STATE || code == NetError.BAD_FD) {
+                self.host.onLoopError("fatal",
+                    "accept 监听套接字失效，退出受理循环 / listen socket broken, accept loop exiting: " + msg);
+                return false;
+            }
+            self.host.onLoopError("transient",
+                "accept 瞬时错误，继续受理 / transient accept error: " + msg);
+            return true;
+        }
+        // 受理成功：退避复位；stop 到达时新连接直接关闭退出
+        self.backoffMs = AcceptLoop.BACKOFF_INIT_MS;
+        if (self.host.loopRunning() == false) {
+            try { conn.close(); } catch (e2) { x = 1; }
+            return false;
+        }
+        self.host.onAccepted(conn);
+        return true;
+    }
+
+    // 循环体：accept 协程入口调用（含 P0-2 监督重启，规则见类注释）
+    func run() {
+        while (self.host.loopRunning()) {
+            try {
+                if (self.acceptOnce() == false) { return; }
+            } catch (e) {
+                if (self.host.loopRunning() == false) { return; }   // 主动 stop 不重启
+                now = timestamp_ms();
+                if (self.windowStartMs == 0 || now - self.windowStartMs > AcceptLoop.RESTART_WINDOW_MS) {
+                    self.windowStartMs = now;
+                    self.restartN = 0;
+                }
+                self.restartN = self.restartN + 1;
+                if (self.restartN > AcceptLoop.RESTART_LIMIT) {
+                    self.host.onLoopError("failure",
+                        "accept 协程异常重启超限（" + AcceptLoop.RESTART_LIMIT + " 次/" + (AcceptLoop.RESTART_WINDOW_MS / 1000) + "s），停止受理 / accept supervisor gave up: " + AcceptLoop.errText(e));
+                    return;
+                }
+                delay = AcceptLoop.BACKOFF_INIT_MS;
+                i = 1;
+                while (i < self.restartN) { delay = delay * 2; i = i + 1; }
+                if (delay > AcceptLoop.BACKOFF_MAX_MS) { delay = AcceptLoop.BACKOFF_MAX_MS; }
+                self.host.onLoopError("supervise",
+                    "accept 协程异常退出，" + delay + "ms 后第 " + self.restartN + " 次重启 / accept coroutine died, restarting (attempt " + self.restartN + "): " + AcceptLoop.errText(e));
+                coSleep(delay);
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -108,7 +238,12 @@ class ServiceConnectionHandler {
             c = h.conn;
             try {
                 h.app.handleConnection(c);
-            } catch (e) { x = 1; }
+            } catch (e) {
+                // P0-3：handler 异常计数 + error 日志（原为静默吞掉，排障不可见）。
+                // 记账落 owner（单线程 = app / 多线程 = worker，bindOwner 后），
+                // 均为本线程本地状态，无跨线程竞态。隔离骨架不变：异常只影响本协程。
+                h.app.countHandlerError(e);
+            }
             try {
                 c.close();
             } catch (e2) { x = 1; }
@@ -167,6 +302,7 @@ class ServiceWorker {
     activeHandlers: array;
     activeCount: int;
     acceptTotal: int;      // 累计 accept 连接数（分布统计，主线程 run 后只读）
+    errorCount: int;       // handler 异常计数（P0-3；worker 线程本地，无锁）
     stopRequested: bool;
     tid: int;
     error: any;
@@ -182,6 +318,7 @@ class ServiceWorker {
         self.activeHandlers = [];
         self.activeCount = 0;
         self.acceptTotal = 0;
+        self.errorCount = 0;
         self.stopRequested = false;
         self.tid = 0;
         self.error = null;
@@ -229,28 +366,10 @@ class ServiceWorker {
         // SO_REUSEPORT：多 worker 同端口 listen，内核 hash 分发连接
         srv = ServerSocket(app.host(), app.port(), app.backlog(), 1);
         self.serverSock = srv;
-        // accept loop 协程（与单线程路径同构，差别仅在连接协程归 worker 管理）
+        // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
         self.acceptCo = Coroutine(func(w) {
-            ls = w.serverSock;
-            a = w.app;
-            while (a.running) {
-                conn = ls.accept();
-                if (a.running == false) {
-                    try { conn.close(); } catch (e) { x = 1; }
-                    break;
-                }
-                // 并发上限保护：多线程模式下 maxConnections 为 per-worker 限制
-                if (a.maxConnections > 0 && w.activeCount >= a.maxConnections) {
-                    a.onRejectConnection(conn);
-                    continue;
-                }
-                h = a.createHandler(conn);
-                h.bindOwner(w);
-                w.activeHandlers.add(h);
-                w.activeCount = w.activeCount + 1;
-                w.acceptTotal = w.acceptTotal + 1;
-                h.start();
-            }
+            loop = AcceptLoop(w, w.serverSock);
+            loop.run();
         }, self);
         // Phase 8.2：accept loop 钉住本线程（listen fd 挂本 reactor，
         // 防 WSQ 窃取窗口——spawn 后首次 yield 前协程可被窃取）
@@ -294,6 +413,48 @@ class ServiceWorker {
     // ---- handler owner 鸭子类型接口（bindOwner 后连接协程调这里）----
     // 业务分派委托回 app（虚分派保持，子类重写生效）；
     // 状态回收落 worker 本地（worker 线程单线程访问，无锁）。
+
+    // ---- AcceptLoopHost 实现（accept 协程宿主，worker 线程本地状态）----
+
+    // 判停：app 停机或本 worker 被单独 stop 均退出受理循环
+    func loopRunning(): bool {
+        if (self.stopRequested) { return false; }
+        return self.app.running;
+    }
+
+    // 已受理连接的入队与启动（原内联循环体逻辑，per-worker 限制）
+    func onAccepted(conn) {
+        a = self.app;
+        // 并发上限保护：多线程模式下 maxConnections 为 per-worker 限制
+        if (a.maxConnections > 0 && self.activeCount >= a.maxConnections) {
+            a.onRejectConnection(conn);
+            return;
+        }
+        h = a.createHandler(conn);
+        h.bindOwner(self);
+        self.activeHandlers.add(h);
+        self.activeCount = self.activeCount + 1;
+        self.acceptTotal = self.acceptTotal + 1;
+        h.start();
+    }
+
+    // accept 循环异常统一挂钩：warn 级（资源耗尽退避/监督重启）、error 级（瞬时/致命）
+    func onLoopError(kind: string, msg: string) {
+        if (kind == "transient" || kind == "exhausted" || kind == "supervise") {
+            print("[lumyr-app][warn] " + msg);
+            return;
+        }
+        print("[lumyr-app][error] " + msg);
+    }
+
+    // handler 异常记账（P0-3）：worker 线程本地计数 + error 日志（无锁）
+    func countHandlerError(e) {
+        self.errorCount = self.errorCount + 1;
+        msg = "handler 异常";
+        if (type(e) == "string") { msg = msg + "：" + e; }
+        else { msg = msg + "：" + e.getMessage(); }
+        print("[lumyr-app][error] " + msg + "（worker " + self.idx + " 累计 " + self.errorCount + "）/ handler error (worker " + self.idx + " total " + self.errorCount + ")");
+    }
 
     func handleConnection(conn) {
         return self.app.handleConnection(conn);
@@ -347,6 +508,7 @@ public class ServiceApplication extends Application {
     target: any;
     maxConnections: int;   // 并发连接上限（0 = 不限）
     activeCount: int;      // 在役连接协程计数
+    errorCount: int;       // handler 异常计数（P0-3；reactor 主线程本地，无锁）
     workerCountVal: int;   // Phase 7.5：worker 线程数（0 = 未设置，走配置/默认 1）
     workerList: any;       // Phase 7.5：多线程模式下的 ServiceWorker 数组（null = 单线程）
     connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/默认 65536）
@@ -405,6 +567,7 @@ public class ServiceApplication extends Application {
         self.target = null;
         self.maxConnections = 0;
         self.activeCount = 0;
+        self.errorCount = 0;
         self.workerCountVal = 0;
         self.workerList = null;
         self.connCapacityVal = 0;
@@ -545,28 +708,10 @@ public class ServiceApplication extends Application {
         }
         srv = ServerSocket(self.host(), self.port(), self.backlog());
         self.serverSock = srv;
-        // accept loop 协程：循环 srv.accept()（EAGAIN 自动 yield 等读事件）
-        // → createHandler + h.start()（resume handler 协程到第一个 yield）
+        // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
         self.acceptCo = Coroutine(func(app) {
-            ls = app.serverSock;
-            while (app.running) {
-                conn = ls.accept();
-                // stop 后 accept 返回的连接直接关闭退出
-                if (app.running == false) {
-                    try { conn.close(); } catch (e) { x = 1; }
-                    break;
-                }
-                // 并发上限保护：在役连接数已达上限 → 拒绝新连接
-                // （不启协程，防止慢客户端/攻击耗尽协程资源）
-                if (app.maxConnections > 0 && app.activeCount >= app.maxConnections) {
-                    app.onRejectConnection(conn);
-                    continue;
-                }
-                h = app.createHandler(conn);
-                app.activeHandlers.add(h);
-                app.activeCount = app.activeCount + 1;
-                h.start();
-            }
+            loop = AcceptLoop(app, app.serverSock);
+            loop.run();
         }, self);
         // Phase 8.2：accept loop 钉住本线程（同 ServiceWorker 处说明）
         coSetPinned(self.acceptCo.impl);
@@ -646,6 +791,45 @@ public class ServiceApplication extends Application {
     }
 
     // ---- 连接协程管理（reactor 主线程内，无锁）----
+
+    // ---- AcceptLoopHost 实现（accept 协程宿主，单线程模式）----
+
+    // 判停：stop 后退出受理循环（super.stop 置 running=false）
+    func loopRunning(): bool {
+        return self.running;
+    }
+
+    // 已受理连接的入队与启动（原内联循环体逻辑）
+    func onAccepted(conn) {
+        // 并发上限保护：在役连接数已达上限 → 拒绝新连接
+        // （不启协程，防止慢客户端/攻击耗尽协程资源）
+        if (self.maxConnections > 0 && self.activeCount >= self.maxConnections) {
+            self.onRejectConnection(conn);
+            return;
+        }
+        h = self.createHandler(conn);
+        self.activeHandlers.add(h);
+        self.activeCount = self.activeCount + 1;
+        h.start();
+    }
+
+    // accept 循环异常统一挂钩：warn 级（资源耗尽退避/监督重启）、error 级（瞬时/致命）
+    func onLoopError(kind: string, msg: string) {
+        if (kind == "transient" || kind == "exhausted" || kind == "supervise") {
+            print("[lumyr-app][warn] " + msg);
+            return;
+        }
+        print("[lumyr-app][error] " + msg);
+    }
+
+    // handler 异常记账（P0-3）：主线程本地计数 + error 日志（无锁）
+    func countHandlerError(e) {
+        self.errorCount = self.errorCount + 1;
+        msg = "handler 异常";
+        if (type(e) == "string") { msg = msg + "：" + e; }
+        else { msg = msg + "：" + e.getMessage(); }
+        print("[lumyr-app][error] " + msg + "（累计 " + self.errorCount + "）/ handler error (total " + self.errorCount + ")");
+    }
 
     // 连接协程完成回调（协程内最后调用）：标记挂起待回收
     func markFinished(h) {

@@ -1,0 +1,27 @@
+// 多连接 EOF 收割探针（服务端）：验证 FIN 风暴下协程 EOF 感知与收割
+import <App/ServiceApplication>;
+
+class ProbeHandler {
+    n: int;
+
+    func ProbeHandler() {
+        self.n = 0;
+    }
+
+    func serve(conn) {
+        self.n = self.n + 1;
+        i = self.n;
+        data = conn.recv(4096);
+        print("RECV-" + i + " len=" + data.len);
+    }
+}
+
+h = ProbeHandler();
+app = ServiceApplication("127.0.0.1", 19138, h);
+app.startAsync();
+sleep(500);
+print("READY");
+sleep(8000);
+app.stop();
+app.join();
+print("DONE served=" + h.n);

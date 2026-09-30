@@ -1,0 +1,32 @@
+// 验证假设：内联静态方法调用在算术表达式中是否损坏返回值（Linux x86_64 bug）
+
+class A {
+    public static func zero(): int {
+        return 0;
+    }
+    public static func five(): int {
+        return 5;
+    }
+}
+
+// Case 1：内联调用——预期 8（如果 bug 触发，得到垃圾值）
+inline1 = 4 + 4 + A.zero();
+print("inline 4+4+A.zero() = " + inline1 + " (expect 8)");
+
+// Case 2：局部变量——预期 8
+z = A.zero();
+local1 = 4 + 4 + z;
+print("local 4+4+z = " + local1 + " (expect 8)");
+
+// Case 3：内联调用 five——预期 13
+inline2 = 4 + 4 + A.five();
+print("inline 4+4+A.five() = " + inline2 + " (expect 13)");
+
+// Case 4：局部变量 five——预期 13
+f = A.five();
+local2 = 4 + 4 + f;
+print("local 4+4+f = " + local2 + " (expect 13)");
+
+// Case 5：单纯调用——预期 0
+plain = A.zero();
+print("plain A.zero() = " + plain + " (expect 0)");

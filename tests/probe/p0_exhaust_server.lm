@@ -1,0 +1,37 @@
+// P0-1 探针服务端：ServiceApplication 级 fd 耗尽注入（配合 p0_exhaust_flood.lm /
+// p0_recover_client.lm 使用）
+// 运行方式（ulimit 拉低软上限制造 accept EMFILE）：
+//   (ulimit -n 40 && ./bin/lumyr tests/probe/p0_exhaust_server.lm > /tmp/p0_exhaust.log 2>&1) &
+// 预期（/tmp/p0_exhaust.log）：
+//   READY                                    —— 服务就绪
+//   [lumyr-app][warn] accept 资源耗尽（fd 耗尽），退避 ... 后继续  —— P0-1 分类退避
+//   SERVER-DONE served=N                     —— fd 释放后恢复受理并服务的连接数
+// 修复前行为：accept 抛 VAL_ERROR 直接杀死 accept 协程，服务永久停止受理
+import <App/ServiceApplication>;
+
+class EchoHandler {
+    served: int;
+
+    func EchoHandler() {
+        self.served = 0;
+    }
+
+    func serve(conn) {
+        self.served = self.served + 1;
+        print("SERVED n=" + self.served);
+        data = conn.recv(4096);
+        conn.send("ok:" + data);
+    }
+}
+
+h = EchoHandler();
+app = ServiceApplication("127.0.0.1", 19134, h);
+app.startAsync();
+sleep(300);
+print("READY");
+
+sleep(30000);   // 等 flood（打满触发退避）+ flood 退出释放 fd + recover 验证
+
+app.stop();
+app.join();
+print("SERVER-DONE served=" + h.served);

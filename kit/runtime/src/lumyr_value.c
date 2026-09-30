@@ -16,6 +16,7 @@ static _Thread_local int g_err_msg_cap = 0;
 _Thread_local char* g_err_type = NULL;
 static _Thread_local int g_err_type_cap = 0;
 _Thread_local int g_err_code = 0;   /* 错误码（runtime_error_code 设置，默认 0；runtime_error 清零） */
+_Thread_local int g_err_os_errno = 0; /* 系统 errno 快照（0=无；runtime_error* 清零，供 e.getErrno() 判定） */
 _Thread_local const char** g_trace = NULL;
 _Thread_local int g_trace_n = 0;
 static _Thread_local int g_trace_cap = 0;
@@ -107,10 +108,11 @@ void g_err_type_set(const char* s)
 }
 
 // 运行时错误：有 try 处理器则恢复（longjmp），否则打印并退出
-// 不带码版本：清零 g_err_code，VAL_ERROR.code=0（兼容 22 个 .c 文件现有调用）
+// 不带码版本：清零 g_err_code/g_err_os_errno，VAL_ERROR.code=0（兼容 22 个 .c 文件现有调用）
 void runtime_error(const char* msg) {
     if(g_err_jmp) {
         g_err_code = 0;
+        g_err_os_errno = 0;
         g_err_type_set("RuntimeError");
         g_err_msg_set(msg);
         longjmp(*g_err_jmp, 1);
@@ -124,11 +126,26 @@ void runtime_error(const char* msg) {
 void runtime_error_code(int code, const char* type, const char* msg) {
     if(g_err_jmp) {
         g_err_code = code;
+        g_err_os_errno = 0;
         g_err_type_set(type ? type : "RuntimeError");
         g_err_msg_set(msg);
         longjmp(*g_err_jmp, 1);
     }
     LOG_ERROR("Runtime Error [%s#%d]: %s\n", type ? type : "RuntimeError", code, msg);
+    exit(EXIT_FAILURE);
+}
+
+// 带错误码 + 系统 errno 的运行时错误：供系统调用失败点使用（调用点须紧跟
+// 失败 syscall，errno 仍有效），VAL_ERROR.os_errno 携带快照供编程判定。
+void runtime_error_code_errno(int code, int os_errno, const char* type, const char* msg) {
+    if(g_err_jmp) {
+        g_err_code = code;
+        g_err_os_errno = os_errno;
+        g_err_type_set(type ? type : "RuntimeError");
+        g_err_msg_set(msg);
+        longjmp(*g_err_jmp, 1);
+    }
+    LOG_ERROR("Runtime Error [%s#%d errno=%d]: %s\n", type ? type : "RuntimeError", code, os_errno, msg);
     exit(EXIT_FAILURE);
 }
 
@@ -139,6 +156,7 @@ void lumyr_rethrow_error(Value err) {
     const char* em = err.v.err.message ? err.v.err.message : "";
     if(g_err_jmp) {
         g_err_code = err.v.err.code;
+        g_err_os_errno = err.v.err.os_errno;
         g_err_type_set(et);
         g_err_msg_set(em);
         longjmp(*g_err_jmp, 1);
@@ -155,6 +173,8 @@ Value lumyr_make_error(const char* type, const char* msg, const char* stack) {
     const char* m = msg ? msg : "";
     const char* s = stack ? stack : "";
     size_t tl = strlen(t), ml = strlen(m), sl = strlen(s);
+    v.v.err.code = 0;        /* 显式归零：本函数只填字符串字段，数值字段不得留栈垃圾 */
+    v.v.err.os_errno = 0;
     v.v.err.type = (char*)gc_alloc(tl + 1, VAL_STRING);
     memcpy(v.v.err.type, t, tl + 1);
     v.v.err.message = (char*)gc_alloc(ml + 1, VAL_STRING);

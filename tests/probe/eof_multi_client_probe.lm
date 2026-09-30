@@ -1,0 +1,11 @@
+// 多连接 EOF 收割探针（客户端）：50 连接全部建立后显式关闭
+keep = [];
+for (i = 0; i < 50; i++) {
+    c = TcpSocket();
+    c.connect("127.0.0.1", 19138);
+    keep.add(c);
+}
+print("CONNECTED 50");
+sleep(1000);   // 等 server handler 全部挂 recv
+for c in keep { c.close(); }
+print("CLOSED ALL");

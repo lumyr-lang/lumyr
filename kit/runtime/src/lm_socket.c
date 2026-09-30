@@ -80,11 +80,13 @@ static int create_fd(SocketKind k) {
     return fd;
 }
 
-// 报错包装：拼 errno 文本并 runtime_error_code（带操作对应的枚举码）
+// 报错包装：拼 errno 文本并 runtime_error_code（带操作对应的枚举码）。
+// 调用点均紧跟失败的系统调用，errno 仍有效：随错误对象携带 os_errno 快照，
+// 上层 e.getErrno() 编程判定资源耗尽等类别（不做消息文本匹配）。
 static void sock_error_code(const char* op, NetErrorCode code) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%s() 失败: %s", op, strerror(errno));
-    runtime_error_code(code, "SocketError", buf);
+    runtime_error_code_errno(code, errno, "SocketError", buf);
 }
 
 /* DNS 解析超时（毫秒，0 = 不限，默认）：build_inet 内若 > 0 走 worker thread +
@@ -823,7 +825,13 @@ Value lumyr_socket_accept(Value v) {
         break;  /* 拿到 cfd 或真错都退出 */
     }
     if(cfd < 0) {
-        sock_error_code("accept", NET_ERR_ACCEPT);
+        /* fd 耗尽（EMFILE/ENFILE）细分专用码：accept 资源耗尽类退避需编程
+         * 判定（对标 nginx ngx_event_accept.c EMFILE 处理），不做文本匹配 */
+        if(errno == EMFILE || errno == ENFILE) {
+            sock_error_code("accept", NET_ERR_FD_EXHAUSTED);
+        } else {
+            sock_error_code("accept", NET_ERR_ACCEPT);
+        }
         return val_none();
     }
     /* 新客户端套接字，类型与服务端一致，已连接 */

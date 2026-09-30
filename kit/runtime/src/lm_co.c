@@ -9,9 +9,10 @@
 // 栈分配：mmap size + page，末页（高地址方向）mprotect PROT_NONE 作 guard page，
 // 爆栈时触发 SIGSEGV 而非静默破坏内存。
 #include "lm_co.h"
-#include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳 */
+#include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度时间戳；R3：now_ms */
 #include "lm_stack_pool.h" /* Phase 8.6 C：per-thread 栈池 */
 #include "lm_scheduler.h"  /* 销毁时释放 migrate_sched/home_sched 的 scheduler 引用 */
+#include "lm_timer.h"      /* R3：coSleep 定时器唤醒 */
 #include "lm_sched_stats.h" /* Phase 8.11：存活协程计数 + pending_time 记账 */
 #include "gc_runtime.h"
 
@@ -265,6 +266,7 @@ lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
     atomic_init(&co->wait_kind, LM_WAIT_NONE);
     atomic_init(&co->waiting_sched, NULL);
     atomic_init(&co->stuck_votes, 0);
+    atomic_init(&co->sleep_ctx, NULL);
     co_registry_add(co);
 
     /* 构造初始上下文：栈 [mmap_base, mmap_base+stack_size)，首次 resume 时
@@ -307,6 +309,7 @@ lm_co_t* lm_co_spawn_class(lm_co_entry_t entry, void* arg, int stack_class) {
     atomic_init(&co->wait_kind, LM_WAIT_NONE);
     atomic_init(&co->waiting_sched, NULL);
     atomic_init(&co->stuck_votes, 0);
+    atomic_init(&co->sleep_ctx, NULL);
     co_registry_add(co);
     lm_ctx_make(&co->ctx, st.mmap_base, st.stack_size, co_trampoline, co);
     return co;
@@ -509,8 +512,70 @@ int lm_co_is_dead(lm_co_t* co) {
     return co && atomic_load_explicit(&co->state, memory_order_acquire) == LM_CO_DEAD;
 }
 
+/* ============================================================
+ * R3：coSleep 协程友好休眠（定时器 + yield，不阻塞 reactor 线程）
+ * ============================================================ */
+/* 挂起上下文：协程侧与 destroy 侧经 co->sleep_ctx exchange 取走所有权，
+ * 取消成功（返回 0=回调未运行）的一方 free；回调已触发（1=运行中 / -1=已执行）
+ * 时由回调方 free——与 fd 等待 waitCtx 所有权语义对齐。 */
+typedef struct {
+    lm_co_t* co;
+    lm_scheduler_t* sched;   /* 唤醒目标（登记时当前线程 scheduler 快照） */
+    lm_timer_id_t id;
+} CoSleepCtx;
+
+/* 定时器回调（timer 线程）：投递协程回 scheduler（post + self-pipe）。
+ * MUST NOT block（timer 线程契约）。提前触发场景（回调先于 yield 到期）：
+ * wakeup 仅入队 + 置 queued，协程随后 yield 由 drain_ready 恢复，语义不变。 */
+static void co_sleep_timer_cb(lm_timer_id_t id, void* arg) {
+    (void)id;
+    CoSleepCtx* ctx = (CoSleepCtx*)arg;
+    lm_scheduler_wakeup(ctx->sched, ctx->co);
+    free(ctx);
+}
+
+/* 取消挂起的 coSleep 定时器（协程正常唤醒后 / destroy 强制清理共用）。
+ * 返回是否为本方释放了 ctx（供追踪，调用方无需关心）。 */
+static void co_sleep_cleanup(lm_co_t* co) {
+    CoSleepCtx* ctx = (CoSleepCtx*)atomic_exchange_explicit(&co->sleep_ctx, NULL,
+                                                            memory_order_acq_rel);
+    if (!ctx) return;
+    int rc = lm_timer_cancel(ctx->id);
+    if (rc == 0) free(ctx);   /* 未触发：本方释放；1/-1：回调持有/已释放 */
+}
+
+/* 协程友好休眠 ms 毫秒：挂起当前协程，集中定时器线程到期后投递唤醒。
+ * 返回 0 成功；-1 非协程上下文或无 scheduler（框架协程均满足）；
+ * -2 定时器注册失败。
+ * 与 fd 等待的区别：唯一唤醒方是定时器回调，无关闭/事件竞态，无需三态
+ * 仲裁字；不登记 wait_kind（LM_WAIT_NONE）——sysmon 跳过扫描，休眠时长
+ * 有界（上层封顶 5s），无 stuck 风险。 */
+int lm_co_sleep_ms(long long ms) {
+    lm_co_t* co = lm_co_current();
+    if (!co) return -1;
+    if (ms <= 0) return 0;
+    lm_scheduler_t* sched = lm_scheduler_get_current();
+    if (!sched) return -1;
+    CoSleepCtx* ctx = (CoSleepCtx*)malloc(sizeof(CoSleepCtx));
+    if (!ctx) return -2;
+    ctx->co = co;
+    ctx->sched = sched;
+    ctx->id = lm_timer_add(lm_reactor_now_ms() + (uint64_t)ms, co_sleep_timer_cb, ctx);
+    if (ctx->id == LM_TIMER_INVALID_ID) { free(ctx); return -2; }
+    atomic_store_explicit(&co->sleep_ctx, ctx, memory_order_release);
+    lm_co_yield();
+    /* 唤醒后清理：正常路径定时器已触发（回调已 free，cancel 返回 1/-1）；
+     * destroy 竞态清理走 co_sleep_cleanup 同一所有权协议。 */
+    co_sleep_cleanup(co);
+    return 0;
+}
+
 void lm_co_destroy(lm_co_t* co) {
     if (!co) return;
+    /* R3：协程仍挂起在 coSleep 定时器上被强制 destroy（accept 协程退避中
+     * 随 run 退出清理）→ 先取消定时器，防回调 wakeup 悬垂协程（UAF）。
+     * 回调已触发时 cancel 返回 1/-1，ctx 已由回调方释放，不再触碰。 */
+    co_sleep_cleanup(co);
     /* Phase 8.6：先从全局注册表摘除（reaper 不再扫到本协程）。 */
     co_registry_remove(co);
     /* Phase 5: 销毁前释放 vm_state（由 vm 层 release hook 释放，

@@ -79,6 +79,11 @@ static inline long lm_sched_stats_stuck_co(void) {
  * 桶判定为无界数组二分（12 桶），无锁原子累加。 */
 void lm_sched_stats_record_pending_ns(uint64_t ns);
 
+/* pending_time 直方图桶上界表（µs，LM_SCHED_PENDING_BUCKETS 项，末项为
+ * 溢出桶下限）。只读常量表单一事实源：trace 打印与查询侧（schedStats
+ * 内置）共用，避免查询侧复制边界表造成漂移。 */
+const uint64_t* lm_sched_stats_pending_bounds(void);
+
 /* trace 线程懒启动（幂等）：解析 LM_SCHED_DEBUG=trace:N，每 N ms 聚合打印
  * 调度器全景到 stderr。N≤0 视为 1000ms。未设置环境变量则不启动。 */
 void lm_sched_stats_start(void);

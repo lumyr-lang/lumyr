@@ -1,0 +1,4 @@
+// EOF 专项探针（客户端）：connect 后立即退出（发送 FIN，不 send 任何数据）
+c = TcpSocket();
+c.connect("127.0.0.1", 19137);
+print("CLIENT EXIT");
