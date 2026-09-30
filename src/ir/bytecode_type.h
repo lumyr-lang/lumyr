@@ -576,7 +576,7 @@ typedef enum {
     /* ===== Phase 7.3：跨线程唤醒原语（coWakeup/coCond） =====
      * coWakeup(co, sched)：跨线程投递协程到目标 scheduler + 唤醒 reactor；
      * coCond 条件变量：wait yield + signal/broadcast wakeup。
-     * 对标 lthread lthread_cond_t（create/wait/signal/broadcast）。 */
+     * cond（create/wait/signal/broadcast）。 */
     BUILTIN_CO_WAKEUP,          // coWakeup(co, sched)：跨线程唤醒（post + reactor self-pipe）
     BUILTIN_COWAKE_COND_NEW,    // coCond() → cond 实例（ptr）
     BUILTIN_COWAKE_COND_WAIT,   // cond.wait()：当前协程挂 waiter 队列 + yield
@@ -585,7 +585,7 @@ typedef enum {
     /* ===== Phase 7.4：compute worker pool =====
      * computeBegin()：当前协程迁入 compute 池（N=CPU 核数 worker，无 reactor），
      * CPU 密集段不卡 IO reactor；computeEnd()：迁回老家 IO scheduler。
-     * 对标 lthread_compute_begin/end（迁移协议见 lm_co.h）。 */
+     * compute_begin/end（迁移协议见 lm_co.h）。 */
     BUILTIN_COMPUTE_BEGIN,      // computeBegin()：当前协程迁入 compute 池
     BUILTIN_COMPUTE_END,        // computeEnd()：迁回老家 IO scheduler
     /* ===== 三角/反三角/对数/指数（全局形式透传，1~2 参，返回 double） ===== */

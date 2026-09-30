@@ -60,7 +60,7 @@ typedef struct lm_co_s {
     /* Phase 7.4：compute 池迁移标记（加在结构体末尾，不改变现有字段偏移——ABI 原则）。
      * home_sched：computeBegin 时记录老家 IO scheduler（非空 = 协程处于 compute 池）；
      * migrate_sched：yield 让出后由调度方 post 到的目标 scheduler。
-     * 迁移协议（对标 lthread PENDING 模式）：协程栈内只设标记 + yield，真正的
+     * 迁移协议（PENDING 模式）：协程栈内只设标记 + yield，真正的
      * post 由调度方在 lm_co_resume 返回（栈已让出）后执行——防双线程同栈竞态
      * （若 yield 前 post，worker 可能抢在 yield 前切栈 → 两线程同时在一条栈上）。 */
     _Atomic(struct lm_scheduler_s*) home_sched;     /* 原子：sysmon 强制迁移与协程 computeBegin/End 并发写 */
@@ -105,8 +105,8 @@ typedef struct lm_co_s {
     /* Phase 8.6：栈分级与 idle 换出字段（结构体末尾追加，ABI 不变）。
      * stack_class：LM_STACK_SMALL(16KiB)/LM_STACK_NORMAL(128KiB)，选栈池桶用。
      *   spawn 时按 stack_size 推断（≤SMALL→SMALL，否则 NORMAL）。VM 协程维持 NORMAL。
-     * swap_buffer/swap_size：idle 换出时把已用栈段 memcpy 到堆 buffer（libco
-     *   save_stack_buffer 思想降级——仅 idle>30s 执行，非每切换都拷贝）。
+     * swap_buffer/swap_size：idle 换出时把已用栈段 memcpy 到堆 buffer（堆栈
+     *   缓冲降级——仅 idle>30s 执行，非每切换都拷贝）。
      *   未换出时 swap_buffer=NULL。
      * swap_state：换出/换入互斥状态机（_Atomic，CAS 仲裁换出与唤醒竞态）：
      *   0=NORMAL 1=SWAPPING_OUT(reaper 拷贝中) 2=SWAPPED(无栈,buffer 持内容)
@@ -156,14 +156,14 @@ typedef struct lm_co_s {
 
 typedef void (*lm_co_entry_t)(void*);
 
-/* Phase 8.5：reduction 预算参数（对齐 BEAM CONTEXT_REDS=4000，erl_vm.h:53）。
+/* Phase 8.5：reduction 预算参数。
  * LM_SCHED_REDS：每次 resume 装载的预算值；
- * LM_SCHED_MIN_REDS：最小切换钳制（=CONTEXT_REDS/10=400，erl_process.c:67），
+ * LM_SCHED_MIN_REDS：最小切换钳制（=预算/10=400），
  *   消耗 < 400 按 400 记账，防"换进即换出"协程白嫖。 */
 #define LM_SCHED_REDS      4000
 #define LM_SCHED_MIN_REDS  (LM_SCHED_REDS / 10)
 
-/* Phase 8.5：reduction 扣减宏（对齐 BEAM bif.h:71 BUMP_REDS / :80 BUMP_ALL_REDS）。
+/* Phase 8.5：reduction 扣减宏。
  * LM_BUMP_REDS(co)：扣 1 预算，归零则在指令边界 lm_co_yield() 让出（VM 状态一致）。
  *   仅在协程上下文（co != NULL）且 reds > 0 时扣减，避免无协程场景误触发。
  * LM_BUMP_ALL_REDS(co)：强制清零预算，下次派发点必让出（长 C 内建主动让步用）。
@@ -213,10 +213,10 @@ typedef void (*lm_co_entry_t)(void*);
 /* 默认栈大小（128KiB，可配）。深递归 lumin 函数应显式调大。
  * 64KiB 在深嵌套 VM 调用热点（accept loop → createHandler → ctor → spawn，
  * 每层 vm_exec_loop + vm_call_func_value + vm_exec_call_method_dyn + builtin_dispatch
- * 栈帧较大）会被顶满触发 SIGBUS。128KiB 是 libco 默认值，足够覆盖 4+ 层 VM 嵌套。 */
+ * 栈帧较大）会被顶满触发 SIGBUS。128KiB 默认值，足够覆盖 4+ 层 VM 嵌套。 */
 #define LM_CO_DEFAULT_STACK_SIZE (128 * 1024)
 
-/* Phase 8.6：栈分级常量（对齐 bthread stack.cpp:34-36 的分级思路）。
+/* Phase 8.6：栈分级常量。
  * LM_STACK_SMALL：IO 连接协程档（16KiB）。mmap 惰性分页使虚拟仅占触页物理。
  *   注：VM 协程本期维持 NORMAL（深嵌套 VM 帧需 128KiB，见上注）；SMALL 降级
  *   待栈深 profiling 验证后另立。此常量供栈池分桶 + 轻量 C 协程显式指定。

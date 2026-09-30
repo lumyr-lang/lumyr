@@ -29,7 +29,7 @@ void lm_scheduler_set_current(lm_scheduler_t* s) {
 }
 
 /* ============================================================
- * Phase 8.2：全局注册表 g_scheds[]（对齐 TaskControl _tagged_groups 机制）
+ * Phase 8.2：全局注册表 g_scheds[]（分组机制）
  * scheduler 创建/销毁时注册/注销；窃取遍历以此为 victim 全集。
  * 生命周期事实：scheduler 仅在启动期创建、退出期销毁（ServiceApplication
  * onStart/onStop + compute 池），运行期不变——故窃取遍历持注册表锁
@@ -96,7 +96,7 @@ int lm_scheduler_registry_snapshot(lm_scheduler_t** out, int max) {
 }
 
 /* ============================================================
- * Phase 8.2：全局溢出队列（injector，对齐 Tokio inject/shared.rs）
+ * Phase 8.2：全局溢出队列（injector，inject→local 搬运）
  * 带锁单链 + 原子 len 旁路做无锁空检查——生产判断：全局队列本就该低频，
  * 一把 mutex 即可，不做无锁化（省自研风险）。
  * 内容保证：只有中立协程（!pinned && stealable）进入——
@@ -106,7 +106,7 @@ static lm_co_t* g_ov_head = NULL;
 static lm_co_t* g_ov_tail = NULL;
 static pthread_mutex_t g_ov_mutex = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic long g_ov_len = 0;
-/* Phase 8.5 G：全局 spinning 计数（对齐 Go nmspinning，proc.go:3230）。
+/* Phase 8.5 G：全局 spinning 计数（spinning 计数协议）。
  * pop_blocking 窃取前 CAS 0→1，已有 spinner 则跳过窃取直接去睡；
  * 窃取到任务或睡前清零。overflow_wake_one 在 g_nspinning>0 时跳过唤醒
  * （spinner 会自行发现全局队列任务，减少惊群）。 */
@@ -129,12 +129,12 @@ static void sched_wake_parked(lm_scheduler_t* s) {
 /* 唤醒一个睡眠中的 compute worker（全局队列投递后）。
  * round-robin 起点扫描注册表找 sleeping 的 compute scheduler（reactor==NULL），
  * 唤醒其 sleepWord——固定顺序扫描会让注册表靠前的 worker 永远先醒先抢
- * 全局锁（压测实测独吞 60%），游标轮转对齐 Go wakep 的随机唤醒语义。
+ * 全局锁（压测实测独吞 60%），游标轮转随机唤醒语义。
  * 找不到（大家都在忙）则跳过——忙碌 worker drain 时会查到全局队列。
- * 唤醒封顶 1 个（对齐 signal_task 封顶语义，防惊群）。 */
+ * 唤醒封顶 1 个（封顶语义，防惊群）。 */
 static void overflow_wake_one(void) {
-    /* Phase 8.5 G：已有 spinner 不唤醒（对齐 Go wakep 跳过语义，
-     * proc.go:3230：spinner 会自行发现全局队列任务）。 */
+    /* Phase 8.5 G：已有 spinner 不唤醒（唤醒跳过语义，
+     * spinner 会自行发现全局队列任务）。 */
     if (atomic_load_explicit(&g_nspinning, memory_order_acquire) > 0) return;
     /* 游标由 g_scheds_mutex 保护（调用路径均经本函数，锁内串行递增） */
     static int g_wake_cursor = 0;
@@ -159,8 +159,8 @@ static void overflow_wake_one(void) {
         sched_wake_parked(target);
     } else {
         /* Phase 8.10：找不到 sleeping compute worker（大家都在忙）→ 按需扩容
-         * 1 个 worker。对齐 bthread signal_task 不足时 add_workers 当场扩容
-         * （task_control.cpp:685-693）。受 LM_MAX_WORKERS 硬上限封顶。 */
+         * 1 个 worker。不足时按需扩容语义。
+         * 受 LM_MAX_WORKERS 硬上限封顶。 */
         lm_compute_pool_maybe_grow();
     }
 }
@@ -188,7 +188,7 @@ static void overflow_push(lm_co_t* co) {
 }
 
 /* 从全局队列取一批（≤max_n 且不超过 WSQ 剩余容量）灌入本地 WSQ 尾部。
- * 对齐 Go runqget + Tokio inject→local 搬运语义。返回灌入个数。 */
+ * 窃取 + inject→local 搬运语义。返回灌入个数。 */
 static size_t overflow_take_to_wsq(lm_scheduler_t* s, size_t max_n) {
     if (atomic_load_explicit(&g_ov_len, memory_order_acquire) == 0) return 0;
     /* WSQ 剩余容量约束（灌入不能溢出本地） */
@@ -217,8 +217,8 @@ static size_t overflow_take_to_wsq(lm_scheduler_t* s, size_t max_n) {
  * 生命周期
  * ============================================================ */
 
-/* 窃取参数初始化：随机起点种子 + 质数步长（对齐 TaskControl 的
- * _steal_seed/_steal_offset：多 thief 从不同起点、以互质步长遍历，
+/* 窃取参数初始化：随机起点种子 + 质数步长（调度控制：
+ * 多 thief 从不同起点、以互质步长遍历，
  * 降低多 thief 同时撞同一 victim 的概率）。 */
 static void sched_steal_param_init(lm_scheduler_t* s) {
     static const uint32_t primes[] = { 7, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53 };
@@ -389,7 +389,7 @@ lm_co_t* lm_scheduler_pop(lm_scheduler_t* s) {
  * Phase 8.2：本地投递分流（owner 线程）+ LIFO slot
  * ============================================================ */
 
-/* WSQ push 满时的溢出处理：抽后半段灌全局（对齐 Go runqputslow），
+/* WSQ push 满时的溢出处理：抽后半段灌全局（溢出协议），
  * 再重试 push 新协程。栈上分批抽取（批 256，防爆栈）。 */
 static void wsq_push_or_overflow(lm_scheduler_t* s, lm_co_t* co) {
     if (lm_wsq_push(&s->wsq, co) == 0) return;
@@ -458,14 +458,14 @@ void lm_scheduler_post_lifo(lm_scheduler_t* s, lm_co_t* co) {
 }
 
 /* ============================================================
- * Phase 8.2：批量窃取（对齐 Go runqgrab/runqsteal + bthread steal_task）
+ * Phase 8.2：批量窃取
  * 随机起点（steal_seed）+ 质数步长（steal_offset）遍历注册表，
  * 每个 victim steal_batch（n=(len+1)/2 上限 LM_SCHED_STEAL_MAX_BATCH），
  * 批次灌本地 WSQ 尾部（溢出转全局），立即返回第一个执行。
  * ============================================================ */
 static lm_co_t* sched_steal(lm_scheduler_t* self) {
     /* Phase 8.5 G：CAS g_nspinning 0→1，已有 spinner 则跳过窃取
-     * （对齐 Go proc.go:3230：宁多醒不漏醒，但已有 spinner 时不再唤醒）。 */
+     * （宁多醒不漏醒，但已有 spinner 时不再唤醒）。 */
     int expected = 0;
     if (!atomic_compare_exchange_strong(&g_nspinning, &expected, 1)) {
         return NULL;   /* 已有 spinner 在窃取，无需重复 */
@@ -490,7 +490,7 @@ static lm_co_t* sched_steal(lm_scheduler_t* self) {
         if (got == 0) continue;
         /* Phase 8.11：窃取成功计数（批非空）。 */
         atomic_fetch_add_explicit(&self->steal_success, 1, memory_order_relaxed);
-        /* 灌本地 WSQ 尾部（对齐 runqsteal：灌一半、立即执行其一）；
+        /* 灌本地 WSQ 尾部（窃取：灌一半、立即执行其一）；
          * 第一个不入队直接返回执行，减少一次 push/pop。 */
         for (size_t k = 1; k < got; k++) {
             wsq_push_or_overflow(self, batch[k]);
@@ -623,8 +623,8 @@ lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
         /* Phase 8.5 D：每轮 schedtick +1（同 drain_ready）。 */
         atomic_fetch_add_explicit(&s->schedtick, 1, memory_order_relaxed);
         atomic_store_explicit(&s->tick_ns, lm_now_ns(), memory_order_relaxed);
-        /* Phase 8.5 H：每 61 轮优先查全局溢出队列（对齐 Go proc.go:3458
-         * schedtick%61==0），防 WSQ 非空时全局队列饿死。
+        /* Phase 8.5 H：每 61 轮优先查全局溢出队列
+         * （schedtick%61==0），防 WSQ 非空时全局队列饿死。
          * 只在 compute worker（pop_blocking）加——IO drain_ready 不查全局
          * （防计算任务卡 reactor）。 */
         if (++round % LM_SCHED_DRAIN_GLOBAL_INTERVAL == 0) {

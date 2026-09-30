@@ -1,5 +1,5 @@
 // lm_sysmon.h —— Phase 8.5 D：sysmon 守护线程
-// 对标 Go runtime sysmon（proc.go:6537）：带外扫描所有 scheduler，
+// 带外扫描所有 scheduler，
 // 检测卡在长协程上的 scheduler（schedtick 超时未动），触发强制迁移。
 //
 // 分工：

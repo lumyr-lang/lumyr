@@ -35,8 +35,7 @@ void lm_sched_stats_record_pending_ns(uint64_t ns) {
 }
 
 /* ============================================================
- * trace 线程：LM_SCHED_DEBUG=trace:N 每 N ms 打印调度器全景
- * （对齐 GODEBUG=schedtrace，proc.go:6950 区域）。
+ * trace 线程：LM_SCHED_DEBUG=trace:N 每 N ms 打印调度器全景。
  * ============================================================ */
 
 static _Atomic int g_stats_started = 0;

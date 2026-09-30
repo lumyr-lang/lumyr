@@ -1,6 +1,6 @@
 // lm_butex.h —— 统一 futex 级阻塞原语（Phase 8.3）
-// 对标 brpc butex + parking_lot ParkingLot：一个 32 位原子字同时服务
-// 协程（bthread）与线程（pthread）。lumyr 的 cond / 后续 mutex / channel /
+// 一个 32 位原子字同时服务
+// 协程与线程（pthread）。lumyr 的 cond / 后续 mutex / channel /
 // join 全部收敛在这一个原语上——一处实现、一处优化。
 //
 // 双模式等待（按调用上下文自动分流）：
@@ -20,7 +20,7 @@
 //           无 waiter 时 wake 不发任何系统调用（S4 验收口径）。
 //
 // 边界约定：
-//   - fd 等待【不走】butex（对标 bthread：fd 等待走 EventDispatcher+epoll，
+//   - fd 等待【不走】butex（fd 等待走 reactor 主循环的 epoll/kevent，
 //     唤醒源是内核事件；butex 只承担唤醒源为用户态写的同步原语）。
 //   - 协程等待必须在 scheduler 上下文（lm_scheduler_get_current 非空）：
 //     跨线程唤醒须有投递目标；无 scheduler 时 wait 不入睡（约定同 lm_cond）。

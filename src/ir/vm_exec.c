@@ -386,7 +386,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DOUBLE_NE: handled = vm_exec_compare_double_ne(ctx, &in); break;
 
         /* ===== 控制流 =====
-         * Phase 8.5：JMP 家族扣 1 reduction（对齐 BEAM 回边扣减，macros.tab）。
+         * Phase 8.5：JMP 家族扣 1 reduction（回边扣减）。
          * 简化实现：所有 JMP（含前向/条件）均扣，保证 tight loop 必撞预算让出；
          * 前向跳转多扣 1 无害（仅多一次调度机会）。条件跳转未命中也扣 1——
          * 开销可忽略，正确性优先于"仅回边扣"的微优化。 */
@@ -418,10 +418,10 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_VSHR:  handled = vm_exec_vshr(ctx, &in); break;
 
         /* ===== 函数调用 =====
-         * Phase 8.5：调用类扣 1 reduction（对齐 BEAM DISPATCH/DISPATCH_FUN，
-         * macros.tab:199）。OPC_CALL/CALLV/CALL_METHOD/CALL_METHODV/MKCLOSURE。
-         * C 内建（BUILTIN/CALL_BUILTIN_METHOD）也扣 1（对齐 BEAM BIF BUMP_REDS，bif.h:71）；
-         * 长内建应主动 LM_BUMP_ALL_REDS 强制让出（bif.h:80 BUMP_ALL_REDS）。 */
+         * Phase 8.5：调用类扣 1 reduction（DISPATCH/DISPATCH_FUN）。
+         * OPC_CALL/CALLV/CALL_METHOD/CALL_METHODV/MKCLOSURE。
+         * C 内建（BUILTIN/CALL_BUILTIN_METHOD）也扣 1（BIF reduction）；
+         * 长内建应主动 LM_BUMP_ALL_REDS 强制让出。 */
         case OPC_CALL: LM_BUMP_REDS(co); handled = vm_exec_call(ctx, &in); break;
         case OPC_BUILTIN: LM_BUMP_REDS(co); handled = vm_exec_builtin(ctx, &in); break;
         case OPC_CALL_BUILTIN_METHOD: LM_BUMP_REDS(co); handled = vm_exec_builtin_method(ctx, &in); break;
@@ -446,7 +446,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_PRINT_DECIMAL: handled = vm_exec_io_print_decimal(ctx, &in); break;
 
         /* ===== 返回：只结束当前层；按 ExprType 从对应栈弹原始值入返回槽 =====
-         * Phase 8.5：返回类扣 1 reduction（对齐 BEAM DISPATCH_RETURN，macros.tab:221）。 */
+         * Phase 8.5：返回类扣 1 reduction（DISPATCH_RETURN）。 */
         case OPC_RETURN: {
             LM_BUMP_REDS(co);
             ExprType et = (ExprType)in.a;

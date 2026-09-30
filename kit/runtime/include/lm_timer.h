@@ -1,11 +1,11 @@
 // lm_timer.h —— 集中化定时器线程（Phase 8.4）
-// 借鉴 brpc bthread timer_thread：全局单 TimerThread + 分桶 + 最小堆。
+// 全局单 TimerThread + 分桶 + 最小堆。
 //
 // 设计依据（phase8-mn-scheduler-research.md G4 缺口）：
 //   lumyr 定时器以 IO 超时为主——秒级、稀疏、大量取消。最小堆插入/取消
 //   O(log N) 且支持任意精度，堆顶即最近到期；分桶解决多生产者对单堆的
-//   schedule 锁竞争（pthread id hash % numBuckets，对齐 timer_thread 的
-//   _nearest_run_time per-bucket）。不用时间轮：时间轮精度受 tick 约束，
+//   schedule 锁竞争（pthread id hash % numBuckets，
+//   per-bucket nearest 思路）。不用时间轮：时间轮精度受 tick 约束，
 //   lumyr 超时需 ms 级任意精度，堆更合适。
 //
 // 与旧实现差异（每 reactor 各自最小堆 → 全局集中）：
@@ -15,7 +15,7 @@
 //         scheduler（lm_scheduler_wakeup）；reactor 主循环只读原子快照
 //         lm_timer_nearest_ms() 计算 epoll_wait/kevent 超时，无堆操作。
 //
-// 回调契约（MUST NOT block，对齐 timer_thread.h:50-52）：
+// 回调契约（MUST NOT block）：
 //   到期回调在 timer 线程上下文执行——严禁阻塞（如 IO、锁长持有），
 //   否则拖延所有其他定时器的到期精度。需阻塞的工作应 post 协程到
 //   scheduler 由 reactor 线程跑，不在 timer 线程内做。

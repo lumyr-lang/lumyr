@@ -1,5 +1,5 @@
 // lm_co.c —— 有栈协程实现（Phase 8.1：fcontext 汇编切换，ucontext 可回退）
-// 参考 libco/libhv withloop 思路：切换栈，yield 时整条 C 调用栈冻结。
+// 切换栈：yield 时整条 C 调用栈冻结。
 // 协程内调 lm_co_yield 切回 resume 调用方（reactor 主循环）；
 // reactor 调度回来 lm_co_resume 从 yield 点继续。
 //
@@ -400,7 +400,7 @@ void lm_co_resume(lm_co_t* co) {
     }
     /* Phase 8.5：每次 resume 重装 reduction 预算 + 记录起始时间。
      * 预算耗尽（VM 派发点 / cc 插桩点）在指令边界 lm_co_yield() 让出，
-     * 切回这里时重新装载——与 BEAM context_switch→erts_schedule 同语义。 */
+     * 切回这里时重新装载——context_switch/schedule 同语义。 */
     co->reds = LM_SCHED_REDS;
     co->last_resume_ns = lm_now_ns();
     /* Phase 8.11：pending_time 记账——经就绪队列调度的协程（ready_ts!=0）
@@ -588,10 +588,10 @@ void lm_co_destroy(lm_co_t* co) {
 }
 
 /* ============================================================
- * Phase 8.6 D: idle 换出（libco save_stack_buffer 思想降级——仅 idle>30s 执行）
+ * Phase 8.6 D: idle 换出（堆栈缓冲降级——仅 idle>30s 执行）
  * 在 reaper（sysmon）线程调用，co 不在任何线程栈上（state==SUSPENDED）。
  *
- * 步骤（对齐调研 §8.6 第 3 条 + libco co_routine.cpp:618-633）：
+ * 步骤（对齐调研 §8.6 第 3 条 + 栈换出协议）：
  *   1. 条件预检（SUSPENDED + idle>阈值 + can_swap 通过 + 非迁移中）
  *   2. CAS swap_state NORMAL→SWAPPING_OUT（仲裁与唤醒方 swap_in 竞态）
  *   3. 计算已用栈深 used = stack_base - ctx.sp（fcontext 冻结 sp）
@@ -652,7 +652,7 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
         return 0;
     }
     size_t used = (size_t)((char*)base - (char*)sp);
-    /* 5. malloc 堆 buffer + memcpy 已用栈段（对齐 libco save_stack_buffer）。 */
+    /* 5. malloc 堆 buffer + memcpy 已用栈段（堆栈缓冲）。 */
     void* buffer = malloc(used);
     if (!buffer) {
         atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,

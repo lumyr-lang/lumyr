@@ -1,13 +1,13 @@
 // lm_blocking_pool.h —— Phase 8.5 F：阻塞 syscall 流放池
-// 对标 Tokio `tokio/src/runtime/blocking/pool.rs`：
+// 设计：
 //   独立 OS 线程池，承接阻塞 syscall（DNS 查询、文件 IO、C FFI 阻塞调用），
 //   不卡 IO reactor 也不占 compute worker——阻塞工作在池内线程执行，
 //   完成后经 lm_scheduler_wakeup 回投原协程到其 home scheduler。
 //
-// 生命周期（对齐 Tokio KEEP_ALIVE=10s）：
+// 生命周期（10s 空闲保活）：
 //   - 按需扩容：提交时无空闲线程则新建（上限 LM_BLOCKING_MAX=512）；
 //   - 空闲收缩：worker 无任务时 futex_wait 10s，超时且线程数 > min 则退出；
-//   - min = 1（保底一个常驻，对齐 Tokio core_threads=1 的常驻语义）。
+//   - min = 1（保底一个常驻）。
 //
 // 8.5 先交付池子 + 提交/回投机制，具体把哪些调用改走 blocking 池列入后续
 // （避免一次性改太多）。

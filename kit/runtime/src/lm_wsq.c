@@ -3,7 +3,7 @@
 // 定长环形缓冲 + bottom/top 单调递增索引（mask 取槽位），
 // owner 热路径无 CAS，thief 以 CAS(top) 提交窃取。
 //
-// 索引用有符号 int64_t（对齐 bthread 的 int）：pop 的 bottom-1 在空队列
+// 索引用有符号 int64_t：pop 的 bottom-1 在空队列
 // 初始态（bottom==0）产生 -1，有符号下 t > b 判定成立正确归位；
 // 无符号回绕会误判非空。2^63 次操作才回绕，工程上不可达。
 #include "lm_wsq.h"
@@ -95,7 +95,7 @@ size_t lm_wsq_steal_batch(lm_wsq_t* q, void** out, size_t max_batch) {
         int64_t b = atomic_load_explicit(&q->bottom, memory_order_acquire);
         if (t >= b) return 0;   /* 空 */
         size_t n = (size_t)(b - t);
-        n = (n + 1) / 2;        /* n - n/2 向上取整一半（对齐 Go runqgrab） */
+        n = (n + 1) / 2;        /* n - n/2 向上取整一半 */
         if (n > max_batch) n = max_batch;
         /* CAS 提交前读槽位：槽位内容先于 bottom 推进写入（push 的 release fence），
          * acquire 读 bottom 保证看到槽位已写。读到的槽位若被并发 pop 取走

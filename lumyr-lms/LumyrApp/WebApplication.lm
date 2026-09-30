@@ -148,7 +148,7 @@ public interface ErrorHandler {
 // 两级 recv 超时（协程模式 reactor 定时器驱动，setOption recvTimeout 应用）：
 //   请求读取阶段 requestTimeout（默认 30s）：超时回 408 并关闭（慢客户端防护）；
 //   keep-alive 空闲等首字节 keepAliveTimeout（默认 5s）：超时静默关闭
-//   （无未决请求，同 nginx keepalive_timeout 语义）。
+//   （无未决请求，keepalive_timeout 语义）。
 // 处理器抛错兜底为 500（并关闭连接），保证单连接异常不拖垮 reactor。
 // recv/send 在协程上下文自动协程化（yield 等 IO 事件，reactor resume）。
 // ============================================================
@@ -460,7 +460,7 @@ public class WebApplication extends ServiceApplication {
     }
 
     // keep-alive 空闲超时（毫秒）：响应完成后等下一请求首字节的最长时间，
-    // 超时静默关闭（无未决请求，同 nginx keepalive_timeout 语义）。默认 5000。
+    // 超时静默关闭（无未决请求，keepalive_timeout 语义）。默认 5000。
     // 取 0 以下的配置无意义（空闲连接会钉死协程耗尽资源），故下界 1ms。
     func keepAliveTimeout(): int {
         if (self.kaTimeoutVal > 0) { return self.kaTimeoutVal; }

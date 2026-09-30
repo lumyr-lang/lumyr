@@ -1,5 +1,5 @@
 /* lm_ctx_jump_x86_64.S —— fcontext 协程切换（System V AMD64，macOS/Linux 通用）
- * 对标 bthread bthread_jump_fcontext / libco coctx_swap：纯用户态，只做三件事：
+ * 纯用户态，只做三件事：
  *   1. 保存 callee-saved 寄存器到当前栈（rbp/rbx/r12-r15 + 返回地址）
  *   2. 交换栈指针（from->sp = rsp; rsp = to->sp）
  *   3. 恢复目标寄存器后 ret 跳入

@@ -8,7 +8,7 @@
 #include <sched.h>   /* sched_yield（自旋让出） */
 
 /* 竞争时进入 butex 前的有限自旋次数（默认 0 = 不自旋，直接排队）。
- * lumyr 场景竞争预期低，对齐 Go sync.Mutex 思路但默认关闭、参数化保留。 */
+ * lumyr 场景竞争预期低，有限自旋思路但默认关闭、参数化保留。 */
 static int g_spin = 0;
 
 void lm_sync_set_spin(int n) { g_spin = (n > 0) ? n : 0; }

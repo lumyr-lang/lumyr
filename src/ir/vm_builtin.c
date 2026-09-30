@@ -4018,7 +4018,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     }
     case BUILTIN_CO_YIELD: {
         /* Phase 8.5：协程主动让出 → 标记时间片耗尽，drain_ready 重入队。
-         * 语义同 Go runtime.Gosched()：自愿让出 CPU 但继续参与调度。
+         * 自愿让出 CPU 但继续参与调度。
          * 事件型 yield（fd/butex）不设此标记，由事件回调重入队。 */
         lm_co_t* _co = lm_co_current();
         if (_co) _co->slice_yield = 1;

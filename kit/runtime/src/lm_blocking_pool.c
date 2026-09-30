@@ -1,5 +1,5 @@
 // lm_blocking_pool.c —— Phase 8.5 F：阻塞 syscall 流放池实现
-// 对标 Tokio `tokio/src/runtime/blocking/pool.rs`：
+// 设计：
 //   独立 OS 线程池，承接阻塞 syscall，完成后回投原协程。
 //
 // 设计要点：
@@ -21,7 +21,7 @@
 
 #define LM_BLOCKING_MAX     512
 #define LM_BLOCKING_MIN     1
-#define LM_BLOCKING_KEEP_ALIVE_US  10000000L  /* 10s，对齐 Tokio KEEP_ALIVE */
+#define LM_BLOCKING_KEEP_ALIVE_US  10000000L  /* 10s 空闲保活 */
 
 typedef struct lm_blocking_task {
     lm_blocking_fn       fn;

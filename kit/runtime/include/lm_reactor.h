@@ -1,17 +1,17 @@
-// lm_reactor.h —— 事件驱动 reactor（参考 nginx src/event）
+// lm_reactor.h —— 事件驱动 reactor
 // 单 reactor 线程跑所有协程；epoll/kqueue ET 后端；连接池 + 定时器最小堆 + posted 队列。
 //
-// 设计要点（对齐 nginx）：
+// 设计要点：
 //   - 后端抽象 lm_event_actions_t：add/del/enable/disable/process_events，
 //     编译期 #if __linux__ 选 epoll、#elif __APPLE__ 选 kqueue，统一 ET 模式
-//     （epoll EPOLLET；kqueue EV_CLEAR），与 nginx NGX_USE_CLEAR_EVENT 语义一致。
+//     （epoll EPOLLET；kqueue EV_CLEAR），clear event 语义。
 //   - 连接对象 lm_connection_t 池化（按 fd 索引 + free list 复用），
-//     对齐 nginx ngx_cycle->connections / free_connections。
-//   - 定时器最小堆（key=expire_ms），对齐 nginx ngx_event_timer（红黑树缓存友好变体）。
-//   - posted_accept / posted_events 双队列，对齐 nginx ngx_posted_accept_events /
-//     ngx_posted_events：避免事件回调内递归调用，把工作延后到主循环统一处理。
+//     连接池 / free_connections。
+//   - 定时器最小堆（key=expire_ms），event timer（红黑树缓存友好变体）。
+//   - posted_accept / posted_events 双队列，posted 队列 /
+//     posted_events：避免事件回调内递归调用，把工作延后到主循环统一处理。
 //
-// 主循环顺序（对齐 nginx ngx_process_events_and_timers）：
+// 主循环顺序：
 //   process_events（epoll_wait/kevent，timeout=最近 timer 剩余）
 //   → 处理 posted_accept → 过期 timer 派发 → 处理 posted_events。
 #ifndef LM_REACTOR_H
@@ -55,7 +55,7 @@ typedef void (*lm_event_handler_t)(lm_connection_t* conn, uint32_t events, void*
 typedef void (*lm_timer_cb_t)(lm_timer_id_t timer_id, void* data);
 
 /* ============================================================
- * 连接对象（对齐 nginx ngx_connection_t）
+ * 连接对象
  * ============================================================ */
 
 #define LM_CONN_FLAG_ACTIVE  0x01   /* 已挂载到 reactor（add 成功后置位） */
@@ -103,7 +103,7 @@ struct lm_connection_s {
 };
 
 /* ============================================================
- * 后端抽象（对齐 nginx ngx_event_actions_t）
+ * 后端抽象
  * ============================================================ */
 
 typedef struct {
@@ -140,7 +140,7 @@ struct lm_reactor_s {
     lm_connection_t** fd_map;
     /* Phase 8.4：定时器集中到全局 TimerThread，reactor 不再维护最小堆。
      * 主循环只读 lm_timer_nearest_ms() 原子快照算 epoll_wait/kevent 超时。 */
-    /* posted 队列：accept 优先级高于一般事件（对齐 nginx 双队列） */
+    /* posted 队列：accept 优先级高于一般事件（双队列） */
     lm_connection_t** posted_accept;
     int posted_accept_count;
     int posted_accept_capacity;
@@ -227,7 +227,7 @@ uint64_t lm_reactor_now_ms(void);
 uint64_t lm_now_ns(void);
 
 /* ============================================================
- * accept / connect helper（对齐 nginx ngx_event_accept / ngx_event_connect）
+ * accept / connect helper
  * ============================================================ */
 
 /* accept 一次：从 listener_conn->fd 非阻塞 accept 一个新连接。

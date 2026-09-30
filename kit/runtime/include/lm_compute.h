@@ -1,5 +1,5 @@
 // lm_compute.h —— compute worker 池（Phase 7.4）
-// 对标 lthread compute scheduler：CPU 密集协程迁入独立 worker 线程池执行，
+// CPU 密集协程迁入独立 worker 线程池执行，
 // 不卡 IO reactor——IO 协程（reactor 驱动）与 CPU 协程（worker 池驱动）分离。
 //
 // 设计要点：
@@ -45,14 +45,14 @@ lm_scheduler_t* lm_compute_pool_scheduler(void);
 
 /* ============================================================
  * Phase 8.10：线程弹性——按需扩 worker + 硬上限 + 运行期调核
- * 借鉴 bthread signal_task 不足时 add_workers 当场扩容（task_control.cpp:685-693）
- * + Go newm/maxmcount=10000 硬上限思路（proc.go:2875、876）。
+ * 不足时按需扩容
+ * + 硬上限 10000 线程思路。
  * 弹性只作用于 compute 池与 blocking 池；IO 线程因 SO_REUSEPORT 绑定
  * listen fd 不参与弹性。
  * ============================================================ */
 
 /* 硬上限：env LM_MAX_WORKERS 可配，默认 4×CPU 数，封顶 256。
- * 弹性必须有顶——线程风暴是事故不是弹性（对齐 maxmcount 思路）。 */
+ * 弹性必须有顶——线程风暴是事故不是弹性（硬上限思路）。 */
 #define LM_MAX_WORKERS_CAP 256
 
 /* 按需扩容 1 个 worker（由 overflow_wake_one 唤醒不足时调用）。

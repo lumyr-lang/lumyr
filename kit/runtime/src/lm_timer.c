@@ -1,8 +1,8 @@
 // lm_timer.c —— 集中化定时器线程实现（Phase 8.4）
-// 全局单 TimerThread + 分桶 + 最小堆。借鉴 brpc bthread timer_thread.cpp。
+// 全局单 TimerThread + 分桶 + 最小堆。
 // 设计依据与回调契约见 lm_timer.h。
 //
-// run 循环（对齐 timer_thread.cpp:340-514）：
+// run 循环：
 //   reset snapshot=MAX → consume all buckets（merge 到本地堆）→
 //   sweep 过期（CAS SCHEDULED→RUNNING，cb，回收）→
 //   publish snapshot=heap top → futex_wait 到最近到期点。
@@ -185,7 +185,7 @@ static uint64_t now_ms(void) {
 }
 
 /* ============================================================
- * run 主循环（对齐 timer_thread.cpp:340-514）
+ * run 主循环
  * ============================================================ */
 static void* timer_run(void* arg) {
     lm_timer_thread_t* t = (lm_timer_thread_t*)arg;
@@ -197,8 +197,8 @@ static void* timer_run(void* arg) {
          *   时 timeout cap 1s 兜底），不影响正确性。 */
         atomic_store_explicit(&t->nearest_snapshot, UINT64_MAX, memory_order_release);
 
-        /* 1.2 nsignals 基线：必须在 consume 前取样（对齐 brpc timer_thread
-         * run 循环协议）。若 add 的 fetch_add 发生在本轮 consume~publish 之间，
+        /* 1.2 nsignals 基线：必须在 consume 前取样（run 循环协议）。
+         * 若 add 的 fetch_add 发生在本轮 consume~publish 之间，
          * 基线不含该增量，步骤 4.5 复核发现差异即重跑 consume——关闭丢唤醒。 */
         uint32_t nsignals_base = atomic_load_explicit(&t->nsignals, memory_order_acquire);
 
@@ -403,7 +403,7 @@ lm_timer_id_t lm_timer_add(uint64_t deadline_ms, lm_timer_fn_t fn, void* arg) {
     task->arg = arg;
     lm_timer_id_t task_id = ((uint64_t)new_v << 32) | task->slot_index;
 
-    /* 投入桶（pthread id hash % numBuckets，对齐 timer_thread 分桶） */
+    /* 投入桶（pthread id hash % numBuckets 分桶） */
     size_t bi = (size_t)((uintptr_t)pthread_self() / sizeof(pthread_t)) % g_timer.num_buckets;
     lm_timer_bucket_t* b = &g_timer.buckets[bi];
     pthread_mutex_lock(&b->mtx);

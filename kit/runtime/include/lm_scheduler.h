@@ -1,5 +1,5 @@
 // lm_scheduler.h —— per-thread 协程调度器（Phase 7.2 起；Phase 8.2 工作窃取升级）
-// 对标 lthread 的 per-thread IO scheduler + Tokio/bthread/Go 的三层队列融合：
+// per-thread IO scheduler + 三层队列融合：
 //   LIFO slot（1 格，同线程唤醒快通道，配额 3/轮）
 //   → mutex 定向队列（跨线程 wakeup / pinned / 非中立协程，保留 Phase 7.2 单链）
 //   → 本地 WSQ（Chase-Lev 无锁，中立协程，可被窃取，见 lm_wsq.h）
@@ -39,16 +39,16 @@ typedef struct lm_scheduler_s {
      * 再 lm_butex_wake——无 waiter 时零系统调用（S4）。 */
     _Atomic uint32_t sleepWord;
     /* ===== Phase 8.2：WSQ + LIFO slot + 窃取（末尾追加） ===== */
-    lm_co_t* lifo_slot;         /* LIFO 单格快通道（同线程唤醒，对齐 Tokio） */
+    lm_co_t* lifo_slot;         /* LIFO 单格快通道（同线程唤醒） */
     int lifo_used;              /* 本轮 LIFO 已连续消费数（配额 LM_SCHED_LIFO_QUOTA/轮） */
     lm_wsq_t wsq;               /* 本地无锁工作窃取队列（owner push/pop） */
     pthread_t owner;            /* owner 线程标识（post_local 本线程判定） */
-    uint32_t steal_seed;        /* 窃取随机起点种子（对齐 TaskControl _steal_seed） */
-    uint32_t steal_offset;      /* 窃取质数步长（对齐 _steal_offset） */
+    uint32_t steal_seed;        /* 窃取随机起点种子 */
+    uint32_t steal_offset;      /* 窃取质数步长 */
     int sched_id;               /* 全局注册表槽位（-1 = 未注册，不参与窃取） */
     _Atomic int sleeping;       /* worker 阻塞睡眠标志（全局队列投递后唤醒扫描用） */
     /* Phase 8.5 D：sysmon 带外监控字段。
-     * schedtick：drain/pop_blocking 每轮 +1（对齐 Go proc.go:3365），
+     * schedtick：drain/pop_blocking 每轮 +1（调度心跳），
      *   sysmon 连续两轮快照相同 → 该 scheduler 卡在单个协程上。
      * tick_ns：最近一次 schedtick 变动的单调时间，判定是否超时用。 */
     _Atomic uint64_t schedtick;
@@ -63,7 +63,7 @@ typedef struct lm_scheduler_s {
      * 后自行退出（pop_blocking 返回 NULL 即队列空 → 见本标记 break）。 */
     _Atomic int reject_new;
     /* Phase 8.11：可观测性计数器（结构末尾追加，ABI 原则）。
-     * 热路径无锁原子累加（bvar 模式），LM_SCHED_DEBUG=trace:N 线程后台聚合打印。
+     * 热路径无锁原子累加（per-thread 原子计数模式），LM_SCHED_DEBUG=trace:N 线程后台聚合打印。
      * steal_attempts/success：窃取尝试（每 victim 探测一次）/成功（批非空）次数。
      * wake_count：sched_wake_parked butex 唤醒次数。
      * lifo_quota_hits：LIFO 配额触顶次数（消费满 LM_SCHED_LIFO_QUOTA 且 slot 仍占）。
@@ -75,21 +75,21 @@ typedef struct lm_scheduler_s {
     _Atomic long ready_len;
 } lm_scheduler_t;
 
-/* LIFO slot 每调度轮连续消费配额（对齐 Tokio MAX_LIFO_POLLS_PER_TICK=3，
- * worker.rs:269：防唤醒链 ping-pong 饿死队列其余任务） */
+/* LIFO slot 每调度轮连续消费配额（LIFO 配额=3，
+ * 防唤醒链 ping-pong 饿死队列其余任务） */
 #define LM_SCHED_LIFO_QUOTA 3
 
-/* 批量窃取单批上限（对齐 Go n-n/2 语义 + lumyr 协程迁移成本封顶） */
+/* 批量窃取单批上限（n-n/2 语义 + lumyr 协程迁移成本封顶） */
 #define LM_SCHED_STEAL_MAX_BATCH 32
 
 /* Phase 8.5：抢占与调度监控参数
  * LM_SCHED_LONG_SCHED_MS：drain 内长调度墙钟告警阈值（>此值打告警，不干预）。
  *   专抓"C 内建忘 BUMP_REDS"类事故；取较宽松 50ms 避免 C 内建正常长执行误报。
- * LM_SCHED_FORCE_MIGRATE_MS：sysmon 强制迁移阈值（对齐 Go forcePreemptNS=10ms，
- *   proc.go:6679）。同 scheduler schedtick 超此时长未动 → 判定卡长协程，
+ * LM_SCHED_FORCE_MIGRATE_MS：sysmon 强制迁移阈值（10ms 强制抢占）。
+ *   同 scheduler schedtick 超此时长未动 → 判定卡长协程，
  *   非 pinned 且 IO 线程的协程写 migrate_sched 迁到 compute 池。
  * LM_SCHED_DRAIN_GLOBAL_INTERVAL：drain 每 N 轮强制查全局溢出队列
- *   （对齐 Go proc.go:3458 schedtick%61==0），防全局队列饿死。
+ *   （schedtick%61==0），防全局队列饿死。
  * 三者均可编译期 -D 覆盖（验收测试用 10ms 口径对齐 S5 等条款）。 */
 #ifndef LM_SCHED_LONG_SCHED_MS
 #define LM_SCHED_LONG_SCHED_MS        50
@@ -160,10 +160,10 @@ void lm_scheduler_post(lm_scheduler_t* s, lm_co_t* co);
 
 /* Phase 8.2：本地投递（仅 owner 线程调，spawn 自动入队用）。
  * 分流：pinned || !stealable → mutex 定向队列；
- *      中立 → 本地 WSQ 尾（WSQ 满则抽后半段灌全局队列，对齐 Go runqputslow）。 */
+ *      中立 → 本地 WSQ 尾（WSQ 满则抽后半段灌全局队列，溢出协议）。 */
 void lm_scheduler_post_local(lm_scheduler_t* s, lm_co_t* co);
 
-/* Phase 8.2：LIFO slot 投递（同线程唤醒快通道，对齐 Tokio schedule_local）：
+/* Phase 8.2：LIFO slot 投递（同线程唤醒快通道，LIFO 快通道）：
  * slot 空则入 slot；slot 旧内容顶出——中立者压入本地 WSQ 尾，
  * 非中立/pinned 者转入 mutex 定向队列（WSQ 只放可被窃取的中立协程）。
  * 仅 owner 线程调用（同线程唤醒路径：channel send / cond signal 等）。 */

@@ -1,12 +1,12 @@
 // lm_sysmon.c —— Phase 8.5 D+E：sysmon 守护线程
-// 对标 Go runtime sysmon（proc.go:6537）：带外扫描所有 scheduler，
+// 带外扫描所有 scheduler，
 // 检测卡在长协程上的 scheduler（schedtick 超时未动），触发强制迁移。
 //
-// 退避策略（对齐 Go proc.go:6548-6557）：
+// 退避策略：
 //   delay 起步 20µs；本扫描轮无超时 scheduler → delay *= 2；封顶 10ms。
 //   有超时 → delay 重置为 20µs（快速响应）。
 //
-// 迁移策略（Phase 8.5 E，对齐 Go forcePreemptNS=10ms）：
+// 迁移策略（Phase 8.5 E，强制抢占 10ms）：
 //   scheduler 的 schedtick 连续两轮未变 且 now - tick_ns > LM_SCHED_FORCE_MIGRATE_MS
 //   → 判定该 scheduler 卡在单个协程上。取其 current 协程：
 //     - pinned（fd 绑定）→ 不迁（fd 亲和必须留在 IO 线程）。
@@ -30,8 +30,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LM_SYSMON_DELAY_MIN_NS   20000ULL     /* 20µs，对齐 Go sysmon 起步 */
-#define LM_SYSMON_DELAY_MAX_NS   10000000ULL  /* 10ms，对齐 Go sysmon 封顶 */
+#define LM_SYSMON_DELAY_MIN_NS   20000ULL     /* 20µs 起步 */
+#define LM_SYSMON_DELAY_MAX_NS   10000000ULL  /* 10ms 封顶 */
 #define LM_SYSMON_MAX_SCHEDS     256
 /* Phase 8.13：stuck 协程扫描间隔（墙钟节流，复用 reaper 模式）。
  * 1s 一轮：检测精度不依赖超时猜测，间隔只影响确认延迟（两轮确认 ≈2s）。 */

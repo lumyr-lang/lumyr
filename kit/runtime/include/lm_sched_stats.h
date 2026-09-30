@@ -1,8 +1,7 @@
 // lm_sched_stats.h —— Phase 8.11：调度器可观测性（指标族 + 排队延迟 + 调试输出）
-// 对标 bthread bvar 指标族（task_control.cpp:204-304）+ pending_time 延迟记账
-// （task_control.cpp:759-764）+ Go GODEBUG=schedtrace（proc.go:6950 区域）。
+// 指标族 + pending_time 延迟记账 + schedtrace。
 //
-// 设计原则：热路径 per-thread / 全局无锁原子计数（bvar 模式），后台 trace 线程
+// 设计原则：热路径 per-thread / 全局无锁原子计数模式，后台 trace 线程
 // 聚合打印——可观测性不以热路径加锁为代价。
 //
 // 指标清单（对齐调研文档 8.11）：
@@ -16,7 +15,7 @@
 //     不重复记账。
 //
 // 调试输出：LM_SCHED_DEBUG=trace:N 每 N 毫秒打印一行调度器全景
-// （对齐 GODEBUG=schedtrace）——线上排障第一工具。未设置则不启动 trace 线程，
+// ——线上排障第一工具。未设置则不启动 trace 线程，
 // 计数器照常累加（查询接口仍可用）。
 #ifndef LM_SCHED_STATS_H
 #define LM_SCHED_STATS_H
@@ -33,14 +32,14 @@ extern "C" {
 #define LM_SCHED_PENDING_BUCKETS 12
 
 typedef struct lm_sched_stats_global_s {
-    _Atomic long live_co;               /* 存活协程数（对齐 bthread_count） */
+    _Atomic long live_co;               /* 存活协程数 */
     _Atomic uint64_t force_yield_count; /* reduction 预算耗尽强制让出重入队总次数 */
     _Atomic uint64_t long_sched_count;  /* 长调度墙钟告警总次数（8.5 C 落地） */
     /* Phase 8.13：sysmon 确认的 stuck 协程（丢唤醒）累计次数。
      * 等待源已完成但协程仍悬挂、连续两轮扫描确认才 +1（两轮确认吸收
      * 投递在飞瞬态，正常负载恒为 0；>0 即存在唤醒协议 bug 或救援事件）。 */
     _Atomic uint64_t stuck_co_count;
-    /* pending_time 直方图（对齐 LatencyRecorder）：ready→被执行延迟分布。
+    /* pending_time 直方图：ready→被执行延迟分布。
      * trace 线程每轮打印后清零（窗口语义）；trace 未启用时累计不清零。 */
     _Atomic uint64_t pending_buckets[LM_SCHED_PENDING_BUCKETS];
     _Atomic uint64_t pending_count;     /* 窗口内样本数 */

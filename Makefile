@@ -168,7 +168,7 @@ endif
 endif
 
 # Phase 7.2：per-thread 协程调度器（reactor + 就绪队列 + TLS scheduler）
-# 对标 lthread per-thread IO scheduler，每线程独立 scheduler + reactor，
+# per-thread IO scheduler，每线程独立 scheduler + reactor，
 # 就绪队列 mutex 保护支持跨线程投递（Phase 7.3 coWakeup 打底）。
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_scheduler.c
 # Phase 7.3：协程条件变量（wait/signal/broadcast 跨线程唤醒）。

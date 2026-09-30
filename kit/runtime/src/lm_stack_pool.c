@@ -1,9 +1,9 @@
 // lm_stack_pool.c —— Phase 8.6 B：per-thread 栈池实现
-// 借鉴 bthread StackFactory（brpc stack_inl.h:124-161）+ stack.cpp:56-131 allocate_stack_storage。
+// per-thread 栈对象池 + 栈存储分配。
 //
 // intrusive free list：归还的栈，可用区首 word 存 next 指针（in-band），
 // 无额外节点 malloc。get 时读 next、出栈；return 时写 next、入栈。
-// ASAN：return poison 整个可用区，get unpoison，与 bthread stack_inl.h:151-158 一致。
+// ASAN：return poison 整个可用区，get unpoison，poison/unpoison 配对一致。
 #include "lm_stack_pool.h"
 #include "lm_co.h"          /* LM_STACK_SMALL/NORMAL/CLASS_* 常量 */
 
@@ -14,7 +14,7 @@
 
 /* ============================================================
  * ASAN poison/unpoison（仅 AddressSanitizer 构建生效，否则空操作）
- * 对齐 bthread stack_inl.h:34-94 的 __asan_poison/unpoison 配对。
+ * __asan_poison/unpoison 配对。
  * 池中空闲栈标记为不可访问，防 co 代码持有栈变量悬空引用误用。
  * ============================================================ */
 #if defined(__has_feature)
@@ -27,8 +27,8 @@
 #endif
 #ifdef LM_ASAN_POOL
 /* poison/unpoison 声明在 asan_interface.h（common_interface_defs.h 仅含
- * start/finish_switch_fiber 等 fiber API，不含 poison）。对齐 bthread
- * stack_inl.h:34-94 的 poison/unpoison 配对语义。 */
+ * start/finish_switch_fiber 等 fiber API，不含 poison）。
+ * poison/unpoison 配对语义。 */
 #include <sanitizer/asan_interface.h>
 #define LM_POOL_POISON(p, n)   __asan_poison_memory_region((p), (n))
 #define LM_POOL_UNPOISON(p, n) __asan_unpoison_memory_region((p), (n))
@@ -37,7 +37,7 @@
 #define LM_POOL_UNPOISON(p, n) ((void)0)
 #endif
 
-/* 池容量（对齐 bthread stack.cpp:38-39 tc_stack_small=32 / tc_stack_normal=8）。 */
+/* 池容量（小栈 32 / 正常栈 8）。 */
 #define LM_POOL_SMALL_CAP   32
 #define LM_POOL_NORMAL_CAP  8
 
@@ -116,7 +116,7 @@ static lm_pool_tls_t* pool_for_thread(void) {
 }
 
 /* ============================================================
- * 栈分配：mmap + 末页 guard page（对齐 bthread stack.cpp:56-131）
+ * 栈分配：mmap + 末页 guard page
  * 逻辑与 lm_co.c:co_alloc_stack 一致，迁出供池使用。
  * 返回 0 成功填充 *out；-1 失败。
  * ============================================================ */

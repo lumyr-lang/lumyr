@@ -1,7 +1,6 @@
 // lm_compute.c —— compute worker 池实现（Phase 7.4）
-// 对标 lthread_compute.c：worker 线程池 + 协程跨线程迁移。
-// 与 lthread 的差异：lthread 用 ucontext 直接在线程间 switch 上下文
-// （PENDING 状态防双线程同栈）；lm 的迁移走"标记 + yield + 调度方 post"协议
+// worker 线程池 + 协程跨线程迁移。
+// 迁移走"标记 + yield + 调度方 post"协议（PENDING 状态防双线程同栈）
 // （见 lm_co.h），复用既有 scheduler 就绪队列与跨线程唤醒（Phase 7.2/7.3），
 // worker 无 reactor，靠 post 内 cond signal 唤醒。
 #include "lm_compute.h"

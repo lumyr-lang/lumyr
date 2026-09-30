@@ -1,7 +1,7 @@
 // lm_stack_pool.h —— Phase 8.6 B：per-thread 栈池
-// 借鉴 bthread StackFactory（brpc stack_inl.h:124-161）：per-thread 对象池，
+// per-thread 对象池，
 // get_object 取池 + ASAN unpoison，return_object poison + 归还池。
-// 池上限对齐 bthread tc_stack_small=32 / tc_stack_normal=8（stack.cpp:38-39）。
+// 池上限（小栈 32 / 正常栈 8）。
 //
 // 设计：
 //   - per-thread 两桶 free list（SMALL 16KiB / NORMAL 128KiB），无跨线程锁。
@@ -9,7 +9,7 @@
 //     无额外节点 malloc。get 时读 next、出栈；return 时写 next、入栈。
 //   - 池满则 munmap 归还 OS；池空则 mmap+guard 分配新栈。
 //   - ASAN：return 时 poison 整个可用区（标记"已释放"），get 时 unpoison
-//     （标记"活跃"），与 bthread stack_inl.h:151-158 配对语义一致。
+//     （标记"活跃"），poison/unpoison 配对语义一致。
 //   - 线程退出时 pthread_key 析构 munmap 拋留栈。
 //
 // 调用方（lm_co.c）：spawn 时 get，destroy 时 return。消除高频 spawn/destroy

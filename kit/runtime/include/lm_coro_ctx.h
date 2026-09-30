@@ -1,6 +1,6 @@
 // lm_coro_ctx.h —— 协程上下文切换原语抽象层（Phase 8.1）
 // 设计目标：把切换机制从 lm_co.c 中剥离，默认 fcontext 纯用户态汇编切换
-// （对标 bthread bthread_jump_fcontext / libco coctx_swap），
+// （纯用户态上下文切换），
 // 保留 ucontext 后端作为排障对照（-DLM_CTX_UCONTEXT 一行回退）。
 //
 // 两后端语义完全对齐：
@@ -12,7 +12,7 @@
 //   - 不保存/恢复信号掩码：协程共享线程信号上下文（省 rt_sigprocmask 系统调用）；
 //   - 不保存 FPU/SIMD：System V AMD64 下全为 caller-saved；AAPCS64 下 d8-d15
 //     为 callee-saved，arm64 汇编已保存；
-//   - errno 是 TLS，天然随线程保留，两后端语义一致（不做 bthread 式协程私有 errno）。
+//   - errno 是 TLS，天然随线程保留，两后端语义一致（不做协程私有 errno）。
 #ifndef LM_CORO_CTX_H
 #define LM_CORO_CTX_H
 

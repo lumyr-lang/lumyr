@@ -1,11 +1,11 @@
 // lm_wsq.h —— 工作窃取队列（Phase 8.2：Chase-Lev 无锁双端队列）
-// 对标 bthread work_stealing_queue + Go runq 的生产级语义：
+// 工作窃取队列的生产级语义：
 //   - owner（本 scheduler 线程）从 bottom 端 push/pop（LIFO），热路径零 CAS；
 //   - thief（其他 scheduler 线程）从 top 端 steal/steal_batch（FIFO），走 CAS；
 //   - 容量为 2 的幂（默认 4096 槽，编译期 -DLM_WSQ_CAPACITY=n 可覆盖，
-//     单测用小容量触发边界交错，对齐 loom 式容量压缩验证法）。
+//     单测用小容量触发边界交错）。
 //
-// 并发契约（对齐 work_stealing_queue.h:65-68、111-113）：
+// 并发契约（工作窃取队列）：
 //   - push/pop/extract_tail_half 仅 owner 线程调用；
 //   - steal_batch 可多 thief 并发，与 owner 的 push/pop 并发安全；
 //   - 元素为 lm_co_t*（不透明指针），WSQ 不管理协程生命周期；
@@ -35,12 +35,12 @@ extern "C" {
 #define LM_WSQ_STEAL_MAX_BATCH 32
 #endif
 
-/* 窃取重试上限（对齐 Go stealWork 的 stealTries=4，proc.go:3849-3852） */
+/* 窃取重试上限（4 次重试） */
 #ifndef LM_WSQ_STEAL_TRIES
 #define LM_WSQ_STEAL_TRIES 4
 #endif
 
-/* bottom/top 用有符号 int64_t（对齐 bthread 的 int）：
+/* bottom/top 用有符号 int64_t：
  * Chase-Lev pop 的 bottom-1 在空队列初始态（bottom==0）会产生 -1，
  * 有符号下 t > b 判定成立归位 NULL；无符号回绕 SIZE_MAX 会误判非空。
  * 单调递增不回绕需 2^63 次操作，工程上不可达。 */
@@ -66,7 +66,7 @@ int  lm_wsq_push(lm_wsq_t* q, void* co);
 /* owner 从 bottom 端 pop（LIFO）。空返回 NULL。仅 owner 线程调用。 */
 void* lm_wsq_pop(lm_wsq_t* q);
 
-/* owner 抽取 bottom 侧至多一半元素到 out[]（溢出灌全局用，对齐 Go runqputslow
+/* owner 抽取 bottom 侧至多一半元素到 out[]（溢出灌全局用，溢出协议
  * 选后半段：全局取回的任务放本地前半段，溢出走后半段，防本地↔全局反复弹跳）。
  * 返回抽取个数（0 = 队列太空不抽）。仅 owner 线程调用。 */
 size_t lm_wsq_extract_tail_half(lm_wsq_t* q, void** out, size_t max_out);

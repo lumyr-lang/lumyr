@@ -1,5 +1,5 @@
 /* lm_ctx_jump_arm64.S —— fcontext 协程切换（AAPCS64，macOS Apple Silicon / Linux arm64）
- * 对标 bthread apple_arm64 fcontext：纯用户态，只做三件事：
+ * 纯用户态，只做三件事：
  *   1. 保存 callee-saved 寄存器到当前栈（x19-x29、x30/lr、d8-d15）
  *   2. 交换栈指针（from->sp = sp; sp = to->sp）
  *   3. 恢复目标寄存器后 ret 跳入

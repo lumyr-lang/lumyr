@@ -1,11 +1,11 @@
-// lm_reactor.c —— 事件驱动 reactor 实现（参考 nginx src/event）
+// lm_reactor.c —— 事件驱动 reactor 实现
 // 单 reactor 线程跑所有协程；epoll/kqueue ET 后端；连接池 + 定时器最小堆 + posted 队列。
 //
-// 主循环顺序（对齐 nginx ngx_process_events_and_timers）：
+// 主循环顺序：
 //   process_events(timeout=最近 timer 剩余) → 处理 posted_accept →
 //   过期 timer 派发 → 处理 posted_events → 检查 stop_flag。
 //
-// 后端抽象（对齐 nginx ngx_event_actions_t）：
+// 后端抽象：
 //   Linux → epoll（EPOLLET，ET 模式）
 //   macOS → kqueue（EV_CLEAR，ET 模式）
 //
@@ -108,7 +108,7 @@ static int epoll_add(lm_reactor_t* r, lm_connection_t* c, uint32_t events) {
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.events = epoll_map_events(events);
-    ev.data.ptr = c;     /* 直接挂 connection 指针（nginx 同做法） */
+    ev.data.ptr = c;     /* 直接挂 connection 指针 */
     return epoll_ctl(r->backend_fd, EPOLL_CTL_ADD, c->fd, &ev);
 }
 
@@ -148,7 +148,7 @@ static int epoll_process_events(lm_reactor_t* r, int timeout_ms) {
         if (events[i].events & EPOLLERR)  revents |= LM_EVENT_ERROR;
         if (events[i].events & EPOLLHUP) revents |= LM_EVENT_HUP;
         c->ready_events = revents;
-        /* 直接调 handler（单线程 reactor，无并发）；nginx 通过 posted 队列延后 */
+        /* 直接调 handler（单线程 reactor，无并发）；posted 队列延后属另一路径 */
         if ((revents & (LM_EVENT_READ | LM_EVENT_ERROR | LM_EVENT_HUP)) && c->read_handler) {
             c->read_handler(c, revents, c->read_data);
         }
@@ -282,7 +282,7 @@ lm_connection_t* lm_reactor_get_connection(lm_reactor_t* r, int fd) {
         r->free_conns = c->next_free;
         c->next_free = NULL;
     } else if (fd >= 0 && fd < r->conn_capacity) {
-        /* 首次按 fd 索引取（nginx 同做法：fd 索引直接定位） */
+        /* 首次按 fd 索引取（fd 索引直接定位） */
         c = &r->connections[fd];
     } else {
         return NULL;   /* 超 capacity，拒绝（用户应扩容或拒绝连接） */
@@ -624,7 +624,7 @@ void lm_reactor_run(lm_reactor_t* r) {
 }
 
 /* ============================================================
- * accept helper（对齐 nginx ngx_event_accept）
+ * accept helper
  * ============================================================ */
 
 lm_connection_t* lm_reactor_accept_one(lm_reactor_t* r, lm_connection_t* listener_conn,
@@ -653,7 +653,7 @@ lm_connection_t* lm_reactor_accept_one(lm_reactor_t* r, lm_connection_t* listene
             return NULL;
         }
         if (errno == EMFILE || errno == ENFILE || errno == ENOMEM) {
-            *out_again = 0;   /* 进程级 fd 耗尽，跳过此次（nginx 同做法） */
+            *out_again = 0;   /* 进程级 fd 耗尽，跳过此次 */
             return NULL;
         }
         /* EINTR 也算可重试，但 ET 模式下重试 accept 可能立即再次 EINTR；返回不重试 */
@@ -677,7 +677,7 @@ lm_connection_t* lm_reactor_accept_one(lm_reactor_t* r, lm_connection_t* listene
 }
 
 /* ============================================================
- * connect helper（对齐 nginx ngx_event_connect）
+ * connect helper
  * ============================================================ */
 
 int lm_reactor_connect(lm_reactor_t* r, lm_connection_t* c) {
