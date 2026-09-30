@@ -1,0 +1,88 @@
+// ============================================================
+// lumyr-App：ComputeTask<T> 接口 + AbstractCompute<T> 抽象基类
+//           + Compute<T> 计算池封装类
+// 面向对象封装内置 computeBegin / computeEnd（Phase 7.4 compute 池）：
+//   ComputeTask<T>        纯 CPU 任务统一契约（返回类型 T 由调用方决定）
+//   AbstractCompute<T>    compute 区间进入/退出公共流程，不能实例化
+//   Compute<T>            构造传入任务，或直接 Compute.exec 静态入口
+//
+// 语义与约束（kit/runtime lm_compute，实测）：
+//   execute 把当前协程迁入 compute worker 池（N=CPU 核数，懒初始化，
+//   LM_MAX_WORKERS 环境变量调上限），跑完迁回老家 IO scheduler——
+//   请求处理器等协程内的 CPU 密集段不再卡 IO reactor；
+//   compute 区间内只能做纯计算，禁止 recv/send/coSleep/timer 等 IO
+//   原语（worker 无 reactor）；必须在协程内调用（主线程裸调运行期
+//   双语报错）；任务抛错时 finally 兜底 computeEnd，协程先迁回老家
+//   再向上传播异常，否则协程滞留 worker、后续 computeBegin 嵌套报错
+//
+// 用法（三模式）：
+//   1. alias：import <App/Compute> as cp; → cp.Compute.exec(task);
+//   2. no-alias：import <App/Compute>; → Compute.exec(task);
+//   3. rename：import <App/Compute> {Compute as Pool}; → Pool.exec(task);
+//
+//   class FibTask implements ComputeTask<int> {
+//       n: int;
+//       func FibTask(n: int) { self.n = n; }
+//       func run(): int { /* 纯 CPU 计算 */ ... }
+//   }
+//   r1 = Compute.exec(FibTask(30));                 // 契约对象
+//   r2 = Compute.exec(func() { return heavy(); });  // func 表达式
+//
+// 注：池容量/扩缩容（lm_compute_pool_grow/shrink）尚未暴露为 lumin
+//     内置，容量调优走 LM_MAX_WORKERS 环境变量
+// ============================================================
+
+// 纯 CPU 任务契约：compute 区间内执行的 run，返回类型 T（由调用方决定）
+public interface ComputeTask<T> {
+    func run(): T;
+}
+
+// 计算池抽象基类：提供 compute 区间的进入/退出公共流程
+// （抽象类豁免接口方法实现检查：run 由具体子类承担）
+public abstract class AbstractCompute<T> implements ComputeTask<T> {
+    // execute：computeBegin 迁入 worker 池 → run → computeEnd 迁回老家。
+    // finally 兜底：任务抛错也保证 computeEnd 执行（协程迁回老家后再
+    // 传播异常），否则协程滞留 worker、后续 computeBegin 嵌套报错。
+    // （VM 跨帧展开 finally 缺陷已修复：try/finally 跨帧必达）
+    func execute(): T {
+        computeBegin();
+        r = null;
+        try {
+            r = self.run();
+        } finally {
+            computeEnd();
+        }
+        return r;
+    }
+}
+
+// 计算池封装类：构造传入任务，或直接用静态入口 exec
+public class Compute<T> extends AbstractCompute<T> {
+    target: any;
+
+    func Compute() {
+        self.target = null;
+    }
+
+    // 传入任务：ComputeTask 契约对象或 func 表达式均可
+    func Compute(task: ComputeTask<T>) {
+        self.target = task;
+    }
+
+    // 任务体：func 值直接调用，契约对象按名分派 run（子类可重写）
+    func run(): T {
+        if (self.target == null) {
+            throw "未设置计算任务 / no compute task set";
+        }
+        t = self.target;
+        if (type(t) == "func") {
+            return t();
+        }
+        return t.run();
+    }
+
+    // 静态入口：把 task 放进 compute 池同步执行并取回结果
+    public static func exec(task: ComputeTask<T>): T {
+        return Compute<T>(task).execute();
+    }
+}

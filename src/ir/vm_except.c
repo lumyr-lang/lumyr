@@ -4,6 +4,12 @@
  *   throw 时沿 try 上下文栈定位捕获帧；
  *   若捕获帧不是当前帧，设置 g_unwind，由各层 vm_exec_loop / vm_exec_call
  *   检测后销毁中间帧并向外传播，直到捕获帧清除展开并跳到 catch_pc。
+ * 展开途中的 finally：throw 分派保留途经的带 finally 节点，各帧在
+ *   check_unwind 分流执行自己的 finally（divert_to_finally，FINISH 以
+ *   RETHROW 重新分派续传），全部执行完才进入捕获帧 catch——保证
+ *   try{ 调用链 }finally{ 清理 } 的清理语义跨帧成立。
+ * 已知边界：全程无任何 catch 时仍走未捕获短路路径（exit/线程根长跳），
+ *   途经 finally 不执行（维持旧行为，如需覆盖需引入根展开模式）。
  */
 #include "vm_types.h"
 #include "stack_manager.h"
@@ -24,7 +30,7 @@
 typedef struct TryCtxNode {
     StackFrame* frame;      /* try 所在栈帧 */
     int catch_pc;           /* catch 入口 pc（0=无 catch） */
-    int fin_pc;             /* finally 入口 pc（0=无 finally，Task 8 后续） */
+    int fin_pc;             /* finally 入口 pc（0=无 finally） */
     int caught;             /* 已进入 catch 块（节点保留至 ENDTRY）：
                              * catch 内再 throw 时本层 finally 仍须执行，
                              * 且同一 catch 不得重复捕获 */
@@ -39,6 +45,8 @@ typedef struct {
     Value throw_val;     /* 原始 throw 值（跨帧展开时同步给 GET_ERR） */
     StackFrame* target_frame;
     int catch_pc;
+    TryCtxNode* target_node;  /* 目标 catch 节点（展开途中据此区分
+                               * "上方待执行 finally 的残存节点"与目标本身） */
 } UnwindState;
 static _Thread_local UnwindState g_unwind;
 
@@ -233,8 +241,12 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
         exit(1);
     }
 
-    /* 弹出 target 之上被异常穿过的 try 节点（仅 finally 的节点后续任务处理） */
-    while (g_try_stack && g_try_stack != t) {
+    /* 弹出 target 之上被异常穿过的 try 节点。
+     * 带 finally（fin_pc!=0）的节点保留：协作式展开途中由各帧的
+     * check_unwind 分流执行其 finally（FINISH 以 RETHROW 重新分派续传），
+     * 执行完由 FINISH 弹出；此后重入本函数时再弹出其间暴露的无 finally
+     * 死节点。全部跳过将导致中间帧 finally 被静默跳过（旧缺陷）。 */
+    while (g_try_stack && g_try_stack != t && g_try_stack->fin_pc == 0) {
         TryCtxNode* d = g_try_stack;
         g_try_stack = d->prev;
         free(d);
@@ -257,6 +269,12 @@ int vm_except_throw_value(VMExecCtx* ctx, Value v) {
         g_unwind.throw_val = v;
         g_unwind.target_frame = t->frame;
         g_unwind.catch_pc = t->catch_pc;
+        g_unwind.target_node = t;
+        /* 同步 current_error/throw_val：展开途中各帧分流执行 finally 后，
+         * FINISH 以 RETHROW 续传（重抛取 current_error），跨帧路径此前
+         * 不设置导致分流后续抛出陈旧错误 */
+        g_current_error = err;
+        g_current_throw_val = v;
     }
     return 1;
 }
@@ -286,22 +304,60 @@ int vm_exec_get_err(VMExecCtx* ctx, Instruction* in) {
     return 1;
 }
 
+/* 弹出当前 try 节点（break/cont/rethrow/return 路径不经过 ENDTRY） */
+static void pop_current_try(void);
+
+/* 展开途中分流：当前帧栈顶若为本帧待执行 finally 的 try 节点（throw 分派
+ * 时保留），清除展开态、压入 RETHROW 完成动作并跳入 finally——finally 跑完
+ * 由 FINISH 重抛（throw_value 重新走完整分派）继续向外展开。
+ * 返回 1=已分流；0=本帧无待执行 finally（展开继续/帧中止）。
+ * 节点存活即 finally 未执行（执行完 FINISH 必弹出），故无重复执行风险。 */
+static int divert_to_finally(VMExecCtx* ctx) {
+    if (!g_unwind.active) return 0;
+    if (!g_try_stack || g_try_stack->frame != ctx->frame) return 0;
+    if (g_try_stack->fin_pc == 0) return 0;
+    FinNode* fn = (FinNode*)malloc(sizeof(FinNode));
+    if(!fn) { perror("unwind fin"); exit(EXIT_FAILURE); }
+    fn->action = 2;    /* RETHROW */
+    fn->target = 0;
+    fn->next   = g_fin_stack;
+    g_fin_stack = fn;
+    g_unwind.active = 0;
+    ctx->pc = g_try_stack->fin_pc;
+    return 1;
+}
+
 /* ========== 主循环底部调用：驱动协作式展开 ========== */
 int vm_except_check_unwind(VMExecCtx* ctx) {
     if (!g_unwind.active) return 0;
     if (g_unwind.target_frame == ctx->frame) {
-        /* 到达捕获帧：定位栈顶属于捕获帧的 try 节点，保留并标记 caught
-         * （与同层捕获一致：catch 内 throw 时本层 finally 不丢失，同一
-         * catch 不重复捕获；catch 正常完成由 ENDTRY 弹出）。 */
-        if (g_try_stack && g_try_stack->frame == ctx->frame) {
-            g_try_stack->caught = 1;
+        /* 到达捕获帧。目标节点上方若仍有 throw 分派时保留的待执行
+         * finally（本帧或途经死帧残存），先分流执行——FINISH 以 RETHROW
+         * 重新分派后再次到达本帧；全部走完后栈顶即目标节点。 */
+        while (g_try_stack && g_try_stack->frame == ctx->frame &&
+               g_try_stack != g_unwind.target_node) {
+            if (g_try_stack->fin_pc != 0) {
+                divert_to_finally(ctx);
+                return 1;
+            }
+            /* 无 finally 的残存死节点（正常已被 throw 分派清理，防御兜底） */
+            pop_current_try();
+        }
+        /* 定位目标节点，保留并标记 caught（与同层捕获一致：catch 内 throw
+         * 时本层 finally 不丢失，同一 catch 不重复捕获；catch 正常完成由
+         * ENDTRY 弹出）。 */
+        if (g_unwind.target_node) {
+            g_unwind.target_node->caught = 1;
         }
         g_current_error = g_unwind.error;
         g_current_throw_val = g_unwind.throw_val;
         ctx->pc = g_unwind.catch_pc;
         g_unwind.active = 0;
+        g_unwind.target_node = NULL;
         return 1;
     }
+    /* 中间帧：本帧若还有待执行 finally，先跳入执行再继续展开 */
+    if (divert_to_finally(ctx)) return 1;
     return -1;
 }
 
@@ -501,6 +557,7 @@ void vm_except_save_state(VMExceptState* out) {
     out->unwind_error        = g_unwind.error;
     out->unwind_throw_val    = g_unwind.throw_val;
     out->unwind_target_frame = g_unwind.target_frame;
+    out->unwind_target_node  = g_unwind.target_node;
     out->unwind_catch_pc     = g_unwind.catch_pc;
     out->current_error       = g_current_error;
     out->current_throw_val   = g_current_throw_val;
@@ -517,6 +574,7 @@ void vm_except_restore_state(const VMExceptState* in) {
     g_unwind.error         = in->unwind_error;
     g_unwind.throw_val     = in->unwind_throw_val;
     g_unwind.target_frame  = (StackFrame*)in->unwind_target_frame;
+    g_unwind.target_node   = (TryCtxNode*)in->unwind_target_node;
     g_unwind.catch_pc      = in->unwind_catch_pc;
     g_current_error        = in->current_error;
     g_current_throw_val    = in->current_throw_val;
@@ -532,6 +590,7 @@ void vm_except_clear_state(void) {
     g_unwind.error = val_none();
     g_unwind.throw_val = val_none();
     g_unwind.target_frame = NULL;
+    g_unwind.target_node = NULL;
     g_unwind.catch_pc = 0;
     g_current_error = val_none();
     g_current_throw_val = val_none();

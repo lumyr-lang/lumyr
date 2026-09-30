@@ -123,6 +123,7 @@ typedef struct {
     Value unwind_error;          /* g_unwind.error */
     Value unwind_throw_val;      /* g_unwind.throw_val */
     void* unwind_target_frame;    /* g_unwind.target_frame（StackFrame*） */
+    void* unwind_target_node;     /* g_unwind.target_node（TryCtxNode*，不透明） */
     int   unwind_catch_pc;        /* g_unwind.catch_pc */
     Value current_error;          /* g_current_error */
     Value current_throw_val;      /* g_current_throw_val */

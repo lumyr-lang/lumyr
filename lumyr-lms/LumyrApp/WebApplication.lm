@@ -179,7 +179,9 @@ class HttpConnectionHandler {
                 // keep-alive 空闲等首字节：仅非首请求且缓冲已空时进入。
                 // 超时/EOF/读错均静默关闭（无未决请求）
                 if (!first && connBuf.len == 0) {
-                    c.setOption("recvTimeout", h.idleMs);
+                    // setOption 失败 = 连接已死亡：静默跳出（走协程尾部
+                    // close + markFinished 收尾，杜绝计数/FD 泄漏）
+                    try { c.setOption("recvTimeout", h.idleMs); } catch (e) { break; }
                     chunk = null;
                     try {
                         chunk = c.recv(ServerRequest.readChunkSize(), 0, true);
@@ -192,7 +194,7 @@ class HttpConnectionHandler {
                 }
                 first = false;
                 // 请求读取阶段：requestTimeout（每次 recv 无数据等待上限）
-                c.setOption("recvTimeout", h.reqMs);
+                try { c.setOption("recvTimeout", h.reqMs); } catch (e) { break; }
                 resp = null;
                 req = null;
                 failed = false;
