@@ -198,6 +198,33 @@ public class ServerRequest {
         return ServerRequest.readChunkSizeSlot[0];
     }
 
+    // P1-5：报文尺寸上限（防慢速/超大请求耗尽内存）。
+    //   maxHeaderBytes：请求头总量上限（含请求行+标头+\\r\\n\\r\\n），默认 1MB（对标 Go MaxHeaderBytes）。
+    //   maxBodyBytes：请求体上限，0=不限制。超限 readFrom 抛标记字符串，连接处理器回 413/431。
+    // 用单元素数组当可变槽（静态字段初始化后只读，数组内容可变）。
+    private static maxHeaderBytesSlot: array = [1048576];
+    private static maxBodyBytesSlot: array = [0];
+
+    // 设置请求头总量上限（字节；须在服务启动前调用）
+    public static func setMaxHeaderBytes(n: int) {
+        if (n > 0) { ServerRequest.maxHeaderBytesSlot[0] = n; }
+    }
+
+    // 读取请求头总量上限
+    public static func maxHeaderBytes(): int {
+        return ServerRequest.maxHeaderBytesSlot[0];
+    }
+
+    // 设置请求体上限（字节；0=不限制）
+    public static func setMaxBodyBytes(n: int) {
+        if (n >= 0) { ServerRequest.maxBodyBytesSlot[0] = n; }
+    }
+
+    // 读取请求体上限
+    public static func maxBodyBytes(): int {
+        return ServerRequest.maxBodyBytesSlot[0];
+    }
+
     // 注册自定义请求报文解析器（实现 RequestParser 接口）
     public static func registerRequestParser(p) {
         if (ServerRequest.requestParserSlot.len == 0) {
@@ -256,6 +283,8 @@ public class ServerRequest {
         buf = [];
         headerEnd = -1;   // buf 中 \r\n\r\n 起始下标，-1 未找到
         total = -1;       // 完整报文字节数（headerEnd+4+ContentLength），-1 未确定
+        maxHdr = ServerRequest.maxHeaderBytes();
+        maxBody = ServerRequest.maxBodyBytes();
         chunkSize = ServerRequest.readChunkSizeSlot[0];
 
         while (true) {
@@ -266,9 +295,16 @@ public class ServerRequest {
             while (i < n) { buf.add(chunk[i]); i = i + 1; }
 
             if (headerEnd < 0) {
+                // P1-5：header 未结束前按总量卡上限（防无头尾超大请求）
+                if (buf.len > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
                 headerEnd = ServerRequest.findHeaderEnd(buf);
                 if (headerEnd >= 0) {
-                    total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+                    // P1-5：header 总量超上限 → 431
+                    if (headerEnd + 4 > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
+                    cl = ServerRequest.headerContentLength(buf, headerEnd);
+                    // P1-5：body 超上限（按 Content-Length）→ 413
+                    if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
+                    total = headerEnd + 4 + cl;
                 }
             }
             if (total >= 0 && buf.len >= total) { break; }
@@ -283,11 +319,16 @@ public class ServerRequest {
     // EOF/异常语义与单参形态一致；connBuf 在返回后始终只含未消费字节。
     public static func readFrom(sock, connBuf: array): ServerRequest {
         buf = connBuf;
+        maxHdr = ServerRequest.maxHeaderBytes();
+        maxBody = ServerRequest.maxBodyBytes();
         // 先看残留缓冲（pipelining 场景可能无需 recv 即凑齐整包）
         headerEnd = ServerRequest.findHeaderEnd(buf);
         total = -1;
         if (headerEnd >= 0) {
-            total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+            if (headerEnd + 4 > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
+            cl = ServerRequest.headerContentLength(buf, headerEnd);
+            if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
+            total = headerEnd + 4 + cl;
         }
         chunkSize = ServerRequest.readChunkSizeSlot[0];
 
@@ -298,13 +339,17 @@ public class ServerRequest {
             i = 0;
             while (i < n) { buf.add(chunk[i]); i = i + 1; }
             if (headerEnd < 0) {
+                // P1-5：header 未结束前按总量卡上限
+                if (buf.len > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
                 headerEnd = ServerRequest.findHeaderEnd(buf);
                 if (headerEnd >= 0) {
-                    total = headerEnd + 4 + ServerRequest.headerContentLength(buf, headerEnd);
+                    if (headerEnd + 4 > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
+                    cl = ServerRequest.headerContentLength(buf, headerEnd);
+                    if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
+                    total = headerEnd + 4 + cl;
                 }
             }
         }
-
         // 只消费当前请求字节；残留左移保留在 connBuf（原地 clear + 重放）
         consume = buf.len;
         if (total >= 0 && total < consume) { consume = total; }
@@ -635,8 +680,11 @@ public class ServerResponse {
         s = "HTTP/1.1 " + self.status + " " + HttpSpec.statusText(self.status) + crlf;
         hdrMap = self.headers.toMap();
         keys = hdrMap.keys();
-        for k in keys {
+        ki = 0;
+        while (ki < keys.len) {
+            k = keys[ki];
             s = s + k + ": " + hdrMap[k] + crlf;
+            ki = ki + 1;
         }
         return s + crlf;
     }
@@ -660,8 +708,10 @@ public class ServerResponse {
     // 返回发送的总字节数
     func sendTo(sock): int {
         self.headers.set("Content-Length", "" + self.bodyByteLen());
+        hs = self.headString();
+        hb = bytes(hs);
         total = 0;
-        total = total + sock.send(bytes(self.headString()));
+        total = total + sock.send(hb);
         t = type(self.body);
         if (t == "file") {
             total = total + sock.send(self.body.readBytes());

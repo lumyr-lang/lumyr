@@ -210,25 +210,39 @@ class HttpConnectionHandler {
                     }
                 } catch (e) {
                     failed = true;   // 任何异常响应后关闭连接（同历史行为）
-                    // 错误码分派：kit 层 socket 错误（VAL_ERROR）携带 code，与
-                    // NetError 枚举数值对齐，e.getCode() 精确比较（不再字符串匹配）；
-                    // string/Error 实例无 socket 码（getCode=0 或不适用），走 500
-                    code = 0;
-                    if (type(e) != "string") {
-                        code = e.getCode();
+                    // P1-5：报文尺寸超限标记（ServerRequest.readFrom 抛出的字符串）
+                    oversizeKind = "";
+                    if (type(e) == "string") {
+                        if (e == "HTTP_HEADER_TOO_LARGE") { oversizeKind = "header"; }
+                        else if (e == "HTTP_BODY_TOO_LARGE") { oversizeKind = "body"; }
                     }
-                    if (code == NetError.RECV_TIMEOUT) {
-                        // 客户端长时间不发送完整报文（请求接收超时）：协议层 408，
-                        // 不进业务 onError（非应用异常），协程及时回收
-                        resp = ServerResponse(408);
-                        resp.text("Request Timeout: incomplete request / 请求接收超时");
-                    } else if (code == NetError.SEND_TIMEOUT) {
-                        // 响应阶段发送超时：协议层 408，连接关闭
-                        resp = ServerResponse(408);
-                        resp.text("Request Timeout: send timeout / 发送超时");
+                    if (oversizeKind != "") {
+                        h.app.countOversize(oversizeKind);
+                        if (oversizeKind == "header") {
+                            resp = ServerResponse(431);
+                            resp.text("Request Header Fields Too Large / 请求头过大");
+                        } else {
+                            resp = ServerResponse(413);
+                            resp.text("Payload Too Large / 请求体过大");
+                        }
                     } else {
-                        resp = ServerResponse(500);
-                        resp.text("Internal Server Error");
+                        // 错误码分派：kit 层 socket 错误（VAL_ERROR）携带 code，与
+                        // NetError 枚举数值对齐，e.getCode() 精确比较；
+                        // string/Error 实例无 socket 码，走 500
+                        code = 0;
+                        if (type(e) != "string") {
+                            code = e.getCode();
+                        }
+                        if (code == NetError.RECV_TIMEOUT) {
+                            resp = ServerResponse(408);
+                            resp.text("Request Timeout: incomplete request / 请求接收超时");
+                        } else if (code == NetError.SEND_TIMEOUT) {
+                            resp = ServerResponse(408);
+                            resp.text("Request Timeout: send timeout / 发送超时");
+                        } else {
+                            resp = ServerResponse(500);
+                            resp.text("Internal Server Error");
+                        }
                     }
                 }
                 // Connection 语义判定（异常响应恒关闭）
@@ -242,7 +256,9 @@ class HttpConnectionHandler {
                 else { resp.setHeader("Connection", "close"); }
                 try {
                     resp.sendTo(c);
-                } catch (e2) { break; }
+                } catch (e2) {
+                    break;
+                }
                 if (!ka) { break; }
             }
             try {
@@ -342,6 +358,9 @@ public class WebApplication extends ServiceApplication {
     kaVal: int;          // Phase 7.7：keepAlive 开关（-1 未设置走配置；0=关 1=开）
     kaTimeoutVal: int;   // Phase 7.7：keepAliveTimeout 毫秒（0 未设置走配置）
     reqTimeoutVal: int;  // Phase 7.7：requestTimeout 毫秒（0 未设置走配置）
+    // P1-5：报文尺寸上限（-1 未设置走配置；0=不限制 body）
+    maxHeaderBytesVal: int;
+    maxBodyBytesVal: int;
 
     func WebApplication() {
         super();
@@ -373,6 +392,8 @@ public class WebApplication extends ServiceApplication {
         self.kaVal = -1;
         self.kaTimeoutVal = 0;
         self.reqTimeoutVal = 0;
+        self.maxHeaderBytesVal = -1;
+        self.maxBodyBytesVal = -1;
     }
 
     // ---- 编程式注册（start 前或 onStart 内调用）----
@@ -502,6 +523,43 @@ public class WebApplication extends ServiceApplication {
         return self;
     }
 
+    // ---- P1-5：报文尺寸限制 ----
+    // 请求头总量上限（字节；默认 1MB，对标 Go MaxHeaderBytes）
+    func maxHeaderBytes(): int {
+        if (self.maxHeaderBytesVal >= 0) { return self.maxHeaderBytesVal; }
+        return self.configInt("maxHeaderBytes", 1048576);
+    }
+
+    // 编程式设置请求头总量上限（须在 start 前调用）
+    func setMaxHeaderBytes(n: int) {
+        if (n < 1) {
+            throw "请求头上限必须 ≥ 1 字节 / max header bytes must be at least 1";
+        }
+        self.maxHeaderBytesVal = n;
+        return self;
+    }
+
+    // 请求体上限（字节；0=不限制，默认 0）
+    func maxBodyBytes(): int {
+        if (self.maxBodyBytesVal >= 0) { return self.maxBodyBytesVal; }
+        return self.configInt("maxBodyBytes", 0);
+    }
+
+    // 编程式设置请求体上限（0=不限制，须在 start 前调用）
+    func setMaxBodyBytes(n: int) {
+        if (n < 0) {
+            throw "请求体上限不能为负 / max body bytes must not be negative";
+        }
+        self.maxBodyBytesVal = n;
+        return self;
+    }
+
+    // 将本实例的报文尺寸上限应用到 ServerRequest 静态槽（process 全局，run 入口调一次）
+    func applySizeLimits() {
+        ServerRequest.setMaxHeaderBytes(self.maxHeaderBytes());
+        ServerRequest.setMaxBodyBytes(self.maxBodyBytes());
+    }
+
     // 分派核心：路由分派 + 链尾异常兜底。
     // 处理器/路由匹配阶段抛出的异常统一转交 onError；错误响应作为
     // 正常返回值回到调用方（有过滤器时即外层过滤器的 post 阶段）。
@@ -557,9 +615,11 @@ public class WebApplication extends ServiceApplication {
     }
 
     // 主循环：进入 reactor 事件循环前按配置执行引导（autoScan=false 时跳过，
-    // 由用户在合适时机手动 scan），随后复用 ServiceApplication 的 reactor+协程骨架
+    // 由用户在合适时机手动 scan），随后复用 ServiceApplication 的 reactor+协程骨架。
+    // P1-5：applySizeLimits 在 super.run 前把报文尺寸上限应用到 ServerRequest 静态槽
     func run() {
         if (self.autoScanEnabled()) { self.scan(); }
+        self.applySizeLimits();
         super.run();
     }
 

@@ -1,0 +1,55 @@
+// slice_yield 协程丢失回归探针（header hang bug）：
+// handler 内纯 CPU 循环耗尽 reduction 预算（LM_SCHED_REDS=4000），
+// 在 VM JMP 指令边界触发 slice_yield 让出。修复前 BUILTIN_CO_RESUME
+// 直连 resume 路径不重入队，handler 协程永久丢失、响应 hang；
+// 修复后 slice_yield 统一在 lm_co_resume 返回段重入队，响应正常返回。
+import <App/WebApplication>;
+
+crlf = "" + '\r' + '\n';
+
+class CpuHandler {
+    n: int;
+    func CpuHandler(n: int) { self.n = n; }
+    func serve(req: ServerRequest): ServerResponse {
+        arr = [];
+        i = 0;
+        while (i < self.n) {
+            arr.add(i);
+            i = i + 1;
+        }
+        r = ServerResponse(200);
+        r.text("ok n=" + arr.len);
+        return r;
+    }
+}
+
+app = WebApplication("127.0.0.1", 19142);
+app.get("/cpu", CpuHandler(1000));
+app.startAsync();
+sleep(1000);
+
+c0 = TcpSocket();
+c0.connect("127.0.0.1", 19142);
+req = "GET /cpu HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + crlf;
+c0.send(req);
+
+// 阻塞 recv 循环读到 EOF（Connection: close，服务端发完即关连接）。
+// 修复前：handler 协程 slice_yield 后丢失，服务端永不发响应，本循环永久挂起。
+r0 = "";
+chunk = c0.recv(4096);
+guard = 0;
+while (chunk.len > 0 && guard < 64) {
+    r0 = r0 + chunk;
+    chunk = c0.recv(4096);
+    guard = guard + 1;
+}
+c0.close();
+
+if (r0.startsWith("HTTP/1.1 200") && r0.contains("ok n=1000")) {
+    print("p1-cpu-loop PASS / slice_yield 协程正常重入队，响应 " + r0.len + " 字节");
+} else {
+    print("p1-cpu-loop FAIL resp=[" + r0 + "]");
+}
+
+app.stop();
+app.join();

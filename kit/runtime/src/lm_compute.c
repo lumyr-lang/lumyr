@@ -74,16 +74,10 @@ static void* compute_worker_run(void* arg) {
                     (void*)co, elapsed_ns / 1000000.0, LM_SCHED_LONG_SCHED_MS);
             }
         }
-        /* Phase 8.5：时间片耗尽重入队 vs 迁移——互斥（同 drain_ready）。
-         * migrate_sched 非空时由 handle_migrate 投递，不重入队本 worker。 */
-        if (co->slice_yield) {
-            co->slice_yield = 0;
-            if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
-                atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
-                lm_sched_stats_force_yield();   /* Phase 8.11：强制让出计数 */
-                lm_scheduler_post(s, co);
-            }
-        }
+        /* Phase 8.5 统一收敛：slice_yield 重入队已上移到 lm_co_resume 返回段
+         * 统一处理（覆盖所有 resume 路径），本点不再重复——否则与 resume 路径
+         * 双重入队。迁移互斥由 handle_migrate 在下点处理（migrate_sched 非空时
+         * resume 的 slice_yield 块已跳过，两路径天然互斥）。 */
         lm_scheduler_handle_migrate(co);
         /* DEAD 协程不自动销毁（owner 管，与 IO scheduler 契约一致）。 */
     }

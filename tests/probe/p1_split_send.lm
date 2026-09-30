@@ -1,0 +1,38 @@
+// 测试：分段发送大 header（多次 send）是否能正常处理
+import <App/WebApplication>;
+
+crlf = "" + '\r' + '\n';
+
+class OkHandler {
+    func serve(req: ServerRequest): ServerResponse {
+        r = ServerResponse(200);
+        r.text("ok");
+        return r;
+    }
+}
+
+app = WebApplication("127.0.0.1", 19143);
+app.setMaxHeaderBytes(10000);
+app.get("/", OkHandler());
+app.startAsync();
+sleep(1000);
+
+// 构造大 header（约 1450 字节）
+bigHdr = "";
+i = 0;
+while (i < 40) { bigHdr = bigHdr + "X-Custom: padding-value-1234567890" + crlf; i = i + 1; }
+fullReq = "GET / HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + bigHdr + crlf;
+print("REQ_LEN=" + fullReq.len);
+
+c = TcpSocket();
+c.connect("127.0.0.1", 19143);
+// 分两次 send
+half = fullReq.len / 2;
+c.send(fullReq.slice(0, half));
+c.send(fullReq.slice(half));
+r = c.recv(4096);
+c.close();
+print("SPLIT_SEND=" + r.slice(9, 12));
+
+app.stop();
+app.join();

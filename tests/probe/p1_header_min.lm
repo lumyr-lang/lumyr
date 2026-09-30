@@ -1,0 +1,35 @@
+// P1-5 最小化：仅测试 header 超限
+import <App/WebApplication>;
+
+crlf = "" + '\r' + '\n';
+
+class OkHandler {
+    func serve(req: ServerRequest): ServerResponse {
+        r = ServerResponse(200);
+        r.text("ok");
+        return r;
+    }
+}
+
+app = WebApplication("127.0.0.1", 19141);
+// 原始代码无 setMaxHeaderBytes，使用默认
+app.get("/", OkHandler());
+app.startAsync();
+sleep(1000);
+
+// 6 行 header（~262 字节）
+c0 = TcpSocket();
+c0.connect("127.0.0.1", 19141);
+hdrLines = "";
+i = 0;
+while (i < 6) { hdrLines = hdrLines + "X-Custom: padding-value-1234567890" + crlf; i = i + 1; }
+fullReq = "GET / HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + hdrLines + crlf;
+print("REQ_LEN=" + fullReq.len);
+sent = c0.send(fullReq);
+print("SENT=" + sent);
+r0 = c0.recv(4096);
+c0.close();
+print("FULL_RESP=[" + r0 + "]");
+
+app.stop();
+app.join();

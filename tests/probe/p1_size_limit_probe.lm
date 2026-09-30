@@ -1,0 +1,58 @@
+// P1-5 探针：报文尺寸限制（header 431 / body 413）
+// 服务端设 maxHeaderBytes=200、maxBodyBytes=50；客户端发超限请求验证状态码
+// 预期：
+//   NORMAL=200          —— 正常请求
+//   HEADER_TOO_LARGE=431 —— 请求头超 200 字节
+//   BODY_TOO_LARGE=413   —— Content-Length 超 50 字节
+import <App/WebApplication>;
+
+crlf = "" + '\r' + '\n';
+
+class OkHandler {
+    func serve(req: ServerRequest): ServerResponse {
+        r = ServerResponse(200);
+        r.text("ok");
+        return r;
+    }
+}
+
+app = WebApplication("127.0.0.1", 19140);
+app.setMaxHeaderBytes(200);
+app.setMaxBodyBytes(50);
+app.get("/", OkHandler());
+app.startAsync();
+sleep(1000);
+
+// 1) 正常请求
+c = TcpSocket();
+c.connect("127.0.0.1", 19140);
+c.send("GET / HTTP/1.1" + crlf + "Host: x" + crlf + crlf);
+r = c.recv(1024);
+c.close();
+print("NORMAL=" + r.slice(9, 12));   // "HTTP/1.1 200" → 200
+
+// 2) 超大 header（远超 200 字节）
+c = TcpSocket();
+c.connect("127.0.0.1", 19140);
+bigHdr = "";
+i = 0;
+while (i < 50) { bigHdr = bigHdr + "X-Custom: padding-value-1234567890" + crlf; i = i + 1; }
+c.send("GET / HTTP/1.1" + crlf + "Host: x" + crlf + bigHdr + crlf);
+r = c.recv(1024);
+c.close();
+print("HEADER_TOO_LARGE=" + r.slice(9, 12));
+
+// 3) 超大 body（Content-Length=100 > 50）
+c = TcpSocket();
+c.connect("127.0.0.1", 19140);
+body = "";
+i = 0;
+while (i < 100) { body = body + "a"; i = i + 1; }
+c.send("POST / HTTP/1.1" + crlf + "Host: x" + crlf + "Content-Length: 100" + crlf + crlf + body);
+r = c.recv(1024);
+c.close();
+print("BODY_TOO_LARGE=" + r.slice(9, 12));
+
+app.stop();
+app.join();
+print("OVERSIZE_COUNT=" + app.oversizeCount);

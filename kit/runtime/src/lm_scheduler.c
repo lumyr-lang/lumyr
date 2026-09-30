@@ -582,25 +582,11 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
                     (void*)co, elapsed_ns / 1000000.0, LM_SCHED_LONG_SCHED_MS);
             }
         }
-        /* Phase 8.5：时间片耗尽让出重入队 vs 迁移——互斥。
-         * 若 co->migrate_sched 非空（computeBegin / sysmon 强制迁移），
-         * 由 handle_migrate 投递到目标 scheduler，不再重入队本 scheduler
-         * （否则协程同时在两个队列 → 双线程同栈 UB）。
-         * 仅当无迁移目标时，slice_yield 才重入队本 scheduler 继续轮转。 */
-        if (co->slice_yield) {
-            co->slice_yield = 0;
-            if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
-                atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
-                /* Phase 8.11：强制让出重入队计数（reduction 账本）。 */
-                lm_sched_stats_force_yield();
-                /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
-                 * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。
-                 * 用 lm_scheduler_post（mutex）而非 post_local（WSQ）。
-                 * 不立即 break：drain 继续 pop 下一个协程（FIFO 轮转），
-                 * 由顶部预算闸门（Phase 8.14）或队列空退出循环。 */
-                lm_scheduler_post(s, co);
-            }
-        }
+        /* Phase 8.5 统一收敛：slice_yield 重入队已上移到 lm_co_resume 返回段
+         * 统一处理（覆盖 BUILTIN_CO_RESUME 等业务层直连 resume 路径），
+         * 本点不再重复处理——否则同一协程被 resume 路径与 drain 路径双重入队。
+         * 迁移互斥仍由 handle_migrate 在下点处理（migrate_sched 非空时
+         * lm_co_resume 的 slice_yield 块已跳过，两路径天然互斥）。 */
         /* Phase 7.4 + 8.5 E：computeBegin / sysmon 强制迁移——投递到目标
          * scheduler（此时协程栈已让出，post 安全——迁移协议见 lm_co.h）。 */
         lm_scheduler_handle_migrate(co);

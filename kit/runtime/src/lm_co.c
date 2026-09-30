@@ -459,6 +459,29 @@ void lm_co_resume(lm_co_t* co) {
      * 否则后续 in_co 判定失效走阻塞分支）。 */
     co_set_current(caller);
     (void)prev;
+    /* Phase 8.5 统一收敛：slice_yield（VM 指令边界 LM_BUMP_REDS 预算耗尽让出）
+     * 的重入队在所有 resume 路径返回点统一处理。
+     * 此前仅 drain_ready 路径处理 slice_yield 重入队；BUILTIN_CO_RESUME
+     * （lumin 层 co.resume()/h.start()）等业务层直连 resume 路径不处理——
+     * 协程让出后永久丢失（HTTP header hang bug 根因：CPU 密集 handler 在
+     * JMP 指令边界 slice_yield 让出后无人重入队，响应永不发出）。
+     * 与 drain_ready 的重复防护：drain_ready 已删除其 slice_yield 块，
+     * 统一由本点处理，避免双重入队。
+     * 迁移互斥：migrate_sched 非空（computeBegin/sysmon 强制迁移）时由
+     * handle_migrate 投递目标 scheduler，本点跳过（否则双线程同栈 UB）。 */
+    if (co->slice_yield) {
+        co->slice_yield = 0;
+        if (atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_DEAD &&
+            atomic_load_explicit(&co->migrate_sched, memory_order_acquire) == NULL) {
+            lm_scheduler_t* sched = lm_scheduler_get_current();
+            if (sched) {
+                lm_sched_stats_force_yield();   /* reduction 账本计数 */
+                /* 重入队到 mutex FIFO 队尾（非 WSQ LIFO），保证时间片轮转公平：
+                 * 刚让出的 CPU 密集协程排到队尾，WSQ 中其他协程先跑。 */
+                lm_scheduler_post(sched, co);
+            }
+        }
+    }
 }
 
 void lm_co_yield(void) {

@@ -81,6 +81,7 @@ import <App/Application>;
 import <NetWork/Socket>;
 import <NetWork/Reactor>;
 import <NetWork/NetError>;
+import <Thread/SchedStats>;   // P1-8：handler 执行预算采样（forceYield/longSched）
 
 // 连接处理器契约：在原始连接上实现自定义协议；返回后连接由框架关闭
 public interface ServiceHandler {
@@ -100,6 +101,13 @@ public interface AcceptLoopHost {
     func onAccepted(conn);
     func onLoopError(kind: string, msg: string);
     func countHandlerError(e);
+    // P1-6：accept 限速平滑档——返回需让位的毫秒数（0=不限速）。
+    // 在役逼近有效容量 87.5% 时返回短延时，让内核 backlog 暂存新连接、
+    // 在途连接排空，避免生硬拒绝（对标 nginx accept_disabled）。
+    func acceptThrottleMs(): int;
+    // P1-8：handler 执行预算检查——采样 SchedStats forceYield/longSched，
+    // 超限则计数 + warn 日志。AcceptLoop 每轮调用。
+    func checkHandlerBudget();
 }
 
 // ============================================================
@@ -150,6 +158,13 @@ public class AcceptLoop {
 
     // 单次受理 + 错误分类（P0-1）。返回 false = 退出循环（致命/停机）
     func acceptOnce(): bool {
+        // P1-6：accept 限速平滑档——在役逼近有效容量 87.5% 时短暂让位，
+        // 让内核 backlog 暂存新连接、在途连接排空，避免生硬拒绝。
+        throttle = self.host.acceptThrottleMs();
+        if (throttle > 0) {
+            coSleep(throttle);
+            return true;
+        }
         conn = null;
         try {
             conn = self.srv.accept();
@@ -189,6 +204,8 @@ public class AcceptLoop {
     // 循环体：accept 协程入口调用（含 P0-2 监督重启，规则见类注释）
     func run() {
         while (self.host.loopRunning()) {
+            // P1-8：每轮采样 handler 执行预算（forceYield/longSched 超限计数+日志）
+            self.host.checkHandlerBudget();
             try {
                 if (self.acceptOnce() == false) { return; }
             } catch (e) {
@@ -303,6 +320,12 @@ class ServiceWorker {
     activeCount: int;
     acceptTotal: int;      // 累计 accept 连接数（分布统计，主线程 run 后只读）
     errorCount: int;       // handler 异常计数（P0-3；worker 线程本地，无锁）
+    oversizeCount: int;    // P1-5：报文尺寸超限计数（worker 线程本地，无锁）
+    // P1-8：handler 执行预算（worker 线程本地，无锁）
+    lastForceYield: long;
+    lastLongSched: long;
+    budgetOverrunCount: long;
+    longSchedCount: long;
     stopRequested: bool;
     tid: int;
     error: any;
@@ -319,6 +342,11 @@ class ServiceWorker {
         self.activeCount = 0;
         self.acceptTotal = 0;
         self.errorCount = 0;
+        self.oversizeCount = 0;
+        self.lastForceYield = 0;
+        self.lastLongSched = 0;
+        self.budgetOverrunCount = 0;
+        self.longSchedCount = 0;
         self.stopRequested = false;
         self.tid = 0;
         self.error = null;
@@ -456,6 +484,49 @@ class ServiceWorker {
         print("[lumyr-app][error] " + msg + "（worker " + self.idx + " 累计 " + self.errorCount + "）/ handler error (worker " + self.idx + " total " + self.errorCount + ")");
     }
 
+    // P1-5：报文尺寸超限记账（worker 线程本地计数 + warn 日志，无锁）
+    func countOversize(kind: string) {
+        self.oversizeCount = self.oversizeCount + 1;
+        name = "header";
+        if (kind == "body") { name = "body"; }
+        print("[lumyr-app][warn] 报文尺寸超限（worker " + self.idx + " " + name
+            + "，累计 " + self.oversizeCount + "）/ message size exceeded (worker "
+            + self.idx + " " + name + ", total " + self.oversizeCount + ")");
+    }
+
+    // P1-6：accept 限速平滑档（worker 版，逻辑同 ServiceApplication）。
+    // 有效上限 = app.maxConnections>0 时 min(app.maxConnections, app.connCapacity)，
+    // 否则 app.connCapacity；空闲槽不足总量 1/8 时让位（active > limit - limit/8）。
+    func acceptThrottleMs(): int {
+        cap = self.app.connCapacity();
+        mc = self.app.maxConnections;
+        limit = cap;
+        if (mc > 0 && mc < limit) { limit = mc; }
+        threshold = limit - limit / 8;
+        if (self.activeCount > threshold) { return 10; }
+        return 0;
+    }
+
+    // P1-8：handler 执行预算检查（worker 版，逻辑同 ServiceApplication）
+    func checkHandlerBudget() {
+        curForce = SchedStats.forceYield();
+        if (curForce > self.lastForceYield) {
+            self.budgetOverrunCount = self.budgetOverrunCount + (curForce - self.lastForceYield);
+            print("[lumyr-app][warn] handler 执行预算超限（worker " + self.idx
+                + " forceYield 累计 " + self.budgetOverrunCount + "）/ handler budget overrun: worker "
+                + self.idx + " forceYield=" + self.budgetOverrunCount);
+        }
+        self.lastForceYield = curForce;
+        curLong = SchedStats.longSched();
+        if (curLong > self.lastLongSched) {
+            self.longSchedCount = self.longSchedCount + (curLong - self.lastLongSched);
+            print("[lumyr-app][warn] 长调度告警（worker " + self.idx + " longSched 累计 "
+                + self.longSchedCount + "）/ long schedule alert: worker " + self.idx
+                + " longSched=" + self.longSchedCount);
+        }
+        self.lastLongSched = curLong;
+    }
+
     func handleConnection(conn) {
         return self.app.handleConnection(conn);
     }
@@ -509,6 +580,12 @@ public class ServiceApplication extends Application {
     maxConnections: int;   // 并发连接上限（0 = 不限）
     activeCount: int;      // 在役连接协程计数
     errorCount: int;       // handler 异常计数（P0-3；reactor 主线程本地，无锁）
+    oversizeCount: int;    // P1-5：报文尺寸超限计数（主线程本地，无锁）
+    // P1-8：handler 执行预算（全局 forceYield/longSched 采样差值，无锁单线程访问）
+    lastForceYield: long;
+    lastLongSched: long;
+    budgetOverrunCount: long;
+    longSchedCount: long;
     workerCountVal: int;   // Phase 7.5：worker 线程数（0 = 未设置，走配置/默认 1）
     workerList: any;       // Phase 7.5：多线程模式下的 ServiceWorker 数组（null = 单线程）
     connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/默认 65536）
@@ -568,6 +645,11 @@ public class ServiceApplication extends Application {
         self.maxConnections = 0;
         self.activeCount = 0;
         self.errorCount = 0;
+        self.oversizeCount = 0;
+        self.lastForceYield = 0;
+        self.lastLongSched = 0;
+        self.budgetOverrunCount = 0;
+        self.longSchedCount = 0;
         self.workerCountVal = 0;
         self.workerList = null;
         self.connCapacityVal = 0;
@@ -637,6 +719,20 @@ public class ServiceApplication extends Application {
         return self;
     }
 
+    // P1-7：fd 预算自检（run 入口调用，reactor 建立前）。
+    // 比对连接池容量与系统 fd 软上限（R2 __private_system__fd_limit）：
+    // 容量超过 fd 上限时双语 warn——实际可跟踪连接数受限于 fd 上限，
+    // 建议调高 ulimit -n 或调小 connCapacity。fdLimit=-1（无上限/不支持）跳过。
+    func checkFdBudget() {
+        cap = self.connCapacity();
+        fdLimit = __private_system__fd_limit();
+        if (fdLimit > 0 && cap > fdLimit) {
+            print("[lumyr-app][warn] 连接池容量 " + cap + " 超过系统 fd 上限 " + fdLimit
+                + "，实际可跟踪连接数受限于 fd 上限，建议调高 ulimit -n 或调小 connCapacity / "
+                + "connection pool capacity " + cap + " exceeds system fd limit " + fdLimit);
+        }
+    }
+
     // ---- 连接处理（核心扩展点，连接协程内调用）----
     // 默认：挂有 target 处理器时执行——func 直接调用，
     // ServiceHandler 对象调 serve；无 target 为空操作（连接随即关闭）。
@@ -701,6 +797,8 @@ public class ServiceApplication extends Application {
     // 创建 listen socket → spawn accept loop 协程 → 进入 reactor 事件循环
     // → reactor 退出后清理 accept 协程 + 挂起 handler 协程 + listen socket
     func run() {
+        // P1-7：fd 预算自检（单/多线程均在 reactor 建立前校验）
+        self.checkFdBudget();
         // Phase 7.5：多线程模式分派（workerCount > 1 走 SO_REUSEPORT 多 reactor）
         if (self.workerCount() > 1) {
             self.runMultiWorker(self.workerCount());
@@ -829,6 +927,49 @@ public class ServiceApplication extends Application {
         if (type(e) == "string") { msg = msg + "：" + e; }
         else { msg = msg + "：" + e.getMessage(); }
         print("[lumyr-app][error] " + msg + "（累计 " + self.errorCount + "）/ handler error (total " + self.errorCount + ")");
+    }
+
+    // P1-5：报文尺寸超限记账（主线程本地计数 + warn 日志，无锁）
+    func countOversize(kind: string) {
+        self.oversizeCount = self.oversizeCount + 1;
+        name = "header";
+        if (kind == "body") { name = "body"; }
+        print("[lumyr-app][warn] 报文尺寸超限（" + name + "，累计 " + self.oversizeCount
+            + "）/ message size exceeded (" + name + ", total " + self.oversizeCount + ")");
+    }
+
+    // P1-6：accept 限速平滑档。有效上限 = maxConnections>0 时 min(maxConnections,
+    // connCapacity)，否则 connCapacity；对标 nginx accept_disabled：空闲槽不足
+    // 总量 1/8 时让位（active > limit - limit/8），与硬拒绝档形成两档。
+    // 小容量（如 limit=1）下 limit-limit/8=limit，active 不可能超过，故不误触发。
+    func acceptThrottleMs(): int {
+        limit = self.connCapacity();
+        if (self.maxConnections > 0 && self.maxConnections < limit) {
+            limit = self.maxConnections;
+        }
+        threshold = limit - limit / 8;
+        if (self.activeCount > threshold) { return 10; }
+        return 0;
+    }
+
+    // P1-8：handler 执行预算检查（AcceptLoop 每轮调用）。采样全局 forceYield
+    // （reduction 预算耗尽强制让出）与 longSched（>50ms 长调度），差值计数+warn。
+    // 全局计数器跨协程共享，反映本进程所有协程（含 handler）的预算超限情况。
+    func checkHandlerBudget() {
+        curForce = SchedStats.forceYield();
+        if (curForce > self.lastForceYield) {
+            self.budgetOverrunCount = self.budgetOverrunCount + (curForce - self.lastForceYield);
+            print("[lumyr-app][warn] handler 执行预算超限（forceYield 累计 " + self.budgetOverrunCount
+                + "）/ handler budget overrun: forceYield=" + self.budgetOverrunCount);
+        }
+        self.lastForceYield = curForce;
+        curLong = SchedStats.longSched();
+        if (curLong > self.lastLongSched) {
+            self.longSchedCount = self.longSchedCount + (curLong - self.lastLongSched);
+            print("[lumyr-app][warn] 长调度告警（longSched 累计 " + self.longSchedCount
+                + "）/ long schedule alert: longSched=" + self.longSchedCount);
+        }
+        self.lastLongSched = curLong;
     }
 
     // 连接协程完成回调（协程内最后调用）：标记挂起待回收

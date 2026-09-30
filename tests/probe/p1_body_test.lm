@@ -1,0 +1,32 @@
+// 测试大请求体是否能正常处理（区分 header 解析 vs recv/buffer 问题）
+import <App/WebApplication>;
+
+crlf = "" + '\r' + '\n';
+
+class OkHandler {
+    func serve(req: ServerRequest): ServerResponse {
+        r = ServerResponse(200);
+        r.text("bodylen=" + req.body.len);
+        return r;
+    }
+}
+
+app = WebApplication("127.0.0.1", 19142);
+app.post("/", OkHandler());
+app.startAsync();
+sleep(1000);
+
+// 大请求体（2000 字节）
+c = TcpSocket();
+c.connect("127.0.0.1", 19142);
+body = "";
+i = 0;
+while (i < 2000) { body = body + "a"; i = i + 1; }
+req = "POST / HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + "Content-Length: 2000" + crlf + crlf + body;
+c.send(req);
+r = c.recv(4096);
+c.close();
+print("BIG_BODY=" + r.slice(9, 12));
+
+app.stop();
+app.join();
