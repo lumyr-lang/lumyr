@@ -62,7 +62,14 @@ yacc.output
 # test intermediate output
 tests/*.lm.c
 tests/*.lm.out
-tests/stackframe_test
+# tests 下的编译产物（无扩展名的可执行文件）：_test / _test_变体(O0/O1/O2/asan/tsan/neg/small) / _bench / _stress
+# .lm 源文件均以 .lm 结尾，不会被这些模式匹配
+tests/*_test
+tests/*_test_*
+tests/*_bench
+tests/*_stress
+# trace 输出（运行时诊断痕迹）
+*_trace_out.txt
 
 # 构建产物（可重现，不入库）
 bin/
