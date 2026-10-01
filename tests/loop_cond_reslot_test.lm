@@ -1,0 +1,97 @@
+// tests/loop_cond_reslot_test.lm
+// 回归：循环条件引用的 typed 变量，在 body 内接收动态值（方法调用/索引访问结果）
+// 时不得重定型换栈——否则条件随回边每轮读旧物理栈初值，循环永不退出。
+// 根因：四栈 VM 单遍编译，cond 先于 body 编译按旧类型落栈（如 string→PTR），
+// body 内 typed→NONE 迁移写 VALUE 栈，条件读永久失效（典型表现：socket 轮询
+// r = sock.recv() 已收到响应但 while (r == "") 不退出）。
+
+// 1) 数组索引结果：string 变量在 while body 内被动态元素赋值
+arr = ["hello"];
+u = "";
+i = 0;
+while (i < 3 && u == "") {
+    u = arr[0];
+    i = i + 1;
+}
+assert i == 1, "array index assignment must be visible to while condition";
+assert u == "hello";
+
+// 2) 内建方法调用结果（trim 等内建方法返回动态类型）
+w = "";
+j = 0;
+while (j < 3 && w == "") {
+    tmp = "  hi  ";
+    w = tmp.trim();
+    j = j + 1;
+}
+assert j == 1, "method call assignment must be visible to while condition";
+assert w == "hi";
+
+// 3) map 索引结果
+m = <string,string>{"a": "hello"};
+s = "";
+k = 0;
+while (k < 3 && s == "") {
+    s = m["a"];
+    k = k + 1;
+}
+assert k == 1, "map index assignment must be visible to while condition";
+assert s == "hello";
+
+// 4) try/catch 包裹的赋值（socket 轮询真实形态：try { r = sock.recv(); }）
+v = "";
+n = 0;
+while (n < 3 && v == "") {
+    try {
+        v = arr[0];
+    } catch (e) {
+        assert false, "unexpected exception";
+    }
+    n = n + 1;
+}
+assert n == 1, "assignment inside try must be visible to while condition";
+assert v == "hello";
+
+// 5) for 循环：body 内动态赋值，cond 引用同一变量
+f = "";
+found = 0;
+for (fi = 0; fi < 3 && f == ""; fi = fi + 1) {
+    f = arr[0];
+    found = found + 1;
+}
+assert found == 1, "for-loop body assignment must be visible to cond";
+assert f == "hello";
+
+// 6) 嵌套循环：内层 body 的动态重赋值不得绕过外层 cond 的 pin
+outer = "";
+oi = 0;
+while (oi < 3 && outer == "") {
+    ii = 0;
+    while (ii < 2) {
+        outer = arr[0];
+        ii = ii + 1;
+    }
+    oi = oi + 1;
+}
+assert oi == 1, "inner loop body assignment must be visible to outer cond";
+assert outer == "hello";
+
+// 7) 直线代码的 typed→NONE 重定型仍允许（特性不回退）：
+//    旧数值变量改持容器，后续引用读到容器本身
+p = 42;
+p = ["a", "b"];
+assert type(p) == "array", "straight-line retype to container must still work";
+assert p.len == 2;
+
+// 8) 累加器自引用动态调用保持原类型（既有保护不回退）
+func boxedStr(): string { return "x"; }
+acc = "";
+t = 0;
+while (t < 3 && acc.len < 3) {
+    acc = acc + boxedStr();
+    t = t + 1;
+}
+assert acc == "xxx", "self-referential accumulator must keep updating";
+assert t == 3;
+
+print("loop_cond_reslot_test ALL PASS");

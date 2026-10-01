@@ -1,0 +1,41 @@
+// 纯协程测试：不涉及 HTTP/socket，验证协程 resume 后 VM 状态是否正确
+
+mailbox = [];
+
+func coBody(x) {
+    arr = [];
+    i = 0;
+    while (i < 1000) {
+        arr.add(i);
+        i = i + 1;
+    }
+    mailbox.add("loop_done n=" + arr.len);
+
+    // 模拟 headString：map keys + 遍历
+    m = {"a": "1", "b": "2", "c": "3", "d": "4"};
+    keys = m.keys();
+    mailbox.add("keys n=" + keys.len);
+    ki = 0;
+    while (ki < keys.len) {
+        mailbox.add("k[" + ki + "]=" + keys[ki]);
+        ki = ki + 1;
+    }
+    mailbox.add("map_done");
+}
+
+co = Coroutine(coBody, 0);
+co.resume();
+
+// 主线程等待协程完成
+j = 0;
+while (j < 100) {
+    if (co.isDead()) { break; }
+    sleep(50);
+    j = j + 1;
+}
+
+print("dead=" + co.isDead());
+mi = 0;
+mb = "";
+while (mi < mailbox.len) { mb = mb + mailbox[mi] + ","; mi = mi + 1; }
+print("MAILBOX=[" + mb + "]");

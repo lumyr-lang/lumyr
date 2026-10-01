@@ -78,6 +78,15 @@ typedef struct {
     int var_cnt;
     int var_cap;
     SymHash var_idx;            /* var_names → 下标哈希（编译期 O(1) 查找） */
+    /* 循环条件 pin 栈（栈式区间，嵌套循环随 push/pop 嵌套）：
+     * while/for 的 cond 在 body 之前单遍编译，cond 中被读变量采用编译期类型；
+     * 运行时回边每轮重读 cond——body 内若把这类变量 typed→NONE 重定型换栈，
+     * cond 的旧栈读将永久失效（四栈错位）。body 编译期间压入 cond AST，
+     * 动态重赋值时用 expr_references_name 判定变量是否被某层 cond 引用，
+     * 命中则禁止重定型、强制 unbox 保持原栈。 */
+    AstNode** cond_pin_stack;
+    int cond_pin_cnt;
+    int cond_pin_cap;
     /* 当前编译函数的形参 AST 链头：方法注册名为内部唯一名，
      * 方法体内裸名自递归时用它构造临时 def 壳（仅遍历形参签名） */
     AstNode* cur_params;

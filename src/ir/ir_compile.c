@@ -3348,6 +3348,40 @@ static int expr_references_name(AstNode* n, const char* name) {
     }
 }
 
+/* ============================================================
+ * 循环条件 pin 栈（while/for body 编译期）
+ * ------------------------------------------------------------
+ * while/for 的 cond 在 body 之前单遍编译，cond 中的变量读按编译期类型
+ * 落到固定物理栈；运行时回边每轮都会重新执行该读。若 body 内把同名
+ * typed 变量接收动态值并重定型到 VALUE 栈（见 AST_ASSIGN 的 typed→NONE
+ * 迁移），cond 的旧栈读将永久失效——四栈槽位错位，循环条件不随更新变化。
+ * 编译 body 前把 cond AST 压栈，动态重定型判定点查变量是否被任一层
+ * cond 词法引用，命中则保持原类型走 unbox，禁止换栈。body 编译完弹栈。
+ * DO-WHILE 不需要：其 cond 在 body 之后编译，已采用重定型后的类型。
+ * ============================================================ */
+static int cond_pin_save(Ctx* c) { return c->cond_pin_cnt; }
+
+static void cond_pin_push(Ctx* c, AstNode* cond) {
+    if(!cond) return;
+    if(c->cond_pin_cnt >= c->cond_pin_cap) {
+        c->cond_pin_cap = c->cond_pin_cap ? c->cond_pin_cap * 2 : 8;
+        c->cond_pin_stack = (AstNode**)realloc(c->cond_pin_stack,
+                              (size_t)c->cond_pin_cap * sizeof(AstNode*));
+    }
+    c->cond_pin_stack[c->cond_pin_cnt++] = cond;
+}
+
+static void cond_pin_restore(Ctx* c, int saved) { c->cond_pin_cnt = saved; }
+
+/* 变量名是否被当前嵌套的任一 while/for 条件词法引用（含嵌套函数体，
+ * 与 expr_references_name 同样保守：假阳性仅损失重定型灵活性）。 */
+static int cond_pin_references(Ctx* c, const char* name) {
+    for(int i = 0; i < c->cond_pin_cnt; i++) {
+        if(expr_references_name(c->cond_pin_stack[i], name)) return 1;
+    }
+    return 0;
+}
+
 /* 判断表达式是否"数值型"（可能产生数值 VALUE）。
    用于决定赋值给已 typed 变量时是 unbox 还是改类型为 NONE。 */
 static int is_numeric_expr(AstNode* n) {
@@ -4347,15 +4381,19 @@ void c_stmt(Ctx* c, AstNode* node) {
                 emit_to_dynamic(c, rt, cast_type);
             } else if (rt == EXPR_TYPE_NONE) {
                 /* RHS 是动态 VALUE：
-                 * - RHS 不引用变量自身：允许重定型为 NONE（如 p = makePair()，
-                 *   旧数值变量改持容器）。本语句 RHS 无旧槽读取，后续引用均在
-                 *   重定型之后编译，无陈旧读。
-                 * - RHS 引用自身（累加器 s = gAdd(s, i)）：RHS 内旧 LOAD 已按
-                 *   旧类型发出，重定型后旧槽不再更新，循环重执行恒读陈旧值
-                 *   （动态箭头累加结果每轮退化为 i，s=0+1+.. 得 4；PTR 变量
-                 *   gCat 式拼接同样读到陈旧 ptr 槽，输出损坏）。
-                 *   保持 C 风格粘性类型：按目标类型 unbox 动态结果。 */
-                if (!selfRef) {
+                 * - 允许重定型为 NONE（如 p = makePair()，旧数值变量改持容器）：
+                 *   直线代码中本语句 RHS 无旧槽读取，后续引用均在重定型之后
+                 *   编译，无陈旧读。
+                 * - 两种情形必须保持原类型、unbox 动态结果：
+                 *   (a) RHS 引用自身（累加器 s = gAdd(s, i)）：RHS 内旧 LOAD
+                 *       已按旧类型发出，重定型后旧槽不再更新，循环重执行恒读
+                 *       陈旧值（动态箭头累加每轮退化为 i；PTR 变量 gCat 式拼接
+                 *       同样读到陈旧 ptr 槽，输出损坏）；
+                 *   (b) 变量被外层 while/for 条件引用（cond pin）：cond 在 body
+                 *       之前单遍编译，其旧栈读随回边每轮重复执行；body 内换栈
+                 *       会让条件永久读到旧槽初值（如 r = sock.recv() 轮询响应，
+                 *       写入 VALUE 栈而条件 r=="" 恒读 PTR 栈空串，循环不退出）。 */
+                if (!selfRef && !cond_pin_references(c, var_name)) {
                     target_et = EXPR_TYPE_NONE;
                     c_add_var(c, var_name, EXPR_TYPE_NONE);
                 } else if (target_et == EXPR_TYPE_INT) {
@@ -4933,7 +4971,12 @@ void c_stmt(Ctx* c, AstNode* node) {
         int cond_pc = here(c);
         L->cont_target = cond_pc;
         int jf = emit_cond_jump_if_false(c, node->u.while_node.cond);
+        /* cond 先于 body 编译：pin 条件引用变量，禁止 body 内动态重定型换栈
+         * （回边每轮重读旧栈，详见 cond_pin_* 说明）。 */
+        int pin_saved = cond_pin_save(c);
+        cond_pin_push(c, node->u.while_node.cond);
         c_stmt(c, node->u.while_node.body);
+        cond_pin_restore(c, pin_saved);
         emit(c, OPC_JMP, cond_pc, 0);
         patch_to(c, jf);
         patch_list_here(c, L->brk, L->brk_cnt);
@@ -4975,6 +5018,10 @@ void c_stmt(Ctx* c, AstNode* node) {
         int jf = -1;
         if(node->u.for_node.cond)
             jf = emit_cond_jump_if_false(c, node->u.for_node.cond);
+        /* cond 先于 body/update 编译：pin 区间覆盖 body 与 update，
+         * 两者每轮都在 cond 重读前执行，动态重定型换栈同样会使条件陈旧。 */
+        int pin_saved = cond_pin_save(c);
+        cond_pin_push(c, node->u.for_node.cond);
         c_stmt(c, node->u.for_node.body);
         int update_pc = here(c);
         for(int i = 0; i < L->cont_cnt; i++)
@@ -4982,6 +5029,7 @@ void c_stmt(Ctx* c, AstNode* node) {
         for(int i = 0; i < L->cont_fin_cnt; i++)
             c->fn->code[L->cont_fin[i]].b = update_pc;
         compile_for_effect(c, node->u.for_node.update);
+        cond_pin_restore(c, pin_saved);
         emit(c, OPC_JMP, cond_pc, 0);
         if(jf >= 0) patch_to(c, jf);
         patch_list_here(c, L->brk, L->brk_cnt);
@@ -5237,6 +5285,10 @@ static void ctx_cleanup(Ctx* c) {
     free(c->deferred);
     c->deferred = NULL;
     c->deferred_cnt = c->deferred_cap = 0;
+    /* 循环条件 pin 栈：只存 AST 借用指针，释放数组本身即可 */
+    free(c->cond_pin_stack);
+    c->cond_pin_stack = NULL;
+    c->cond_pin_cnt = c->cond_pin_cap = 0;
 }
 
 /* 前置声明（重载组定义在后文） */
