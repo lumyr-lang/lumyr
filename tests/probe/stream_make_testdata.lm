@@ -1,0 +1,25 @@
+// ============================================================
+// 流式探针测试数据生成器：生成全 'A' 的 1MB / 10MB 确定性文件
+// 由 run_stream_probes.sh 调用；也可单独运行：
+//   ./bin/lumyr tests/probe/stream_make_testdata.lm
+// ============================================================
+
+CHUNK = 65536;
+
+// 造指定大小的文件：字符串翻倍到 64KB 后分块 append，避免逐字符拼接
+func makeFile(path, size) {
+    f = file(path, "w");
+    f.writeAll("");
+    block = "A";
+    while (block.len < CHUNK) { block = block + block; }
+    n = size / CHUNK;
+    i = 0;
+    while (i < n) {
+        f.append(block);
+        i = i + 1;
+    }
+    print("generated " + path + " (" + size + " bytes)");
+}
+
+makeFile("/tmp/lumin_probe_data_1m.bin", 1024 * 1024);
+makeFile("/tmp/lumin_probe_data_10m.bin", 10 * 1024 * 1024);

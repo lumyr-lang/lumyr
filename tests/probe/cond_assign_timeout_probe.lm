@@ -1,0 +1,62 @@
+// ============================================================
+// T6: 超时 + 条件内赋值复合边界
+// 验证：recvTimeout 触发时，条件内赋值语法仍保持正确栈状态
+// ============================================================
+
+import <NetWork/Socket>;
+import <NetWork/NetError>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+port = 19202;
+srv = TcpSocket();
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", port);
+srv.listen();
+
+// 服务端：accept 后延迟 2 秒再发数据（触发客户端超时）
+tid = thread(func() {
+    conn = srv.accept();
+    sleep(2000);  // 延迟 2 秒
+    conn.send("delayed");
+    conn.close();
+});
+
+sleep(100);
+
+conn = TcpSocket();
+conn.setOption("recvTimeout", 500);  // 500ms 超时
+conn.connect("127.0.0.1", port);
+
+// 边界：条件内赋值 + 超时异常捕获
+received = "";
+timeoutCount = 0;
+r = "";
+guard = 0;
+
+while (guard < 10) {
+    try {
+        // 条件内赋值：超时异常会中断赋值，r 保持前值
+        if ((r = conn.recv(4096)) == "") {
+            break;  // EOF
+        }
+        received = received + r;
+    } catch (e) {
+        if (e.getCode() == NetError.RECV_TIMEOUT) {
+            timeoutCount = timeoutCount + 1;
+            continue;
+        }
+        throw e;
+    }
+    guard = guard + 1;
+}
+
+conn.close();
+srv.close();
+
+check(timeoutCount >= 2, "T6: expected >= 2 timeouts, got " + timeoutCount);
+check(received == "delayed", "T6: expected [delayed], got [" + received + "]");
+print("[T6] 超时+条件内赋值: " + timeoutCount + " timeouts, received=[" + received + "]");
+print("T6 超时+条件内赋值边界 ALL PASS");

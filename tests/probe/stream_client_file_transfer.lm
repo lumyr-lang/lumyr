@@ -1,0 +1,91 @@
+// ============================================================
+// T1: 大文件传输测试（1MB / 10MB）—— 流式版
+// 客户端边读边发：readChunk(64KB) → send(bytes)，内存占用恒定
+// 换行符：使用反引号字面量换行（ASCII 10）
+// ============================================================
+
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+NL = `
+`;
+
+CHUNK = 65536;
+
+// 读取文本行（以字面量换行结尾）
+func readLine(conn) {
+    line = "";
+    while (true) {
+        ch = conn.recv(1);
+        if (ch == "") { break; }
+        line = line + ch;
+        if (line.len > 0 && line.endsWith(NL)) {
+            line = line.slice(0, line.len - 1);
+            return line;
+        }
+    }
+    return line;
+}
+
+func readResponse(conn) {
+    resp = "";
+    while (true) {
+        part = conn.recv(4096);
+        if (part == "") { break; }
+        resp = resp + part;
+        if (resp.len >= 3 && resp.startsWith("OK ")) { break; }
+        if (resp.len >= 4 && resp.startsWith("ERR ")) { break; }
+    }
+    return resp;
+}
+
+// 流式发送：header → 等 READY → 复用缓冲分块读文件分块发送 → DONE（零新分配）
+func sendFileStreaming(conn, f, totalLen) {
+    header = "R:" + totalLen + NL;
+    conn.send(header);
+    ready = readLine(conn);
+    if (ready != "READY") { throw "Expected READY, got [" + ready + "]"; }
+    buf = bytes(CHUNK);
+    sentBytes = 0;
+    while (sentBytes < totalLen) {
+        want = totalLen - sentBytes;
+        n = f.readInto(buf, want);
+        if (n == 0) { break; }  // EOF
+        conn.send(buf);
+        sentBytes = sentBytes + n;
+    }
+    if (sentBytes != totalLen) {
+        throw "stream send short: sent " + sentBytes + " / " + totalLen;
+    }
+    conn.send("DONE" + NL);
+}
+
+func testFileTransfer(port, filepath, expectedSize, label) {
+    print("[" + label + "] opening " + filepath + " size=" + expectedSize + " ...");
+    f = file(filepath, "r");
+
+    conn = TcpSocket();
+    conn.setOption("recvTimeout", 30000);
+    conn.connect("127.0.0.1", port);
+
+    sendFileStreaming(conn, f, expectedSize);
+    resp = readResponse(conn);
+    conn.close();
+
+    expected = "OK " + expectedSize;
+    check(resp == expected, label + ": expected [" + expected + "], got [" + resp + "]");
+    print("[" + label + "] PASS: " + resp);
+}
+
+port = 19200;
+
+// 1MB
+testFileTransfer(port, "/tmp/lumin_probe_data_1m.bin", 1024 * 1024, "T1-1MB");
+
+// 10MB
+testFileTransfer(port, "/tmp/lumin_probe_data_10m.bin", 10 * 1024 * 1024, "T1-10MB");
+
+print("T1 大文件传输 ALL PASS");

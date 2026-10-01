@@ -1,0 +1,103 @@
+// ============================================================
+// T3: HTML 表单上传模拟（multipart/form-data 格式）—— 流式版
+// 发送序列：M 头 → READY → multipart 头部（小字符串）→
+//           文件分块 readChunk/send → multipart 尾部（小字符串）→ DONE
+// 不再整包构造 body，内存占用与文件大小无关
+// 换行符：使用反引号字面量换行（ASCII 10）
+// ============================================================
+
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+NL = `
+`;
+
+CHUNK = 65536;
+
+func readLine(conn) {
+    line = "";
+    while (true) {
+        ch = conn.recv(1);
+        if (ch == "") { break; }
+        line = line + ch;
+        if (line.len > 0 && line.endsWith(NL)) {
+            line = line.slice(0, line.len - 1);
+            return line;
+        }
+    }
+    return line;
+}
+
+func readResponse(conn) {
+    resp = "";
+    while (true) {
+        part = conn.recv(4096);
+        if (part == "") { break; }
+        resp = resp + part;
+        if (resp.len >= 3 && resp.startsWith("OK ")) { break; }
+        if (resp.len >= 4 && resp.startsWith("ERR ")) { break; }
+    }
+    return resp;
+}
+
+func testMultipartUpload(port, filepath, fileSize, label) {
+    boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+
+    // multipart 头部（空行之前，不含文件数据）
+    head = "";
+    head = head + "--" + boundary + NL;
+    head = head + "Content-Disposition: form-data; name=\"file\"; filename=\"test.bin\"" + NL;
+    head = head + "Content-Type: application/octet-stream" + NL;
+    head = head + NL;
+    // multipart 尾部（文件数据之后）
+    tail = NL + "--" + boundary + "--" + NL;
+    totalLen = head.len + fileSize + tail.len;
+
+    f = file(filepath, "r");
+
+    conn = TcpSocket();
+    conn.setOption("recvTimeout", 30000);
+    conn.connect("127.0.0.1", port);
+
+    // 发行头并等 READY
+    conn.send("M:" + totalLen + NL);
+    ready = readLine(conn);
+    if (ready != "READY") { throw "Expected READY, got [" + ready + "]"; }
+
+    // 1) multipart 头部
+    conn.send(head);
+
+    // 2) 文件主体：复用缓冲边读边发（零新分配）
+    buf = bytes(CHUNK);
+    sentBytes = 0;
+    while (sentBytes < fileSize) {
+        want = fileSize - sentBytes;
+        n = f.readInto(buf, want);
+        if (n == 0) { break; }
+        conn.send(buf);
+        sentBytes = sentBytes + n;
+    }
+    if (sentBytes != fileSize) {
+        throw "stream send short: sent " + sentBytes + " / " + fileSize;
+    }
+
+    // 3) multipart 尾部 + DONE
+    conn.send(tail);
+    conn.send("DONE" + NL);
+
+    resp = readResponse(conn);
+    conn.close();
+
+    // multipart 提取后应等于原始文件大小
+    expected = "OK " + fileSize;
+    check(resp == expected, label + ": expected [" + expected + "], got [" + resp + "]");
+    print("[" + label + "] PASS: " + resp);
+}
+
+port = 19200;
+fileSize = 512 * 1024;  // 512KB
+testMultipartUpload(port, "/tmp/lumin_probe_data_1m.bin", fileSize, "T3-HTML-multipart");
+print("T3 HTML 表单上传 ALL PASS");

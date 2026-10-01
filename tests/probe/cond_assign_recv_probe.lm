@@ -1,0 +1,74 @@
+// ============================================================
+// T5: 条件内赋值边界测试 —— while ((r = recv()) == "")
+// 验证编译器修复后，赋值表达式作为 while 条件时栈状态正确
+// 运行时自建确定性测试文件（全 'A' 128KB），不依赖外部数据
+// ============================================================
+
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 造数：字符串翻倍到 64KB 后分块 append，避免逐字符拼接
+func makeData(path, size, chunk) {
+    gf = file(path, "w");
+    gf.writeAll("");
+    block = "A";
+    while (block.len < chunk) {
+        block = block + block;
+    }
+    i = 0;
+    while (i < size / chunk) {
+        gf.append(block);
+        i = i + 1;
+    }
+}
+
+CHUNK = 65536;
+dataPath = "/tmp/lumin_probe_cond_assign_128k.bin";
+makeData(dataPath, 128 * 1024, CHUNK);  // 128KB
+
+// ===== 服务端：发送固定数据后关闭 =====
+port = 19201;
+srv = TcpSocket();
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", port);
+srv.listen();
+
+f = file(dataPath, "r");
+expectedData = f.readAll();  // 128KB
+
+// 服务端线程：accept → send → close
+tid = thread(func() {
+    conn = srv.accept();
+    conn.send(expectedData);
+    conn.close();
+});
+
+sleep(100);  // 等服务端就绪
+
+// ===== 客户端：条件内赋值接收 =====
+conn = TcpSocket();
+conn.setOption("recvTimeout", 10000);
+conn.connect("127.0.0.1", port);
+
+received = "";
+r = "";
+guard = 0;
+
+// 边界场景：赋值表达式作为 while 条件
+// 修复前：r 在 PTR 栈，recv() 结果写 VALUE 栈，条件恒真，循环不退出
+// 修复后：条件内赋值正确处理，循环正常终止
+while ((r = conn.recv(4096)) != "" && guard < 1000) {
+    received = received + r;
+    guard = guard + 1;
+}
+
+conn.close();
+srv.close();
+
+check(received == expectedData, "T5: received " + received.len + " bytes, expected " + expectedData.len);
+check(guard > 0, "T5: guard should be > 0, got " + guard);
+print("[T5] 条件内赋值接收: " + received.len + " bytes, " + guard + " iterations");
+print("T5 条件内赋值边界 ALL PASS");

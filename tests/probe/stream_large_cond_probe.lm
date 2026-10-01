@@ -1,0 +1,86 @@
+// ============================================================
+// T7: 大文件 + 条件内赋值复合场景（10MB）—— 流式版
+// 服务端线程：readInto 复用缓冲边读边发（不整文件入内存）
+// 客户端：while 条件内赋值 recvInto，边收边 appendBytes 落盘
+// 验证：大数据量 + 条件内赋值边界语法双重压力下栈状态稳定
+// 运行时自建确定性测试文件（全 'A' 10MB），不依赖外部数据；
+// 字节级一致性由运行脚本在外部 cmp 校验
+// ============================================================
+
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 造数：字符串翻倍到 64KB 后分块 append
+func makeData(path, size, chunk) {
+    gf = file(path, "w");
+    gf.writeAll("");
+    block = "A";
+    while (block.len < chunk) {
+        block = block + block;
+    }
+    i = 0;
+    while (i < size / chunk) {
+        gf.append(block);
+        i = i + 1;
+    }
+}
+
+CHUNK = 65536;
+fileSize = 10 * 1024 * 1024;
+srcPath = "/tmp/lumin_probe_stream_10m.bin";
+dstPath = "/tmp/lumin_probe_t7_received.bin";
+makeData(srcPath, fileSize, CHUNK);  // 10MB
+
+port = 19203;
+srv = TcpSocket();
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", port);
+srv.listen();
+
+// 服务端线程：复用缓冲流式读文件并分块发送（零新分配）
+tid = thread(func() {
+    sf = file(srcPath, "r");
+    conn = srv.accept();
+    sbuf = bytes(CHUNK);
+    sentBytes = 0;
+    while (sentBytes < fileSize) {
+        want = fileSize - sentBytes;
+        n = sf.readInto(sbuf, want);
+        if (n == 0) { break; }
+        conn.send(sbuf);
+        sentBytes = sentBytes + n;
+    }
+    conn.close();
+});
+
+sleep(100);
+
+conn = TcpSocket();
+conn.setOption("recvTimeout", 30000);
+conn.connect("127.0.0.1", port);
+
+// 客户端：复用单个缓冲边收边写，不在内存累积
+out = file(dstPath, "w");
+out.writeBytes(bytes(""));
+rbuf = bytes(CHUNK);
+
+n = 0;
+totalRecv = 0;
+guard = 0;
+
+// 大文件 + 条件内赋值边界（if(false) 栈失衡修复的核心回归场景）
+while ((n = conn.recvInto(rbuf, 0, CHUNK)) != 0 && guard < 10000) {
+    out.appendBytes(rbuf);
+    totalRecv = totalRecv + n;
+    guard = guard + 1;
+}
+
+conn.close();
+srv.close();
+
+check(totalRecv == fileSize, "T7: received " + totalRecv + " bytes, expected " + fileSize);
+print("[T7] 大文件+条件内赋值: " + totalRecv + " bytes, " + guard + " iterations");
+print("T7 大文件+条件内赋值 ALL PASS");

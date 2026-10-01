@@ -1,0 +1,127 @@
+// ============================================================
+// T4: 并发客户端上传测试（50 个客户端同时上传）—— 流式版
+// 每个客户端边读边发（readChunk/send），服务端边收边写
+// 验证：服务端正确处理并发连接，无数据交叉、无 hang、无数据丢失
+// 换行符：使用反引号字面量换行（ASCII 10）
+// ============================================================
+
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+NL = `
+`;
+
+CHUNK = 65536;
+
+// 读取文本行（以字面量换行结尾）
+func readLine(conn) {
+    line = "";
+    while (true) {
+        ch = conn.recv(1);
+        if (ch == "") { break; }
+        line = line + ch;
+        if (line.len > 0 && line.endsWith(NL)) {
+            line = line.slice(0, line.len - 1);
+            return line;
+        }
+    }
+    return line;
+}
+
+func readResponse(conn) {
+    resp = "";
+    while (true) {
+        part = conn.recv(4096);
+        if (part == "") { break; }
+        resp = resp + part;
+        if (resp.len >= 3 && resp.startsWith("OK ")) { break; }
+        if (resp.len >= 4 && resp.startsWith("ERR ")) { break; }
+    }
+    return resp;
+}
+
+// 流式发送一个文件的前 size 字节（复用缓冲零新分配）
+func sendFileStreaming(conn, f, size) {
+    conn.send("R:" + size + NL);
+    ready = readLine(conn);
+    if (ready != "READY") { throw "Expected READY, got [" + ready + "]"; }
+    buf = bytes(CHUNK);
+    sentBytes = 0;
+    while (sentBytes < size) {
+        want = size - sentBytes;
+        n = f.readInto(buf, want);
+        if (n == 0) { break; }
+        conn.send(buf);
+        sentBytes = sentBytes + n;
+    }
+    if (sentBytes != size) {
+        throw "stream send short: sent " + sentBytes + " / " + size;
+    }
+    conn.send("DONE" + NL);
+}
+
+func clientTask(id, port, size, results, filepath) {
+    try {
+        f = file(filepath, "r");
+
+        conn = TcpSocket();
+        conn.setOption("recvTimeout", 30000);
+        conn.connect("127.0.0.1", port);
+        sendFileStreaming(conn, f, size);
+        resp = readResponse(conn);
+        conn.close();
+
+        expected = "OK " + size;
+        if (resp == expected) {
+            results[id] = "PASS";
+        } else {
+            results[id] = "FAIL: got [" + resp + "]";
+        }
+    } catch (e) {
+        results[id] = "ERROR: " + e;
+    }
+}
+
+port = 19200;
+numClients = 50;
+fileSize = 64 * 1024;  // 64KB per client
+
+print("[T4] 启动 " + numClients + " 个并发客户端，每个上传 " + fileSize + " 字节");
+
+results = [];
+i = 0;
+while (i < numClients) {
+    results.add("");
+    i = i + 1;
+}
+
+threads = [];
+i = 0;
+while (i < numClients) {
+    t = thread(clientTask, i, port, fileSize, results, "/tmp/lumin_probe_data_1m.bin");
+    threads.add(t);
+    i = i + 1;
+}
+
+// thread 返回 int64，无 join 方法，只能 sleep 等待
+sleep(30000);
+
+pass = 0;
+fail = 0;
+i = 0;
+while (i < numClients) {
+    if (results[i] == "PASS") {
+        pass = pass + 1;
+    } else {
+        fail = fail + 1;
+        print("[T4] client " + i + ": " + results[i]);
+    }
+    i = i + 1;
+}
+
+print("[T4] 结果: " + pass + "/" + numClients + " PASS, " + fail + " FAIL");
+check(fail == 0, "T4: " + fail + " 个客户端失败");
+print("T4 并发客户端上传 ALL PASS");

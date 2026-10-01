@@ -1,0 +1,163 @@
+// ============================================================
+// 文件传输服务端（流式版）：边收边写，内存占用与文件大小无关
+// 协议：客户端先发 "R:size\n"（原始）或 "M:size\n"（multipart）文本头，
+//       服务端回 "READY\n"，然后客户端发送 size 字节报文，最后发 "DONE\n"
+// R 模式：报文即文件内容，全部直写磁盘
+// M 模式：报文 = 多行头部 + 空行 + 文件数据 + 尾部(boundary 结束标记)，
+//         头部逐行有界读取（小块），文件数据按 64KB 块直写，尾部读掉丢弃
+// 换行符：使用反引号字面量换行（ASCII 10）
+// ============================================================
+
+import <NetWork/Socket>;
+import <NetWork/NetError>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+NL = `
+`;
+
+CHUNK = 65536;
+
+// 读取文本行（以字面量换行结尾）；返回 [行内容, 消耗字节数]
+func readLine(conn) {
+    line = "";
+    while (true) {
+        ch = conn.recv(1);
+        if (ch == "") { return [line, line.len]; }
+        line = line + ch;
+        if (line.len > 0 && line.endsWith(NL)) {
+            stripped = line.slice(0, line.len - 1);
+            return [stripped, line.len];
+        }
+    }
+}
+
+// 精确接收 need 字节：复用同一个定长 bytes 缓冲，每块直接追加到文件（零新分配）
+func recvToFile(conn, need, f) {
+    buf = bytes(CHUNK);
+    got = 0;
+    while (got < need) {
+        want = need - got;  // 末块精确截断，绝不吞掉后续 tail/DONE
+        n = conn.recvInto(buf, 0, want);
+        if (n == 0) {
+            throw "connection closed mid-body: got " + got + " / " + need;
+        }
+        f.appendBytes(buf);
+        got = got + n;
+    }
+    return got;
+}
+
+// 精确接收 need 字节并丢弃（用于读完 multipart 尾部标记），同样复用缓冲
+func recvDiscard(conn, need) {
+    buf = bytes(CHUNK);
+    got = 0;
+    while (got < need) {
+        want = need - got;
+        n = conn.recvInto(buf, 0, want);
+        if (n == 0) { break; }
+        got = got + n;
+    }
+    return got;
+}
+
+// 处理单个客户端连接
+func handleClient(conn, id) {
+    try {
+        // 第一行：MODE 和 SIZE
+        firstLine = readLine(conn);
+        header = firstLine[0];
+        if (header == "") { conn.close(); return; }
+        // 格式: "R:1048576" 或 "M:1048576"
+        sep = header.indexOf(":");
+        if (sep < 0) { throw "Invalid header: " + header; }
+        mode = header.slice(0, sep);
+        totalLen = (int)header.slice(sep + 1);
+
+        print("[srv " + id + "] mode=" + mode + " expect=" + totalLen + " bytes");
+
+        // 发送 READY 确认，让客户端开始发送数据
+        conn.send("READY" + NL);
+
+        bodyLen = totalLen;  // R 模式：全部是文件数据
+        boundary = "";
+
+        if (mode == "M") {
+            // 逐行消费 multipart 头部直到空行（头部有界，仅几百字节）
+            headerBytes = 0;
+            first = true;
+            while (true) {
+                lr = readLine(conn);
+                hline = lr[0];
+                hused = lr[1];
+                headerBytes = headerBytes + hused;
+                if (first) {
+                    // 首行形如 "--boundary"，取出 boundary
+                    if (hline.len > 2 && hline.startsWith("--")) {
+                        boundary = hline.slice(2);
+                    }
+                    first = false;
+                }
+                if (hline == "") { break; }
+            }
+            // 尾部 = NL + "--" + boundary + "--" + NL
+            tail = NL + "--" + boundary + "--" + NL;
+            bodyLen = totalLen - headerBytes - tail.len;
+            if (bodyLen < 0) {
+                throw "multipart too small: total=" + totalLen + " header=" + headerBytes + " tail=" + tail.len;
+            }
+        }
+
+        // 准备落盘文件：先清空，后续全程 appendBytes
+        path = "/tmp/lumin_probe_upload_" + id + ".bin";
+        f = file(path, "w");
+        f.writeBytes(bytes(""));
+
+        // 流式接收文件主体，边收边写（R 模式 bodyLen=totalLen）
+        written = recvToFile(conn, bodyLen, f);
+        if (written != bodyLen) {
+            throw "Incomplete body: wrote " + written + " / " + bodyLen;
+        }
+
+        // 等待客户端的 DONE 结束标记（M 模式需先消费尾部 boundary 标记）
+        if (mode == "M") {
+            tail2 = NL + "--" + boundary + "--" + NL;
+            recvDiscard(conn, tail2.len);
+        }
+        done = readLine(conn);
+        if (done[0] != "DONE") {
+            print("[srv " + id + "] warning: expected DONE, got [" + done[0] + "]");
+        }
+
+        resp = "OK " + bodyLen;
+        conn.send(resp);
+        print("[srv " + id + "] saved " + bodyLen + " bytes to " + path);
+        sleep(200);  // 给客户端足够时间读响应，避免 close 触发 RST
+    } catch (e) {
+        print("[srv " + id + "] ERROR: " + e);
+        try { conn.send("ERR " + e); } catch (e2) {}
+        sleep(200);
+    }
+    conn.close();
+}
+
+// ===== 主服务 =====
+port = 19200;
+srv = TcpSocket();
+srv.setOption("reuseAddr", 1);
+srv.bind("127.0.0.1", port);
+srv.listen();
+print("file_server listening on 127.0.0.1:" + port);
+
+clientId = 0;
+while (true) {
+    conn = srv.accept();
+    if (conn == null) { break; }
+    clientId = clientId + 1;
+    tid = thread(handleClient, conn, clientId);
+}
+
+srv.close();
+print("file_server stopped");
