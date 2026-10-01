@@ -583,7 +583,17 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
         *(char**)field_ptr = gc_str;
         return;
     }
-    /* 其他指针类型：直接拷指针 */
+    /* 其他指针类型（bigint/decimal/bitdecimal/bytes/容器/类实例等）：
+     * null（VAL_NONE，如 RequestBinder 越界/非法拒绝返回 null）→ 槽位置 NULL。
+     * 引用类型统一以 NULL 指针表示 null（与 STRING 分支及字段读取侧
+     * 空指针读回 VAL_NONE 的语义对齐）。此前裸拷 value.v.struct_ptr，
+     * 而 val_none() 不清零联合体，栈残留不确定值被写入字段：
+     * 非 ASAN 构建常残留 0 侥幸正常，ASAN 下残留 Mach-O 基址等垃圾，
+     * 后续 (string) 强转把垃圾当 BigInt* 解引用而段错误。 */
+    if(value.type == VAL_NONE) {
+        *(void**)field_ptr = NULL;
+        return;
+    }
     *(void**)field_ptr = value.v.struct_ptr;
 }
 

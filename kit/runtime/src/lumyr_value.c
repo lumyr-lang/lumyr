@@ -202,7 +202,12 @@ char* lumyr_build_stack_trace(void) {
 
 // -------- 值构造 --------
 Value val_none(void) {
+    /* 必须清零联合体：none 只有类型标签有意义，载荷须确定为 0。
+     * 此前未清零，v.v.struct_ptr 等携带栈残留，一旦 none 被当作
+     * 引用值写入定长对象指针字段，会把垃圾落盘（见 lumyr_field_set_trusted
+     * 对 VAL_NONE 的处理）。 */
     Value r;
+    memset(&r, 0, sizeof(r));
     r.type = VAL_NONE;
     return r;
 }
