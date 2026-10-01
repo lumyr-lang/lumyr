@@ -3678,6 +3678,25 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_file_write_bytes(recv, argv[1]);
         return 1;
     }
+    case BUILTIN_FILE_READ_CHUNK: {
+        if(recv.type != VAL_FILE) return bi_type_err("readChunk", recv);
+        int64_t n = (argc >= 1) ? bi_num_i64(argv[1]) : 65536;
+        *out = lumyr_file_read_chunk(recv, n);
+        return 1;
+    }
+    case BUILTIN_FILE_APPEND_BYTES: {
+        if(recv.type != VAL_FILE) return bi_type_err("appendBytes", recv);
+        if(argc < 1) { runtime_error("appendBytes(b) 需要 1 个 bytes 参数"); return 0; }
+        *out = lumyr_file_append_bytes(recv, argv[1]);
+        return 1;
+    }
+    case BUILTIN_FILE_READ_INTO: {
+        if(recv.type != VAL_FILE) return bi_type_err("readInto", recv);
+        if(argc < 1) { runtime_error("readInto(buf [, maxLen]) 需要 1 个 bytes 定长缓冲参数"); return 0; }
+        int64_t maxLen = (argc >= 2) ? bi_num_i64(argv[2]) : 0;
+        *out = lumyr_file_read_into(recv, argv[1], maxLen);
+        return 1;
+    }
     case BUILTIN_FILE_TRUNCATE: {
         if(recv.type != VAL_FILE) return bi_type_err("truncate", recv);
         if(argc < 1) { runtime_error("truncate(size) 需要 1 个参数"); return 0; }
@@ -3855,6 +3874,17 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int flags = (nuser >= 2) ? (int)bi_num_i64(argv[2]) : 0;
         int asBytes = (nuser >= 3) ? (lumyr_to_bool(argv[3]) ? 1 : 0) : 0;
         *out = lumyr_socket_recv(recv, maxLen, flags, asBytes);
+        return 1;
+    }
+    case BUILTIN_SOCKET_RECV_INTO: {
+        /* s.recvInto(buf [, flags [, maxLen]]) → 实际接收字节数（EOF/关闭=0，错误抛异常）
+         * buf 必须是 bytes(n) 定长缓冲；maxLen>0 取 min(cap,maxLen) 精确截断；循环复用零新分配 */
+        if(recv.type != VAL_SOCKET) return bi_type_err("recvInto", recv);
+        int nuser = is_method ? argc : argc - 1;
+        if(nuser < 1) { runtime_error("recvInto(buf [, flags [, maxLen]]) 至少需要 1 个 bytes 缓冲参数"); return 0; }
+        int flags = (nuser >= 2) ? (int)bi_num_i64(argv[2]) : 0;
+        int maxLen = (nuser >= 3) ? (int)bi_num_i64(argv[3]) : 0;
+        *out = lumyr_socket_recv_into(recv, argv[1], flags, maxLen);
         return 1;
     }
     case BUILTIN_SOCKET_SENDTO: {
@@ -4633,6 +4663,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_FILE_DELETE: return "delete";
     case BUILTIN_FILE_READ_BYTES: return "readBytes";
     case BUILTIN_FILE_WRITE_BYTES: return "writeBytes";
+    case BUILTIN_FILE_READ_CHUNK: return "readChunk";
+    case BUILTIN_FILE_APPEND_BYTES: return "appendBytes";
+    case BUILTIN_FILE_READ_INTO: return "readInto";
     case BUILTIN_FILE_TRUNCATE: return "truncate";
     case BUILTIN_FILE_RENAME_TO: return "renameTo";
     case BUILTIN_FOLDER_MAKE: return "folder";
@@ -4699,6 +4732,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOCKET_LISTEN: return "listen";
     case BUILTIN_SOCKET_ACCEPT: return "accept";
     case BUILTIN_SOCKET_RECV: return "recv";
+    case BUILTIN_SOCKET_RECV_INTO: return "recvInto";
     case BUILTIN_SOCKET_SENDTO: return "sendTo";
     case BUILTIN_SOCKET_RECVFROM: return "recvFrom";
     case BUILTIN_SOCKET_SETOPT: return "setOption";

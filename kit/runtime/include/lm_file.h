@@ -35,6 +35,13 @@ Value lumyr_file_delete(Value v);
 // 二进制 I/O + 文件管理
 Value lumyr_file_read_bytes(Value v);
 Value lumyr_file_write_bytes(Value v, Value b);
+// 流式分块 I/O（顺序读游标 + 二进制安全追加），内存占用与文件大小无关
+Value lumyr_file_read_chunk(Value v, int64_t maxLen);
+Value lumyr_file_append_bytes(Value v, Value b);
+// 零分配流式读：把下一块直接读入复用的定长 bytes 缓冲（bytes(n)），更新其 len，
+// 返回实际读取字节数（EOF=0）；maxLen>0 时读取上限取 min(cap,maxLen)，用于精确边界。
+// 循环内不产生新对象，内存 O(缓冲大小)
+Value lumyr_file_read_into(Value v, Value buf, int64_t maxLen);
 Value lumyr_file_copy_to(Value v, const char* dest);
 Value lumyr_file_rename_to(Value v, const char* newPath);
 Value lumyr_file_truncate(Value v, int64_t size);

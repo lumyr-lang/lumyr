@@ -285,6 +285,7 @@ static Value bytes_alloc(const uint8_t* data, int len) {
         Value z; z.type = VAL_NONE; z.str_inline = 0; return z;
     }
     o->len = len;
+    o->cap = len;   /* 普通构造：容量等于长度 */
     o->elem_type = VAL_UINT8;   /* 默认普通 uint8 字节 */
     o->stack_alloc = 0;
     if(len > 0) {
@@ -465,11 +466,41 @@ Value lumyr_bytes_typed(int cast_kind, Value src) {
     return r;
 }
 
+/* 定长可复用字节缓冲：data 区零初始化，len=cap=n，供 readInto/recvInto 循环复用，
+ * 流式 I/O 全程只有一个缓冲存活，内存占用与文件大小无关。 */
+static Value bytes_alloc_capacity(int n) {
+    if (n < 0) n = 0;
+    BytesObj* o = (BytesObj*)gc_alloc(sizeof(BytesObj), VAL_BYTES);
+    if(!o) { Value z; z.type = VAL_NONE; z.str_inline = 0; return z; }
+    o->len = n;
+    o->cap = n;
+    o->elem_type = VAL_UINT8;
+    o->stack_alloc = 0;
+    if(n > 0) {
+        o->data = (uint8_t*)gc_alloc((size_t)n, VAL_BYTES);
+        if(o->data) memset(o->data, 0, (size_t)n);
+        else { o->len = 0; o->cap = 0; }
+    } else {
+        o->data = NULL;
+    }
+    Value r;
+    r.type = VAL_BYTES;
+    r.str_inline = 0;
+    r.v.bytes_obj = o;
+    return r;
+}
+
 Value lumyr_bytes_make(int argc, const Value* args) {
     if(argc == 0) return bytes_alloc(NULL, 0);
-    // 单参数：字符串 或 数组
+    // 单参数：字符串 或 数组 或 非负整数（定长可复用缓冲 bytes(n)）
     if(argc == 1) {
         Value a = args[0];
+        if(a.type == VAL_INT || a.type == VAL_INT64 || a.type == VAL_UINT64) {
+            int64_t n64 = lumyr_extract_ll(a);
+            if(n64 < 0) { runtime_error("bytes(n) 容量不能为负"); return bytes_alloc(NULL, 0); }
+            if(n64 > 0x7fffffff) { runtime_error("bytes(n) 容量过大"); return bytes_alloc(NULL, 0); }
+            return bytes_alloc_capacity((int)n64);
+        }
         if(a.type == VAL_STRING) {
             const char* s = lumyr_str_cstr(&a);
             int sl = lumyr_str_len(&a);

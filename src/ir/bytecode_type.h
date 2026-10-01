@@ -508,6 +508,9 @@ typedef enum {
     BUILTIN_FILE_DELETE,        // f.delete()：删除文件
     BUILTIN_FILE_READ_BYTES,    // f.readBytes()：读取为 bytes 对象
     BUILTIN_FILE_WRITE_BYTES,   // f.writeBytes(b)：写入 bytes
+    BUILTIN_FILE_READ_CHUNK,    // f.readChunk(n)：顺序读取最多 n 字节为 bytes（EOF 返回空 bytes）
+    BUILTIN_FILE_APPEND_BYTES,  // f.appendBytes(b)：二进制安全追加 bytes
+    BUILTIN_FILE_READ_INTO,     // f.readInto(buf)：零分配读入复用定长 bytes 缓冲，返回读取字节数（EOF=0）
     BUILTIN_FILE_TRUNCATE,      // f.truncate(size)：截断/扩展
     BUILTIN_FILE_RENAME_TO,     // f.renameTo(newPath)：重命名（更新内部路径）
     /* folder 目录对象 */
@@ -542,6 +545,7 @@ typedef enum {
     BUILTIN_SOCKET_LISTEN,      // s.listen([backlog])
     BUILTIN_SOCKET_ACCEPT,      // s.accept() → 新连接 socket（或 null）
     BUILTIN_SOCKET_RECV,        // s.recv([len [, flags]]) → 字符串
+    BUILTIN_SOCKET_RECV_INTO,   // s.recvInto(buf [, flags])：零分配收进复用 bytes 缓冲，返回字节数（EOF=0）
     BUILTIN_SOCKET_SENDTO,      // s.sendTo(data, host, port) / s.sendTo(data, path)
     BUILTIN_SOCKET_RECVFROM,    // s.recvFrom([len]) → [data, addr]
     BUILTIN_SOCKET_SETOPT,      // s.setOption(name, val)

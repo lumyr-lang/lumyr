@@ -1077,6 +1077,183 @@ Value lumyr_file_write_bytes(Value v, Value b) {
     return val_none();
 }
 
+/* ============================================================
+ * 流式分块 I/O
+ * ------------------------------------------------------------
+ * readChunk(n)：从 readPos 游标顺序读取最多 n 字节为 bytes，游标按
+ *   实际读取字节数前进；到文件尾返回空 bytes。磁盘读走 blocking 池
+ *   （fopen/fseek/fread/fclose 均为阻塞 syscall），内存文件直接拷贝。
+ * appendBytes(b)：以 "ab" 二进制追加一块 bytes，不做全量缓冲。
+ * 二者配合使大文件上传/落盘的内存占用保持 O(块大小)，与文件大小无关。
+ * ============================================================ */
+
+typedef struct {
+    const char* path;
+    int64_t     offset;
+    int64_t     maxLen;
+    uint8_t*    buf;      /* 输出：malloc 缓冲，调用方 free；EOF/失败为 NULL */
+    int64_t     got;      /* 实际读取字节数，EOF=0，失败=-1 */
+} chunkReadCtx;
+
+static void* chunk_read_blocking(void* arg) {
+    chunkReadCtx* c = (chunkReadCtx*)arg;
+    c->buf = NULL;
+    c->got = -1;
+    FILE* f = fopen(c->path, "rb");
+    if (!f) return c;
+    if (c->offset > 0 && fseek(f, (long)c->offset, SEEK_SET) != 0) { fclose(f); return c; }
+    if (c->maxLen <= 0) { fclose(f); c->got = 0; return c; }
+    c->buf = (uint8_t*)malloc((size_t)c->maxLen);
+    if (!c->buf) { fclose(f); return c; }
+    size_t rd = fread(c->buf, 1, (size_t)c->maxLen, f);
+    fclose(f);
+    c->got = (int64_t)rd;
+    if (rd == 0) { free(c->buf); c->buf = NULL; }
+    return c;
+}
+
+Value lumyr_file_read_chunk(Value v, int64_t maxLen) {
+    if (v.type != VAL_FILE) { runtime_error("readChunk() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("readChunk() 文件对象无效"); return val_none(); }
+    if (maxLen <= 0) maxLen = 65536;
+
+    /* 内存文件：直接从 content 游标拷贝，无 syscall */
+    if (o->content) {
+        int64_t remain = (int64_t)o->contentLen - o->readPos;
+        if (remain <= 0) return lumyr_bytes_from_buf(NULL, 0);
+        int64_t n = remain < maxLen ? remain : maxLen;
+        Value r = lumyr_bytes_from_buf(o->content + o->readPos, (int)n);
+        o->readPos += n;
+        return r;
+    }
+
+    chunkReadCtx c;
+    c.path = o->path; c.offset = o->readPos; c.maxLen = maxLen;
+    c.buf = NULL; c.got = -1;
+    if (lm_co_await_blocking(chunk_read_blocking, &c, NULL) != 0) {
+        chunk_read_blocking(&c);
+    }
+    if (c.got < 0) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "readChunk() 无法读取文件: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    Value r = lumyr_bytes_from_buf(c.buf, (int)c.got);
+    if (c.buf) free(c.buf);
+    o->readPos += c.got;
+    return r;
+}
+
+typedef struct {
+    const char* path;
+    const uint8_t* data;
+    size_t      len;
+    int         ok;       /* 0 成功 / -1 失败 */
+} chunkWriteCtx;
+
+static void* chunk_append_blocking(void* arg) {
+    chunkWriteCtx* c = (chunkWriteCtx*)arg;
+    c->ok = -1;
+    FILE* f = fopen(c->path, "ab");
+    if (!f) return c;
+    size_t wr = c->len ? fwrite(c->data, 1, c->len, f) : 0;
+    int rc = fclose(f);
+    c->ok = (wr == c->len && rc == 0) ? 0 : -1;
+    return c;
+}
+
+/* ============================================================
+ * readInto：零分配流式读
+ * fread 直接写入复用缓冲（GC 非移动式，data 指针跨 blocking 调用稳定；
+ * 缓冲由调用栈保活），循环内不再 gc_alloc 新 bytes，从根上避免
+ * 保守 C 栈扫描残留指针导致的流式垃圾驻留。
+ * ============================================================ */
+
+typedef struct {
+    const char* path;
+    int64_t     offset;
+    uint8_t*    dst;      /* 调用方 bytes 缓冲 data（容量 cap） */
+    int         cap;
+    int64_t     got;      /* 实际读取字节数，EOF=0，失败=-1 */
+} readIntoCtx;
+
+static void* read_into_blocking(void* arg) {
+    readIntoCtx* c = (readIntoCtx*)arg;
+    c->got = -1;
+    FILE* f = fopen(c->path, "rb");
+    if (!f) return c;
+    if (c->offset > 0 && fseek(f, (long)c->offset, SEEK_SET) != 0) { fclose(f); return c; }
+    size_t rd = c->cap > 0 ? fread(c->dst, 1, (size_t)c->cap, f) : 0;
+    fclose(f);
+    c->got = (int64_t)rd;
+    return c;
+}
+
+Value lumyr_file_read_into(Value v, Value buf, int64_t maxLen) {
+    if (v.type != VAL_FILE) { runtime_error("readInto() 仅适用于 file 对象"); return lumyr_make_int(-1); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("readInto() 文件对象无效"); return lumyr_make_int(-1); }
+    if (buf.type != VAL_BYTES) { runtime_error("readInto(buf) 参数必须是 bytes 定长缓冲 bytes(n)"); return lumyr_make_int(-1); }
+    BytesObj* bo = (BytesObj*)buf.v.bytes_obj;
+    if (!bo || !bo->data || bo->cap <= 0) { runtime_error("readInto(buf) 需要非空定长缓冲 bytes(n>0)"); return lumyr_make_int(-1); }
+    int readCap = bo->cap;
+    if (maxLen > 0 && maxLen < readCap) readCap = (int)maxLen;
+
+    int64_t n;
+    /* 内存文件：直接拷贝到复用缓冲 */
+    if (o->content) {
+        int64_t remain = (int64_t)o->contentLen - o->readPos;
+        n = remain < (int64_t)readCap ? remain : (int64_t)readCap;
+        if (n < 0) n = 0;
+        if (n > 0) memcpy(bo->data, o->content + o->readPos, (size_t)n);
+    } else {
+        readIntoCtx c;
+        c.path = o->path; c.offset = o->readPos; c.dst = bo->data; c.cap = readCap; c.got = -1;
+        if (lm_co_await_blocking(read_into_blocking, &c, NULL) != 0) {
+            read_into_blocking(&c);
+        }
+        if (c.got < 0) {
+            char eb[512];
+            snprintf(eb, sizeof(eb), "readInto() 无法读取文件: %s", o->path);
+            runtime_error(eb);
+            return lumyr_make_int(-1);
+        }
+        n = c.got;
+    }
+    bo->len = (int)n;   /* 末块可能不足 cap，按实际长度发送/落盘 */
+    o->readPos += n;
+    return lumyr_make_int((int)n);
+}
+
+Value lumyr_file_append_bytes(Value v, Value b) {
+    if (v.type != VAL_FILE) { runtime_error("appendBytes() 仅适用于 file 对象"); return val_none(); }
+    FileObj* o = (FileObj*)v.v.file_obj;
+    if (!o || !o->path) { runtime_error("appendBytes() 文件对象无效"); return val_none(); }
+    if (b.type != VAL_BYTES) { runtime_error("appendBytes() 参数必须是 bytes 对象"); return val_none(); }
+    if (o->content) {
+        runtime_error("appendBytes() 不支持内存文件，请用磁盘路径 file(path, \"a\")");
+        return val_none();
+    }
+    BytesObj* bo = (BytesObj*)b.v.bytes_obj;
+    chunkWriteCtx c;
+    c.path = o->path;
+    c.data = bo ? bo->data : NULL;
+    c.len = bo ? (size_t)bo->len : 0;
+    c.ok = -1;
+    if (lm_co_await_blocking(chunk_append_blocking, &c, NULL) != 0) {
+        chunk_append_blocking(&c);
+    }
+    if (c.ok != 0) {
+        char buf[512];
+        snprintf(buf, sizeof(buf), "appendBytes() 追加写入失败: %s", o->path);
+        runtime_error(buf);
+        return val_none();
+    }
+    return val_none();
+}
+
 Value lumyr_file_copy_to(Value v, const char* dest) {
     if (v.type != VAL_FILE) { runtime_error("copyTo() 仅适用于 file 对象"); return val_none(); }
     FileObj* o = (FileObj*)v.v.file_obj;

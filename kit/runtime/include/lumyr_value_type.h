@@ -420,8 +420,9 @@ typedef struct {
 // GC 管理：BytesObj* 由 gc_alloc(vtype=VAL_BYTES) 分配；
 //          data 缓冲区也由 gc_alloc(vtype=VAL_BYTES) 管理（无内部 Value 引用，无需递归标记）
 typedef struct {
-    uint8_t* data;        // 字节数据（不可变，构造后只读）
-    int len;              // 字节长度（byte 数）
+    uint8_t* data;        // 字节数据（普通 bytes 构造后只读；readInto/recvInto 复用缓冲时可覆盖写）
+    int len;              // 当前有效字节长度（byte 数，<= cap）
+    int cap;              // data 缓冲区容量（普通构造 cap==len；定长缓冲 bytes(n) 后供 readInto/recvInto 复用）
     ValueType elem_type;  // 元素类型（默认 VAL_UINT8 普通字节；VAL_INT8/INT16/.../FLOAT/DOUBLE 为类型化 bytes）
     uint8_t stack_alloc;  // 0=堆分配，1=编译通道栈分配
 } BytesObj;
@@ -453,6 +454,7 @@ typedef struct {
     char* mode;     // 打开模式字符串（"r"/"w"/"a"，gc_alloc 管理）
     uint8_t* content;   // 非 NULL=内存文件内容（gc_alloc 管理）
     int contentLen;     // 内容字节数
+    int64_t readPos;    // readChunk 顺序读游标（字节偏移），内存/磁盘文件共用
     uint8_t stack_alloc; // 0=堆分配，1=编译通道栈分配
 } FileObj;
 

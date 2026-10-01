@@ -1013,6 +1013,62 @@ Value lumyr_socket_sendto(Value v, const char* data, int len,
     }
 }
 
+Value lumyr_socket_recv_into(Value v, Value buf, int flags, int maxLen) {
+    if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "recvInto() 仅适用于 socket 对象"); return lumyr_make_int(-1); }
+    SocketObj* o = (SocketObj*)v.v.socket_obj;
+    if(!o || o->closed || o->fd < 0) { runtime_error_code(NET_ERR_BAD_STATE, "SocketError", "recvInto() 套接字无效或已关闭"); return lumyr_make_int(-1); }
+    if(buf.type != VAL_BYTES) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "recvInto(buf) 参数必须是 bytes 定长缓冲 bytes(n)"); return lumyr_make_int(-1); }
+    BytesObj* bo = (BytesObj*)buf.v.bytes_obj;
+    if(!bo || !bo->data || bo->cap <= 0) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "recvInto(buf) 需要非空定长缓冲 bytes(n>0)"); return lumyr_make_int(-1); }
+    int readCap = bo->cap;
+    if(maxLen > 0 && maxLen < readCap) readCap = maxLen;  /* 精确边界：不吞掉后续报文 */
+    int in_co = (lm_co_current() != NULL && g_socket_reactor != NULL);
+    if (in_co) {
+        socket_mark_io_affine();
+        set_nonblock(o->fd);
+    }
+    for (;;) {
+        /* 直接 recv 进复用缓冲：等待期间该缓冲常驻是复用语义本身，
+         * 循环内零新分配，流式收包内存与报文总量无关。 */
+        ssize_t n;
+        if (in_co) {
+            n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                int wr = co_wait_fd_timeout(o->fd, 1, 0, o->recv_timeout_ms);
+                if (wr != 0) {
+                    if (wr == 1) {
+                        runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
+                    } else {
+                        sock_error_code("recvInto", NET_ERR_RECV);
+                    }
+                    return lumyr_make_int(-1);
+                }
+                continue;
+            }
+        } else {
+            gc_enter_native_block();
+            n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            gc_leave_native_block();
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
+                return lumyr_make_int(-1);
+            }
+        }
+        if(n < 0) {
+            sock_error_code("recvInto", NET_ERR_RECV);
+            return lumyr_make_int(-1);
+        }
+        if(n == 0) {
+            /* 对端关闭 / EOF */
+            o->is_connected = 0;
+            bo->len = 0;
+            return lumyr_make_int(0);
+        }
+        bo->len = (int)n;
+        return lumyr_make_int((int)n);
+    }
+}
+
 Value lumyr_socket_recvfrom(Value v, int maxLen, int flags) {
     if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "recvFrom() 仅适用于 socket 对象"); return val_array(0); }
     SocketObj* o = (SocketObj*)v.v.socket_obj;

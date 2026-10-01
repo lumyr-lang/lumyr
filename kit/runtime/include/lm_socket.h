@@ -33,6 +33,9 @@ Value lumyr_socket_send(Value v, const char* data, int len, int flags);
 // recv：已连接套接字接收 → 字符串（asBytes=0）或 bytes（asBytes=1，二进制安全含 NUL）
 // EOF/关闭返回 ""（字符串）或空 bytes
 Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes);
+// recvInto：零分配接收，直接写入复用的定长 bytes 缓冲 bytes(n)，更新其 len，
+// 返回实际接收字节数（EOF/关闭=0）；maxLen>0 时读取上限取 min(cap,maxLen) 精确截断
+Value lumyr_socket_recv_into(Value v, Value buf, int flags, int maxLen);
 // sendTo：UDP/Unix 数据报指定目标发送 → 实际发送字节数
 Value lumyr_socket_sendto(Value v, const char* data, int len,
                           const char* host, int port, int flags);
