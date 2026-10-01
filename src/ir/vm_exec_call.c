@@ -17,6 +17,7 @@
 #include "lumyr_value.h"
 #include "lm_value.h"
 #include "lm_type.h"
+#include "gc_runtime.h"
 #include "vm_exec.h"
 #include "lm_formdata.h"
 #include <stdio.h>
@@ -971,8 +972,24 @@ int vm_call_func_value(VMExecCtx* ctx, Value fv, int argc, Value* args, Value* o
                 }
                 case EXPR_TYPE_PTR: {
                     void* p_val = NULL;
-                    if(dv.type == VAL_STRING)
-                        p_val = dv.str_inline ? (void*)dv.v.sso.data : (void*)dv.v.s;
+                    if(dv.type == VAL_STRING) {
+                        if(dv.str_inline) {
+                            /* 默认值是在本块 C 栈局部 dv 中现场求值的 SSO 串，
+                             * 字节内联在 Value 内，块作用域结束即失效；若直接把
+                             * dv.v.sso.data 裸指针绑进 ptr_slots，callee 体内读取时
+                             * 已悬空（ASAN stack-use-after-scope，非 ASAN 下读到
+                             * 栈残留）。物化为 GC 串后再绑定；非内联串 v.s 本就是
+                             * gc_alloc 堆内存，生命周期独立于 dv，可直接绑定。
+                             * 正常实参路径不拷贝是因为源 Value（常量池/调用方）
+                             * 在整个调用期存活，默认值临时量不满足该契约。 */
+                            int sl = lumyr_str_len(&dv);
+                            char* gs = (char*)gc_alloc((size_t)sl + 1, VAL_STRING);
+                            memcpy(gs, dv.v.sso.data, (size_t)sl + 1);
+                            p_val = gs;
+                        } else {
+                            p_val = (void*)dv.v.s;
+                        }
+                    }
                     else if(dv.type == VAL_PTR || dv.type == VAL_STRUCT_PTR || dv.type == VAL_CLASS_PTR)
                         p_val = dv.v.struct_ptr;
                     stackframe_bind_ptr(new_frame, pname, p_val);
