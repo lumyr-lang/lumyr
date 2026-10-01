@@ -1,0 +1,165 @@
+// ============================================================
+// 文件传输服务端（reactor + workers 多路复用版）
+// 与 thread-per-connection 版（stream_file_server.lm）协议完全一致：
+//   首行 "R:size\n"（原始）或 "M:size\n"（multipart）→ 服务端回 "READY\n"
+//   → 客户端发 size 字节报文 → "DONE\n" → 服务端回 "OK <bodyLen>"
+//
+// 模型差异：
+//   - 固定 WORKERS 个 OS 线程，各跑独立 reactor（SO_REUSEPORT 同端口）；
+//     每连接一个协程，IO 等待（recvInto 协程化 recv + co_wait_fd）自动让出，
+//     磁盘写（appendBytes）走阻塞池 lm_co_await_blocking，不堵 reactor。
+//   - 并发上限 maxConnections（per-worker）：在役达限后 accept 循环让位，
+//     新连接留在内核 listen 全连接队列（backlog）排队，TCP 流控自然反压
+//     客户端（send 阻塞/协程让出），超限突发超 backlog 才被直接关闭。
+//   - 每连接内存 = 协程栈（实测触及约 70KB）+ 64KB 复用缓冲，
+//     且总量被 maxConnections×workers 封顶，与连接总数/文件大小无关。
+// 注意：协程内禁止 sleep（usleep 堵死整个 reactor），等待一律 coSleep。
+// ============================================================
+
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+NL = `
+`;
+CHUNK = 65536;
+
+// ---- 可调参数（压测时改这里）----
+PORT = 19210;
+WORKERS = 4;          // reactor worker 线程数（= 实际 OS 线程上限）
+MAX_CONN = 128;       // per-worker 在役连接上限（总在役 = WORKERS × MAX_CONN）
+BACKLOG = 1024;       // listen 全连接队列：超限连接在内核里排队
+CONN_CAPACITY = 4096; // per-worker reactor 连接池容量
+
+// 读取文本行（以字面量换行结尾）；返回 [行内容, 消耗字节数]
+func readLine(conn) {
+    line = "";
+    while (true) {
+        ch = conn.recv(1);
+        if (ch == "") { return [line, line.len]; }
+        line = line + ch;
+        if (line.len > 0 && line.endsWith(NL)) {
+            return [line.slice(0, line.len - 1), line.len];
+        }
+    }
+}
+
+// 精确接收 need 字节：复用同一个定长 bytes 缓冲，每块直追加磁盘（零新分配）
+func recvToFile(conn, need, f) {
+    buf = bytes(CHUNK);
+    got = 0;
+    while (got < need) {
+        want = need - got;  // 末块精确截断，绝不吞掉后续 tail/DONE
+        n = conn.recvInto(buf, 0, want);
+        if (n == 0) {
+            throw "connection closed mid-body: got " + got + " / " + need;
+        }
+        f.appendBytes(buf);
+        got = got + n;
+    }
+    return got;
+}
+
+// 精确接收 need 字节并丢弃（读完 multipart 尾部标记），复用缓冲
+func recvDiscard(conn, need) {
+    buf = bytes(CHUNK);
+    got = 0;
+    while (got < need) {
+        want = need - got;
+        n = conn.recvInto(buf, 0, want);
+        if (n == 0) { break; }
+        got = got + n;
+    }
+    return got;
+}
+
+// 上传协议处理器：框架每接受一个连接建一个协程调 serve，
+// serve 返回/抛错后框架自动 close 连接并回收协程。
+class UploadHandler implements ServiceHandler {
+    idLock: int;
+    nextId: int;
+
+    func UploadHandler() {
+        self.idLock = mutex();
+        self.nextId = 0;
+    }
+
+    func allocId(): int {
+        lock(self.idLock);
+        id = self.nextId;
+        self.nextId = self.nextId + 1;
+        unlock(self.idLock);
+        return id;
+    }
+
+    func serve(conn) {
+        id = self.allocId();
+        // 第一行：MODE 和 SIZE
+        firstLine = readLine(conn);
+        header = firstLine[0];
+        if (header == "") { return; }
+        sep = header.indexOf(":");
+        if (sep < 0) { throw "Invalid header: " + header; }
+        mode = header.slice(0, sep);
+        totalLen = (int)header.slice(sep + 1);
+
+        // 回 READY 让客户端开始发数据
+        conn.send("READY" + NL);
+
+        bodyLen = totalLen;
+        boundary = "";
+        if (mode == "M") {
+            // 逐行消费 multipart 头部直到空行（头部有界，仅几百字节）
+            headerBytes = 0;
+            first = true;
+            while (true) {
+                lr = readLine(conn);
+                hline = lr[0];
+                headerBytes = headerBytes + lr[1];
+                if (first) {
+                    if (hline.len > 2 && hline.startsWith("--")) {
+                        boundary = hline.slice(2);
+                    }
+                    first = false;
+                }
+                if (hline == "") { break; }
+            }
+            tail = NL + "--" + boundary + "--" + NL;
+            bodyLen = totalLen - headerBytes - tail.len;
+            if (bodyLen < 0) {
+                throw "multipart too small: total=" + totalLen + " header=" + headerBytes + " tail=" + tail.len;
+            }
+        }
+
+        // 落盘：先清空，后续全程 appendBytes（磁盘写走阻塞池，不堵 reactor）
+        path = "/tmp/lumin_probe_upload_" + id + ".bin";
+        f = file(path, "w");
+        f.writeBytes(bytes(""));
+
+        written = recvToFile(conn, bodyLen, f);
+        if (written != bodyLen) {
+            throw "Incomplete body: wrote " + written + " / " + bodyLen;
+        }
+        if (mode == "M") {
+            recvDiscard(conn, (NL + "--" + boundary + "--" + NL).len);
+        }
+        done = readLine(conn);
+        if (done[0] != "DONE") {
+            print("[reactor-srv " + id + "] warning: expected DONE, got [" + done[0] + "]");
+        }
+        conn.send("OK " + bodyLen);
+        // coSleep 而非 sleep：让响应有时间发出，避免 close 触发 RST，
+        // 同时只挂起当前协程，不阻塞 worker 上的其他连接。排队模式下该等待
+        // 仍占并发槽位，取 flush 所需的小值（loopback 20ms 足够）。
+        coSleep(20);
+    }
+}
+
+// ===== 主服务：reactor + workers，固定线程数承载全部连接 =====
+app = ServiceApplication({"host": "127.0.0.1", "port": PORT, "backlog": BACKLOG,
+                          "workers": WORKERS, "connCapacity": CONN_CAPACITY,
+                          "acceptQueue": true});
+app.setHandler(UploadHandler());
+app.setMaxConnections(MAX_CONN);
+print("reactor file_server on 127.0.0.1:" + PORT
+      + " workers=" + WORKERS + " maxConn(per-worker)=" + MAX_CONN + " backlog=" + BACKLOG);
+app.start();

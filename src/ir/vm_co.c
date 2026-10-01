@@ -41,6 +41,10 @@ typedef struct {
     int            baseline_sp[4];
     jmp_buf*       baseline_err_jmp;
     VMExceptState  baseline_except;
+    /* 本轮 resume 恢复后的 4 栈 sp（= 协程入口/上次让出点的平衡栈深）。
+     * vm_co_can_preempt 据此判断时间片抢占点是否栈平衡：非平衡派发点
+     * 禁止让出（per-thread 共享栈数据区的活值会被同线程他协程覆盖）。 */
+    int            entry_sp[4];
     /* Phase 7.4：跨线程迁移搬栈。栈池 per-thread（g_stack_mgr 是 TLS 指针，
      * 栈数据物理绑定创建线程），迁移 yield（migrate_sched 非空）时把活数据
      * （stacks[i][0..sp[i])）拷入 mig_copy，跨线程 resume 时写回目标线程栈池。
@@ -90,6 +94,9 @@ static void vm_co_resume_hook(lm_co_t* co) {
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->stack_sp[i];
     g_err_jmp = st->err_jmp;
     vm_except_restore_state(&st->except_state);
+    /* 记录本协程本轮运行的入口栈深（= 上次让出点的平衡栈深），
+     * vm_co_can_preempt 据此禁止在操作数栈非平衡点抢占。 */
+    for(int i = 0; i < 4; i++) st->entry_sp[i] = g_stack_mgr->sp[i];
 }
 
 /* yield 前保存协程 vm_state + 恢复 baseline。
@@ -186,9 +193,24 @@ static int vm_co_can_swap(lm_co_t* co) {
 #endif
 }
 
+/* 抢占安全门（根因修复）：仅当 4 个操作数栈当前 sp 都等于本协程本轮 resume
+ * 的入口基线（= 上次让出点栈深）时才允许时间片抢占。不相等说明实参（含
+ * receiver）或表达式中间值正压在栈上——此刻让出，这些活值会留在 per-thread
+ * 共享栈数据区，被同线程后运行的协程压值覆盖，resume 后弹出串改的对象
+ * （file.recv 类型串改根因）。无栈池/无 vm_state（纯 C 场景）时放行。 */
+static int vm_co_can_preempt(lm_co_t* co) {
+    if (!co || !co->vm_state || !g_stack_mgr) return 1;
+    VMCoState* st = (VMCoState*)co->vm_state;
+    for (int i = 0; i < STACK_TYPE_COUNT; i++) {
+        if (g_stack_mgr->sp[i] != st->entry_sp[i]) return 0;
+    }
+    return 1;
+}
+
 void vm_co_hooks_register(void) {
     lm_co_set_vm_hooks(vm_co_resume_hook, vm_co_yield_hook, vm_co_release_hook);
     lm_co_set_can_swap_hook(vm_co_can_swap);   /* Phase 8.6 F：注册换出裁量 */
+    lm_co_set_can_preempt_hook(vm_co_can_preempt); /* 非平衡栈禁止 slice 抢占 */
 }
 
 /* ============================================================

@@ -4457,6 +4457,10 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         bi_need_args_mt("thread_join", argc, 1); bi_need_int_mt("thread_join", argv[0], 1);
         *out = lumyr_thread_join((int)bi_num_i64(argv[0]));
         return 1;
+    case BUILTIN_THREAD_DETACH:
+        bi_need_args_mt("thread_detach", argc, 1); bi_need_int_mt("thread_detach", argv[0], 1);
+        lumyr_thread_detach((int)bi_num_i64(argv[0]));
+        *out = val_none(); return 1;
     case BUILTIN_SLEEP:
         /* sleep(ms)：休眠毫秒；lm_time 内部按 GC 安全点处理阻塞 */
         bi_need_args_mt("sleep", argc, 1); bi_need_int_mt("sleep", argv[0], 1);
@@ -4686,6 +4690,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_HTTP_PATCH: return "http_patch";
     case BUILTIN_THREAD: return "thread";
     case BUILTIN_THREAD_JOIN: return "thread_join";
+    case BUILTIN_THREAD_DETACH: return "thread_detach";
     case BUILTIN_SLEEP: return "sleep";
     case BUILTIN_TIMESTAMP: return "timestamp";
     case BUILTIN_TIMESTAMP_MS: return "timestamp_ms";

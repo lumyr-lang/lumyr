@@ -33,6 +33,9 @@
 #include <netdb.h>
 #ifndef _WIN32
 #include <signal.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 #endif
 
 /* 进程级忽略 SIGPIPE：向已关闭连接 send 时返回 EPIPE 错误而非终止进程。
@@ -772,6 +775,28 @@ Value lumyr_socket_bind(Value v, const char* host, int port) {
     return val_none();
 }
 
+/* 读取系统全连接队列上限 somaxconn：listen(fd, backlog) 超过该值会被内核静默
+ * 截断，而队列满时新连接在 macOS 被直接 RST、Linux 被丢弃 SYN——表象是高并发
+ * 突发下零星 "connect reset by peer"，极易误判为应用拒绝。读出供 listen 告警；
+ * 不支持的平台/读取失败返回 -1（跳过，不影响行为）。 */
+static int socket_sys_somaxconn(void) {
+#if defined(__linux__)
+    FILE* fp = fopen("/proc/sys/net/core/somaxconn", "r");
+    if (!fp) return -1;
+    int v = -1;
+    if (fscanf(fp, "%d", &v) != 1) v = -1;
+    fclose(fp);
+    return v;
+#elif defined(__APPLE__)
+    int v = -1;
+    size_t len = sizeof(v);
+    if (sysctlbyname("kern.ipc.somaxconn", &v, &len, NULL, 0) != 0) return -1;
+    return v;
+#else
+    return -1;
+#endif
+}
+
 Value lumyr_socket_listen(Value v, int backlog) {
     if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "listen() 仅适用于 socket 对象"); return val_none(); }
     SocketObj* o = (SocketObj*)v.v.socket_obj;
@@ -781,6 +806,19 @@ Value lumyr_socket_listen(Value v, int backlog) {
     if(listen(o->fd, backlog) != 0) {
         sock_error_code("listen", NET_ERR_LISTEN);
         return val_none();
+    }
+    /* backlog 被系统上限静默截断时显式告警（不改变行为，仅消除隐性坑）：
+     * 队列满的溢出连接由内核处置，应用层无法拦截，只能调大 somaxconn 或错峰。 */
+    int cap = socket_sys_somaxconn();
+    if (cap > 0 && backlog > cap) {
+        fprintf(stderr,
+            "[warn] listen backlog=%d 超过系统全连接队列上限 somaxconn=%d，已被内核截断；"
+            "瞬时并发突发超出该上限的连接会被 macOS 直接重置（Linux 丢弃 SYN），表现为零星 "
+            "\"connect reset by peer\"。请调大系统参数（macOS: sysctl -w kern.ipc.somaxconn=N；"
+            "Linux: net.core.somaxconn）或让客户端错峰接入。/ listen backlog=%d exceeds OS "
+            "somaxconn=%d and was clamped; overflow burst connections are reset (macOS) or "
+            "SYN-dropped (Linux). Raise somaxconn or stagger connects.\n",
+            backlog, cap, backlog, cap);
     }
     o->is_server = 1;
     return val_none();

@@ -4,6 +4,7 @@
 #include "lm_value.h"
 #include "gc_runtime.h"
 #include <pthread.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@ typedef struct {
     pthread_t handle;
     int used;       // 槽位占用
     int done;       // 线程已退出（结果已写）
+    int detached;   // 已分离：退出即回收槽位，不再保留 result 供 join
     int id;         // 用户可见线程 id（自增）
     Value result;   // 线程返回值（join 时克隆取走）
 } ThreadSlot;
@@ -64,7 +66,16 @@ static void* lm_thread_main(void* p)
     t.data = job->data;
     job->body(&t);   // 线程体：执行函数调用 + lumyr_thread_set_result
     pthread_mutex_lock(&g_lock);
-    g_slots[job->slot].done = 1;
+    if (g_slots[job->slot].detached) {
+        /* 分离线程：无人 join，立即归还槽位。result 弃置（GC 堆对象失去根后
+         * 由 GC 自然回收），handle 已 pthread_detach，无需也不能再 join。 */
+        g_slots[job->slot].used = 0;
+        g_slots[job->slot].done = 0;
+        g_slots[job->slot].detached = 0;
+        g_slots[job->slot].result = val_none();
+    } else {
+        g_slots[job->slot].done = 1;
+    }
     pthread_mutex_unlock(&g_lock);
     free(job->args);
     free(job);
@@ -97,6 +108,7 @@ int lumyr_thread_start(ThreadBody body, void* data, const Value* args, int argc)
     }
     g_slots[slot].used = 1;
     g_slots[slot].done = 0;
+    g_slots[slot].detached = 0;
     g_slots[slot].result = val_none();
     g_slots[slot].id = ++g_next_id;
     int tid = g_slots[slot].id;
@@ -205,6 +217,13 @@ Value lumyr_thread_join(int id)
         pthread_mutex_unlock(&g_lock);
         runtime_error("thread_join: 无效的线程id（不存在或已 join）");
     }
+    if(g_slots[slot].detached && !g_slots[slot].done) {
+        /* 已分离且仍在运行：槽位将由线程退出路径自回收，join 不合法。
+         * （done=1 只可能出现在 detach 之前线程已退出的窗口，此时 detach
+         * 调用会自行 join 回收，不会走到这里。） */
+        pthread_mutex_unlock(&g_lock);
+        runtime_error("thread_join: 线程已分离（thread_detach 后不可 join）");
+    }
     pthread_t h = g_slots[slot].handle;
     pthread_mutex_unlock(&g_lock);
 
@@ -234,4 +253,43 @@ Value lumyr_thread_join(int id)
      * 槽位已释放再跳，longjmp 不泄漏线程表资源。 */
     if(cloned.type == VAL_ERROR) lumyr_rethrow_error(cloned);
     return cloned;
+}
+
+int lumyr_thread_detach(int id)
+{
+    pthread_mutex_lock(&g_lock);
+    int slot = -1;
+    for(int i = 0; i < g_cap; i++) {
+        if(g_slots[i].used && g_slots[i].id == id) { slot = i; break; }
+    }
+    if(slot < 0) {
+        pthread_mutex_unlock(&g_lock);
+        runtime_error("thread_detach: 无效的线程id（不存在、已 join 或已分离）");
+    }
+    /* 线程已退出（退出时 detached 尚为 0 → 未自回收）：线程是 joinable 的，
+     * 仍须 pthread_join 一次回收内核线程资源，随后立即归还槽位。 */
+    if(g_slots[slot].done) {
+        pthread_t h = g_slots[slot].handle;
+        g_slots[slot].used = 0;
+        g_slots[slot].done = 0;
+        g_slots[slot].detached = 0;
+        g_slots[slot].result = val_none();
+        pthread_mutex_unlock(&g_lock);
+        gc_enter_native_block();
+        pthread_join(h, NULL);
+        gc_leave_native_block();
+        return 0;
+    }
+    /* 在运行：置分离标志后 pthread_detach。竞态论证：线程退出临界区对
+     * detached 的读与 done/回收的写是原子的——本临界区之后退出的线程必见
+     * detached=1 并自回收；故 pthread_detach 若 EINVAL（线程刚好退出），
+     * 其退出路径已完成自回收，无需补救。 */
+    g_slots[slot].detached = 1;
+    pthread_t h2 = g_slots[slot].handle;
+    pthread_mutex_unlock(&g_lock);
+    int rc = pthread_detach(h2);
+    if(rc != 0 && rc != EINVAL) {
+        runtime_error("thread_detach: pthread_detach 失败");
+    }
+    return 0;
 }

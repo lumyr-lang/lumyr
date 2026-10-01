@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <pthread.h>
 
@@ -484,6 +485,29 @@ void lm_co_resume(lm_co_t* co) {
     }
 }
 
+/* 时间片抢占安全门：VM 层注册，返回当前 4 操作数栈是否处于本协程入口
+ * 基线（sp 平衡，让出不会暴露栈上活值）。未注册=无共享操作数栈（纯 C），
+ * 可直接让出。 */
+static lm_co_can_preempt_hook_t g_co_can_preempt_hook = NULL;
+void lm_co_set_can_preempt_hook(lm_co_can_preempt_hook_t cb) {
+    g_co_can_preempt_hook = cb;
+}
+
+/* 时间片耗尽的统一抢占动作：仅在操作数栈平衡时让出。非平衡（CALL/BUILTIN
+ * 派发点实参含 receiver 正压栈）时让出会把活值留在 per-thread 共享栈数据
+ * 区，被同线程后运行的协程覆盖，resume 后实参/receiver 串改成他人对象
+ * （file.recv 跨协程类型串改根因）。此时借一个时间片继续，平衡派发点
+ * （JMP 回边、弹参后的 callee 派发点）有界可达，不影响轮转公平。 */
+void lm_co_slice_bump(lm_co_t* co) {
+    if (!co) return;
+    if (g_co_can_preempt_hook && !g_co_can_preempt_hook(co)) {
+        co->reds = LM_SCHED_REDS;
+        return;
+    }
+    co->slice_yield = 1;   /* 标记时间片耗尽，drain_ready 重入队 */
+    lm_co_yield();
+}
+
 void lm_co_yield(void) {
     lm_co_t* co = lm_co_current();
     if (!co || atomic_load_explicit(&co->state, memory_order_acquire) != LM_CO_RUNNING) return;
@@ -550,21 +574,56 @@ typedef struct {
 /* 定时器回调（timer 线程）：投递协程回 scheduler（post + self-pipe）。
  * MUST NOT block（timer 线程契约）。提前触发场景（回调先于 yield 到期）：
  * wakeup 仅入队 + 置 queued，协程随后 yield 由 drain_ready 恢复，语义不变。 */
+/* coSleep 完成握手值（co->sleep_arm）。 */
+#define LM_COSLEEP_ARMED 1   /* 定时器已注册，回调尚未投递唤醒 */
+#define LM_COSLEEP_FIRED 2   /* 回调已投递唤醒并结束（此后不再访问 ctx/co） */
+
 static void co_sleep_timer_cb(lm_timer_id_t id, void* arg) {
     (void)id;
     CoSleepCtx* ctx = (CoSleepCtx*)arg;
+    /* 回调只投递唤醒 + 置完成位，绝不 free：ctx 由协程侧（正常续行/
+     * lm_co_destroy）单一所有者释放。读 ctx->sched/co 期间二者必存活——
+     * 正常续行先等到 FIRED 才释放 ctx；destroy 先 cancel，见回调在跑则等
+     * FIRED 后才释放协程。FIRED 是回调最后一个动作，置位后不再触碰任何共享
+     * 状态（修复旧版回调 free(ctx) 与清理方解引用 ctx 的 heap-use-after-free，
+     * 该 UAF 在 reap 批量释放/复用协程内存时被放大成服务停滞）。 */
     lm_scheduler_wakeup(ctx->sched, ctx->co);
-    free(ctx);
+    atomic_store_explicit(&ctx->co->sleep_arm, LM_COSLEEP_FIRED, memory_order_release);
 }
 
-/* 取消挂起的 coSleep 定时器（协程正常唤醒后 / destroy 强制清理共用）。
- * 返回是否为本方释放了 ctx（供追踪，调用方无需关心）。 */
-static void co_sleep_cleanup(lm_co_t* co) {
+/* 等定时器回调结束（sleep_arm==FIRED）。回调在独立 timer 线程，仅一次投递 +
+ * 一个原子 store，极短；调用方为 reactor/销毁线程（永不是 timer 线程），自旋
+ * sched_yield 不影响回调运行。 */
+static void co_sleep_wait_fired(lm_co_t* co) {
+    while (atomic_load_explicit(&co->sleep_arm, memory_order_acquire) != LM_COSLEEP_FIRED) {
+        sched_yield();
+    }
+}
+
+/* 协程正常唤醒续行后的清理：本协程既被唤醒，回调必已投递，等其结束（FIRED）
+ * 再由协程侧释放 ctx。回调不释放，故不存在双方 free / 悬垂解引用。 */
+static void co_sleep_after_wait(lm_co_t* co) {
+    co_sleep_wait_fired(co);
+    CoSleepCtx* ctx = (CoSleepCtx*)atomic_exchange_explicit(&co->sleep_ctx, NULL,
+                                                            memory_order_acq_rel);
+    if (ctx) free(ctx);
+}
+
+/* lm_codestroy 路径：协程可能仍挂在 coSleep 定时器上（未到期）。
+ * cancel 仲裁定时器状态：
+ *   rc==0（SCHEDULED→DONE 成功）：回调保证不再运行，直接释放 ctx；
+ *   rc==1/-1（RUNNING/已执行）：回调在跑或已投递唤醒，等 FIRED（回调不 free，
+ *   ctx 仍有效）后释放——保证随后 free(co) 时回调不再访问协程。 */
+static void co_sleep_cancel_on_destroy(lm_co_t* co) {
     CoSleepCtx* ctx = (CoSleepCtx*)atomic_exchange_explicit(&co->sleep_ctx, NULL,
                                                             memory_order_acq_rel);
     if (!ctx) return;
-    int rc = lm_timer_cancel(ctx->id);
-    if (rc == 0) free(ctx);   /* 未触发：本方释放；1/-1：回调持有/已释放 */
+    if (lm_timer_cancel(ctx->id) == 0) {
+        free(ctx);
+        return;
+    }
+    co_sleep_wait_fired(co);
+    free(ctx);
 }
 
 /* 协程友好休眠 ms 毫秒：挂起当前协程，集中定时器线程到期后投递唤醒。
@@ -583,22 +642,34 @@ int lm_co_sleep_ms(long long ms) {
     if (!ctx) return -2;
     ctx->co = co;
     ctx->sched = sched;
-    ctx->id = lm_timer_add(lm_reactor_now_ms() + (uint64_t)ms, co_sleep_timer_cb, ctx);
-    if (ctx->id == LM_TIMER_INVALID_ID) { free(ctx); return -2; }
+    ctx->id = LM_TIMER_INVALID_ID;
+    /* 先置 ARMED 并发布 sleep_ctx，再注册定时器：回调一经 lm_timer_add 即可能
+     * 运行（时钟抖动 / deadline 已过期），其读取的 co/sched 必须先就位；
+     * ctx->id 回调不读，仅 destroy 取消时读（那时 add 必已返回）。 */
+    atomic_store_explicit(&co->sleep_arm, LM_COSLEEP_ARMED, memory_order_relaxed);
     atomic_store_explicit(&co->sleep_ctx, ctx, memory_order_release);
+    lm_timer_id_t tid = lm_timer_add(lm_reactor_now_ms() + (uint64_t)ms,
+                                     co_sleep_timer_cb, ctx);
+    if (tid == LM_TIMER_INVALID_ID) {
+        atomic_exchange_explicit(&co->sleep_ctx, NULL, memory_order_acq_rel);
+        free(ctx);
+        return -2;
+    }
+    ctx->id = tid;
     lm_co_yield();
-    /* 唤醒后清理：正常路径定时器已触发（回调已 free，cancel 返回 1/-1）；
-     * destroy 竞态清理走 co_sleep_cleanup 同一所有权协议。 */
-    co_sleep_cleanup(co);
+    /* 被唤醒：等回调投递并结束（FIRED）后由协程侧释放 ctx（回调不 free）。
+     * 即使回调在 yield 前提前触发（deadline 已过期），也只是立即就绪，语义
+     * 退化为 0ms 睡眠，无 UAF。 */
+    co_sleep_after_wait(co);
     return 0;
 }
 
 void lm_co_destroy(lm_co_t* co) {
     if (!co) return;
     /* R3：协程仍挂起在 coSleep 定时器上被强制 destroy（accept 协程退避中
-     * 随 run 退出清理）→ 先取消定时器，防回调 wakeup 悬垂协程（UAF）。
-     * 回调已触发时 cancel 返回 1/-1，ctx 已由回调方释放，不再触碰。 */
-    co_sleep_cleanup(co);
+     * 随 run 退出清理）→ 取消定时器并等在飞回调结束，防回调 wakeup/访问
+     * 已释放协程（UAF）。已正常续行（FIRED）时此处 sleep_ctx 为 NULL，no-op。 */
+    co_sleep_cancel_on_destroy(co);
     /* Phase 8.6：先从全局注册表摘除（reaper 不再扫到本协程）。 */
     co_registry_remove(co);
     /* Phase 5: 销毁前释放 vm_state（由 vm 层 release hook 释放，

@@ -28,6 +28,9 @@ typedef void (*ThreadBody)(ThreadLaunch*);   // 线程体：执行函数调用�
 int lumyr_thread_start(ThreadBody body, void* data, const Value* args, int argc);
 int lumyr_thread_start_c(Value (*cf)(Value*, int), const Value* args, int argc);
 Value lumyr_thread_join(int id);
+/* 分离线程：不关心返回值，线程退出时立即回收线程表槽位（长跑服务的即发即忘任务用）。
+ * 语义：detach 后 tid 失效，不可再 join；线程已退出则当场回收。幂等失败按无效 id 报错。 */
+int lumyr_thread_detach(int id);
 void lumyr_thread_set_result(ThreadLaunch* t, Value r);
 /* 已保护版本：调用方已用 gc_protect_push(r) 保护 r，本函数不再重复保护。
  * 用于 VM 通道线程体：vm_run 已自行 unregister，需在 cleanup 前 protect_push(r)。 */

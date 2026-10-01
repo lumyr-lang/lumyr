@@ -328,6 +328,7 @@ typedef enum {
     BUILTIN_VALUES,       // values(d) → 值数组
     BUILTIN_THREAD,       // thread(f, args...) → 线程id（多线程）
     BUILTIN_THREAD_JOIN,  // thread_join(tid) → 等待线程并取返回值（join 已被字符串拼接占用）
+    BUILTIN_THREAD_DETACH,// thread_detach(tid) → 分离线程，退出即回收槽位（即发即忘任务）
     BUILTIN_MUTEX,        // mutex() → 互斥锁 id
     BUILTIN_RMUTEX,       // rmutex() → 递归互斥锁 id
     BUILTIN_RWLOCK,       // rwlock() → 读写锁 id

@@ -164,6 +164,7 @@ int builtin_id_by_name(const char* name) {
         {"has", BUILTIN_MAP_HAS},
         /* 线程/锁/条件变量/线程本地存储（仅函数形式；join 被字符串拼接占用故用 thread_join） */
         {"thread", BUILTIN_THREAD}, {"thread_join", BUILTIN_THREAD_JOIN},
+        {"thread_detach", BUILTIN_THREAD_DETACH},
         {"mutex", BUILTIN_MUTEX}, {"rmutex", BUILTIN_RMUTEX},
         {"rwlock", BUILTIN_RWLOCK}, {"spinlock", BUILTIN_SPINLOCK},
         {"lock", BUILTIN_LOCK}, {"unlock", BUILTIN_UNLOCK}, {"trylock", BUILTIN_TRYLOCK},

@@ -153,11 +153,16 @@ typedef struct lm_co_s {
     _Atomic(struct lm_scheduler_s*) waiting_sched;
     _Atomic int stuck_votes;
     /* R3：coSleep 挂起登记（结构体末尾追加，ABI 不变）。
-     * 协程挂起在 coSleep 定时器上时指向 CoSleepCtx（lm_co.c 内部类型），
-     * 正常唤醒/destroy 均经 exchange 取走并取消定时器——防 destroy 后
-     * 定时器回调 wakeup 悬垂协程（UAF）。无挂起时恒 NULL。
-     * 仅协程所属线程（登记/清理）与 destroy 调用方访问，无跨线程读写。 */
+     * 协程挂起在 coSleep 定时器上时指向 CoSleepCtx（lm_co.c 内部类型）。
+     * 所有权（修复 timer 线程回调与 reactor 线程清理/销毁的 free 竞态）：
+     *   ctx 只由协程侧（正常续行 / lm_co_destroy）这一个所有者释放；定时器
+     *   回调只读 ctx 投递唤醒、绝不 free。sleep_arm 为完成握手：
+     *   1=ARMED（已注册，回调未完成），2=FIRED（回调已投递唤醒并结束）。
+     *   续行/destroy 读到 FIRED（或 cancel 成功确认回调不运行）后才释放 ctx，
+     *   destroy 并等回调结束后才允许释放协程本身——回调读 ctx->co 期间协程
+     *   必存活，根除 heap-use-after-free。无挂起时 sleep_ctx 恒 NULL。 */
     _Atomic(void*) sleep_ctx;
+    _Atomic int sleep_arm;
 } lm_co_t;
 
 typedef void (*lm_co_entry_t)(void*);
@@ -169,6 +174,19 @@ typedef void (*lm_co_entry_t)(void*);
 #define LM_SCHED_REDS      4000
 #define LM_SCHED_MIN_REDS  (LM_SCHED_REDS / 10)
 
+/* 时间片耗尽的统一抢占动作（LM_BUMP_REDS 归零后调用）。
+ * 根因修复（file.recv 跨协程类型串改）：VM 的 4 个操作数栈是 per-thread
+ * 共享数据区，协程切换只保存/恢复 sp 下标、不搬数据；在操作数栈非平衡点
+ * （CALL/BUILTIN 派发点实参已压栈）让出后，同线程他协程 resume 会在同一
+ * 数据区压值，覆盖本协程栈上活值，resume 后弹出的实参/receiver 被串改为
+ * 他人对象。故抢占前必须经 can_preempt hook 向 VM 层确认 4 栈处于本协程
+ * 入口基线（平衡）；非平衡时借一个时间片继续，到下一平衡派发点（JMP 回边
+ * 或弹参后的 callee 派发点）再让。无 hook（纯 C 场景，无共享操作数栈）时
+ * 直接让出。 */
+void lm_co_slice_bump(lm_co_t* co);
+typedef int (*lm_co_can_preempt_hook_t)(lm_co_t* co);
+void lm_co_set_can_preempt_hook(lm_co_can_preempt_hook_t cb);
+
 /* Phase 8.5：reduction 扣减宏。
  * LM_BUMP_REDS(co)：扣 1 预算，归零则在指令边界 lm_co_yield() 让出（VM 状态一致）。
  *   仅在协程上下文（co != NULL）且 reds > 0 时扣减，避免无协程场景误触发。
@@ -177,8 +195,7 @@ typedef void (*lm_co_entry_t)(void*);
 #define LM_BUMP_REDS(co) do {                                       \
     lm_co_t* _co = (co);                                            \
     if (_co && _co->reds > 0 && --_co->reds <= 0) {                 \
-        _co->slice_yield = 1;   /* 标记时间片耗尽，drain_ready 重入队 */  \
-        lm_co_yield();                                              \
+        lm_co_slice_bump(_co);                                      \
     }                                                               \
 } while (0)
 

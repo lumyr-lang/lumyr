@@ -105,9 +105,19 @@ public interface AcceptLoopHost {
     // 在役逼近有效容量 87.5% 时返回短延时，让内核 backlog 暂存新连接、
     // 在途连接排空，避免生硬拒绝（对标 nginx accept_disabled）。
     func acceptThrottleMs(): int;
+    // 硬上限排队闸门（acceptQueue 模式）：返回 -1 = 正常受理；
+    // 返回 >=0 = 在役已达有效容量，暂不 accept 并让位指定毫秒，
+    // 新连接留在内核 listen 全连接队列排队，TCP 流控对客户端自然反压。
+    // 与 acceptThrottleMs 的区别：平滑档只在 87.5% 附近短暂让位，本闸门
+    // 在满员期间持续挂起 accept，直到有空位（小容量上限下唯一不漏拒绝的档）。
+    func acceptGateMs(): int;
     // P1-8：handler 执行预算检查——采样 SchedStats forceYield/longSched，
     // 超限则计数 + warn 日志。AcceptLoop 每轮调用。
     func checkHandlerBudget();
+    // 运行期增量回收：已完成连接协程达到批量阈值时 destroy 释放协程栈。
+    // 不做的话协程栈只在 run() 退出时 reap，长跑服务的稳态 RSS 会随
+    // 累计连接数线性增长（实测 200 连接约多占 30+ MiB）。
+    func reapDueHandlers();
 }
 
 // ============================================================
@@ -158,6 +168,14 @@ public class AcceptLoop {
 
     // 单次受理 + 错误分类（P0-1）。返回 false = 退出循环（致命/停机）
     func acceptOnce(): bool {
+        // 硬上限排队闸门：满员期间不 accept，连接留 backlog 排队（优先于
+        // 87.5% 平滑档——平滑档在小容量上限下因整数取整不触发，闸门保证
+        // 任意上限值都不漏拒绝）。coSleep 只挂起 accept 协程，不堵 reactor。
+        gate = self.host.acceptGateMs();
+        if (gate >= 0) {
+            coSleep(gate);
+            return true;
+        }
         // P1-6：accept 限速平滑档——在役逼近有效容量 87.5% 时短暂让位，
         // 让内核 backlog 暂存新连接、在途连接排空，避免生硬拒绝。
         throttle = self.host.acceptThrottleMs();
@@ -204,6 +222,8 @@ public class AcceptLoop {
     // 循环体：accept 协程入口调用（含 P0-2 监督重启，规则见类注释）
     func run() {
         while (self.host.loopRunning()) {
+            // 运行期增量回收已完成协程（释放协程栈，稳态 RSS 不随累计连接数增长）
+            self.host.reapDueHandlers();
             // P1-8：每轮采样 handler 执行预算（forceYield/longSched 超限计数+日志）
             self.host.checkHandlerBudget();
             try {
@@ -309,6 +329,7 @@ class ServiceConnectionHandler {
 // 主线程 join 时重抛（同 Application.startAsync 的 bgError 模式）。
 // ============================================================
 class ServiceWorker {
+    static REAP_BATCH: int = 16;
     app: any;
     idx: int;
     serverSock: any;
@@ -507,6 +528,18 @@ class ServiceWorker {
         return 0;
     }
 
+    // 硬上限排队闸门（worker 版）：activeCount 为 per-worker 在役数，
+    // 容量配置统一读 app（acceptQueue/maxConnections/connCapacity）。
+    func acceptGateMs(): int {
+        if (!self.app.acceptQueueEnabled()) { return -1; }
+        cap = self.app.connCapacity();
+        mc = self.app.maxConnections;
+        limit = cap;
+        if (mc > 0 && mc < limit) { limit = mc; }
+        if (self.activeCount >= limit) { return 2; }
+        return -1;
+    }
+
     // P1-8：handler 执行预算检查（worker 版，逻辑同 ServiceApplication）
     func checkHandlerBudget() {
         curForce = SchedStats.forceYield();
@@ -556,6 +589,14 @@ class ServiceWorker {
         for h in done { h.destroy(); }
     }
 
+    // 运行期增量回收（AcceptLoop 每轮调用）：攒够一批再统一 destroy，
+    // 避免每个连接结束都重建 activeHandlers 数组。
+    func reapDueHandlers() {
+        if (self.finishedHandlers.len >= ServiceWorker.REAP_BATCH) {
+            self.reapFinished();
+        }
+    }
+
     // run 退出时 destroy 所有在役连接协程（挂起在 IO yield 的协程强制释放）
     private func destroyActive() {
         all = self.activeHandlers;
@@ -567,6 +608,7 @@ class ServiceWorker {
 
 // 通用 TCP 服务应用基类
 public class ServiceApplication extends Application {
+    static REAP_BATCH: int = 16;  // 运行期增量回收阈值：累计完成 16 个连接协程即批量 destroy
     serverSock: any;
     reactor: any;        // ReactorInstance
     scheduler: any;      // Phase 7.2：per-thread scheduler（绑定 reactor + 就绪队列）
@@ -589,6 +631,9 @@ public class ServiceApplication extends Application {
     workerCountVal: int;   // Phase 7.5：worker 线程数（0 = 未设置，走配置/默认 1）
     workerList: any;       // Phase 7.5：多线程模式下的 ServiceWorker 数组（null = 单线程）
     connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/默认 65536）
+    // 硬上限排队模式（0 = 未设置走配置/默认 false；1 = 开；-1 = 关）。
+    // 开启后在役达 maxConnections 不 reject，而是暂停 accept 让连接在 backlog 排队。
+    acceptQueueVal: int;
 
     func ServiceApplication() {
         super();
@@ -653,6 +698,7 @@ public class ServiceApplication extends Application {
         self.workerCountVal = 0;
         self.workerList = null;
         self.connCapacityVal = 0;
+        self.acceptQueueVal = 0;
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -680,6 +726,27 @@ public class ServiceApplication extends Application {
         }
         self.maxConnections = max;
         return self;
+    }
+
+    // 硬上限排队模式：开启（默认关闭，保持超限即 reject 的既有语义）后，
+    // 在役连接达到 maxConnections 时不再受理新连接（不 reject），连接留在内核
+    // listen 全连接队列（backlog）排队，在役连接排空后自动补入；TCP 流控对
+    // 排队客户端自然反压。要求 backlog ≥ 预期排队峰值，否则超出部分被内核丢弃。
+    // 配置表键：acceptQueue（bool）；编程式设置优先于配置表。
+    func setAcceptQueue(q: bool) {
+        if (q) { self.acceptQueueVal = 1; }
+        else { self.acceptQueueVal = -1; }
+        return self;
+    }
+
+    // 排队模式是否生效（编程式优先，其次配置表，默认关）
+    func acceptQueueEnabled(): bool {
+        if (self.acceptQueueVal != 0) { return self.acceptQueueVal == 1; }
+        if (self.configMap != null && self.configMap.contains("acceptQueue")) {
+            v = self.configMap["acceptQueue"];
+            if (type(v) == "bool") { return v; }
+        }
+        return false;
     }
 
     // ---- Phase 7.5：多线程模式（SO_REUSEPORT 同端口多 reactor）----
@@ -952,6 +1019,18 @@ public class ServiceApplication extends Application {
         return 0;
     }
 
+    // 硬上限排队闸门（单线程版）：满员期间持续返回 20ms 挂起 accept，
+    // 直到 markFinished 释放空位；逻辑与 ServiceWorker 版一致。
+    func acceptGateMs(): int {
+        if (!self.acceptQueueEnabled()) { return -1; }
+        limit = self.connCapacity();
+        if (self.maxConnections > 0 && self.maxConnections < limit) {
+            limit = self.maxConnections;
+        }
+        if (self.activeCount >= limit) { return 2; }
+        return -1;
+    }
+
     // P1-8：handler 执行预算检查（AcceptLoop 每轮调用）。采样全局 forceYield
     // （reduction 预算耗尽强制让出）与 longSched（>50ms 长调度），差值计数+warn。
     // 全局计数器跨协程共享，反映本进程所有协程（含 handler）的预算超限情况。
@@ -989,6 +1068,13 @@ public class ServiceApplication extends Application {
         }
         self.activeHandlers = still;
         for h in done { h.destroy(); }
+    }
+
+    // 运行期增量回收（AcceptLoop 每轮调用）：单线程版，逻辑同 ServiceWorker。
+    func reapDueHandlers() {
+        if (self.finishedHandlers.len >= ServiceApplication.REAP_BATCH) {
+            self.reapFinished();
+        }
     }
 
     // run 退出时 destroy 所有在役连接协程（挂起在 IO yield 的协程强制释放）
