@@ -4358,11 +4358,13 @@ void c_stmt(Ctx* c, AstNode* node) {
             target_et = rt;
         }
         /* 判断 typed->typed 是否存在真实转换（仅 INT<->DOUBLE）；
-           不存在则放弃旧类型，变量改用 RHS 实际类型，避免栈错位。 */
+           不存在则放弃旧类型，变量改用 RHS 实际类型，避免栈错位。
+           条件分支内禁止换栈：分支可能不执行，换栈后类型标签与实际
+           值的栈位置不匹配，分支出口读取即四栈错位。 */
         if (rt != target_et && rt != EXPR_TYPE_NONE && target_et != EXPR_TYPE_NONE) {
             int convertible = (rt == EXPR_TYPE_INT || rt == EXPR_TYPE_DOUBLE) &&
                               (target_et == EXPR_TYPE_INT || target_et == EXPR_TYPE_DOUBLE);
-            if (!convertible) target_et = rt;
+            if (!convertible && c->branch_depth == 0) target_et = rt;
         }
         /* 变量类型粘性（C 风格）：已存在的整数变量重赋值时保持原整数类型标签，
          * RHS 按值存入 int64 栈，装箱时按变量类型截断。
@@ -4392,8 +4394,13 @@ void c_stmt(Ctx* c, AstNode* node) {
                  *   (b) 变量被外层 while/for 条件引用（cond pin）：cond 在 body
                  *       之前单遍编译，其旧栈读随回边每轮重复执行；body 内换栈
                  *       会让条件永久读到旧槽初值（如 r = sock.recv() 轮询响应，
-                 *       写入 VALUE 栈而条件 r=="" 恒读 PTR 栈空串，循环不退出）。 */
-                if (!selfRef && !cond_pin_references(c, var_name)) {
+                 *       写入 VALUE 栈而条件 r=="" 恒读 PTR 栈空串，循环不退出）；
+                 *   (c) 当前在 if/elif/else 分支内（branch_depth>0）：分支可能
+                 *       不执行，body 内重定型会让变量类型标签指向新栈而值仍在
+                 *       旧栈，分支出口后读取即四栈错位（段错误/null）。强制
+                 *       unbox 保持原栈类型，运行时分支未走时值不变、走了则
+                 *       按原类型 unbox 存储。 */
+                if (!selfRef && !cond_pin_references(c, var_name) && c->branch_depth == 0) {
                     target_et = EXPR_TYPE_NONE;
                     c_add_var(c, var_name, EXPR_TYPE_NONE);
                 } else if (target_et == EXPR_TYPE_INT) {
@@ -4718,7 +4725,11 @@ void c_stmt(Ctx* c, AstNode* node) {
                 } else {
                     emit(c, OPC_POP, 0, 0);
                 }
+                /* catch 子句体仅在匹配异常时执行：无异常或子句不匹配时
+                 * 不执行，body 内重定型换栈同样导致四栈错位，禁止。 */
+                c->branch_depth++;
                 c_stmt(c, cl[i].body);
+                c->branch_depth--;
                 int end_jmp = emit_here(c, OPC_JMP, 0, 0);
                 if(has_fin) fin_add_jmp(c, end_jmp);
                 else int_list_add(&after_jmps, &after_n, &after_cap, end_jmp);
@@ -4863,21 +4874,28 @@ void c_stmt(Ctx* c, AstNode* node) {
             end_jmps[jmp_cnt++] = (pos); } while(0)
 
         int jf = emit_cond_jump_if_false(c, node->u.if_chain.cond);
+        c->branch_depth++;
         c_stmt(c, node->u.if_chain.if_body);
+        c->branch_depth--;
         ADD_END_JMP(emit_here(c, OPC_JMP, 0, 0));
         patch_to(c, jf);
 
         AstNode* e = node->u.if_chain.elif_list;
         while(e && e->type == AST_ELIF) {
             int ejf = emit_cond_jump_if_false(c, e->u.elif.cond);
+            c->branch_depth++;
             c_stmt(c, e->u.elif.body);
+            c->branch_depth--;
             ADD_END_JMP(emit_here(c, OPC_JMP, 0, 0));
             patch_to(c, ejf);
             e = e->u.elif.next;
         }
 
-        if(node->u.if_chain.else_body)
+        if(node->u.if_chain.else_body) {
+            c->branch_depth++;
             c_stmt(c, node->u.if_chain.else_body);
+            c->branch_depth--;
+        }
 
         for(int i = 0; i < jmp_cnt; i++)
             patch_to(c, end_jmps[i]);
@@ -4890,14 +4908,22 @@ void c_stmt(Ctx* c, AstNode* node) {
         /* 历史表示 ifnode（parser 当前走 IF_CHAIN；此处兜底支持嵌套 if）：
          *   cond; JMP_IF_FALSE -> else; then; JMP -> end; else; end */
         int jf = emit_cond_jump_if_false(c, node->u.ifnode.cond);
+        c->branch_depth++;
         c_stmt(c, node->u.ifnode.then_stmt);
+        c->branch_depth--;
         if(node->u.ifnode.elif_chain || node->u.ifnode.else_stmt) {
             int je = emit_here(c, OPC_JMP, 0, 0);
             patch_to(c, jf);
-            if(node->u.ifnode.elif_chain)
+            if(node->u.ifnode.elif_chain) {
+                c->branch_depth++;
                 c_stmt(c, node->u.ifnode.elif_chain);  /* AST_IF 嵌套链 */
-            if(node->u.ifnode.else_stmt)
+                c->branch_depth--;
+            }
+            if(node->u.ifnode.else_stmt) {
+                c->branch_depth++;
                 c_stmt(c, node->u.ifnode.else_stmt);
+                c->branch_depth--;
+            }
             patch_to(c, je);
         } else {
             patch_to(c, jf);
@@ -4975,7 +5001,11 @@ void c_stmt(Ctx* c, AstNode* node) {
          * （回边每轮重读旧栈，详见 cond_pin_* 说明）。 */
         int pin_saved = cond_pin_save(c);
         cond_pin_push(c, node->u.while_node.cond);
+        /* 循环体可能执行 0 次（初始条件即假）：body 内重定型换栈会让
+         * 条件不满足时变量类型标签与实际栈值错位，禁止重定型。 */
+        c->branch_depth++;
         c_stmt(c, node->u.while_node.body);
+        c->branch_depth--;
         cond_pin_restore(c, pin_saved);
         emit(c, OPC_JMP, cond_pc, 0);
         patch_to(c, jf);
@@ -4991,7 +5021,11 @@ void c_stmt(Ctx* c, AstNode* node) {
         layer_push(c, 0, node->u.while_node.label);
         Layer* L = layer_top(c);
         int body_pc = here(c);
+        /* do-while body 至少执行一次，但回边重放同一字节码：首轮若重定型
+         * 换栈，后续轮次 body 内按旧类型发出的 LOAD 将读到陈旧栈槽，禁止。 */
+        c->branch_depth++;
         c_stmt(c, node->u.while_node.body);
+        c->branch_depth--;
         int cond_pc = here(c);
         for(int i = 0; i < L->cont_cnt; i++)
             bf_patch(c->fn, L->cont[i], cond_pc);
@@ -5022,13 +5056,18 @@ void c_stmt(Ctx* c, AstNode* node) {
          * 两者每轮都在 cond 重读前执行，动态重定型换栈同样会使条件陈旧。 */
         int pin_saved = cond_pin_save(c);
         cond_pin_push(c, node->u.for_node.cond);
+        /* body/update 均可能执行 0 次或回边重放，同 while 理由禁止重定型。 */
+        c->branch_depth++;
         c_stmt(c, node->u.for_node.body);
+        c->branch_depth--;
         int update_pc = here(c);
         for(int i = 0; i < L->cont_cnt; i++)
             bf_patch(c->fn, L->cont[i], update_pc);
         for(int i = 0; i < L->cont_fin_cnt; i++)
             c->fn->code[L->cont_fin[i]].b = update_pc;
+        c->branch_depth++;
         compile_for_effect(c, node->u.for_node.update);
+        c->branch_depth--;
         cond_pin_restore(c, pin_saved);
         emit(c, OPC_JMP, cond_pc, 0);
         if(jf >= 0) patch_to(c, jf);
@@ -5120,15 +5159,19 @@ void c_stmt(Ctx* c, AstNode* node) {
                 cond_eq = ast_binop(OP_EQ, var_node, ast_clone_node(cs->u.cs.const_val));
             }
             int jf = emit_cond_jump_if_false(c, cond_eq);
+            c->branch_depth++;
             c_stmt(c, cs->u.cs.body);
+            c->branch_depth--;
             /* fall-through（无 break）跳到 switch 末尾 */
             end_jmps[end_cnt++] = emit_here(c, OPC_JMP, 0, 0);
             patch_to(c, jf);
         }
 
-        /* default：放在所有 case 测试之后 */
+        /* default：放在所有 case 测试之后；有 case 命中时 default 不执行 */
         if(default_case) {
+            c->branch_depth++;
             c_stmt(c, default_case->u.cs.body);
+            c->branch_depth--;
         }
 
         /* end: patch 所有 fall-through 与 break */

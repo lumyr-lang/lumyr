@@ -87,6 +87,11 @@ typedef struct {
     AstNode** cond_pin_stack;
     int cond_pin_cnt;
     int cond_pin_cap;
+    /* 条件分支深度：if/elif/else body 编译期间 >0。
+     * 分支可能不执行，body 内赋值若把变量 typed→NONE 重定型换栈，
+     * 分支未走时变量值仍在旧栈、类型标签却指新栈，if 后读取即四栈错位
+     * （段错误或读到 null）。分支内禁止重定型，强制 unbox 保持原栈。 */
+    int branch_depth;
     /* 当前编译函数的形参 AST 链头：方法注册名为内部唯一名，
      * 方法体内裸名自递归时用它构造临时 def 壳（仅遍历形参签名） */
     AstNode* cur_params;
