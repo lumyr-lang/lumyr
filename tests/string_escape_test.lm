@@ -1,0 +1,88 @@
+// 字符串/字符字面量转义测试
+// 覆盖：单字符转义、八进制、\x、\u/\U（UTF-8）、反引号串、f-string
+// 字面文本与内插、char 字面量、StringBuffer 家族 appendLine 真实换行。
+// 注：.size() 为 Unicode 字符数；字符串内嵌 NUL 属既有 C 串模型限制，
+// 其字节值正确性由 char '\0' 路径覆盖。
+import <Function/StringBuffer>;
+import <Function/ConcurrentStringBuffer>;
+import <Function/ReadWriteStringBuffer>;
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+func main() {
+    // ===== 1. 单字符转义 =====
+    check("\n".size() == 1 && '\n' == 10, "\\n");
+    check("\t".size() == 1 && '\t' == 9, "\\t");
+    check("\r".size() == 1 && '\r' == 13, "\\r");
+    check("\\".size() == 1 && '\\' == 92, "backslash");
+    check("\"".size() == 1 && '"' == 34, "double quote");
+    check("\a".size() == 1 && '\a' == 7, "\\a");
+    check("\b".size() == 1 && '\b' == 8, "\\b");
+    check("\f".size() == 1 && '\f' == 12, "\\f");
+    check("\v".size() == 1 && '\v' == 11, "\\v");
+    check("\'".size() == 1 && '\'' == 39, "single quote escape");
+
+    // ===== 2. 八进制（1-3 位变长，值 0-255）=====
+    check("\101" == "A", "octal \\101 = A");
+    check('\101' == 65, "octal char \\101 = 65");
+    check('\0' == 0, "char NUL = 0");
+    check("\101B" == "AB", "octal then literal");
+
+    // ===== 3. \xHH 十六进制（1-2 位）=====
+    check("\x41" == "A", "\\x41 = A");
+    check('\x41' == 65, "char \\x41 = 65");
+    check("\x4" == ("" + '\x4'), "\\x4 one digit");
+
+    // ===== 4. \u / \U Unicode → UTF-8 =====
+    check("\u0041" == "A", "\\u0041 = A");
+    check("\u4E2D" == "中", "\\u4E2D = 中");
+    check("\U0001F600" == "😀", "\\U0001F600 = emoji");
+    check("中".size() == 1, "size counts chars not bytes (BMP)");
+    check("😀".size() == 1, "size counts chars not bytes (astral)");
+
+    // ===== 5. 反引号串：字面真换行保留，转义规则统一 =====
+    m = `a\nb`;
+    check(m == ("a" + '\n' + "b"), "mstr \\n decoded");
+    m2 = `L1
+L2`;
+    check(m2 == ("L1" + '\n' + "L2"), "mstr literal newline kept");
+    check(`tab\there`.size() == 8, "mstr \\t decoded");
+
+    // ===== 6. f-string：字面文本转义 + 内插表达式独立 =====
+    v = 7;
+    check(f"a\nb" == ("a" + '\n' + "b"), "fstr literal \\n");
+    check(f"x\ty".size() == 3, "fstr literal \\t");
+    check(f"v={v}" == "v=7", "fstr interpolation");
+    check(f"a={v}\tb" == ("a=7" + '\t' + "b"), "fstr interp then escape");
+    check(f`x={"\x41"}` == "x=A", "fbacktick interp string escape");
+    check(f"\\{v}" == ("\\" + "7"), "fstr literal backslash");
+    check(f"a={v}\nb".size() == 5, "fstr mixed interp newline");
+
+    // ===== 7. StringBuffer 三家族 appendLine 必须写真实换行 =====
+    sb = StringBuffer("");
+    sb.appendLine("a").appendLine("b");
+    out = sb.toString();
+    check(out == ("a" + '\n' + "b" + '\n'), "StringBuffer.appendLine real newline");
+    check(out.size() == 4, "StringBuffer.appendLine count=4");
+
+    csb = ConcurrentStringBuffer("");
+    csb.appendLine("a");
+    cout = csb.toString();
+    check(cout == ("a" + '\n'), "ConcurrentStringBuffer.appendLine real newline");
+
+    rwb = ReadWriteStringBuffer("");
+    rwb.appendLine("a");
+    rout = rwb.toString();
+    check(rout == ("a" + '\n'), "ReadWriteStringBuffer.appendLine real newline");
+
+    // ===== 8. 路径/引号等实用形态 =====
+    check("C:/tmp/x" == "C:/tmp/x", "forward slash path");
+    check("a\\b" == ("a" + '\\' + "b"), "backslash path segment");
+    check("say \"hi\"" == ("say " + '"' + "hi" + '"'), "embedded quotes");
+
+    print("===== string escape ALL PASS / 字符串转义全部通过 =====");
+}
+
+main();

@@ -15,8 +15,6 @@
 
 /* PRINT：从 VALUE 栈弹值打印 */
 int vm_exec_io_print(VMExecCtx* ctx, Instruction* in) {
-    static int print_count = 0;
-    print_count++;
     Value* stk = (Value*)g_stack_mgr->stacks[STACK_VALUE];
     int sp = --g_stack_mgr->sp[STACK_VALUE];
     lumyr_print(stk[sp]);
@@ -58,8 +56,6 @@ int vm_exec_io_print_int64(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_DOUBLE：从 DOUBLE 栈弹值打印 */
 int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in) {
-    static int print_double_count = 0;
-    print_double_count++;
     int sp = --g_stack_mgr->sp[STACK_DOUBLE];
     double val = ((double*)g_stack_mgr->stacks[STACK_DOUBLE])[sp];
     printf("%g\n", val);
@@ -68,8 +64,6 @@ int vm_exec_io_print_double(VMExecCtx* ctx, Instruction* in) {
 
 /* PRINT_PTR：从 PTR 栈弹值打印（字符串指针） */
 int vm_exec_io_print_ptr(VMExecCtx* ctx, Instruction* in) {
-    static int print_ptr_count = 0;
-    print_ptr_count++;
     void* val;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &val);
     if(val) {

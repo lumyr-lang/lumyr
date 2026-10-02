@@ -127,11 +127,8 @@ public class SchedStats {
         st = __private_system__sched_stats();
         s = st["stackHwSmall"];
         n = st["stackHwNormal"];
-        // lumin 无三元表达式，avg 用 if/else 计算
-        sAvg = 0;
-        if (s["count"] > 0) { sAvg = s["sumBytes"] / s["count"]; }
-        nAvg = 0;
-        if (n["count"] > 0) { nAvg = n["sumBytes"] / n["count"]; }
+        sAvg = (s["count"] > 0 ? s["sumBytes"] / s["count"] : 0);
+        nAvg = (n["count"] > 0 ? n["sumBytes"] / n["count"] : 0);
         return "stackHw[S] n=" + s["count"]
              + " avg=" + sAvg + "B"
              + " p50=" + SchedStats.stackHwPercentileB(s, 0.50) + "B"

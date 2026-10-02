@@ -3,11 +3,19 @@
 #include "yacc.tab.h"
 #include "lumyr_value_type.h"
 #include "ast/ast_types.h"  /* struct_lookup / class_lookup / type_lookup */
+#include "parse/lm_lex_unescape.h"  /* 字符串/字符字面量统一转义解码 */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+
+/* 字面量转义解码失败：词法阶段直接判错退出（yyerror 不中止解析，
+ * 与 yacc.y 中同类处理一致）。err 为双语错误正文。 */
+static void lm_lex_escape_fail(const char* err) {
+    fprintf(stderr, "语法错误(第%d行): %s\n", yylineno, err);
+    exit(EXIT_FAILURE);
+}
 
 // 前一个 token：用于区分 `[` 是下标（表达式后）还是数组字面量（表达式开始）
 static int prev_token = 0;
@@ -29,6 +37,10 @@ static char mstr_buf[65536];
 static int mstr_len = 0;
 /* 多行反引号字符串是否为 f-string（支持 {expr} 内插） */
 static int mstr_is_fstring = 0;
+
+/* 字符字面量累积缓冲（CHARSCAN 态，最长 \UXXXXXXXX 共 10 字符） */
+static char charBuf[16];
+static int  charLen = 0;
 
 // 表达式结束类 token（其后 `[` 是下标）
 static int in_case_expr = 0;   /* case 值后的冒号 → CASE_COLON（与字典/三元冒号区分） */
@@ -199,6 +211,7 @@ static int lex_number(const char* s)
 
 %option yylineno
 %x MSTR
+%x CHARSCAN
 
 %%
 "type"          { LEX_RET(TOK_TYPE); }
@@ -301,8 +314,17 @@ static int lex_number(const char* s)
 "..."           { LEX_RET(ELLIPSIS); }
 
 \"([^"\\]|\\.)*\"   {
-    yylval.s = strdup(yytext+1);
-    yylval.s[strlen(yylval.s)-1] = '\0';
+    /* 双引号字符串：去外层引号后统一反转义（\n \xHH \uXXXX 等） */
+    char* raw = strdup(yytext+1);
+    raw[strlen(raw)-1] = '\0';
+    char* decoded = NULL; int decLen = 0; char escErr[192];
+    if(lm_lex_unescape(raw, LM_QUOTE_STR, &decoded, &decLen,
+                       escErr, (int)sizeof(escErr)) != 0) {
+        free(raw);
+        lm_lex_escape_fail(escErr);
+    }
+    free(raw);
+    yylval.s = decoded;
     LEX_RET(STRING_LIT);
 }
 
@@ -311,41 +333,53 @@ static int lex_number(const char* s)
 <MSTR>"`"  {
     BEGIN(INITIAL);
     mstr_buf[mstr_len] = '\0';
-    yylval.s = strdup(mstr_buf);
+    if(mstr_is_fstring) {
+        /* f`...`：原文交给模板拆解（字面文本与内插表达式分别处理转义） */
+        yylval.s = strdup(mstr_buf);
+    } else {
+        /* 普通反引号串：保留字面真换行，结束时统一反转义 */
+        char* decoded = NULL; int decLen = 0; char escErr[192];
+        if(lm_lex_unescape(mstr_buf, LM_QUOTE_MSTR, &decoded, &decLen,
+                           escErr, (int)sizeof(escErr)) != 0) {
+            lm_lex_escape_fail(escErr);
+        }
+        yylval.s = decoded;
+    }
     LEX_RET(mstr_is_fstring ? FSTRING_LIT : STRING_LIT);
 }
 <MSTR>\n  { mstr_buf[mstr_len++]='\n'; }
-<MSTR>\\n  { mstr_buf[mstr_len++]='\n'; }
-<MSTR>\\t  { mstr_buf[mstr_len++]='\t'; }
-<MSTR>\\r  { mstr_buf[mstr_len++]='\r'; }
-<MSTR>\\\\ { mstr_buf[mstr_len++]='\\'; }
 <MSTR>.  { mstr_buf[mstr_len++]=yytext[0]; }
 <MSTR><<EOF>> { BEGIN(INITIAL); mstr_buf[mstr_len]='\0'; yylval.s=strdup(mstr_buf); LEX_RET(mstr_is_fstring ? FSTRING_LIT : STRING_LIT); }
 
 f\"([^"\\]|\\.)*\"   {
+    /* f"..."：原文交给模板拆解（内插 {expr} 的边界契约依赖原文 \" 对，
+     * 不能在此整体反转义）；字面文本转义由模板拆解器负责 */
     yylval.s = strdup(yytext+2);   /* 跳过 f 和开头引号 */
     yylval.s[strlen(yylval.s)-1] = '\0';
     LEX_RET(FSTRING_LIT);
 }
 
-'(\\.|[^'\''\\\n])'      {   /* 字符字面量：'A' 或转义 \n \t \r \0 \\ \' \" */
-    if(yytext[1] == '\\') {
-        char c = yytext[2];
-        switch(c) {
-            case 'n':  yylval.ch = '\n'; break;
-            case 't':  yylval.ch = '\t'; break;
-            case 'r':  yylval.ch = '\r'; break;
-            case '0':  yylval.ch = '\0'; break;
-            case '\\': yylval.ch = '\\'; break;
-            case '\'': yylval.ch = '\''; break;
-            case '"':  yylval.ch = '"';  break;
-            default:   yylval.ch = c;    break;
-        }
-    } else {
-        yylval.ch = yytext[1];
+"'"  { BEGIN(CHARSCAN); charBuf[0]='\0'; charLen=0; }
+<CHARSCAN>\\[0-7][0-7]?[0-7]?  { if(charLen + (int)yyleng < 16) { memcpy(charBuf+charLen, yytext, yyleng); charLen += (int)yyleng; } }
+<CHARSCAN>\\x[0-9a-fA-F]+      { if(charLen + (int)yyleng < 16) { memcpy(charBuf+charLen, yytext, yyleng); charLen += (int)yyleng; } }
+<CHARSCAN>\\u[0-9a-fA-F]+      { if(charLen + (int)yyleng < 16) { memcpy(charBuf+charLen, yytext, yyleng); charLen += (int)yyleng; } }
+<CHARSCAN>\\U[0-9a-fA-F]+      { if(charLen + (int)yyleng < 16) { memcpy(charBuf+charLen, yytext, yyleng); charLen += (int)yyleng; } }
+<CHARSCAN>\\.                  { if(charLen + 2 < 16) { charBuf[charLen++] = yytext[0]; charBuf[charLen++] = yytext[1]; } }
+<CHARSCAN>"'"  {
+    BEGIN(INITIAL);
+    charBuf[charLen] = '\0';
+    char* decoded = NULL; int decLen = 0; char escErr[192];
+    if(lm_lex_unescape(charBuf, LM_QUOTE_CHAR, &decoded, &decLen,
+                       escErr, (int)sizeof(escErr)) != 0) {
+        lm_lex_escape_fail(escErr);
     }
+    yylval.ch = decoded[0];
+    free(decoded);
     LEX_RET(TOK_CHAR_LIT);
 }
+<CHARSCAN>\n   { lm_lex_escape_fail("字符字面量未闭合 / unterminated char literal"); }
+<CHARSCAN>.    { if(charLen < 15) charBuf[charLen++] = yytext[0]; }
+<CHARSCAN><<EOF>> { lm_lex_escape_fail("字符字面量未闭合 / unterminated char literal"); }
 
 "."                     {
     LEX_RET(DOT);

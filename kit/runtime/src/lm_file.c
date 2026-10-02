@@ -16,6 +16,19 @@
 #include <fnmatch.h>
 #include <libgen.h>
 
+/* 把 err 对应的系统错误文本写入调用方栈缓冲（可重入）。
+ * 兼容两种 strerror_r 签名：GNU 版可能返回独立静态串（需拷入 buf），
+ * XSI 版（macOS/BSD）直接写入 buf。多 worker/blocking 池线程共用，
+ * 不得使用非线程安全保证的 strerror()。 */
+static void file_errno_text(int err, char* buf, size_t n) {
+#if defined(__GLIBC__) && (_GNU_SOURCE)
+    char* r = strerror_r(err, buf, n);
+    if(r && r != buf) snprintf(buf, n, "%s", r);
+#else
+    (void)strerror_r(err, buf, n);
+#endif
+}
+
 /* ============================================================
  * 路由约定（本文件所有阻塞操作统一遵循）
  * ------------------------------------------------------------
@@ -1022,8 +1035,9 @@ Value lumyr_file_delete(Value v) {
     int rc = 0, errNo = 0;
     file_unlink_route(o->path, &rc, &errNo);
     if (rc != 0) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "delete() 无法删除文件: %s (%s)", o->path, strerror(errNo));
+        char buf[512], why[160];
+        file_errno_text(errNo, why, sizeof(why));
+        snprintf(buf, sizeof(buf), "delete() 无法删除文件: %s (%s)", o->path, why);
         runtime_error(buf);
         return val_none();
     }
@@ -1277,9 +1291,10 @@ Value lumyr_file_rename_to(Value v, const char* newPath) {
     if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
     int errNo = 0;
     if (file_rename_route(o->path, newPath, &errNo) != 0) {
-        char buf[512];
+        char buf[512], why[160];
+        file_errno_text(errNo, why, sizeof(why));
         snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)",
-                 o->path, newPath, strerror(errNo));
+                 o->path, newPath, why);
         runtime_error(buf);
         return val_none();
     }
@@ -1297,8 +1312,9 @@ Value lumyr_file_truncate(Value v, int64_t size) {
     if (!o || !o->path) { runtime_error("truncate() 文件对象无效"); return val_none(); }
     int errNo = 0;
     if (file_truncate_route(o->path, size, &errNo) != 0) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "truncate() 截断失败: %s (%s)", o->path, strerror(errNo));
+        char buf[512], why[160];
+        file_errno_text(errNo, why, sizeof(why));
+        snprintf(buf, sizeof(buf), "truncate() 截断失败: %s (%s)", o->path, why);
         runtime_error(buf);
         return val_none();
     }
@@ -1490,8 +1506,9 @@ Value lumyr_folder_create(Value v) {
     } else if (mkdir_p_impl(o->path) == 0) {
         return val_none();
     }
-    char buf[512];
-    snprintf(buf, sizeof(buf), "create() 无法创建目录: %s (%s)", o->path, strerror(c.errNo));
+    char buf[512], why[160];
+    file_errno_text(c.errNo, why, sizeof(why));
+    snprintf(buf, sizeof(buf), "create() 无法创建目录: %s (%s)", o->path, why);
     runtime_error(buf);
     return val_none();
 }
@@ -1510,8 +1527,9 @@ Value lumyr_folder_remove(Value v) {
         if (rc != 0) c.errNo = errno;
     }
     if (rc != 0) {
-        char buf[512];
-        snprintf(buf, sizeof(buf), "remove() 无法删除目录: %s (%s)", o->path, strerror(c.errNo));
+        char buf[512], why[160];
+        file_errno_text(c.errNo, why, sizeof(why));
+        snprintf(buf, sizeof(buf), "remove() 无法删除目录: %s (%s)", o->path, why);
         runtime_error(buf);
         return val_none();
     }
@@ -1557,9 +1575,10 @@ Value lumyr_folder_move_to(Value v, const char* dest) {
         if (rc != 0) c.errNo = errno;
     }
     if (rc != 0) {
-        char buf[512];
+        char buf[512], why[160];
+        file_errno_text(c.errNo, why, sizeof(why));
         snprintf(buf, sizeof(buf), "moveTo() 移动失败: %s -> %s (%s)",
-                 o->path, dest, strerror(c.errNo));
+                 o->path, dest, why);
         runtime_error(buf);
         return val_none();
     }
@@ -1577,9 +1596,10 @@ Value lumyr_folder_rename_to(Value v, const char* newPath) {
     if (!newPath) { runtime_error("renameTo() 新路径为空"); return val_none(); }
     int errNo = 0;
     if (file_rename_route(o->path, newPath, &errNo) != 0) {
-        char buf[512];
+        char buf[512], why[160];
+        file_errno_text(errNo, why, sizeof(why));
         snprintf(buf, sizeof(buf), "renameTo() 重命名失败: %s -> %s (%s)",
-                 o->path, newPath, strerror(errNo));
+                 o->path, newPath, why);
         runtime_error(buf);
         return val_none();
     }

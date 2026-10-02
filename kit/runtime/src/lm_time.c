@@ -46,7 +46,9 @@ void lumyr_sleep_ms(long long ms) {
 }
 
 static void fmt_buf(char* buf, size_t sz, const char* fmt, time_t t) {
-    struct tm* lt = localtime(&t);
+    /* 可重入版本：结果写入栈上 tm，不依赖 libc 共享静态缓冲 */
+    struct tm tmbuf;
+    struct tm* lt = localtime_r(&t, &tmbuf);
     strftime(buf, sz, fmt, lt);
 }
 
@@ -89,7 +91,7 @@ void lumyr_log(int level, const char* msg) {
 /* ===== date 族对象（VAL_DATE/VAL_DATETIME/VAL_TIME/VAL_TIMEDELTA） ===== */
 // 双模式存储：epoch 为主，缓存字段懒计算；时区支持（默认本地电脑时区）
 
-// macOS/Linux glibc 均提供 timegm；保险起见给个 extern 声明
+// macOS/Linux 的 C 库均提供 timegm；保险起见给个 extern 声明
 extern time_t timegm(struct tm*);
 
 // 哨兵值：表示"本地电脑时区"

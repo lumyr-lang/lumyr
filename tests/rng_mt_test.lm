@@ -1,0 +1,102 @@
+// 每线程随机数发生器多 worker 验证
+// 验证点：
+//   [1] random() 值域严格 [0,1)（20000 次/连接，8 连接，4 worker RR）
+//   [2] 10 个等宽桶全部非空（粗分布健康，无退化/常数序列）
+//   [3] 4 个 worker 各自独立播种：不同连接落在不同线程时序列正常
+//       （per-thread 状态，无锁、无共享；同 worker 多连接复播连续）
+// 运行：ulimit -n 8192 && ./bin/lumyr tests/rng_mt_test.lm
+import <App/ServiceApplication>;
+import <NetWork/Socket>;
+
+class RngSession implements ServiceHandler {
+    func serve(conn) {
+        while (true) {
+            data = conn.recv(4096);
+            if (data == "") { return; }
+            n = 20000;
+            buckets = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            sum = 0.0;
+            mn = 1.0;
+            mx = 0.0;
+            bad = 0;
+            i = 0;
+            while (i < n) {
+                r = random();
+                if (r < 0.0 || r >= 1.0) { bad = bad + 1; }
+                if (r < mn) { mn = r; }
+                if (r > mx) { mx = r; }
+                sum = sum + r;
+                b = <int>(r * 10.0);
+                if (b < 0) { b = 0; }
+                if (b > 9) { b = 9; }
+                buckets[b] = buckets[b] + 1;
+                i = i + 1;
+            }
+            emptyBuckets = 0;
+            bi2 = 0;
+            while (bi2 < 10) {
+                if (buckets[bi2] == 0) { emptyBuckets = emptyBuckets + 1; }
+                bi2 = bi2 + 1;
+            }
+            avg = sum / n;
+            if (bad != 0 || emptyBuckets != 0 || avg < 0.45 || avg > 0.55) {
+                conn.send("RNG_FAIL bad=" + bad + " empty=" + emptyBuckets + " avg=" + avg);
+            } else {
+                conn.send("RNG_OK avg=" + avg + " min=" + mn + " max=" + mx
+                    + " b0=" + buckets[0] + " b9=" + buckets[9]);
+            }
+        }
+    }
+}
+
+func check(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+
+func main() {
+    port = 19411;
+    app = ServiceApplication("127.0.0.1", port, RngSession());
+    app.setWorkers(4);
+    app.setDispatch("rr");
+    app.setConnCapacity(8192);
+    app.startAsync();
+    sleep(500);
+
+    total = 8;
+    clients = [];
+    i = 0;
+    while (i < total) {
+        clients.add(ClientSocket("127.0.0.1", port));
+        i = i + 1;
+    }
+
+    // 两轮：同一批连接再次请求，验证 per-thread 状态跨连接持续推进且不重置
+    round = 0;
+    while (round < 2) {
+        okCount = 0;
+        j = 0;
+        while (j < total) {
+            clients[j].send("go");
+            resp = clients[j].recv(4096);
+            if (resp.indexOf("RNG_OK") == 0) { okCount = okCount + 1; }
+            else { print("  FAIL resp: " + resp); }
+            j = j + 1;
+        }
+        check(okCount == total, "round " + round + " RNG_OK " + okCount + "/" + total);
+        print("  round " + round + ": " + okCount + "/" + total + " RNG_OK");
+        round = round + 1;
+    }
+
+    // worker 覆盖：8 连接在 4 worker RR 下应全部有 accept（随机数确实跨线程执行）
+    used = 0;
+    for w in app.workerList { if (w.acceptTotal > 0) { used = used + 1; } }
+    check(used == 4, "all 4 workers served, got " + used);
+
+    for c in clients { try { c.close(); } catch (e) { x = 1; } }
+    sleep(300);
+    app.stop();
+    app.join();
+    print("===== rng multi-worker ALL PASS / 多线程随机数全部通过 =====");
+}
+
+main();

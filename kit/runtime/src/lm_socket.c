@@ -86,10 +86,23 @@ static int create_fd(SocketKind k) {
 // 报错包装：拼 errno 文本并 runtime_error_code（带操作对应的枚举码）。
 // 调用点均紧跟失败的系统调用，errno 仍有效：随错误对象携带 os_errno 快照，
 // 上层 e.getErrno() 编程判定资源耗尽等类别（不做消息文本匹配）。
+/* 取当前 errno 的文本到栈缓冲（可重入，兼容 GNU/XSI 两种
+ * strerror_r 签名）；多 worker 线程共用，不用非线程安全的 strerror() */
+static void sock_errno_text(char* buf, size_t n) {
+#if defined(__GLIBC__) && (_GNU_SOURCE)
+    char* r = strerror_r(errno, buf, n);
+    if(r && r != buf) snprintf(buf, n, "%s", r);
+#else
+    (void)strerror_r(errno, buf, n);
+#endif
+}
+
 static void sock_error_code(const char* op, NetErrorCode code) {
-    char buf[256];
-    snprintf(buf, sizeof(buf), "%s() 失败: %s", op, strerror(errno));
-    runtime_error_code_errno(code, errno, "SocketError", buf);
+    char buf[256], why[160];
+    int e = errno;
+    sock_errno_text(why, sizeof(why));
+    snprintf(buf, sizeof(buf), "%s() 失败: %s", op, why);
+    runtime_error_code_errno(code, e, "SocketError", buf);
 }
 
 /* DNS 解析超时（毫秒，0 = 不限，默认）：build_inet 内若 > 0 走 worker thread +

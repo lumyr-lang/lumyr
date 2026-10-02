@@ -13,6 +13,7 @@
 
 #include "ast/ast.h"
 #include "parse/import.h"   // lm_is_module_alias：f-string 内模块别名方法调用
+#include "lm_lex_unescape.h"  // 模板字面文本/内插字符串转义解码
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -132,8 +133,13 @@ static void tp_next_tok(TpParser* tp, TpTok* t)
         int n = 0;
         while(q < tp->end && *q != '\0' && *q != '"') {
             if(*q == '\\' && q + 1 < tp->end) {
-                if(q[1] == '"' || q[1] == '\'') { q++; continue; }   // 转义引号：跳过 \，引号留作边界
-                q += 2; continue;                                      // 其他转义：原样跳过
+                if(q[1] == '"' || q[1] == '\'') { q++; continue; }   // 转义引号：跳过 \，引号留作边界（f"..." 借道契约）
+                /* 其他转义对原样收入 raw，扫描结束后统一反转义 */
+                tok_ensure(t, n + 3);
+                t->text[n++] = q[0];
+                t->text[n++] = q[1];
+                q += 2;
+                continue;
             }
             tok_ensure(t, n + 2);
             t->text[n++] = *q;
@@ -142,20 +148,50 @@ static void tp_next_tok(TpParser* tp, TpTok* t)
         tok_ensure(t, n + 1);
         t->text[n] = '\0';
         if(q >= tp->end || *q != '"') tp_err("字符串未闭合");
+        /* 内插字符串与主词法共用同一套转义规则 */
+        {
+            char* decoded = NULL; int decLen = 0; char escErr[192];
+            if(lm_lex_unescape(t->text, LM_QUOTE_STR, &decoded, &decLen,
+                               escErr, (int)sizeof(escErr)) != 0)
+                tp_err(escErr);
+            free(t->text);
+            t->text = decoded;
+            t->text_cap = (int)strlen(decoded) + 1;
+        }
         tp->p = q + 1;
         t->type = TT_STR;
         return;
     }
     // char
     if(c == '\'') {
+        /* 收集到闭单引号（尊重 \. 对），raw 交统一解码器，支持
+         * \n \xHH \nnn 等完整转义；结果必须恰为 1 字节 */
         const char* q = p + 1;
-        if(q < tp->end && *q != '\'' && *q != '\0') {
-            t->ch = *q;
-            tp->p = q + 2;
-            t->type = TT_CHAR;
-            return;
+        int n = 0;
+        while(q < tp->end && *q != '\0' && *q != '\'') {
+            tok_ensure(t, n + 2);
+            t->text[n++] = *q;
+            if(*q == '\\' && q + 1 < tp->end) {
+                t->text[n++] = q[1];
+                q += 2;
+                continue;
+            }
+            q++;
         }
-        tp_err("字符字面量格式错误");
+        tok_ensure(t, n + 1);
+        t->text[n] = '\0';
+        if(q >= tp->end || *q != '\'') tp_err("字符字面量格式错误");
+        {
+            char* decoded = NULL; int decLen = 0; char escErr[192];
+            if(lm_lex_unescape(t->text, LM_QUOTE_CHAR, &decoded, &decLen,
+                               escErr, (int)sizeof(escErr)) != 0)
+                tp_err(escErr);
+            t->ch = decoded[0];
+            free(decoded);
+        }
+        tp->p = q + 1;
+        t->type = TT_CHAR;
+        return;
     }
     // 运算符
     p++;
@@ -494,7 +530,19 @@ static AstNode* make_format_call(char* fmt_text, AstNode* exprs)
 AstNode* maybe_template(const char* s)
 {
     const char* p = s;
-    if(!strchr(s, '{')) return ast_string(s);
+    const char* tmplEnd = s + strlen(s);
+    if(!strchr(s, '{')) {
+        /* 无花括号：整串即字面文本，统一反转义（f"a\nb"、f`a\nb`） */
+        char* decoded = NULL; int decLen = 0; char escErr[192];
+        if(lm_lex_unescape(s, LM_QUOTE_MSTR, &decoded, &decLen,
+                           escErr, (int)sizeof(escErr)) != 0) {
+            fprintf(stderr, "语法错误(第%d行): %s\n", yylineno, escErr);
+            exit(EXIT_FAILURE);
+        }
+        AstNode* lit = ast_string(decoded);
+        free(decoded);
+        return lit;
+    }
 
     // 第一遍：确认含内插（"{{" 不算）；否则当普通字符串
     {
@@ -506,9 +554,19 @@ AstNode* maybe_template(const char* s)
             if(q[0] == '{') { has_interp = 1; break; }
             q++;
         }
-        if(!has_interp) return ast_string(s);
-        // 注：无内插的字符串原样返回——{{/}} 转义是模板特性（有内插的模板串才生效），
-        // 且 format 的格式串实参不能被提前转义（否则 format("{{x}}") 双重转义报错）。
+        if(!has_interp) {
+            // 无内插：{{/}} 按字面保留（不走 format，故不做花括号转义），
+            // 但反斜杠转义仍按字面文本规则解码。
+            char* decoded = NULL; int decLen = 0; char escErr[192];
+            if(lm_lex_unescape(s, LM_QUOTE_MSTR, &decoded, &decLen,
+                               escErr, (int)sizeof(escErr)) != 0) {
+                fprintf(stderr, "语法错误(第%d行): %s\n", yylineno, escErr);
+                exit(EXIT_FAILURE);
+            }
+            AstNode* lit = ast_string(decoded);
+            free(decoded);
+            return lit;
+        }
     }
 
     // 拆段
@@ -608,8 +666,26 @@ AstNode* maybe_template(const char* s)
             p = close + 1;
             continue;
         }
-        fmt[w++] = *p;
-        p++;
+        /* 字面文本：反斜杠转义在此解码（内插 {expr} 区域由上方分支
+         * 整体跳过，其内部转义交给 TpParser，互不干扰） */
+        if(p[0] == '\\' && p + 1 < tmplEnd) {
+            char tmp[8]; int add = 0; char escErr[192];
+            if(lm_lex_unescape_one((const char**)&p, tmplEnd, LM_QUOTE_MSTR,
+                                   tmp, &add,
+                                   escErr, (int)sizeof(escErr)) != 0) {
+                fprintf(stderr, "语法错误(第%d行): %s\n", yylineno, escErr);
+                exit(EXIT_FAILURE);
+            }
+            if(w + (size_t)add + 1 > cap) {
+                while(w + (size_t)add + 1 > cap) cap *= 2;
+                fmt = (char*)realloc(fmt, cap + 1);
+            }
+            memcpy(fmt + w, tmp, (size_t)add);
+            w += (size_t)add;
+        } else {
+            fmt[w++] = *p;
+            p++;
+        }
     }
     fmt[w] = '\0';
 

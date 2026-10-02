@@ -6,24 +6,29 @@
 #include "lm_butex.h"
 
 #include <sched.h>   /* sched_yield（自旋让出） */
+#include <stdatomic.h>
 
 /* 竞争时进入 butex 前的有限自旋次数（默认 0 = 不自旋，直接排队）。
- * lumyr 场景竞争预期低，有限自旋思路但默认关闭、参数化保留。 */
-static int g_spin = 0;
+ * lumyr 场景竞争预期低，有限自旋思路但默认关闭、参数化保留。
+ * 启动配置可在任意 worker 线程读取，故用原子（TSan 干净）。 */
+static _Atomic int g_spin = 0;
 
-void lm_sync_set_spin(int n) { g_spin = (n > 0) ? n : 0; }
+void lm_sync_set_spin(int n) {
+    atomic_store_explicit(&g_spin, (n > 0) ? n : 0, memory_order_relaxed);
+}
 
 /* 有限自旋辅助：返回非 0 表示自旋期间条件可能已满足，调用方应重试快路径。 */
 static int spin_wait(int* spins) {
-    if (g_spin <= 0) return 0;
-    if (++(*spins) >= g_spin) { *spins = 0; return 0; }
+    int spin = atomic_load_explicit(&g_spin, memory_order_relaxed);
+    if (spin <= 0) return 0;
+    if (++(*spins) >= spin) { *spins = 0; return 0; }
     sched_yield();
     return 1;
 }
 
 /* ============================================================
  * mutex：32 位三态（0=未锁 / 1=已锁无等待 / 2=已锁有等待）
- * 对齐 musl/glibc futex mutex：
+ * 三态快速路径设计：
  *   lock 快路径  CAS 0→1；
  *   慢路径抢到后  CAS 0→2（保持「有等待」标记，unlock 据此 wake 传递链）；
  *   unlock       exchange 0，旧值==2（有等待者）才 butex_wake（无 waiter 不 syscall）。

@@ -69,3 +69,11 @@ print(s11);
 s12 = f`no interp
 here`;
 print(s12);
+
+// 13. s7 转义字节断言：反引号串 \t/\n 与普通串同一转义口径
+func mcheck(cond, msg) {
+    if (cond == true) { x = 1; } else { throw msg; }
+}
+mcheck(s7 == ("tab" + '\t' + "here" + '\n' + "newline"), "s7 mstr escape decode");
+mcheck(s7.size() == 16, "s7 size=16, got " + s7.size());
+print("multiline escape assertions PASS");

@@ -1,10 +1,13 @@
 // lm_math.c —— 数学内置函数
 #include "lm_math.h"
+#include "lm_reactor.h"   /* lm_now_ns：单调时钟纳秒，随机数播种熵源 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdint.h>
+#include <pthread.h>
 
 
 
@@ -157,11 +160,58 @@ Value lumyr_degrees(Value x) { return lumyr_make_double(to_double_arg(x, "degree
 Value lumyr_radians(Value x) { return lumyr_make_double(to_double_arg(x, "radians") * (M_PI / 180.0)); }
 Value lumyr_trunc(Value x)   { return lumyr_make_double(trunc(to_double_arg(x, "trunc"))); }
 
-/* random：返回 [0,1) 随机 double，首次调用自动播种 */
+/* ============================================================
+ * 每线程快速随机数发生器
+ *
+ * 多 worker 线程模型下，进程级 srand/rand 存在三类问题：懒播种竞争、
+ * 各线程随机流相互交叠、系统 rand 内部锁串行化。这里使用 per-thread
+ * 的 128 位状态移位迭代器（周期 2^128-2，通过标准统计检验套件），
+ * 每线程独立状态：无锁、无共享、序列不交叠。
+ *
+ * 状态全零表示尚未播种，首次取数时惰性播种。播种熵源完全自包含：
+ * 单调时钟纳秒 ^ 线程本地状态地址（每线程天然不同）^ 线程身份，
+ * 再经单字混合扩散为两个状态字。
+ * ============================================================ */
+static _Thread_local uint64_t g_lmRngState[2] = {0, 0};
+
+/* 单字混合扩散：seed 每调用一次自增一个常数，连续两次调用得到
+ * 充分独立的状态字 */
+static uint64_t lmRngMix(uint64_t* seed) {
+    uint64_t z = (*seed += UINT64_C(0x9E3779B97F4A7C15));
+    z = (z ^ (z >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return z ^ (z >> 31);
+}
+
+static void lmRngSeed(void) {
+    uint64_t seed = lm_now_ns();
+    seed ^= (uint64_t)(uintptr_t)&g_lmRngState;
+    seed ^= (uint64_t)(uintptr_t)pthread_self();
+    g_lmRngState[0] = lmRngMix(&seed);
+    g_lmRngState[1] = lmRngMix(&seed);
+    /* 混合结果恰为双零（概率 2^-128）时强制非零，避免退化为不动点 */
+    if(g_lmRngState[0] == 0 && g_lmRngState[1] == 0)
+        g_lmRngState[0] = 1;
+}
+
+/* 128 位状态移位迭代：返回下一个 64 位随机数 */
+static uint64_t lmRngNext(void) {
+    uint64_t x = g_lmRngState[0];
+    uint64_t const y = g_lmRngState[1];
+    g_lmRngState[0] = y;
+    x ^= x << 23;
+    g_lmRngState[1] = x ^ y ^ (x >> 17) ^ (y >> 26);
+    return g_lmRngState[1] + y;
+}
+
+/* random：返回 [0,1) 随机 double。
+ * 取 64 位随机数的高 53 位映射到 [0,1)，等概率、无双精度精度浪费；
+ * 每线程首次调用自动播种。 */
 Value lumyr_random(void) {
-    static int seeded = 0;
-    if(!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
-    return lumyr_make_double((double)rand() / ((double)RAND_MAX + 1.0));
+    if(g_lmRngState[0] == 0 && g_lmRngState[1] == 0)
+        lmRngSeed();
+    uint64_t bits = lmRngNext() >> 11;   /* 高 53 位 */
+    return lumyr_make_double(ldexp((double)bits, -53));
 }
 
 // join：字符串数组按分隔符拼接（非字符串元素 value_to_str 转换）
