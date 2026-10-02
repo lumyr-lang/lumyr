@@ -371,3 +371,57 @@ P0-A 容量定稿的实施前提（main 帧何时创建、全局槽数何时可�
   配置表）优先断言 + 真实 fdLimit 端到端取值一致断言 + 双语文案断言；
   原 echo 功能/多 worker 两个场景保留不动；
 - TR-7.2：全量枚举（正常 + ASAN），零新增 FAIL。
+
+## 11. Task 8：10000 长连容量基准（实测归档）
+
+### 11.1 环境与方法
+
+- 机器：MacBookPro12,1（2015 13" MBP），**2 物理核 / 4 逻辑核，8GB 内存**；
+  未改任何系统参数：`kern.maxfiles=30720`、`kern.maxfilesperproc=10240`、
+  **`kern.ipc.somaxconn=128`（listen backlog 4096 被内核截断到 128）**。
+- nofile 调优：仅进程软上限 `ulimit -n 20000`（无需 root，未触硬限）。
+  同机压测 fd 账：服务端 10000（listen+10000 连接）+ 客户端 10000 ≈ 20002，
+  系统总量 30720 内；两端各自软上限 20000 内。
+- 配置：RR 分派、**workers=2（=物理核数）**、per-worker maxConnections=5500
+  （总额度 11000）、acceptQueue=true；**connCapacity 未显式配置，Task 7
+  自动对齐给出 per-worker=19744**（20000-256），可容纳进程级 fd 号到 ~10015。
+- 方法（`tests/probe/c10k_server.lm` + `c10k_driver.py` +
+  `run_c10k_bench.sh`，归档 `/tmp/t8_bench/`）：asyncio 驱动 BATCH=100
+  错峰建 10000 长连 + 建连即逐条 echo 校验；t≈25s 对全部存活连接做一轮
+  全量 ping（轻量收发，响应带编号校验）；t≈65s 全关。服务端自适应
+  打印 BASELINE / 每 2s PROGRESS（峰值 active）/ DRAINED；编排 ps+lsof
+  三点采 RSS 与 TCP fd；驱动 ping 完成打标记文件，编排按标记采 ACTIVE，
+  不赌墙钟。
+
+### 11.2 实测结果（2026-10-02，TR-8.1 达标）
+
+| 指标 | 结果 |
+|---|---|
+| 建连成功率 | **10000/10000 = 100%，bad=0 err=0**（somaxconn=128 未调，零 reset） |
+| 建连耗时/速率 | 10.10s，**990 conn/s**（BATCH=100 错峰，单调爬升无突发丢失） |
+| 保活全量 ping | **10000/10000 零错误**，一轮 17.92s（≈558 msg/s） |
+| 关闭耗时 | 10000 连 1.47s |
+| worker 分布 | acceptDist=activeDist=**[5000, 5000]，偏差 0%** |
+| fd 守恒 | BASELINE fd_tcp=1 → ACTIVE **10001**（listen+10000）→ DRAINED **1** |
+| RSS | BASELINE 10MB → ACTIVE **667MB（65.7KB/连接）** → DRAINED 834MB* |
+| Task 7 联动 | 自动对齐 19744/worker，启动双语 info 一行，全程零容量拒绝 |
+
+\* DRAINED RSS 834MB 高于 ACTIVE：ACTIVE 采样于建连+ping 完成点，之后
+全量 ping 与 10000 协程退出/GC 销毁继续触碰 VM 帧与 C 栈物理页；本运行时
+栈池 per-worker 缓存 8 个 NORMAL 栈且 macOS 不主动向 OS 回收空闲物理页，
+故进程 RSS 不回落**不构成泄漏证据**——判定口径以 fd 归零（fd_tcp 10001→1）
+与 active=0 为准（与 T5 三点 fd 采样结论一致）；OS 物理页在进程退出时归还。
+
+观测项（非错误，不临时改设计——spec Task 8 明确要求）：
+1. **GC 协程注册表全局锁是万级吞吐瓶颈**（T5 已记录）：建连期 990 conn/s
+   尚可，但全量 ping 仅 ~558 msg/s——每条 ping 触发的协程 resume/yield
+   都挂摘全局注册表，2 worker 真并行下锁竞争把吞吐压到单核量级。
+2. 建连高峰 worker 0 触发 2 次 longSched 告警（>50ms 单协程霸占，
+   sysmon 观测口径），无卡死、无误迁、零业务错误。
+3. somaxconn=128 是同机万级突发的潜在重置源；本次 BATCH=100 错峰恰好
+   不溢出，更高突发速率（或 Linux 生产部署）应调大 somaxconn 或保持错峰。
+
+**结论：10000 长连容量基准在 2 核 8GB 笔记本、未提权改系统参数的条件下
+一次达标——10000/10000 建连、保活收发零错误、worker 分布偏差 0%、
+65.7KB/连接、fd 完全守恒。** 后续性能输入：GC 协程注册表锁分片
+（吞吐优化，非容量缺陷）。

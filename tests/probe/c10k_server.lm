@@ -1,0 +1,88 @@
+// ============================================================
+// TR-8.1 探针：RR 分派，workers=物理核数(2)，10000 长连容量基准
+//
+// 目的（验收口径）：
+//   1) 10000 条长连接全部建立 + 建连时 echo + 保活期一轮轻量全量 ping，
+//      驱动侧校验收发零错误；
+//   2) worker 受理/在役分布（服务端 STATE ACTIVE 打印 acceptDist/activeDist）；
+//   3) RSS/连接与 fd 数：外部 ps/lsof 在 BASELINE/ACTIVE/DRAINED 三点采样；
+//   4) 顺带验证 Task 7：不显式配置 connCapacity，启动时按 fd 软上限自动对齐
+//      （ulimit -n 20000 → per-worker 19744，容纳进程级 fd 号到 ~10020）。
+//
+// 时间线（主协程 sleep 墙钟驱动，worker 在独立线程，不受影响）：
+//   t≈1s   STATE BASELINE（外部采基线 RSS/fd）
+//   0~70s  驱动建 10000 连 + 首 echo，保活期一轮全量 ping，约 t≈65s 关闭
+//   t≈70s  STATE ACTIVE + 分布（外部采在役 RSS/fd）
+//   t≈72s  起轮询 activeCount 归零 → STATE DRAINED（外部采回落）
+//   留 3s 采样窗后优雅停机
+//
+// 用法（见 tests/probe/run_c10k_bench.sh）：
+//   ulimit -n 20000
+//   ./bin/lumyr tests/probe/c10k_server.lm
+// ============================================================
+
+import <App/ServiceApplication>;
+
+PORT = 19610;
+WORKERS = 2;          // 本机物理核数（sysctl hw.physicalcpu）
+MAX_CONN = 5500;      // per-worker（2 × 5500 = 11000，容纳 10000 长连 + RR 偏差）
+BACKLOG = 4096;
+// connCapacity 故意不显式配置：Task 7 自动对齐（20000-256=19744/worker）。
+
+// 长连 echo：连接保活期间反复 echo，客户端关闭（recv 得空串）即返回
+class C10kEchoHandler implements ServiceHandler {
+    func serve(conn) {
+        while (true) {
+            data = conn.recv(4096);
+            if (data == "") { return; }
+            conn.send(data);
+        }
+    }
+}
+
+// 汇总 worker 受理/在役分布（runMultiWorker 返回后 workerList 只读）
+func snapshot(): string {
+    acc = [];
+    act = [];
+    totalAcc = 0;
+    totalAct = 0;
+    for w in app.workerList {
+        acc.add(w.acceptTotal);
+        act.add(w.activeCount);
+        totalAcc = totalAcc + w.acceptTotal;
+        totalAct = totalAct + w.activeCount;
+    }
+    return "accepted=" + totalAcc + " active=" + totalAct
+           + " acceptDist=" + acc + " activeDist=" + act;
+}
+
+app = ServiceApplication({"host": "127.0.0.1", "port": PORT, "backlog": BACKLOG,
+                          "workers": WORKERS,
+                          "dispatch": "rr", "acceptQueue": true});
+app.setHandler(C10kEchoHandler());
+app.setMaxConnections(MAX_CONN);
+app.startAsync();
+sleep(1000);
+print("STATE BASELINE workers=" + WORKERS + " maxConn(per-worker)=" + MAX_CONN
+      + " connCapacity(auto)=" + app.connCapacity());
+
+// 自适应观测：每 2s 打印在役/受理；峰值 ≥50 后归零即 DRAINED，120s 超时兜底
+drained = false;
+peak = 0;
+elapsed = 0;
+while (elapsed < 120000) {
+    sleep(2000);
+    elapsed = elapsed + 2000;
+    total = 0;
+    for w in app.workerList { total = total + w.activeCount; }
+    if (total > peak) { peak = total; }
+    print("STATE PROGRESS t=" + elapsed + " peak=" + peak + " " + snapshot());
+    if (peak >= 50 && total == 0) { drained = true; break; }
+}
+print("STATE DRAINED drained=" + drained + " peak=" + peak + " " + snapshot());
+
+// 留 3s 外部回落采样窗，然后优雅停机
+sleep(3000);
+app.stop();
+app.join();
+print("STATE EXIT " + snapshot());
