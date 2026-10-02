@@ -233,3 +233,87 @@ P0-A 容量定稿的实施前提（main 帧何时创建、全局槽数何时可�
 - reuseport 默认模式回归（reuseport/conn_capacity/stress_concurrent/
   stream_reactor）+ 全量枚举 90+ 用例；ASAN 双模式零报告（含 fd 快速复用）；
   RR vs reuseport echo QPS 对比（≥3 次中位数，回归 ≤5%）。
+
+## 9. T6 实施取证与详细设计（协程栈高水位采样 + SMALL 档试点，2026-10）
+
+### 9.1 现状事实链（文件:行号）
+
+- **栈档与分配已就位**：`LM_STACK_SMALL`=16KiB / `LM_STACK_NORMAL`=128KiB
+  （`kit/runtime/include/lm_co.h:274-275`），`lm_co_spawn` 按 stack_size 推断档
+  （`lm_co.c:229-230`），`lm_co_spawn_class` 显式选档（`lm_co.c:282`）；per-thread
+  栈池两桶分档复用（`lm_stack_pool.c:157/193`）。
+- **栈几何**（`lm_stack_pool.h:26-36`）：mmap 区间 `[mmap_base, mmap_base+total)`，
+  `stack_base`=可用区末（高地址，栈从此向低生长），`stack_top`=可用区起（低地址），
+  `stack_size`=可用区大小（不含 guard page）。注释口误修正：`stack_base` 是
+  可用区末，紧邻其上的 guard page 为 PROT_NONE（`lm_co.c:543-544` 的
+  "stack_base 指向 guard page 起点"表述不准——scanTop 下退一字只是避开
+  紧邻 guard 的边界读取，不是 stack_base 落在 guard 内）。
+- **栈使用量精确采样点 = `lm_co_yield`**（`lm_co.c:530-575`）：fcontext 后端
+  `lm_ctx_jump` 把 callee-saved 现场 push 到协程栈，`ctx.sp` 指向保存区最低点
+  ——即**当前已用栈的最低地址**；栈向低生长，故
+  `highWaterBytes = (char*)co->stack_base - (char*)co->ctx.sp`，语义与
+  `lm_co.c:543-555` 既有 GC 水位参考点完全一致（该点注册 scanTop=
+  stack_base-sizeof(void*) 与 ctx.sp 间接槽）。yield 是唯一"栈冻结 + 现场已落栈"
+  的点；resume 返回侧（`lm_co.c:439` 之后）看到的是同一冻结状态，等价采样。
+  ucontext 回退后端 ctx 内嵌 ucontext_t 无 sp 槽，本设计仅对 fcontext 采样，
+  ucontext 构建降级为只统计 spawn/destroy 档级计数（`#ifdef LM_CTX_FCONTEXT`）。
+- **采样点取舍**：spec 要求 yield/销毁两点。销毁点（`lm_co_destroy`）不可靠——
+  DEAD 协程的 ctx.sp 停在 `co_trampoline` 末尾切回点（接近空栈），不能反映
+  运行期高水位；且协程可被在 SUSPENDED 态强毁。故以 **yield 点每事件采样**为
+  主（覆盖全生命周期所有冻结态），`spawn/destroy` 仅做档级计数，不做水位采样。
+- **schedStats 现有形态**：全局原子计数 `g_lm_sched_stats`（`lm_sched_stats.h:34-47`，
+  live_co/force_yield/long_sched/stuck + pending_time 12 对数桶直方图）；
+  trace 线程（`lm_sched_stats.c:160-192`）`LM_SCHED_DEBUG=trace:N` 周期打印
+  全局行 + per-scheduler 行；lumin 门面 `LumyrThread/SchedStats.lm` 经
+  `__private_system__sched_stats`（BUILTIN_SCHED_STATS，`vm_builtin.c:4388`）
+  输出快照 map（buckets/bounds/分位数 lumin 侧算，`SchedStats.lm:82-98`）。
+- **lumin 层 spawn 链路**：`Coroutine` 构造器（`LumyrNetWork/Reactor.lm:123-130`）
+  → 全局内建 `spawn(f, arg)`（BUILTIN_CO_SPAWN，`ir_compile.c:321`）
+  → `vm_co_spawn`（`vm_co.c:342-357`，硬编码 stack_size=0 → 恒 NORMAL 档）
+  → `lm_co_spawn`。当前全仓**无任何** SMALL 档使用方（grep 零命中
+  `lm_co_spawn_class`/`LM_STACK_CLASS_SMALL` 于 src/ 与 lumyr-lms/）。
+- **压测入口**：echo = `tests/rr_dispatch_test.lm`（4 worker 800 长连）/
+  `tests/probe/rr_dispatch_server.lm`（19510）；file.recv =
+  `tests/probe/stream_reactor_server.lm`（19210，reuseport 大文件上传）；
+  HTTP = `tests/probe/p1_header_min.lm`（HTTP 请求最小解析路径）。
+  采样输出走 stderr trace 行（LM_SCHED_DEBUG=trace:N）+ SchedStats.summary()。
+
+### 9.2 设计
+
+1. **高水位采样**（`lm_co.c` yield 点，`#ifdef LM_CTX_FCONTEXT`）：
+   `lm_ctx_jump` 返回后（resume 回来栈仍冻结态已过——采样必须在 jump **前**，
+   即现场已保存但尚未切走时读 ctx.sp 无效，因 sp 是 jump 内更新的）。
+   **正确采样点**：fcontext 下 `lm_ctx_jump(&co->ctx, &co->resume_ctx)` 把
+   保存后 sp 写入 `co->ctx.sp`——该写入发生在 jump 内部、控制流转出前；
+   因此采样应放在 **resume 返回侧**（`lm_co_resume` 中 `lm_ctx_jump` 返回后，
+   `lm_co.c:439` 之后）：此刻 `co->ctx.sp` 已是冻结 sp，协程栈内容稳定
+   （state 尚未被本线程以外触碰，SUSPENDED 补写也在此后），读取安全。
+   与 yield 点语义等价（同一冻结状态），且不侵入 yield 的 GC 注册临界区。
+   DEAD 协程（trampoline 末尾切回）采样为近零，用 state==DEAD 跳过，
+   避免拉低分档基线；swap_out 路径（reaper 读 ctx.sp 拷栈）同理是冻结态，
+   但 reaper 属低频维护路径，不重复采样。
+2. **分档直方图**（`lm_sched_stats`）：新增 `stack_hw_buckets[2][N]`——
+   第一维 = `co->stack_class`（SMALL/NORMAL 槽位 0/1），桶按**已用字节对数**
+   分档（1K/2K/4K/8K/16K/32K/64K/128K + 溢出桶，共 9 桶，128K 桶上界即
+   NORMAL 档限），另加 per-class `stack_hw_max` 原子 max（fetch_max 循环）。
+   累计语义（不清零，与 live_co 同生命周期）——高水位是容量规划指标，
+   要的是进程历史峰值分布，不是窗口值。
+3. **输出**：trace 全局行追加 `stackHw[class] n/p50/p99/max`；
+   `SchedStats.lm` 快照 map 增加 `stackHwSmall`/`stackHwNormal`
+   （{buckets,boundsKib,count,max}），`summary()` 追加两档 p50/p99/max 摘要。
+4. **SMALL 档试点**：依据 9.3 采样数据选定 spawn 点，扩展 `Coroutine` 构造器
+   可选栈档参数（默认 NORMAL 零行为变化），经 `vm_co_spawn` 传至
+   `lm_co_spawn` 的 stack_size（≤LM_STACK_SMALL → SMALL 桶），不改
+   `lm_co_spawn_class` 的 C API（保持 VM 协程单入口）。预期目标：纯转发
+   echo handler 协程；深 VM 帧路径（HTTP 解析/构造器链）维持 NORMAL。
+5. **性能纪律**：采样 = 一次减法 + 桶判定（≤9 次比较）+ 两次 relaxed 原子加
+   + max 的 CAS 循环，仅在 resume 返回路径（已有 CAS 与记账逻辑同点），
+   不新增锁、不新增 TLS 查找（co 已在手）。
+
+### 9.3 验证设计
+
+- 三类负载跑 LM_SCHED_DEBUG=trace:500，归档 trace 行（p50/p99/max 必须
+  ≤ 档上限：SMALL 档 max ≤16KiB，NORMAL 档 max ≤128KiB）；
+- SMALL 试点后全量枚举 + ASAN 零报告（重点：无 guard page SIGSEGV/SIGBUS）；
+- 热路径开销：trace 关闭时采样仍计（原子加），与 pending 记账同量级，
+  QPS 回归沿用既有口径抽测。

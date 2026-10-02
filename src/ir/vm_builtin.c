@@ -4150,6 +4150,27 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         out->v.struct_ptr = co;
         return 1;
     }
+    case BUILTIN_CO_SPAWN_CLASS: {
+        /* Task 6：显式栈档 spawn（__private_system__co_spawn_class(f, arg, cls)）。
+         * cls 1=SMALL(16KiB) / 2=NORMAL(128KiB)；其余语义与 spawn 一致。 */
+        if(argc < 3 || argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
+            runtime_error("co_spawn_class(f, arg, cls) 首参须为函数 / co_spawn_class: first arg must be function");
+        }
+        if(argv[2].type != VAL_INT) {
+            runtime_error("co_spawn_class cls 须为 int / co_spawn_class: cls must be int");
+        }
+        int cls = (int)argv[2].v.i32;
+        if(cls != 1 && cls != 2) {
+            runtime_error("co_spawn_class cls 须为 1(SMALL) 或 2(NORMAL) / co_spawn_class: cls must be 1(SMALL) or 2(NORMAL)");
+        }
+        lm_co_t* co = vm_co_spawn_class(argv[0], argv[1], cls);
+        if(!co) { runtime_error("co_spawn_class 协程创建失败 / co_spawn_class: coroutine creation failed"); }
+        lm_scheduler_t* sched = lm_scheduler_get_current();
+        if (sched && !lm_co_current()) lm_scheduler_post_local(sched, co);
+        out->type = VAL_STRUCT_PTR;
+        out->v.struct_ptr = co;
+        return 1;
+    }
     case BUILTIN_CO_RESUME: {
         void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
                   : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
@@ -4455,6 +4476,34 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             lumyr_array_add(&rows, row);
         }
         lumyr_map_set(&m, lumyr_make_string("scheds"), rows);
+        /* Task 6：栈高水位两档（SMALL/NORMAL）快照。 */
+        const uint64_t* shwBounds = lm_sched_stats_stack_hw_bounds();
+        const char* shwKeys[2] = {"stackHwSmall", "stackHwNormal"};
+        for (int ci = 0; ci < LM_SCHED_STACK_HW_CLASSES; ci++) {
+            Value cls = val_map();
+            Value clsBuckets = val_array(0);
+            Value clsBounds = val_array(0);
+            uint64_t cnt = 0, sum = 0;
+            for (int i = 0; i < LM_SCHED_STACK_HW_BUCKETS; i++) {
+                uint64_t v = atomic_load_explicit(&gs->stack_hw_buckets[ci][i],
+                                                  memory_order_relaxed);
+                cnt += v;
+                lumyr_array_add(&clsBuckets, lumyr_make_int64((int64_t)v));
+                uint64_t b = shwBounds[i];
+                lumyr_array_add(&clsBounds,
+                                b == UINT64_MAX ? lumyr_make_int64(INT64_MAX)
+                                                : lumyr_make_int64((int64_t)b));
+            }
+            sum = atomic_load_explicit(&gs->stack_hw_sum[ci], memory_order_relaxed);
+            lumyr_map_set(&cls, lumyr_make_string("buckets"), clsBuckets);
+            lumyr_map_set(&cls, lumyr_make_string("boundsBytes"), clsBounds);
+            lumyr_map_set(&cls, lumyr_make_string("count"), lumyr_make_int64((int64_t)cnt));
+            lumyr_map_set(&cls, lumyr_make_string("sumBytes"), lumyr_make_int64((int64_t)sum));
+            lumyr_map_set(&cls, lumyr_make_string("maxBytes"),
+                          lumyr_make_int64((int64_t)atomic_load_explicit(&gs->stack_hw_max[ci],
+                                                                          memory_order_relaxed)));
+            lumyr_map_set(&m, lumyr_make_string(shwKeys[ci]), cls);
+        }
         *out = m;
         return 1;
     }
@@ -4870,6 +4919,7 @@ const char* builtin_id_name(int id) {
     case BUILTIN_REACTOR_INBOUND_CANCEL: return "__private_system__reactor_inbound_cancel";
     case BUILTIN_SOCKET_ACCEPT_RR: return "__private_system__socket_accept_rr";
     case BUILTIN_CO_SPAWN: return "spawn";
+    case BUILTIN_CO_SPAWN_CLASS: return "__private_system__co_spawn_class";
     case BUILTIN_CO_RESUME: return "resume";
     case BUILTIN_CO_YIELD: return "yield";
     case BUILTIN_CO_CURRENT: return "current";

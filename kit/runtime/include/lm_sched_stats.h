@@ -31,6 +31,12 @@ extern "C" {
  * 桶语义：buckets[i] = 延迟 ∈ (bounds[i-1], bounds[i]] µs，末桶为溢出桶。 */
 #define LM_SCHED_PENDING_BUCKETS 12
 
+/* Task 6：协程栈高水位直方图（对数桶，按已用字节分档）。
+ * 桶语义：buckets[i] = 高水位 ∈ (bounds[i-1], bounds[i]]，末桶为溢出桶（>128KiB）。
+ * 两档：idx 0 = SMALL（16KiB），idx 1 = NORMAL（128KiB）。 */
+#define LM_SCHED_STACK_HW_CLASSES 2
+#define LM_SCHED_STACK_HW_BUCKETS 9
+
 typedef struct lm_sched_stats_global_s {
     _Atomic long live_co;               /* 存活协程数 */
     _Atomic uint64_t force_yield_count; /* reduction 预算耗尽强制让出重入队总次数 */
@@ -44,6 +50,13 @@ typedef struct lm_sched_stats_global_s {
     _Atomic uint64_t pending_buckets[LM_SCHED_PENDING_BUCKETS];
     _Atomic uint64_t pending_count;     /* 窗口内样本数 */
     _Atomic uint64_t pending_sum_ns;    /* 窗口内样本总延迟（均值用） */
+    /* Task 6：栈高水位（yield 冻结点采样，fcontext 专属）。
+     * 累计语义（不清零）——容量规划看历史峰值分布，非窗口值。
+     * [0]=SMALL 档，[1]=NORMAL 档。 */
+    _Atomic uint64_t stack_hw_buckets[LM_SCHED_STACK_HW_CLASSES][LM_SCHED_STACK_HW_BUCKETS];
+    _Atomic uint64_t stack_hw_count[LM_SCHED_STACK_HW_CLASSES];
+    _Atomic uint64_t stack_hw_max[LM_SCHED_STACK_HW_CLASSES];   /* 各档历史最大已用字节 */
+    _Atomic uint64_t stack_hw_sum[LM_SCHED_STACK_HW_CLASSES];   /* 各档样本总字节（均值用） */
 } lm_sched_stats_global_t;
 
 extern lm_sched_stats_global_t g_lm_sched_stats;
@@ -83,6 +96,15 @@ void lm_sched_stats_record_pending_ns(uint64_t ns);
  * 溢出桶下限）。只读常量表单一事实源：trace 打印与查询侧（schedStats
  * 内置）共用，避免查询侧复制边界表造成漂移。 */
 const uint64_t* lm_sched_stats_pending_bounds(void);
+
+/* Task 6：记录一次协程栈高水位（字节）。lm_co_resume 返回侧（yield 冻结点）
+ * 热点调用：桶判定顺序扫描（≤9 次比较），无锁原子累加 + fetch_max CAS。
+ * stack_class 为 LM_STACK_CLASS_SMALL/NORMAL；非法档丢弃。 */
+void lm_sched_stats_record_stack_hw(int stack_class, uint64_t used_bytes);
+
+/* Task 6：栈高水位桶上界表（字节，LM_SCHED_STACK_HW_BUCKETS 项，末项为
+ * 溢出桶下限）。与 pending 同理为单一事实源。 */
+const uint64_t* lm_sched_stats_stack_hw_bounds(void);
 
 /* trace 线程懒启动（幂等）：解析 LM_SCHED_DEBUG=trace:N，每 N ms 聚合打印
  * 调度器全景到 stderr。N≤0 视为 1000ms。未设置环境变量则不启动。 */

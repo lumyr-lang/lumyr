@@ -1,0 +1,93 @@
+// Task 6：栈档指定能力回归测试。
+// 数据结论：VM 协程栈深 ~47-53KB，SMALL 档（16KiB）不适用；NORMAL 档
+// 行为与默认 spawn 一致。本测试验证 spawn_class NORMAL 档 + SchedStats
+// 栈高水位输出格式。
+import <NetWork/Reactor>;
+import <Thread/SchedStats>;
+
+func shallowWorker(n) {
+    x = 0;
+    i = 0;
+    while (i < n) {
+        x = x + i;
+        i = i + 1;
+    }
+    coYield();
+    return x;
+}
+
+func deepVmWorker(n) {
+    arr = [];
+    i = 0;
+    while (i < n) {
+        arr.add("item" + i);
+        i = i + 1;
+    }
+    coYield();
+    s = "";
+    i = 0;
+    while (i < arr.size()) {
+        s = s + arr[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+func main() {
+    r = ReactorInstance(65536);
+    setReactor(r);
+    sched = scheduler(r.impl);
+    setScheduler(sched);
+
+    // NORMAL 档显式指定（cls=2），行为须与默认 spawn 一致
+    cos = [];
+    i = 0;
+    while (i < 4) {
+        cos.add(Coroutine(shallowWorker, 1000, 2));
+        cos.add(Coroutine(deepVmWorker, 500, 2));
+        i = i + 1;
+    }
+
+    i = 0;
+    while (i < cos.size()) {
+        cos[i].resume();
+        i = i + 1;
+    }
+    i = 0;
+    while (i < cos.size()) {
+        cos[i].resume();
+        i = i + 1;
+    }
+
+    // 断言全部结束
+    allDead = true;
+    i = 0;
+    while (i < cos.size()) {
+        if (cos[i].isDead() == false) {
+            allDead = false;
+        }
+        i = i + 1;
+    }
+
+    st = __private_system__sched_stats();
+    sw = st["stackHwSmall"];
+    sn = st["stackHwNormal"];
+
+    // SMALL 档无样本（VM 协程未使用 SMALL）
+    assert sw["count"] == 0, "VM 协程不应走 SMALL 档 / VM coroutine must not use SMALL class";
+    // NORMAL 档有样本（8 协程各 yield 1 次，resume 返回侧采样 = 8）
+    assert sn["count"] >= 8, "NORMAL 档应有 yield 采样 / NORMAL class must have yield samples";
+    // max 不超 NORMAL 上限 128KiB
+    assert sn["maxBytes"] < 131072, "NORMAL max 须 <128KiB / NORMAL max must be <128KiB";
+    // 全结束
+    assert allDead, "全部协程须已结束 / all coroutines must be dead";
+
+    print("STACK_CLASS_TEST_OK");
+
+    r.stop();
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    r.destroy();
+}
+
+main();

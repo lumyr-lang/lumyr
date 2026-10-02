@@ -25,6 +25,9 @@
 //   pendingCount / pendingSumNs   直方图样本数 / 样本总延迟 ns
 //   pendingBuckets                12 桶样本数组（µs 对数桶）
 //   pendingBoundsUs               桶上界 µs 数组（末桶为溢出桶：>1s）
+//   stackHwSmall / stackHwNormal  栈高水位（字节）两档：{buckets, boundsBytes,
+//                                 count, sumBytes, maxBytes}
+//   stackHwBoundsBytes            桶上界字节数组（末桶为溢出桶：>128KiB）
 //   scheds                        per-scheduler 行数组：{id, kind(io/compute),
 //                                 stealAttempts, stealSuccess, wakeCount,
 //                                 lifoQuotaHits, readyLen, wsqLen, lifoBusy}
@@ -97,6 +100,50 @@ public class SchedStats {
         return bounds[bounds.size() - 1];
     }
 
+    // ========== 栈高水位 ==========
+
+    // 栈高水位分位数（字节，q ∈ (0,1]，如 0.50 / 0.99；无样本返回 0）。
+    // 与 percentileUs 同算法，但读栈高水位桶。
+    static func stackHwPercentileB(cls: map, q: double): long {
+        buckets = cls["buckets"];
+        bounds = cls["boundsBytes"];
+        total = cls["count"];
+        if (total == 0) { return 0; }
+        need = total * q;
+        cum = 0;
+        i = 0;
+        while (i < buckets.size()) {
+            cum = cum + buckets[i];
+            if (cum > need) {
+                return bounds[i];
+            }
+            i = i + 1;
+        }
+        return bounds[bounds.size() - 1];
+    }
+
+    // 栈高水位单行摘要（分档，供日志 / 健康检查输出）。
+    static func stackHwSummary(): string {
+        st = __private_system__sched_stats();
+        s = st["stackHwSmall"];
+        n = st["stackHwNormal"];
+        // lumin 无三元表达式，avg 用 if/else 计算
+        sAvg = 0;
+        if (s["count"] > 0) { sAvg = s["sumBytes"] / s["count"]; }
+        nAvg = 0;
+        if (n["count"] > 0) { nAvg = n["sumBytes"] / n["count"]; }
+        return "stackHw[S] n=" + s["count"]
+             + " avg=" + sAvg + "B"
+             + " p50=" + SchedStats.stackHwPercentileB(s, 0.50) + "B"
+             + " p99=" + SchedStats.stackHwPercentileB(s, 0.99) + "B"
+             + " max=" + s["maxBytes"] + "B"
+             + " stackHw[N] n=" + n["count"]
+             + " avg=" + nAvg + "B"
+             + " p50=" + SchedStats.stackHwPercentileB(n, 0.50) + "B"
+             + " p99=" + SchedStats.stackHwPercentileB(n, 0.99) + "B"
+             + " max=" + n["maxBytes"] + "B";
+    }
+
     // ========== 汇总 ==========
 
     // 单行摘要（对齐 trace 线程全局行口径，供日志 / 健康检查输出）
@@ -111,6 +158,7 @@ public class SchedStats {
              + " pending n=" + st["pendingCount"]
              + " avg=" + SchedStats.pendingAvgUs() + "us"
              + " p50=" + SchedStats.percentileUs(st, 0.50) + "us"
-             + " p99=" + SchedStats.percentileUs(st, 0.99) + "us";
+             + " p99=" + SchedStats.percentileUs(st, 0.99) + "us"
+             + " " + SchedStats.stackHwSummary();
     }
 }

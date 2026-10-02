@@ -319,6 +319,7 @@ int builtin_id_by_name(const char* name) {
         {"__private_system__reactor_inbound_cancel", BUILTIN_REACTOR_INBOUND_CANCEL},
         {"__private_system__socket_accept_rr", BUILTIN_SOCKET_ACCEPT_RR},
         {"spawn", BUILTIN_CO_SPAWN},
+        {"__private_system__co_spawn_class", BUILTIN_CO_SPAWN_CLASS},
         {"resume", BUILTIN_CO_RESUME},
         {"coYield", BUILTIN_CO_YIELD},             /* 协程让出：与 lm 的 yield 关键字（generator 语句）分离 */
         {"current", BUILTIN_CO_CURRENT},

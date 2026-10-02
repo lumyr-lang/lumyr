@@ -130,6 +130,13 @@ public class Coroutine {
         self.impl = spawn(f, null);
     }
 
+    // Task 6：显式栈档构造（cls 1=SMALL 16KiB / 2=NORMAL 128KiB）。
+    // 浅栈路径（纯转发 IO 协程）走 SMALL 档，深 VM 帧路径维持 NORMAL。
+    // 默认行为不变（不传 cls 走 NORMAL）。
+    func Coroutine(f, arg, cls: int) {
+        self.impl = __private_system__co_spawn_class(f, arg, cls);
+    }
+
     // resume：从挂起点继续；协程内 yield 会切回这里
     func resume() {
         resume(self.impl);

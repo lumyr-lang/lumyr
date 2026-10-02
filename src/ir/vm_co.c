@@ -345,11 +345,27 @@ lm_co_t* vm_co_spawn(Value func, Value arg) {
     sc->func = func;
     sc->arg = arg;
     sc->co = NULL;
-    /* lm_co_spawn 用 vm_co_trampoline 作 entry；stack_size=0 用默认 64KiB */
+    /* lm_co_spawn 用 vm_co_trampoline 作 entry；stack_size=0 用默认 128KiB */
     lm_co_t* co = lm_co_spawn(vm_co_trampoline, sc, 0);
     if(!co) { free(sc); return NULL; }
     sc->co = co;  /* 回填，trampoline 内写 result/error 用 */
     /* 分配 VMCoState（全 0：协程从空状态开始——空 try 栈、thread_root=0、sp=0） */
+    VMCoState* st = (VMCoState*)calloc(1, sizeof(VMCoState));
+    if(!st) { lm_co_destroy(co); return NULL; }
+    co->vm_state = st;
+    return co;
+}
+
+/* Task 6：显式指定栈档的 spawn（LM_STACK_CLASS_SMALL/NORMAL）。 */
+lm_co_t* vm_co_spawn_class(Value func, Value arg, int stack_class) {
+    CoSpawnCtx* sc = (CoSpawnCtx*)malloc(sizeof(CoSpawnCtx));
+    if(!sc) return NULL;
+    sc->func = func;
+    sc->arg = arg;
+    sc->co = NULL;
+    lm_co_t* co = lm_co_spawn_class(vm_co_trampoline, sc, stack_class);
+    if(!co) { free(sc); return NULL; }
+    sc->co = co;
     VMCoState* st = (VMCoState*)calloc(1, sizeof(VMCoState));
     if(!st) { lm_co_destroy(co); return NULL; }
     co->vm_state = st;

@@ -566,6 +566,8 @@ typedef enum {
     BUILTIN_CO_CURRENT,          // current() → co 实例或 null
     BUILTIN_CO_IS_DEAD,          // co.isDead(impl) → bool
     BUILTIN_CO_DESTROY,          // co.destroy(impl)
+    /* Task 6：显式栈档 spawn（SMALL=1/NORMAL=2），浅栈 IO 协程试点用。 */
+    BUILTIN_CO_SPAWN_CLASS,      // __private_system__co_spawn_class(f, arg, cls)
     /* Phase 8.2：显式 pinned 置位（accept loop 等 spawn 后即需钉住本线程的
      * 协程——fd 等待自动置位覆盖不到"spawn 后首次 yield 前被窃取"的窗口，
      * 框架层 spawn 后立即调用）。 */

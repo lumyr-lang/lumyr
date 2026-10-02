@@ -37,6 +37,11 @@ void vm_co_set_error(lm_co_t* co, Value error);
  * 失败返回 NULL。返回的 lm_co_t 由调用方负责 resume/destroy。 */
 lm_co_t* vm_co_spawn(Value func, Value arg);
 
+/* Task 6：显式指定栈档的 spawn（LM_STACK_CLASS_SMALL/NORMAL）。
+ * 供浅栈路径（纯转发 IO 协程）走 SMALL 档（16KiB），深 VM 帧路径维持 NORMAL。
+ * 其余语义与 vm_co_spawn 一致。 */
+lm_co_t* vm_co_spawn_class(Value func, Value arg, int stack_class);
+
 /* reactor addTimer(ms, cb) 的 lm 回调封装（BUILTIN_REACTOR_ADD_TIMER 调用）。
  * timer 触发时 spawn 协程跑 cb，传 timer_id 作参数。
  * Phase 8.4：timer 集中到全局 TimerThread，返回 lm_timer_id_t（>0），

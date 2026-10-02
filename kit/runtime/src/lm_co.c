@@ -442,6 +442,21 @@ void lm_co_resume(lm_co_t* co) {
     __sanitizer_finish_switch_fiber(caller ? caller->asan_fake : tl_main_fake,
                                     NULL, NULL);
 #endif
+#ifdef LM_CTX_FCONTEXT
+    /* Task 6：栈高水位采样。协程 yield 切回后，ctx.sp 已更新为冻结 sp
+     * （fcontext jump 内保存 callee-saved 现场到协程栈、写回 ctx.sp，
+     * 控制流转出前完成）。此刻栈冻结（SUSPENDED 补写在下文、DEAD 在
+     * trampoline 已写），读取安全。DEAD 协程 sp 停在 trampoline 末尾
+     * 切回点（近空栈），不代表运行期高水位，跳过。
+     * 水位 = stack_base（高地址，可用区末）- ctx.sp（当前已用最低地址）。 */
+    {
+        lm_co_state_t hwSt = atomic_load_explicit(&co->state, memory_order_acquire);
+        if (hwSt != LM_CO_DEAD && co->stack_base && co->ctx.sp) {
+            uint64_t hwUsed = (uint64_t)((char*)co->stack_base - (char*)co->ctx.sp);
+            lm_sched_stats_record_stack_hw(co->stack_class, hwUsed);
+        }
+    }
+#endif
     /* 协程 yield 或 entry 返回后切回这里。
      * yield 切回（state 仍 RUNNING）：协程栈此刻已冻结（ctx.sp 已保存），
      * 由本线程补写 SUSPENDED——reaper 仅见 SUSPENDED 才能 CAS SWAPPING 动栈，
