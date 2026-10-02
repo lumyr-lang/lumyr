@@ -1,0 +1,318 @@
+// ============================================================
+// G6 gzip 响应压缩端到端测试
+//
+// T1  协商压缩：Accept-Encoding: gzip + 大文本 → Content-Encoding: gzip、
+//     魔数 1f 8b、Content-Length 为压缩长、Vary、gunzip 往返等于原文
+// T2  不协商：无 Accept-Encoding → 明文原文
+// T3  q=0：gzip;q=0 明确拒绝 → 明文
+// T4  白名单：application/octet-stream 不压缩（body 逐字节一致）
+// T5  阈值：低于 minLength 的文本不压缩，但补 Vary
+// T6  级别：level 1 与 level 9 均正确往返（9 ≤ 1 体积）
+// T7  流式：streamBody（chunked）跳过压缩，保留 Transfer-Encoding
+// T8  已编码：响应自带 Content-Encoding 不二次压缩
+// T9  非 200：404 不压缩
+// T10 JSON：application/json 白名单压缩
+// T11 builtin 单元：二进制含 NUL 往返、坏数据/坏级别抛错
+//
+// 自验证：raw TcpSocket 按 bytes 收完整响应（Connection: close 读到 EOF），
+// 解压用内置 gzipDecompress，不依赖 curl/外网。端口 18126-18128。
+// ============================================================
+
+import <App/WebApplication>;
+import <App/GzipFilter>;
+import <NetWork/Socket>;
+import <IO/Files>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// ---- 共享响应正文 ----
+bigText = "";
+i = 0;
+while (i < 800) { bigText = bigText + "lumyr-gzip-0123456789-"; i = i + 1; }
+
+// 高熵二进制（4000 字节，类随机跳变；即使误过白名单也有"压缩变大"兜底）
+binArr = [];
+i = 0;
+v = 7;
+while (i < 4000) {
+    v = (v * 1103515245 + 12345) % 256;
+    binArr.add(v);
+    i = i + 1;
+}
+binData = bytes(binArr);
+
+// ---- 原始 HTTP 收发：返回 head（字符串）+ body（bytes） ----
+func copyRange(a: array, from: int, to: int): array {
+    out = [];
+    i = from;
+    while (i < to) { out.add(a[i]); i = i + 1; }
+    return out;
+}
+
+func httpRaw(port: int, path: string, acceptEnc: string) {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", port);
+    sock.setOption("recvTimeout", 3000);
+    req = "GET " + path + " HTTP/1.1" + crlf + "Host: g" + crlf
+          + "Connection: close" + crlf;
+    if (acceptEnc != "") { req = req + "Accept-Encoding: " + acceptEnc + crlf; }
+    req = req + crlf;
+    sock.send(req);
+    all = [];
+    while (true) {
+        chunk = sock.recv(8192, 0, 1);
+        if (chunk.len == 0) { break; }
+        j = 0;
+        while (j < chunk.len) { all.add(chunk[j]); j = j + 1; }
+    }
+    sock.close();
+    // 定位头部结束 13 10 13 10
+    sep = -1;
+    k = 0;
+    while (k + 3 < all.len) {
+        if (all[k] == 13 && all[k + 1] == 10 && all[k + 2] == 13 && all[k + 3] == 10) {
+            sep = k;
+            break;
+        }
+        k = k + 1;
+    }
+    check(sep >= 0, "响应缺少头部分隔符 / malformed response");
+    head = bytes(copyRange(all, 0, sep)).decode();
+    body = bytes(copyRange(all, sep + 4, all.len));
+    r = {};
+    r["head"] = head;
+    r["body"] = body;
+    return r;
+}
+
+// 从头字符串取标头值（键不区分大小写；不存在返回 ""）
+func headerValue(head: string, name: string): string {
+    want = name.lower() + ":";
+    lines = head.split(crlf);
+    i = 1;   // 跳过状态行
+    while (i < lines.len) {
+        line = lines[i];
+        if (line.lower().startsWith(want)) {
+            return line.slice(want.len, line.len).trim();
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
+// 解析 content-length
+func contentLength(head: string): int {
+    v = headerValue(head, "Content-Length");
+    if (v == "") { return -1; }
+    raw = bytes(v);
+    n = 0;
+    i = 0;
+    while (i < raw.len) {
+        c = raw[i];
+        if (c < 48 || c > 57) { break; }   // 48='0' 57='9'
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+// ---- 构造三个应用：默认 / level1 / level9 ----
+func makeApp(port: int, level: int) {
+    app = WebApplication("127.0.0.1", port);
+    f = GzipFilter();
+    if (level != 6) { f.setLevel(level); }
+    app.addFilter(f);
+
+    app.get("/text", func(req) {
+        r = ServerResponse(200);
+        r.text(bigText);
+        return r;
+    });
+    app.get("/small", func(req) {
+        r = ServerResponse(200);
+        r.text("hi");
+        return r;
+    });
+    app.get("/bin", func(req) {
+        r = ServerResponse(200);
+        r.raw(binData);
+        return r;
+    });
+    app.get("/json", func(req) {
+        r = ServerResponse(200);
+        r.json({"ok": true, "pad": bigText.slice(0, 2000)});
+        return r;
+    });
+    app.get("/stream", func(req) {
+        r = ServerResponse(200);
+        r.streamBody(func(w) {
+            w.send("stream-chunk-1-");
+            w.send("stream-chunk-2");
+        });
+        return r;
+    });
+    app.get("/already", func(req) {
+        r = ServerResponse(200);
+        r.setHeader("Content-Encoding", "identity");
+        r.text(bigText);
+        return r;
+    });
+    app.get("/file", func(req) {
+        r = ServerResponse(200);
+        r.sendFile("/tmp/lm_gzip_static_test.txt");
+        return r;
+    });
+    return app;
+}
+
+// 静态文本文件（覆盖过滤器 file body 分支，sendFile 按 .txt 推断 text/plain）
+staticFile = "/tmp/lm_gzip_static_test.txt";
+Files.writeText(staticFile, bigText);
+
+appA = makeApp(18126, 6);
+appB = makeApp(18127, 1);
+appC = makeApp(18128, 9);
+appA.startAsync();
+appB.startAsync();
+appC.startAsync();
+sleep(400);
+
+// ---- T1 协商压缩 ----
+print("[T1] gzip 协商压缩 / negotiated gzip");
+r1 = httpRaw(18126, "/text", "gzip");
+check(headerValue(r1["head"], "Content-Encoding") == "gzip",
+      "T1 应有 Content-Encoding: gzip: " + r1["head"].slice(0, 200));
+b1 = r1["body"];
+check(b1[0] == 0x1f && b1[1] == 0x8b, "T1 gzip 魔数应为 1f 8b");
+check(contentLength(r1["head"]) == b1.len, "T1 Content-Length 应等于压缩 body 长度");
+check(headerValue(r1["head"], "Vary").lower().contains("accept-encoding"),
+      "T1 应有 Vary: Accept-Encoding");
+check(b1.len < bigText.len, "T1 压缩后应更小: " + b1.len);
+check(gzipDecompress(b1).decode() == bigText, "T1 gunzip 往返应等于原文");
+print("  " + bigText.len + " -> " + b1.len + " PASS");
+
+// ---- T2 不协商 ----
+print("[T2] 无 Accept-Encoding 走明文 / identity without Accept-Encoding");
+r2 = httpRaw(18126, "/text", "");
+check(headerValue(r2["head"], "Content-Encoding") == "", "T2 不应有 Content-Encoding");
+check(contentLength(r2["head"]) == bigText.len, "T2 Content-Length 应为原长");
+check(r2["body"].decode() == bigText, "T2 body 应为原文");
+print("  PASS");
+
+// ---- T3 q=0 拒绝 ----
+print("[T3] gzip;q=0 拒绝压缩 / q=0 refusal");
+r3 = httpRaw(18126, "/text", "gzip;q=0, deflate");
+check(headerValue(r3["head"], "Content-Encoding") == "", "T3 q=0 不应压缩");
+check(r3["body"].decode() == bigText, "T3 body 应为原文");
+print("  PASS");
+
+// ---- T4 白名单 ----
+print("[T4] octet-stream 不压缩 / content-type whitelist");
+r4 = httpRaw(18126, "/bin", "gzip");
+check(headerValue(r4["head"], "Content-Encoding") == "", "T4 二进制流不应压缩");
+check(r4["body"].len == binData.len, "T4 body 长度应一致");
+i4 = 0;
+ok4 = true;
+while (i4 < binData.len) {
+    if (r4["body"][i4] != binData[i4]) { ok4 = false; }
+    i4 = i4 + 1;
+}
+check(ok4, "T4 body 逐字节应一致");
+print("  PASS");
+
+// ---- T5 阈值 ----
+print("[T5] 小响应不压缩但补 Vary / min-length threshold");
+r5 = httpRaw(18126, "/small", "gzip");
+check(headerValue(r5["head"], "Content-Encoding") == "", "T5 小响应不应压缩");
+check(headerValue(r5["head"], "Vary").lower().contains("accept-encoding"),
+      "T5 可压缩路径未命中也应补 Vary");
+check(r5["body"].decode() == "hi", "T5 body 应为 hi");
+print("  PASS");
+
+// ---- T6 级别 ----
+print("[T6] level 1 vs 9 / compression levels");
+r6a = httpRaw(18127, "/text", "gzip");
+r6b = httpRaw(18128, "/text", "gzip");
+check(headerValue(r6a["head"], "Content-Encoding") == "gzip", "T6 level1 应压缩");
+check(headerValue(r6b["head"], "Content-Encoding") == "gzip", "T6 level9 应压缩");
+check(gzipDecompress(r6a["body"]).decode() == bigText, "T6 level1 往返");
+check(gzipDecompress(r6b["body"]).decode() == bigText, "T6 level9 往返");
+check(r6b["body"].len <= r6a["body"].len,
+      "T6 level9 体积应不大于 level1: " + r6b["body"].len + " vs " + r6a["body"].len);
+print("  level1=" + r6a["body"].len + " level9=" + r6b["body"].len + " PASS");
+
+// ---- T7 流式 chunked 跳过 ----
+print("[T7] chunked 流式响应跳过 / streaming body skipped");
+r7 = httpRaw(18126, "/stream", "gzip");
+check(headerValue(r7["head"], "Transfer-Encoding").lower() == "chunked",
+      "T7 应为 chunked: " + headerValue(r7["head"], "Transfer-Encoding"));
+check(headerValue(r7["head"], "Content-Encoding") == "", "T7 流式不应压缩");
+print("  PASS");
+
+// ---- T8 已编码不二次压缩 ----
+print("[T8] 已有 Content-Encoding 不二次压缩 / no double encoding");
+r8 = httpRaw(18126, "/already", "gzip");
+check(headerValue(r8["head"], "Content-Encoding") == "identity",
+      "T8 应保留原有 Content-Encoding");
+check(r8["body"].decode() == bigText, "T8 body 应为原文");
+print("  PASS");
+
+// ---- T9 非 200 ----
+print("[T9] 404 不压缩 / non-200 skipped");
+r9 = httpRaw(18126, "/no-such-path", "gzip");
+check(r9["head"].contains("404"), "T9 应为 404");
+check(headerValue(r9["head"], "Content-Encoding") == "", "T9 404 不应压缩");
+print("  PASS");
+
+// ---- T10 JSON ----
+print("[T10] application/json 压缩 / json whitelisted");
+r10 = httpRaw(18126, "/json", "gzip");
+check(headerValue(r10["head"], "Content-Encoding") == "gzip", "T10 JSON 应压缩");
+j10 = gzipDecompress(r10["body"]).decode();
+check(j10.contains("\"ok\":true") || j10.contains("\"ok\": true"),
+      "T10 解压后应含 JSON 内容: " + j10.slice(0, 60));
+print("  PASS");
+
+// ---- T11 builtin 单元 ----
+print("[T11] builtin 单元 / builtin unit cases");
+bb = bytes([0, 255, 1, 2, 0, 255, 72, 105, 10]);
+gz = gzipCompress(bb, 9);
+back = gzipDecompress(gz);
+check(back.len == bb.len, "T11 二进制往返长度");
+i11 = 0;
+ok11 = true;
+while (i11 < bb.len) {
+    if (back[i11] != bb[i11]) { ok11 = false; }
+    i11 = i11 + 1;
+}
+check(ok11, "T11 二进制往返逐字节");
+threwBad = false;
+try { gzipDecompress(bytes([1, 2, 3, 4, 5])); } catch (e) { threwBad = true; }
+check(threwBad, "T11 坏 gzip 数据应抛错");
+threwLvl = false;
+try { gzipCompress("x", 42); } catch (e) { threwLvl = true; }
+check(threwLvl, "T11 非法级别应抛错");
+print("  PASS");
+
+// ---- T12 静态文件（file body）压缩 ----
+print("[T12] sendFile 文本文件压缩 / file body compressed");
+r12 = httpRaw(18126, "/file", "gzip");
+check(headerValue(r12["head"], "Content-Type").lower().startsWith("text/plain"),
+      "T12 应为 text/plain: " + headerValue(r12["head"], "Content-Type"));
+check(headerValue(r12["head"], "Content-Encoding") == "gzip", "T12 文件应压缩");
+check(gzipDecompress(r12["body"]).decode() == bigText, "T12 解压应等于文件原文");
+print("  PASS");
+
+appA.stop();
+appA.join();
+appB.stop();
+appB.join();
+appC.stop();
+appC.join();
+Files.delete(staticFile);
+
+print("gzip_test ALL PASS");

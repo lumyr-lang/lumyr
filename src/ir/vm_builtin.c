@@ -22,6 +22,7 @@
 #include "lm_map.h"
 #include "lm_math.h"
 #include "lm_crypto.h"
+#include "lm_gzip.h"
 #include "lm_regex.h"
 #include "lm_time.h"
 #include "lm_container.h"
@@ -1882,6 +1883,61 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         char* h = lumyr_md5_hex(s, (int)strlen(s));
         *out = lumyr_make_string(h ? h : "");
         free(h);
+        return 1;
+    }
+    /* G6 gzip（系统 zlib；string|bytes → bytes，二进制安全可含 NUL） */
+    case BUILTIN_GZIP_COMPRESS: {
+        if(is_method) { runtime_error("gzipCompress() 不支持方法形式 / gzipCompress() is global only"); return 0; }
+        if(argc < 1) { runtime_error("gzipCompress() 至少需要 1 个参数 / gzipCompress() requires 1 argument"); return 0; }
+        const uint8_t* in = NULL;
+        size_t inLen = 0;
+        if(argv[0].type == VAL_STRING) {
+            in = (const uint8_t*)lumyr_str_cstr(&argv[0]);
+            inLen = (size_t)lumyr_str_len(&argv[0]);   /* 字节长度，不用 strlen（可含 NUL） */
+        } else if(argv[0].type == VAL_BYTES && argv[0].v.bytes_obj) {
+            BytesObj* bo = (BytesObj*)argv[0].v.bytes_obj;
+            in = bo->data;
+            inLen = (size_t)bo->len;
+        } else {
+            return bi_type_err("gzipCompress", argv[0]);
+        }
+        int level = -1;   /* zlib 默认级别(6) */
+        if(argc >= 2) level = (int)bi_num_i64(argv[1]);
+        uint8_t* dst = NULL;
+        size_t dstLen = 0;
+        char gzErr[256] = {0};
+        if(lm_gzip_compress(in, inLen, level, &dst, &dstLen, gzErr, sizeof(gzErr)) != 0) {
+            runtime_error(gzErr[0] ? gzErr : "gzip 压缩失败 / gzip compress failed");
+            return 0;
+        }
+        *out = lumyr_bytes_from_buf(dst, (int)dstLen);
+        free(dst);
+        return 1;
+    }
+    case BUILTIN_GZIP_DECOMPRESS: {
+        if(is_method) { runtime_error("gzipDecompress() 不支持方法形式 / gzipDecompress() is global only"); return 0; }
+        if(argc < 1) { runtime_error("gzipDecompress() 至少需要 1 个参数 / gzipDecompress() requires 1 argument"); return 0; }
+        const uint8_t* in = NULL;
+        size_t inLen = 0;
+        if(argv[0].type == VAL_BYTES && argv[0].v.bytes_obj) {
+            BytesObj* bo = (BytesObj*)argv[0].v.bytes_obj;
+            in = bo->data;
+            inLen = (size_t)bo->len;
+        } else if(argv[0].type == VAL_STRING) {
+            in = (const uint8_t*)lumyr_str_cstr(&argv[0]);
+            inLen = (size_t)lumyr_str_len(&argv[0]);
+        } else {
+            return bi_type_err("gzipDecompress", argv[0]);
+        }
+        uint8_t* dst = NULL;
+        size_t dstLen = 0;
+        char gzErr[256] = {0};
+        if(lm_gzip_decompress(in, inLen, &dst, &dstLen, gzErr, sizeof(gzErr)) != 0) {
+            runtime_error(gzErr[0] ? gzErr : "gzip 解压失败 / gzip decompress failed");
+            return 0;
+        }
+        *out = lumyr_bytes_from_buf(dst, (int)dstLen);
+        free(dst);
         return 1;
     }
     case BUILTIN_ENCODE_BASE64: {

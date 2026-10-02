@@ -16,5 +16,5 @@
   LGPL-2.1 完整条款见 libiconv/COPYING.LGPL-2.1。
 - libcurl 的 TLS 后端为 **Windows 原生 Schannel**，不使用、不分发 OpenSSL。
 - GMP 6.3.0（LGPLv3，动态 libgmp-10.dll）许可证见
-  [deps/gmp/licenses](../../../deps/gmp/licenses/)，打包发行时同样需包含。
+  [licenses/gmp](../../../licenses/gmp/)，打包发行时同样需包含。
 - 静态链接的 curl/TRE 为宽松许可证，义务仅为再分发时保留本声明。

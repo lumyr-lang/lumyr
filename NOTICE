@@ -23,7 +23,7 @@ GMP (GNU Multiple Precision Arithmetic Library)
     Windows: prebuilt/windows/bin/libgmp-10.dll (built from source by
              scripts/build_deps_mingw.sh, with lib/libgmp.dll.a import
              library), copied next to lumyr.exe at build time
-  License texts: deps/gmp/licenses/
+  License texts: licenses/gmp/
   Source:   https://gmplib.org/
 
 ---------------------------------------------------------------------------
@@ -37,13 +37,22 @@ system's own libraries and are not bundled with this product:
                 Linux: distribution package)
   Charset conv: iconv (POSIX; macOS /usr/lib/libiconv.2.dylib)
   Regex       : POSIX regex.h (libc)
+  gzip (G6)   : zlib (zlib License; macOS /usr/lib/libz.1.dylib;
+                Linux: distribution package zlib1g)
+                License text: licenses/zlib/
+  TLS (G4)    : OpenSSL 3.x (Apache License 2.0), dynamically linked and
+                never redistributed by this product; macOS: Homebrew
+                openssl@3 (build machine only), Linux: distribution
+                package libssl-dev; license text:
+                https://www.openssl.org/source/license.html
+                (Windows builds do not use OpenSSL: nossl stub)
 
 Their use is governed by the platform's own terms (macOS: Apple software
 license; Linux: respective distribution licenses).
 
 Build-time requirements:
-  macOS:  brew install gmp bison flex
-  Linux:  libgmp-dev, bison, flex (distribution packages)
+  macOS:  brew install gmp bison flex openssl@3 (zlib ships with the macOS SDK)
+  Linux:  libgmp-dev, bison, flex, libssl-dev, zlib1g-dev (distribution packages)
 
 ---------------------------------------------------------------------------
 Windows (MinGW-w64) - prebuilt third-party components
@@ -69,7 +78,7 @@ GMP 6.3.0
   License: LGPL v3 (some files GPL v2+) - see the GMP section above
   Linking: dynamic (bin/libgmp-10.dll shipped next to lumyr.exe,
   linked via lib/libgmp.dll.a)
-  License text: deps/gmp/licenses/
+  License text: licenses/gmp/
 
 Build tools on Windows: WinFlexBison (flex 2.6.4 / bison 3.8.2),
 build-time only; generated parsers are covered by the flex/bison runtime

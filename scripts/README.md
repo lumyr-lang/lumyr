@@ -49,7 +49,7 @@ bash scripts/build_deps_mingw.sh
 - TRE 0.9.0 静态、libcurl 8.22.0 静态（TLS 用 Windows 原生 Schannel）
 - libiconv 1.17 动态（libiconv-2.dll，LGPL 合规）
 - GMP 6.3.0 动态（libgmp-10.dll + libgmp.dll.a 导入库，LGPL 合规）
-- 同时装配许可证到 prebuilt/windows/licenses 与 deps/gmp/licenses
+- 同时装配许可证到 prebuilt/windows/licenses 与 licenses/gmp
 
 ### build.bat (Windows)
 检查 prebuilt/windows 产物是否齐备，设置 PATH 后执行 mingw32-make 完整构建。
@@ -65,7 +65,7 @@ bash scripts/build_deps_mingw.sh
 | libcurl | 8.22.0 | scripts/vendor/libcurl |
 | libiconv | 1.17 | scripts/vendor/libiconv |
 | TRE | 0.9.0 | scripts/vendor/tre |
-| GMP | 6.3.0 | scripts/vendor/gmp / deps/gmp |
+| GMP | 6.3.0 | scripts/vendor/gmp（许可原文入 licenses/gmp） |
 | flex | 2.6.4 | scripts/build_tools/flex |
 | bison | 3.8.2 | scripts/build_tools/bison |
 | m4 | 1.4.19 | scripts/build_tools/m4 |
@@ -77,5 +77,5 @@ macOS/Linux 使用系统库与包管理器版本，不锁定上述版本。
 1. **源码不提交 git**：scripts/vendor、scripts/build_tools 通过下载脚本获取
 2. **平台策略**：macOS/Linux 优先系统库（适配代码内置），Windows 使用 prebuilt/windows
 3. **许可证**：GMP（LGPLv3）全平台动态链接；Windows 另有 libiconv（LGPL-2.1）动态、
-   curl（MIT）/TRE（BSD）静态，许可证原文见 prebuilt/windows/licenses、deps/gmp/licenses
+   curl（MIT）/TRE（BSD）静态，许可证原文见 prebuilt/windows/licenses、licenses/gmp
    及根目录 NOTICE

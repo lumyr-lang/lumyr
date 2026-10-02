@@ -124,7 +124,7 @@ echo.
 echo Directory structure:
 echo   vendor/         - Third-party library source code
 echo   build_tools/    - Build toolchain source code
-echo   deps/gmp/       - GMP headers and prebuilt libraries
+echo   licenses/gmp/   - GMP license texts (dynamic linking)
 echo   prebuilt/       - Prebuilt binaries (windows ready to use)
 echo.
 echo Next steps:

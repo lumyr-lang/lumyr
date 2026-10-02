@@ -378,6 +378,8 @@ typedef enum {
     BUILTIN_ENCODE_URL,   // encodeURL(s)：URL 编码（高字节原样）
     BUILTIN_DECODE_URL,   // decodeURL(s)：URL 解码（%XX/+ → 原字符）
     BUILTIN_MD5,          // md5(s)：MD5 32 位十六进制小写
+    BUILTIN_GZIP_COMPRESS,  // gzipCompress(data [, level])：gzip 压缩 → bytes（G6）
+    BUILTIN_GZIP_DECOMPRESS,// gzipDecompress(data)：gzip 解压 → bytes（G6）
     BUILTIN_ENCODE_BASE64,  // encodeBase64(s)：Base64 编码
     BUILTIN_DECODE_BASE64,  // decodeBase64(s)：Base64 解码
     BUILTIN_REGEX_MATCH,    // regex_match(s, pattern)：完整匹配 → bool

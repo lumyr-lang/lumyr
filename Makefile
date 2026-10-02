@@ -87,8 +87,7 @@ else
     LDLIBS := -lcurl -lm -lpthread
 endif
 
-# ========== GMP 高精度数学库（动态链接，LGPL v3 合规） ==========
-GMP_DIR := $(CURDIR)/deps/gmp
+# ========== GMP 高精度数学库（动态链接，LGPL v3 合规；许可原文在 licenses/gmp/） ==========
 ifeq ($(OS_NAME),macos)
     # Homebrew GMP（brew install gmp）
     GMP_BREW := $(firstword $(wildcard /usr/local/opt/gmp /opt/homebrew/opt/gmp))
@@ -137,6 +136,35 @@ else ifeq ($(OS_NAME),linux)
 endif
 # Windows/mingw：本期不接入（nossl 空实现）
 
+# ========== G6 gzip 压缩（系统 zlib 动态链接；缺失则 nozlib 空实现降级） ==========
+# zlib 为 zlib License（BSD 类宽松许可，许可文本见 licenses/zlib/，
+# 随包拷贝到 bin/licenses/）。lm_gzip.c 恒编译，内部 #ifdef LM_HAVE_ZLIB
+# 双后端。同样用独立 ZLIB_CFLAGS，避免被命令行 CFLAGS 覆盖（ASAN 构建）。
+# -lz 走 LDLIBS，主二进制与 -c 编译通道（LUMYR_GEN_LDLIBS）自动一致。
+ZLIB_CFLAGS :=
+ZLIB_STATE := disabled
+ifeq ($(OS_NAME),macos)
+    # macOS SDK 自带 libz（头在 SDK 默认包含路径，无需 -I）
+    ZLIB_SDK_HDR := $(wildcard $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)/usr/include/zlib.h)
+    ifneq ($(ZLIB_SDK_HDR),)
+        ZLIB_CFLAGS += -DLM_HAVE_ZLIB
+        LDLIBS += -lz
+        ZLIB_STATE := enabled
+    else
+        $(warning zlib.h not found in macOS SDK: gzip filter disabled)
+    endif
+else ifeq ($(OS_NAME),linux)
+    # 系统 zlib（apt install zlib1g-dev），走默认搜索路径
+    ifneq ($(wildcard /usr/include/zlib.h /usr/local/include/zlib.h),)
+        ZLIB_CFLAGS += -DLM_HAVE_ZLIB
+        LDLIBS += -lz
+        ZLIB_STATE := enabled
+    else
+        $(warning zlib dev headers not found: gzip filter disabled (apt install zlib1g-dev))
+    endif
+endif
+# Windows/mingw：本期不接入（nozlib 空实现）
+
 # ========== Runtime 静态库源文件 ==========
 # lm_runtime.c 已 include 了 gc_runtime.c / lm_string.c / lm_array.c / lm_math.c / lm_io.c
 # 这些文件不再单独编译，避免重复定义
@@ -147,6 +175,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_map.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_thread.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_lock.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_ssl.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_gzip.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_tls.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_http.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_json.c
@@ -282,6 +311,7 @@ env-info:
 	@echo "bison: $(BISON_CMD)"
 	@echo "flex: $(FLEX_CMD)"
 	@echo "GMP lib: $(GMP_LIB_DIR) [dynamic, LGPL]"
+	@echo "zlib(gzip): $(ZLIB_STATE) [system libz, zlib License]"
 	@echo "curl/iconv/regex: system libraries"
 	@echo "EXE_EXT: $(EXE_EXT)"
 	@echo "Runtime lib: $(RUNTIME_LIB)"
@@ -320,7 +350,7 @@ $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 # ========== 通用 C 编译规则（编译同时生成 .d 头依赖） ==========
 # 覆盖 make 内置不追踪头文件的 %.o: %.c 隐式规则；% 匹配任意源码/生成目录
 %.o: %.c
-	$(CC) $(CFLAGS) $(SSL_CFLAGS) $(DEPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(SSL_CFLAGS) $(ZLIB_CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 # 汇编源（.S 经 C 预处理器处理，-DLM_CTX_UCONTEXT 等开关经 CFLAGS 传入）
 %.o: %.S
@@ -360,9 +390,9 @@ ifeq ($(OS_NAME),macos)
 	 install_name_tool -id @loader_path/libgmp.10.dylib $(BIN_DIR)/libgmp.10.dylib; \
 	 install_name_tool -change "$$OLD_ID" @loader_path/libgmp.10.dylib $@
 	@echo "    bundled libgmp.10.dylib (@loader_path)"
-	@# GMP 许可证（LGPL）随分发包提供
+	@# 动态链接依赖的许可证统一收在 licenses/<name>/（gmp、zlib），整体随分发包提供
 	@rm -rf $(BIN_DIR)/licenses
-	@cp -R $(GMP_DIR)/licenses $(BIN_DIR)/licenses
+	@cp -R $(CURDIR)/licenses $(BIN_DIR)/licenses
 	@echo "    copied licenses -> bin/licenses/"
 endif
 ifeq ($(OS_NAME),windows)
@@ -372,7 +402,8 @@ ifeq ($(OS_NAME),windows)
 	@cp $(WIN_DEPS)/bin/libgmp-10.dll $(BIN_DIR)/ && echo "    copied libgmp-10.dll"
 	@rm -rf $(BIN_DIR)/licenses
 	@cp -R $(WIN_DEPS)/licenses $(BIN_DIR)/licenses
-	@cp -R $(GMP_DIR)/licenses $(BIN_DIR)/licenses/gmp
+	@# 动态链接依赖许可（licenses/gmp、licenses/zlib）并入分发包
+	@cp -R $(CURDIR)/licenses/. $(BIN_DIR)/licenses/
 	@echo "    copied licenses -> bin/licenses/"
 endif
 # ========== 单元测试 ==========

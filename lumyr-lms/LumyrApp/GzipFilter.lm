@@ -1,0 +1,195 @@
+// ============================================================
+// lumyr-GzipFilter：gzip 响应压缩过滤器（G6）
+// 洋葱过滤器形态挂在 WebApplication 上：
+//   import <App/GzipFilter>;
+//   app.addFilter(GzipFilter());
+//
+// 协商与判定（post 阶段处理 chain.next 返回的 ServerResponse）：
+//   1. 请求 Accept-Encoding 含 gzip（gzip;q=0 视为拒绝），否则直通
+//   2. 仅压缩 200 响应（304/206/错误页保持原语义）
+//   3. 响应未带 Content-Encoding（避免双重压缩）、未带 Transfer-Encoding、
+//      body 非流式 func（chunked 流式压缩本期不做，见文件尾说明）
+//   4. Content-Type 命中白名单：text/* 全族 + 常见结构化文本类型
+//   5. 正文字节数 ≥ minLength（默认 1024；小块 gzip 封装开销不划算）
+//   6. 压缩结果确实更小才采用（已压缩/高熵数据负收益时保留原文）
+// 命中后：body 替换为 gzip bytes，设置 Content-Encoding: gzip；
+// 所有"可压缩但本次未压"的响应统一补 Vary: Accept-Encoding（缓存正确性）。
+// Content-Length 无需本过滤器处理——ServerResponse.sendTo 在压缩之后
+// 按替换后的 body 重新计算。HEAD 请求同样压缩 body（仅头部发出，
+// Content-Length 反映压缩后长度，与同条件 GET 一致）。
+//
+// 正文形态覆盖：string（→UTF-8 bytes）/bytes（原样）/file（读入后压缩，
+// 与 sendTo 既有"文件整体读入"行为同口径）；流式 func 不压缩。
+//
+// 配置：
+//   GzipFilter()                 默认级别 6、阈值 1024 字节
+//   f.setLevel(9)                -1=zlib 默认 6；0=仅存储；1..9
+//   f.setMinLength(2048)         小于阈值不压缩
+//   f.setTypes(["application/foo"])  整体替换扩展白名单
+//   f.addType("application/foo")     追加单个 MIME
+// ============================================================
+
+import <App/WebApplication>;
+
+public class GzipFilter implements WebFilter {
+    minLen: int;      // 压缩最小正文长度（字节）
+    level: int;       // zlib 级别：-1 默认 / 0..9
+    types: array;     // 非 text/* 的可压缩 MIME（去参数小写后精确匹配）
+
+    func GzipFilter() {
+        self.minLen = 1024;
+        self.level = 6;
+        // 对标明示（参数如 charset 已在匹配前剥除）
+        self.types = [
+            "application/json",
+            "application/javascript",
+            "application/x-javascript",
+            "application/xml",
+            "application/xhtml+xml",
+            "application/rss+xml",
+            "application/atom+xml",
+            "application/manifest+json",
+            "image/svg+xml"
+        ];
+    }
+
+    // 压缩级别：-1=zlib 默认(6)，0=仅存储，1..9 速度→压缩率
+    func setLevel(n: int) {
+        if (n != -1 && (n < 0 || n > 9)) {
+            throw "gzip 级别必须为 -1 或 0..9 / gzip level must be -1 or 0..9";
+        }
+        self.level = n;
+        return self;
+    }
+
+    // 压缩阈值：正文小于该字节数不压缩（不能为负）
+    func setMinLength(n: int) {
+        if (n < 0) {
+            throw "gzip 阈值不能为负 / gzip minLength must not be negative";
+        }
+        self.minLen = n;
+        return self;
+    }
+
+    // 整体替换非 text/* 的可压缩 MIME 白名单
+    func setTypes(types: array) {
+        self.types = types;
+        return self;
+    }
+
+    // 追加单个可压缩 MIME（内部按小写存储）
+    func addType(mime: string) {
+        if (mime == "") {
+            throw "MIME 不能为空 / mime must not be empty";
+        }
+        self.types.add(mime.lower());
+        return self;
+    }
+
+    // 解析 Accept-Encoding：返回客户端是否接受 gzip。
+    // 逗号分隔的 token 列表；精确 "gzip" 接受；"gzip;q=0" 明确拒绝。
+    func clientAcceptsGzip(raw: string): bool {
+        if (raw == "") { return false; }
+        parts = raw.lower().split(",");
+        i = 0;
+        while (i < parts.len) {
+            t = parts[i].trim();
+            if (t == "gzip") { return true; }
+            if (t.startsWith("gzip")) {
+                qp = t.indexOf("q=");
+                if (qp >= 0) {
+                    qv = t.slice(qp + 2, t.len).trim();
+                    // q=0 / 0.0 / 0.00 均为明确拒绝（其余值接受）
+                    if (qv == "0" || qv == "0.0" || qv == "0.00") {
+                        i = i + 1;
+                        continue;
+                    }
+                }
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    // Content-Type 是否可压缩：剥 "; charset=..." 参数后，
+    // text/* 全族命中，其余走白名单精确匹配
+    func compressible(contentType: string): bool {
+        ct = contentType;
+        sp = ct.indexOf(";");
+        if (sp >= 0) { ct = ct.slice(0, sp); }
+        ct = ct.trim().lower();
+        if (ct.startsWith("text/")) { return true; }
+        i = 0;
+        while (i < self.types.len) {
+            if (ct == self.types[i]) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    // 补 Vary: Accept-Encoding（已有且未包含则逗号追加；Headers.add
+    // 自动按逗号合并，这里只做重复值检查）
+    func addVary(resp: ServerResponse) {
+        v = resp.headers.get("Vary");
+        if (v == "") {
+            resp.headers.set("Vary", "Accept-Encoding");
+            return self;
+        }
+        found = false;
+        parts = v.split(",");
+        i = 0;
+        while (i < parts.len) {
+            if (parts[i].trim().lower() == "accept-encoding") { found = true; }
+            i = i + 1;
+        }
+        if (!found) { resp.headers.add("Vary", "Accept-Encoding"); }
+        return self;
+    }
+
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        resp = chain.next(req);
+
+        // 1. 协商：客户端不接受 gzip → 完全不动响应（含不加 Vary）
+        if (!self.clientAcceptsGzip(req.header("Accept-Encoding"))) { return resp; }
+        // 2. 仅 200
+        if (resp.status != 200) { return resp; }
+        // 3. 已编码 / 已有传输编码 / 流式 body：不处理
+        if (resp.headers.has("Content-Encoding")) { return resp; }
+        if (resp.headers.has("Transfer-Encoding")) { return resp; }
+        bodyType = type(resp.body);
+        if (bodyType == "func") { return resp; }
+        // 4. MIME 白名单
+        if (!self.compressible(resp.headers.get("Content-Type"))) { return resp; }
+
+        // 取原始字节：bytes 原样；file 读入；string 按 UTF-8 编码
+        data = null;
+        if (bodyType == "bytes") { data = resp.body; }
+        else if (bodyType == "file") { data = resp.body.readBytes(); }
+        else { data = bytes(resp.body); }
+
+        // 5. 阈值
+        if (data.len < self.minLen) { self.addVary(resp); return resp; }
+
+        // 6. 压缩且要求负收益保护
+        z = gzipCompress(data, self.level);
+        if (z.len >= data.len) { self.addVary(resp); return resp; }
+
+        resp.body = z;
+        resp.headers.set("Content-Encoding", "gzip");
+        self.addVary(resp);
+        return resp;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "GzipFilter(level=" + self.level + " minLength=" + self.minLen
+               + " types=" + self.types.len + ")";
+    }
+}
+
+// 流式压缩（streamBody/func body 逐块 gzip + chunked 传输）本期不做：
+// 一次性 deflate 无法跨 chunk 维持压缩上下文，需在 C 层暴露 z_stream
+// 增量压缩句柄（deflate/deflateEnd 配对的有状态 builtin），与 G7
+// WebSocket 帧改造同期评估更合适。当前流式响应会被本过滤器跳过（明文
+// chunked），功能不回退，仅不压缩。

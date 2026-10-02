@@ -120,17 +120,17 @@ cp "$VENDOR/libcurl/COPYING"     "$LIC/libcurl/COPYING"
 cp "$VENDOR/libiconv/COPYING.LIB" "$LIC/libiconv/COPYING.LGPL-2.1"
 cp "$VENDOR/tre/LICENSE"         "$LIC/tre/LICENSE"
 
-# GMP 许可证 → deps/gmp/licenses
-GMP_LIC="$ROOT/deps/gmp/licenses"
+# GMP 许可证 → licenses/gmp（动态链接依赖许可统一目录）
+GMP_LIC="$ROOT/licenses/gmp"
 mkdir -p "$GMP_LIC"
 cp "$VENDOR/gmp/COPYING.LESSERv3" "$VENDOR/gmp/COPYINGv2" \
    "$VENDOR/gmp/COPYINGv3" "$GMP_LIC/"
-echo "         prebuilt/windows/licenses/ + deps/gmp/licenses/"
+echo "         prebuilt/windows/licenses/ + licenses/gmp/"
 echo ""
 
 echo "============================================================"
 echo "All Windows dependencies built."
 echo "下一步：scripts\\build.bat（或 mingw32-make -B CC=gcc all）"
 echo "lumyr.exe 旁将自动复制 libiconv-2.dll / libgmp-10.dll，"
-echo "许可证汇总于 prebuilt\\windows\\licenses 与 deps\\gmp\\licenses。"
+echo "许可证汇总于 prebuilt\\windows\\licenses 与 licenses\\gmp。"
 echo "============================================================"

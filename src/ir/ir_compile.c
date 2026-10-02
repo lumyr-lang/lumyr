@@ -111,6 +111,8 @@ int builtin_id_by_name(const char* name) {
         {"charAt", BUILTIN_CHAR_AT},
         /* 加密/编码/正则（kit/runtime 现成封装） */
         {"md5", BUILTIN_MD5},
+        {"gzipCompress", BUILTIN_GZIP_COMPRESS},
+        {"gzipDecompress", BUILTIN_GZIP_DECOMPRESS},
         {"encodeBase64", BUILTIN_ENCODE_BASE64},
         {"decodeBase64", BUILTIN_DECODE_BASE64},
         {"encodeURL", BUILTIN_ENCODE_URL},

@@ -60,4 +60,4 @@ prebuilt/
 
 1. 平台产物不可跨平台使用
 2. Windows 组件从源码可重现构建：scripts/build_deps_mingw.sh
-3. 完整许可证清单见根目录 NOTICE；原文在 prebuilt/windows/licenses、deps/gmp/licenses
+3. 完整许可证清单见根目录 NOTICE；原文在 prebuilt/windows/licenses、licenses/gmp
