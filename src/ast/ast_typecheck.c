@@ -664,8 +664,10 @@ static void collect_top_level(AstNode* node) {
             if(!node->u.func_def.is_class_method) {
                 static_sym_put(node->u.func_def.name, VAL_FUNC);
             }
-            /* const func：登记到 const func 表（供常量折叠查找其 AST） */
-            if(node->u.func_def.is_const) cf_register(node->u.func_def.name, node);
+            /* const func：登记到 const func 表（供常量折叠查找其 AST）。
+             * const gen func 返回生成器对象、不可折叠，不登记。 */
+            if(node->u.func_def.is_const && !node->u.func_def.is_generator)
+                cf_register(node->u.func_def.name, node);
             break;
         }
         case AST_EXTERN_FUNC: {
@@ -1936,8 +1938,10 @@ int typecheck_expr(AstNode* node)
             err |= typecheck_expr(node->u.func_def.body);
             g_in_ctor = save_in_ctor;
             /* const func：纯函数约束校验（body 只允许 const 声明/return、
-             * 表达式只由参数/常量/纯运算/其他 const func 调用组成） */
-            if(node->u.func_def.is_const && !ce_validate_func(node)) {
+             * 表达式只由参数/常量/纯运算/其他 const func 调用组成）。
+             * const gen func 为生成器（yield/惰性恢复），豁免纯函数体约束。 */
+            if(node->u.func_def.is_const && !node->u.func_def.is_generator
+               && !ce_validate_func(node)) {
                 LOG_ERROR("语义错误(第%d行)：const 函数 '%s' 不是纯函数：体内只允许常量声明与 return\n",
                           node->line, node->u.func_def.name);
                 err = 1;

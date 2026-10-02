@@ -2696,6 +2696,80 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           func_val.v.func.is_ffi = 0;
           try_register_global_func($3, func_val);
         }
+        /* const func + 前置返回类型：const func <int> name(params) { body } */
+        | CONST FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
+          $$ = ast_func_def($4, $6, $8);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_const = 1;
+          $$->u.func_def.ret_type_name = strdup(castkind_to_name($3));
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($4, func_val);
+        }
+        /* const + 生成器函数：const gen func name(params) { body } */
+        | CONST TOK_GEN FUNC ID LPAREN param_list RPAREN block_stmt {
+          $$ = ast_func_def($4, $6, $8);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_const = 1;
+          $$->u.func_def.is_generator = 1;
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($4, func_val);
+        }
+        /* const + 生成器函数 + 前置返回类型：const gen func <int> name(params) { body } */
+        | CONST TOK_GEN FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
+          $$ = ast_func_def($5, $7, $9);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_const = 1;
+          $$->u.func_def.is_generator = 1;
+          $$->u.func_def.ret_type_name = strdup(castkind_to_name($4));
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($5, func_val);
+        }
+        /* const + 生成器函数 + 冒号后缀返回类型：const gen func name(params) : type { body } */
+        | CONST TOK_GEN FUNC ID LPAREN param_list RPAREN COLON type_name_str block_stmt {
+          $$ = ast_func_def($4, $6, $10);
+          $$->u.func_def.annotations = NULL;
+          $$->u.func_def.is_const = 1;
+          $$->u.func_def.is_generator = 1;
+          $$->u.func_def.ret_type_name = $9;
+          annotate_self_if_in_struct($$);
+          RuntimeFunc* rf = NULL;
+          if(!g_current_class_name && !g_current_struct_name) {
+              rf = compile_func_from_ast($$);
+          }
+          Value func_val = {0};
+          func_val.type = VAL_FUNC;
+          func_val.v.func.func_obj = rf;
+          func_val.v.func.ffi_func = NULL;
+          func_val.v.func.is_ffi = 0;
+          try_register_global_func($4, func_val);
+        }
         /* 生成器函数：gen func name(params) { body } */
         | TOK_GEN FUNC ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($3, $5, $7);
@@ -4026,6 +4100,30 @@ class_prop_list
             }
         }
         $$ = ast_seq($1, $2);
+      }
+    | CONST func_def    {
+        /* const func / const gen func 作为类体首个成员（无前缀版，与
+         * access_modifier func_def 同构）：空 class_prop_list 起点 lookahead=CONST
+         * 时内核只保留 class_prop 的 const 字段规则（CONST ID COLON），
+         * CONST 后接 FUNC/TOK_GEN 的方法形态须在此显式补齐；非首成员走
+         * class_prop_list annotated_decl。动作同 class_prop_list annotated_decl。 */
+        if($2 && $2->type == AST_FUNC_DEF) {
+            $2->u.func_def.is_class_method = 1;
+            if(g_current_class_name && strcmp($2->u.func_def.name, g_current_class_name) == 0) {
+                char* ctor_name = (char*)malloc(strlen(g_current_class_name) + 16);
+                if(g_class_ctor_cnt > 0)
+                    sprintf(ctor_name, "%s___init__%d", g_current_class_name, g_class_ctor_cnt + 1);
+                else
+                    sprintf(ctor_name, "%s___init__", g_current_class_name);
+                free($2->u.func_def.name);
+                $2->u.func_def.name = ctor_name;
+                if(g_class_ctor_cnt == 0) g_class_constructor = $2;
+                g_class_ctor_push($2);
+            } else {
+                g_class_method_push($2);
+            }
+        }
+        $$ = $2;
       }
     | class_prop_list annotation_list TOK_STATIC func_def  {
         /* @annotation static func ...：带注解的 class 静态方法定义 */

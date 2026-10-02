@@ -296,7 +296,28 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
     }
     if (!actual_fn) actual_fn = static_fn;   /* 无同签名覆盖 → 编译期选定版本 */
 
-    /* 4. 建帧绑定（slot0=self, slot1+=实参）并执行实际方法 */
+    /* 4. 生成器方法：建帧绑定（slot0=self, slot1+=实参）后创建生成器对象
+     *    返回，不进入 vm_exec_loop（与 vm_exec_call 的 gen 分支同构）。
+     *    缺此分支时 gen 方法体会被当普通方法执行，yield 结果丢失、返回 none。 */
+    if (actual_fn->is_generator) {
+        StackFrame* new_frame = vm_bind_only(actual_fn, cs, argc, args, ctx->frame);
+        free(args);
+        GeneratorObject* gen = generator_new_with_frame(actual_fn, new_frame);
+        if (!gen) {
+            fprintf(stderr, "VM: 创建生成器失败 %s\n", cs->callee);
+            stackframe_destroy(new_frame);
+            return 0;
+        }
+        RetSlot gret;
+        memset(&gret, 0, sizeof(gret));
+        gret.et = EXPR_TYPE_NONE;
+        gret.v.type = VAL_GENERATOR;
+        gret.v.v.generator = gen;
+        push_call_result(cs, gret);
+        return 1;
+    }
+
+    /* 普通方法：建帧绑定并执行实际方法 */
     RetSlot ret;
     int status = vm_bind_and_run(ctx, actual_fn, cs, argc, args, &ret);
     free(args);
