@@ -1,0 +1,131 @@
+// concurrent_globals_test.lm —— T2（P0）：全局根帧并发安全 + 访问控制上下文线程隔离
+//
+// 背景两处：
+// 1. main 根帧（g_main_root_frame）是全 worker 共享的全局变量唯一存储。修复前六个
+//    槽位数组（vals/int_slots/...）按需 realloc 增长：worker LOAD_GLOBAL 读槽位时
+//    调 frame_ensure_slots，主线程执行到"后声明"的顶层变量时也在扩容，两边并发
+//    无锁 realloc/free（TSAN 报 data race/heap-use-after-free，结果读空或崩溃）。
+//    修复：vm_run 执行用户代码前按 main_fn->sym_cnt 一次性定稿容量，运行期零扩容。
+// 2. g_current_class 标记"当前执行方法的属主类"（private/protected 访问检查读它）。
+//    修复前是进程级 static：多线程并发执行不同类方法时互相覆盖（TSAN data race，
+//    可能误判访问越权）。修复：_Thread_local + 协程 resume/yield 快照。
+//
+// 运行（正常构建）：./bin/lumyr tests/concurrent_globals_test.lm
+// TSAN：TSAN_OPTIONS="halt_on_error=0:exitcode=77" ./bin/lumyr_tsan tests/concurrent_globals_test.lm
+import <Thread/Thread>;
+
+// ---- 场景 1：worker 高频读多个不同全局槽位 ----
+class GlobalReader {
+    id: int;
+    rounds: int;
+    func GlobalReader(i: int, r: int) { self.id = i; self.rounds = r; }
+    func run() {
+        // base0..base7 均为顶层全局变量，函数体内读未声明名 → LOAD_GLOBAL
+        sum = 0;
+        k = 0;
+        while (k < self.rounds) {
+            sum = sum + base0 + base1 + base2 + base3;
+            sum = sum + base4 + base5 + base6 + base7;
+            k = k + 1;
+        }
+        // 每轮应得 0+1+...+7 = 28
+        return sum;
+    }
+}
+
+// ---- 场景 2：不同类的 private 字段在多线程高频访问 ----
+class VaultA {
+    private secret: int;
+    func VaultA(v: int) { self.secret = v; }
+    func reveal(): int {
+        // 同类内访问 private 字段：读 g_current_class 做属主校验
+        return self.secret * 3;
+    }
+}
+
+class VaultB {
+    private token: int;
+    func VaultB(v: int) { self.token = v; }
+    private func hidden(): int { return self.token + 5; }
+    func reveal(): int {
+        return self.token * 100 + self.hidden();
+    }
+}
+
+class AccessWorker {
+    kind: int;
+    rounds: int;
+    func AccessWorker(k: int, r: int) { self.kind = k; self.rounds = r; }
+    func run() {
+        ok = 0;
+        k = 0;
+        while (k < self.rounds) {
+            if (self.kind == 0) {
+                a = VaultA(k % 64);
+                if (a.reveal() == (k % 64) * 3) { ok = ok + 1; }
+            } else {
+                b = VaultB(k % 64);
+                // token*100 + (token+5)
+                if (b.reveal() == (k % 64) * 100 + (k % 64) + 5) { ok = ok + 1; }
+            }
+            k = k + 1;
+        }
+        return ok;
+    }
+}
+
+// ---- 先存在的全局槽位（worker 读这些）----
+base0 = 0;
+base1 = 1;
+base2 = 2;
+base3 = 3;
+base4 = 4;
+base5 = 5;
+base6 = 6;
+base7 = 7;
+
+ROUNDS = 20000;
+
+// 全部先启动，制造"worker 已在读全局、主线程仍在写后声明顶层变量"的时序窗口
+gr0 = Thread("global-r0", GlobalReader(0, ROUNDS)).start();
+gr1 = Thread("global-r1", GlobalReader(1, ROUNDS)).start();
+aw0 = Thread("access-a", AccessWorker(0, ROUNDS)).start();
+aw1 = Thread("access-b", AccessWorker(1, ROUNDS)).start();
+
+// ---- worker 存活期间主线程写"后声明"全局槽位（修复前此处触发并发 realloc）----
+late01 = 101;  late02 = 102;  late03 = 103;  late04 = 104;
+late05 = 105;  late06 = 106;  late07 = 107;  late08 = 108;
+late09 = 109;  late10 = 110;  late11 = 111;  late12 = 112;
+late13 = 113;  late14 = 114;  late15 = 115;  late16 = 116;
+late17 = 117;  late18 = 118;  late19 = 119;  late20 = 120;
+late21 = 121;  late22 = 122;  late23 = 123;  late24 = 124;
+late25 = 125;  late26 = 126;  late27 = 127;  late28 = 128;
+late29 = 129;  late30 = 130;  late31 = 131;  late32 = 132;
+
+s0 = gr0.join();
+s1 = gr1.join();
+a0 = aw0.join();
+a1 = aw1.join();
+
+// 主线程侧后写槽位值必须完好
+lateSum = late01 + late02 + late03 + late04 + late05 + late06 + late07 + late08;
+lateSum = lateSum + late09 + late10 + late11 + late12 + late13 + late14 + late15 + late16;
+lateSum = lateSum + late17 + late18 + late19 + late20 + late21 + late22 + late23 + late24;
+lateSum = lateSum + late25 + late26 + late27 + late28 + late29 + late30 + late31 + late32;
+
+print("reader sums:", s0, s1, "access ok:", a0, a1, "lateSum:", lateSum);
+
+bad = 0;
+expectSum = ROUNDS * 28;
+if (s0 != expectSum) { bad = bad + 1; print("FAIL reader0 期望", expectSum, "实得", s0); }
+if (s1 != expectSum) { bad = bad + 1; print("FAIL reader1 期望", expectSum, "实得", s1); }
+if (a0 != ROUNDS) { bad = bad + 1; print("FAIL access-a 访问控制误判", a0); }
+if (a1 != ROUNDS) { bad = bad + 1; print("FAIL access-b 访问控制误判", a1); }
+// 101..132 等差数列：(101+132)*32/2 = 3728
+if (lateSum != 3728) { bad = bad + 1; print("FAIL lateSum 期望 3728 实得", lateSum); }
+
+if (bad == 0) {
+    print("concurrent_globals_test ALL PASS");
+} else {
+    print("concurrent_globals_test FAIL: " + bad + " 项失败");
+}

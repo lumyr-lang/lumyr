@@ -9,7 +9,11 @@
 /* 获取变量的类型标记 */
 CastKind get_var_cast_type(Ctx* c, const char* name) {
     if(!c || !c->fn || !name) return -1;
-    int var_idx = bf_sym(c->fn, name);
+    /* 只读查找：不可用 bf_sym（缺失即插入）。本函数在操作数发射前的类型推断期
+     * 调用，插入会把未注册名字塞进 fn->syms 前部，破坏 Ctx/fn->syms 下标对齐
+     * （LOAD_GLOBAL fixup 按 fn->syms[a] 取名字解析到错误全局槽位）。
+     * 未注册名字 = 尚未声明/全局占位，类型未知（-1），与插入后读初值 -1 等价。 */
+    int var_idx = bf_sym_lookup(c->fn, name);
     if(var_idx < 0 || var_idx >= c->fn->sym_cnt) return -1;
     return (CastKind)c->fn->var_type_tags[var_idx];
 }

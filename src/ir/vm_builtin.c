@@ -712,8 +712,11 @@ static Value bi_inv_row_like(Value proto_row, const double* vals, int n) {
     return r;
 }
 
-/* 原地 qsort 比较器：array（Value 数字/字符串） */
+/* 原地排序比较器：array（Value 数字/字符串）
+ * T4：checkpoint 在比较器入口——排序栈帧跨 yield 保留（fcontext），
+ * 比较器不持操作数栈裸指针（只读被排序 buffer 的元素）。 */
 static int bi_cmp_val(const void* pa, const void* pb) {
+    lm_co_builtin_checkpoint();
     Value a = *(const Value*)pa, b = *(const Value*)pb;
     if(a.type == VAL_STRING && b.type == VAL_STRING)
         return strcmp(lumyr_str_cstr(&a), lumyr_str_cstr(&b));
@@ -726,10 +729,14 @@ static int bi_cmp_val(const void* pa, const void* pb) {
 }
 
 /* 按元素宽度比较的 qsort 比较器（int 族/float 族）：
- * 元素宽度由 g_cmp_width 决定（qsort 比较器无上下文参数，用文件级变量传递） */
-static int g_cmp_width = 8;
+ * 元素宽度由 g_cmp_width 决定（qsort 比较器无上下文参数，用文件级变量传递）。
+ * 必须为 _Thread_local：多 OS 线程并发 sort 不同宽度 TypedArray 时，
+ * 进程级共享会让比较器读到被别的线程踩过的宽度（按错误步长读内存，
+ * 排序结果损坏）。与 kit/runtime/src/lm_array.c 的 g_sort_numeric 同理。 */
+static _Thread_local int g_cmp_width = 8;
 
 static int bi_cmp_int_w(const void* pa, const void* pb) {
+    lm_co_builtin_checkpoint();   /* T4：排序栈帧跨 yield 保留 */
     int64_t a, b;
     switch(g_cmp_width) {
     case 1:  a = *(const int8_t*)pa;  b = *(const int8_t*)pb;  break;
@@ -741,6 +748,7 @@ static int bi_cmp_int_w(const void* pa, const void* pb) {
 }
 
 static int bi_cmp_dbl_w(const void* pa, const void* pb) {
+    lm_co_builtin_checkpoint();   /* T4：qsort 栈帧跨 yield 保留 */
     double a, b;
     switch(g_cmp_width) {
     case 4:  a = *(const float*)pa;  b = *(const float*)pb;  break;
@@ -750,11 +758,49 @@ static int bi_cmp_dbl_w(const void* pa, const void* pb) {
 }
 
 static int bi_cmp_str(const void* pa, const void* pb) {
+    lm_co_builtin_checkpoint();   /* T4：排序栈帧跨 yield 保留 */
     const char* a = *(const char* const*)pa;
     const char* b = *(const char* const*)pb;
     if(!a) return b ? -1 : 0;
     if(!b) return 1;
     return strcmp(a, b);
+}
+
+/* ===== T4 根修：自带堆排序（替代 libc qsort） =====
+ * 根因：ASAN 的 qsort 拦截器把用户比较器藏入 per-thread TLS，经共享尾跳 thunk
+ *（wrapped_qsort_compar）派发；比较器内 checkpoint 让出后，同线程嵌套 qsort
+ * 返回时该 TLS 被恢复/清空，外层 qsort 恢复执行即尾跳 NULL → pc=0 SEGV
+ *（仅 ASAN 构建；libc qsort 以 callee 参数直传比较器，天然可重入）。
+ * 自排序全部状态在 C 栈与被排数组上：跨 yield 冻结/恢复天然安全，四平台
+ * 行为一致（顺带消除对 libc qsort 实现差异的依赖）。
+ * 堆排序：in-place、O(n log n) 最坏保证、无递归深栈；比较次数与 qsort 同阶，
+ * 比较器 checkpoint 让出节奏不变。 */
+typedef int (*bi_cmp_fn)(const void*, const void*);
+
+static void bi_hswap(char* a, char* b, size_t sz) {
+    for (size_t k = 0; k < sz; k++) { char t = a[k]; a[k] = b[k]; b[k] = t; }
+}
+
+/* 大顶堆下沉：[0, n) 内自 root 下沉；cmp 与 qsort 比较器同约（<0 即 a 在前）。 */
+static void bi_sift_down(char* base, size_t root, size_t n, size_t sz, bi_cmp_fn cmp) {
+    for (;;) {
+        size_t child = root * 2 + 1;
+        if (child >= n) break;
+        if (child + 1 < n && cmp(base + child * sz, base + (child + 1) * sz) < 0) child++;
+        if (cmp(base + root * sz, base + child * sz) >= 0) break;
+        bi_hswap(base + root * sz, base + child * sz, sz);
+        root = child;
+    }
+}
+
+static void bi_hsort(void* base, size_t n, size_t sz, bi_cmp_fn cmp) {
+    if (!base || n < 2) return;
+    char* a = (char*)base;
+    for (size_t i = n / 2; i-- > 0; ) bi_sift_down(a, i, n, sz, cmp);   /* heapify */
+    for (size_t end = n - 1; end > 0; end--) {
+        bi_hswap(a, a + end * sz, sz);            /* 堆顶（最大值）归位 */
+        bi_sift_down(a, 0, end, sz, cmp);
+    }
 }
 
 /* 类型错误提示（无兜底：经 runtime_error 长跳到受防护循环，再走协作式
@@ -2457,7 +2503,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     case BUILTIN_SORT: {
         if(recv.type == VAL_ARRAY) {
             ValueArray* a = recv.v.array;
-            if(a && a->len > 1) qsort(a->items, (size_t)a->len, sizeof(Value), bi_cmp_val);
+            if(a && a->len > 1) bi_hsort(a->items, (size_t)a->len, sizeof(Value), bi_cmp_val);
             *out = recv;
             return 1;
         }
@@ -2468,12 +2514,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 if(bi_is_int_et(ta->elem_type)) {
                     /* 必须按元素真实宽度比较（固定 8 字节读会读穿相邻元素） */
                     g_cmp_width = (int)isz;
-                    qsort(ta->items, (size_t)ta->len, isz, bi_cmp_int_w);
+                    bi_hsort(ta->items, (size_t)ta->len, isz, bi_cmp_int_w);
                 } else if(bi_is_float_et(ta->elem_type)) {
                     g_cmp_width = (int)isz;
-                    qsort(ta->items, (size_t)ta->len, isz, bi_cmp_dbl_w);
+                    bi_hsort(ta->items, (size_t)ta->len, isz, bi_cmp_dbl_w);
                 } else if(ta->elem_type == VAL_STRING) {
-                    qsort(ta->items, (size_t)ta->len, isz, bi_cmp_str);
+                    bi_hsort(ta->items, (size_t)ta->len, isz, bi_cmp_str);
                 } else {
                     runtime_error("运行时错误: TypedArray 元素类型不支持 sort / runtime error: TypedArray element type does not support sort");
                     return 0;   /* 不可达 */
@@ -4494,6 +4540,13 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
 
 /* ===== 指令入口 ===== */
 
+/* Phase 8.5 J 前置门：实参弹出后、进入 C 前的 reduction 扣减。
+ * 此时四栈回到内置入口深度（平衡点），LM_BUMP_REDS 归零即真正让出
+ * （替代旧派发点扣减——派发点实参压栈，can_preempt 必拒并重载预算，
+ * tight loop 调内置永不让出）。嵌套表达式调用（栈深 > entry_sp）仍拒让，
+ * 与 TR-4.3 一致。 */
+#define BI_PRE_GATE() LM_BUMP_REDS(lm_co_current())
+
 /* 全局形式 m(x, ...)：VALUE 栈弹 b 个实参（argv[0] 即 receiver） */
 int vm_exec_builtin(VMExecCtx* ctx, const Instruction* in) {
     (void)ctx;
@@ -4501,6 +4554,7 @@ int vm_exec_builtin(VMExecCtx* ctx, const Instruction* in) {
     Value* argv = (Value*)malloc(sizeof(Value) * (size_t)(argc > 0 ? argc : 1));
     if(!argv) { perror("vm_exec_builtin"); return 0; }
     for(int i = argc - 1; i >= 0; i--) stack_vm_pop(g_stack_mgr, STACK_VALUE, &argv[i]);
+    BI_PRE_GATE();
     Value rv;
     int rc = builtin_dispatch(ctx, in->a, argv, argc, &rv, 0);
     free(argv);
@@ -4516,6 +4570,7 @@ int vm_exec_builtin_method(VMExecCtx* ctx, const Instruction* in) {
     if(!argv) { perror("vm_exec_builtin_method"); return 0; }
     for(int i = argc - 1; i >= 0; i--) stack_vm_pop(g_stack_mgr, STACK_VALUE, &argv[i + 1]);
     stack_vm_pop(g_stack_mgr, STACK_VALUE, &argv[0]);
+    BI_PRE_GATE();
     Value rv;
     int rc = builtin_dispatch(ctx, in->a, argv, argc, &rv, 1);
     free(argv);

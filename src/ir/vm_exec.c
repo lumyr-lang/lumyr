@@ -20,6 +20,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 回边公共钩子：协程时间片扣减 + GC STW 安全点轮询（详见 OPC_JMP 处注释）。
+ * co==NULL（Thread 裸线程/VM 顶层）时 LM_BUMP_REDS 内部自行判空跳过，
+ * gc_stw_check_fast 与协程无关、对所有执行上下文生效。 */
+#define VM_BACKEDGE_HOOK(co) do { \
+    LM_BUMP_REDS(co);             \
+    gc_stw_check_fast();          \
+} while (0)
+
 /* ========== 模块函数声明 ========== */
 
 /* 栈操作 */
@@ -386,15 +394,22 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_DOUBLE_NE: handled = vm_exec_compare_double_ne(ctx, &in); break;
 
         /* ===== 控制流 =====
-         * Phase 8.5：JMP 家族扣 1 reduction（回边扣减）。
+         * 回边钩子（VM_BACKEDGE_HOOK）：
+         *  1) LM_BUMP_REDS 扣 1 reduction（回边扣减）：保证 tight loop 必撞预算，
+         *     协程经 lm_co_slice_bump 让出给调度器；co==NULL 的裸线程跳过。
+         *  2) gc_stw_check_fast 是 VM 解释通道的 STW 安全点轮询（非 GC 期仅一条
+         *     volatile 读，零函数调用）：STW 期间任何在解释循环里的线程（含
+         *     co==NULL 的 Thread 裸线程）都在回边自旋到 GC 结束。GC 不扫的栈
+         *     由新对象预标记 + 写屏障保证存活，本钩子只负责"STW 期不并发推进"
+         *     这一时序契约（gc_runtime.h 的 gc_stw_check 注释所述设计）。
          * 简化实现：所有 JMP（含前向/条件）均扣，保证 tight loop 必撞预算让出；
          * 前向跳转多扣 1 无害（仅多一次调度机会）。条件跳转未命中也扣 1——
          * 开销可忽略，正确性优先于"仅回边扣"的微优化。 */
-        case OPC_JMP: LM_BUMP_REDS(co); handled = vm_exec_control_jmp(ctx, &in); break;
-        case OPC_JMP_IF_TRUE: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_true(ctx, &in); break;
-        case OPC_JMP_IF_FALSE: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_false(ctx, &in); break;
-        case OPC_JMP_IF_TRUE_V: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_true_value(ctx, &in); break;
-        case OPC_JMP_IF_FALSE_V: LM_BUMP_REDS(co); handled = vm_exec_control_jmp_if_false_value(ctx, &in); break;
+        case OPC_JMP: VM_BACKEDGE_HOOK(co); handled = vm_exec_control_jmp(ctx, &in); break;
+        case OPC_JMP_IF_TRUE: VM_BACKEDGE_HOOK(co); handled = vm_exec_control_jmp_if_true(ctx, &in); break;
+        case OPC_JMP_IF_FALSE: VM_BACKEDGE_HOOK(co); handled = vm_exec_control_jmp_if_false(ctx, &in); break;
+        case OPC_JMP_IF_TRUE_V: VM_BACKEDGE_HOOK(co); handled = vm_exec_control_jmp_if_true_value(ctx, &in); break;
+        case OPC_JMP_IF_FALSE_V: VM_BACKEDGE_HOOK(co); handled = vm_exec_control_jmp_if_false_value(ctx, &in); break;
 
         /* ===== 通用 Value 运算（动态兜底） ===== */
         case OPC_VADD: handled = vm_exec_vadd(ctx, &in); break;
@@ -420,11 +435,13 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         /* ===== 函数调用 =====
          * Phase 8.5：调用类扣 1 reduction（DISPATCH/DISPATCH_FUN）。
          * OPC_CALL/CALLV/CALL_METHOD/CALL_METHODV/MKCLOSURE。
-         * C 内建（BUILTIN/CALL_BUILTIN_METHOD）也扣 1（BIF reduction）；
-         * 长内建应主动 LM_BUMP_ALL_REDS 强制让出。 */
+         * C 内建（BUILTIN/CALL_BUILTIN_METHOD）的扣减移至 vm_exec_builtin
+         * 内部实参弹出后（Phase 8.5 J 前置门）——派发点实参压栈属非平衡点，
+         * 在此扣减必被 can_preempt 拒并重载预算，tight loop 调内置将永远
+         * 不让出；弹参后栈回平衡点，扣减归零即真正让出。 */
         case OPC_CALL: LM_BUMP_REDS(co); handled = vm_exec_call(ctx, &in); break;
-        case OPC_BUILTIN: LM_BUMP_REDS(co); handled = vm_exec_builtin(ctx, &in); break;
-        case OPC_CALL_BUILTIN_METHOD: LM_BUMP_REDS(co); handled = vm_exec_builtin_method(ctx, &in); break;
+        case OPC_BUILTIN: handled = vm_exec_builtin(ctx, &in); break;
+        case OPC_CALL_BUILTIN_METHOD: handled = vm_exec_builtin_method(ctx, &in); break;
         case OPC_GETFUNC: handled = vm_exec_getfunc(ctx, &in); break;
         case OPC_CALLV: LM_BUMP_REDS(co); handled = vm_exec_callv(ctx, &in); break;
         case OPC_MKCLOSURE: LM_BUMP_REDS(co); handled = vm_exec_mkclosure(ctx, &in); break;

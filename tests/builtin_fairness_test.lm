@@ -1,0 +1,150 @@
+// builtin_fairness_test.lm —— T4（P1）：C 内置检查点公平性专项（AC-4 / TR-4.1 / TR-4.3）
+//
+// 同一 reactor（单 worker 线程）上两个协程：
+//   burner：阶段0 反复执行纯 C 长内置（json 解析超大文本 + 大 TypedArray sort）；
+//           阶段1（对照组）改跑同档纯 lumin tight loop（既有回边抢占路径）。
+//   ticker：每被调度一次 +1 后 coYield() 自愿让出，并记录相邻两次被调度的最大间隔。
+//
+// 修复前基线（预期现象，见 tasks.md T4 证据）：
+//   C 内置内部无任何让出点，burner 一个 4000-reductions 时间片约合数秒
+//   （每轮 json+sort 只扣 ~10 reds）——ticker 长时间得不到调度（maxGap 秒级），
+//   调度器日志出现 [sched] long schedule（>50ms）与 sysmon force-migrate 强迁。
+// 修复后：json 主循环 / sort 比较器内的 lm_co_builtin_checkpoint 按 reduction
+//   记账并在平衡点让出——tickBlt 数量级提升且 >= tickCtl 的 50%（AC-4），
+//   maxGapBlt 降到毫秒级，无 long schedule / force-migrate 日志。
+//
+// TR-4.3（不误放）：burner 每轮执行 `7 + json("[1,2,3]").len() + 11`——
+//   json 调用发生时外层表达式中间值 7 正压在共享操作数栈上（非平衡点），
+//   checkpoint 必须拒绝让出；若误放，ticker 的压栈会串改该槽位，t != 21。
+//
+// 协程间状态隔离：ticker 只写 t_st、burner 只写 b_st、g["phase"] 为
+//   burner 单写/ticker 只读的进度标志（与 preempt_test 同一良性竞态模式）——
+//   即使 burner 被 sysmon 迁到 compute 池与 ticker 真并行，也无共享 map 并发写。
+//
+// 运行：./bin/lumyr tests/builtin_fairness_test.lm
+import <NetWork/Reactor>;
+
+ELEM = 6000;      // json 数组元素数（文本约 300KB）
+SORTN = 200000;   // sort 元素数
+
+g = { "r": null, "phase": 0, "big": "", "arr": null };
+t_st = { "tickBlt": 0, "tickCtl": 0, "maxGapBlt": 0, "maxGapCtl": 0 };
+b_st = { "jsonRounds": 0, "sortRounds": 0, "jsonBad": 0, "sortBad": 0, "unbalBad": 0 };
+
+func buildBig(n) {
+    a = [];
+    i = 0;
+    while (i < n) {
+        a.add({"k": i, "v": "abcdefghijklmnopqrstuvwxyz0123456789"});
+        i = i + 1;
+    }
+    return stringify(a);
+}
+
+func buildArr(n) {
+    a = <int64>[0];
+    seed = 12345;
+    i = 0;
+    while (i < n) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        a.add(seed % 1000000);
+        i = i + 1;
+    }
+    return a;
+}
+
+func burner(arg) {
+    // 阶段0：纯 C 长内置循环（3s）
+    deadline = timestamp_ms() + 3000;
+    a = g["arr"];
+    an = a.len();
+    while (timestamp_ms() < deadline) {
+        v = json(g["big"]);
+        if (v.len() != ELEM) { b_st["jsonBad"] = b_st["jsonBad"] + 1; }
+        else if (v[ELEM - 1]["k"] != ELEM - 1) { b_st["jsonBad"] = b_st["jsonBad"] + 1; }
+        b_st["jsonRounds"] = b_st["jsonRounds"] + 1;
+        a.reverse();
+        a.sort();
+        if (a[0] > a[an - 1]) { b_st["sortBad"] = b_st["sortBad"] + 1; }
+        b_st["sortRounds"] = b_st["sortRounds"] + 1;
+        // TR-4.3：非平衡点嵌套调用——期望值恒 21，被串改则不等
+        t = 7 + json("[1,2,3]").len() + 11;
+        if (t != 21) { b_st["unbalBad"] = b_st["unbalBad"] + 1; }
+    }
+    g["phase"] = 1;
+    // 阶段1：对照组——同档纯 lumin tight loop（3s）
+    deadline2 = timestamp_ms() + 3000;
+    i = 0;
+    while (timestamp_ms() < deadline2) {
+        x = i * i;
+        i = i + 1;
+    }
+    g["phase"] = 2;
+}
+
+func ticker(arg) {
+    last = timestamp_ms();
+    while (g["phase"] == 0) {
+        t_st["tickBlt"] = t_st["tickBlt"] + 1;
+        now = timestamp_ms();
+        gap = now - last;
+        if (gap > t_st["maxGapBlt"]) { t_st["maxGapBlt"] = gap; }
+        last = now;
+        coYield();
+    }
+    last = timestamp_ms();
+    while (g["phase"] == 1) {
+        t_st["tickCtl"] = t_st["tickCtl"] + 1;
+        now = timestamp_ms();
+        gap = now - last;
+        if (gap > t_st["maxGapCtl"]) { t_st["maxGapCtl"] = gap; }
+        last = now;
+        coYield();
+    }
+    g["r"].stop();
+}
+
+func runTest() {
+    g["big"] = buildBig(ELEM);
+    g["arr"] = buildArr(SORTN);
+
+    r = ReactorInstance(65536);
+    g["r"] = r;
+    setReactor(r);
+    sched = scheduler(r.impl);
+    setScheduler(sched);
+
+    Coroutine(ticker, null);
+    Coroutine(burner, null);
+
+    r.run();
+
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    clearReactor();
+    r.destroy();
+
+    print("tickBlt(内置阶段): " + t_st["tickBlt"]);
+    print("tickCtl(对照阶段): " + t_st["tickCtl"]);
+    print("maxGapBlt(ms): " + t_st["maxGapBlt"]);
+    print("maxGapCtl(ms): " + t_st["maxGapCtl"]);
+    print("jsonRounds: " + b_st["jsonRounds"] + " sortRounds: " + b_st["sortRounds"]);
+    print("jsonBad: " + b_st["jsonBad"] + " sortBad: " + b_st["sortBad"] + " unbalBad: " + b_st["unbalBad"]);
+
+    ok = true;
+    if (b_st["jsonBad"] != 0) { ok = false; }
+    if (b_st["sortBad"] != 0) { ok = false; }
+    if (b_st["unbalBad"] != 0) { ok = false; }
+    // AC-4：tickBlt >= tickCtl 的 50%，且相对修复前基线数量级提升（基线 maxGap 秒级）
+    if (t_st["tickBlt"] * 2 < t_st["tickCtl"]) { ok = false; }
+    if (t_st["tickBlt"] < 100) { ok = false; }
+    // 公平性时延上界：内置阶段 tick 最大间隔须 < 500ms（修复前为秒级）
+    if (t_st["maxGapBlt"] >= 500) { ok = false; }
+    if (ok) {
+        print("BUILTIN FAIRNESS OK");
+    } else {
+        print("BUILTIN FAIRNESS FAIL");
+    }
+}
+
+runTest();

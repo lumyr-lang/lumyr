@@ -11,6 +11,12 @@
 BytecodeFunc* bytecode_func_new(const char* name, int is_main);
 void bytecode_func_free(BytecodeFunc* fn);
 int bf_sym(BytecodeFunc* fn, const char* name);
+/* 只读查找：不存在返回 -1，绝不插入。
+ * 类型推断路径（get_var_cast_type / c_expr_type_name）必须用本函数而非 bf_sym——
+ * bf_sym 缺失即插入，推断顺序（右操作数先查）会把名字插到 fn->syms 前部，
+ * 破坏"Ctx 下标 == fn->syms 下标"不变量，LOAD_GLOBAL fixup 按 fn->syms[a] 取名字
+ * 会解析到错误全局槽位（如 g 与 NCLI 互换）。 */
+int bf_sym_lookup(BytecodeFunc* fn, const char* name);
 
 /* SymHash 符号哈希（开放寻址）：names 为 char* 符号名数组 */
 unsigned symhash_code(const char* s);                                   /* 字符串哈希 */

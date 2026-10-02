@@ -520,6 +520,11 @@ static lm_co_t* sched_steal(lm_scheduler_t* self) {
 
 void lm_scheduler_drain_ready(lm_scheduler_t* s) {
     if (!s) return;
+    /* T4：惰性记录实际 drain 线程（sysmon CPU 时间确认用；单 drainer 设计） */
+    if (!atomic_load_explicit(&s->drain_seen, memory_order_acquire)) {
+        s->drain_tid = pthread_self();
+        atomic_store_explicit(&s->drain_seen, 1, memory_order_release);
+    }
     s->lifo_used = 0;
     int budget = s->reactor ? LM_SCHED_DRAIN_BUDGET : 0;   /* 0 = 不限（无 reactor） */
     for (;;) {
@@ -604,6 +609,11 @@ void lm_scheduler_drain_ready(lm_scheduler_t* s) {
  * ============================================================ */
 lm_co_t* lm_scheduler_pop_blocking(lm_scheduler_t* s) {
     if (!s) return NULL;
+    /* T4：惰性记录实际 drain 线程（sysmon CPU 时间确认用；单 drainer 设计） */
+    if (!atomic_load_explicit(&s->drain_seen, memory_order_acquire)) {
+        s->drain_tid = pthread_self();
+        atomic_store_explicit(&s->drain_seen, 1, memory_order_release);
+    }
     uint64_t round = 0;   /* Phase 8.5 H：61 轮计数器 */
     for (;;) {
         /* Phase 8.5 D：每轮 schedtick +1（同 drain_ready）。 */
@@ -685,6 +695,15 @@ void lm_scheduler_handle_migrate(lm_co_t* co) {
     lm_scheduler_t* target = atomic_exchange_explicit(&co->migrate_sched, NULL,
                                                       memory_order_acq_rel);
     if (!target) return;
+    /* T4：DEAD 协程不投递——迁移标记在协程运行期间设置，协程可能在让出点
+     * 直接结束（entry 返回）。DEAD co 入队只会被 pop 方 resume 早退丢弃，
+     * 且 last_resume_ns 停在上次真实 resume，导致长调度告警用陈旧时间戳
+     * 打出虚假 elapsed（md5 正向控制实测：同一 resume 被 drain 与 compute
+     * 双侧计时，compute 侧打出 1204.53ms 假告警）。归还引用后即返回。 */
+    if (atomic_load_explicit(&co->state, memory_order_acquire) == LM_CO_DEAD) {
+        lm_scheduler_release(target);
+        return;
+    }
     if (!target->reactor && !co->pinned &&
         atomic_load_explicit(&co->stealable, memory_order_acquire)) {
         overflow_push(co);

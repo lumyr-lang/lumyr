@@ -22,6 +22,7 @@
 #include "vm_exec.h"        /* vm_call_func_value */
 #include "ast/stackframe.h" /* stackframe_new, stackframe_destroy */
 #include "gc_runtime.h"     /* gc_protect_push/pop */
+#include "lm_type.h"        /* lumyr_get/set_current_class：访问控制上下文随协程迁移 */
 
 #include <stdlib.h>
 #include <string.h>
@@ -37,13 +38,20 @@ typedef struct {
     int            stack_sp[4];   /* g_stack_mgr->sp 快照（4 核心栈） */
     jmp_buf*       err_jmp;       /* g_err_jmp 快照（runtime_error 着陆垫） */
     VMExceptState  except_state;  /* 异常状态快照（g_try_stack/g_unwind/g_fin_stack/g_thread_root 等） */
+    const char*    current_class; /* g_current_class 快照（当前方法属主类，访问控制上下文） */
     /* 调用方基线（resume 时保存当前 _Thread_local，yield 时恢复）*/
     int            baseline_sp[4];
     jmp_buf*       baseline_err_jmp;
     VMExceptState  baseline_except;
+    const char*    baseline_class;
     /* 本轮 resume 恢复后的 4 栈 sp（= 协程入口/上次让出点的平衡栈深）。
      * vm_co_can_preempt 据此判断时间片抢占点是否栈平衡：非平衡派发点
-     * 禁止让出（per-thread 共享栈数据区的活值会被同线程他协程覆盖）。 */
+     * 禁止让出（per-thread 共享栈数据区的活值会被同线程他协程覆盖）。
+     * Phase 8.5 J：内置检查点复用此规则——内置 C 代码不触碰操作数栈，
+     * 故内置期间 sp 恒等于进入时深度。语句级调用时该深度 == entry_sp，
+     * checkpoint 让出安全；嵌套表达式调用（如 `7 + json()`）深度 >
+     * entry_sp，checkpoint 拒让（防共享栈上活值被覆写），与 TR-4.3 一致。
+     * 故无需独立的 builtin_entry_sp 机制。 */
     int            entry_sp[4];
     /* Phase 7.4：跨线程迁移搬栈。栈池 per-thread（g_stack_mgr 是 TLS 指针，
      * 栈数据物理绑定创建线程），迁移 yield（migrate_sched 非空）时把活数据
@@ -85,15 +93,23 @@ static void vm_co_resume_hook(lm_co_t* co) {
         }
         st->migrated = 0;
     }
-    if(!g_stack_mgr) return;  /* 非迁移且本线程无栈池（C 测试场景） */
+    if(!g_stack_mgr) stack_global_init(0);  /* 本线程首次 resume VM 协程：建本线程栈池。
+     * 能走到这里的协程在本线程必无栈数据：fresh 协程（sp 全 0，spawn 即 stealable=1，
+     * 可被 WSQ 窃取到任意线程）或 migrated（上方分支已建池并恢复 mig_copy）。
+     * sp>0 的未迁移协程在首个非迁移 yield 后 stealable=0，不会被跨线程投递，
+     * 故此处建池后恢复 sp 不会读到空池垃圾。 */
     /* 保存当前 _Thread_local 到 baseline（调用方基线：reactor 主循环或外层协程）*/
     for(int i = 0; i < 4; i++) st->baseline_sp[i] = g_stack_mgr->sp[i];
     st->baseline_err_jmp = g_err_jmp;
     vm_except_save_state(&st->baseline_except);
+    st->baseline_class = lumyr_get_current_class();
     /* 恢复协程 vm_state 到 _Thread_local（首次 resume 时 stack_sp 全 0、except 清零）*/
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->stack_sp[i];
     g_err_jmp = st->err_jmp;
     vm_except_restore_state(&st->except_state);
+    /* 恢复协程自己的方法属主类：同线程交错的两个协程若执行不同类的方法，
+     * 不恢复会让 private/protected 访问检查误用他协程的类上下文。 */
+    lumyr_set_current_class(st->current_class);
     /* 记录本协程本轮运行的入口栈深（= 上次让出点的平衡栈深），
      * vm_co_can_preempt 据此禁止在操作数栈非平衡点抢占。 */
     for(int i = 0; i < 4; i++) st->entry_sp[i] = g_stack_mgr->sp[i];
@@ -114,6 +130,7 @@ static void vm_co_yield_hook(lm_co_t* co) {
         for(int i = 0; i < 4; i++) st->stack_sp[i] = g_stack_mgr->sp[i];
         st->err_jmp = g_err_jmp;
         vm_except_save_state(&st->except_state);
+        st->current_class = lumyr_get_current_class();
         if (atomic_load_explicit(&co->migrate_sched, memory_order_acquire)) {
             st->migrated = 1;
             for (int i = 0; i < STACK_TYPE_COUNT; i++) {
@@ -145,6 +162,7 @@ static void vm_co_yield_hook(lm_co_t* co) {
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->baseline_sp[i];
     g_err_jmp = st->baseline_err_jmp;
     vm_except_restore_state(&st->baseline_except);
+    lumyr_set_current_class(st->baseline_class);
 }
 
 /* destroy 前释放 vm_state 内存。
@@ -202,7 +220,9 @@ static int vm_co_can_preempt(lm_co_t* co) {
     if (!co || !co->vm_state || !g_stack_mgr) return 1;
     VMCoState* st = (VMCoState*)co->vm_state;
     for (int i = 0; i < STACK_TYPE_COUNT; i++) {
-        if (g_stack_mgr->sp[i] != st->entry_sp[i]) return 0;
+        if (g_stack_mgr->sp[i] != st->entry_sp[i]) {
+            return 0;
+        }
     }
     return 1;
 }

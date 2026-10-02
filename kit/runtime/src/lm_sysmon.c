@@ -6,15 +6,21 @@
 //   delay 起步 20µs；本扫描轮无超时 scheduler → delay *= 2；封顶 10ms。
 //   有超时 → delay 重置为 20µs（快速响应）。
 //
-// 迁移策略（Phase 8.5 E，强制抢占 10ms）：
-//   scheduler 的 schedtick 连续两轮未变 且 now - tick_ns > LM_SCHED_FORCE_MIGRATE_MS
-//   → 判定该 scheduler 卡在单个协程上。取其 current 协程：
-//     - pinned（fd 绑定）→ 不迁（fd 亲和必须留在 IO 线程）。
-//     - 非 pinned 且所在 scheduler 是 IO（reactor != NULL）→
-//       写 co->migrate_sched = compute 池 scheduler，协程在下一个让出点
-//       （含预算耗尽 LM_BUMP_REDS）被 drain/worker 经 handle_migrate 迁走。
-//     - 已在 compute 池（reactor == NULL）→ 不迁（compute 池本就轮转，
-//       且无 IO 可卡，长任务留池中是预期行为）。
+// 迁移策略（Phase 8.5 E，强制抢占 10ms + T4 CPU 时间二轮确认）：
+//   scheduler 的 tick_ns 超 LM_SCHED_FORCE_MIGRATE_MS 未动 → 首轮只登记嫌疑
+//   （drain 线程 CPU 时间 + 墙钟基线）；LM_SYSMON_CONFIRM_NS 后复审：
+//     - 窗口内线程 CPU 增量 < 墙钟一半 → 线程被 OS 抢占（tick 停滞是线程级
+//       停滞而非协程卡死——checkpoint 正常的协程每数十 µs 让出一次，>10ms 的
+//       tick 停滞几乎都源于抢占），撤销嫌疑不迁移；
+//     - CPU 增量随墙钟推进 → 协程真在烧 CPU 不 yield → 确认卡死：
+//       取其 current 协程：
+//         - pinned（fd 绑定）→ 不迁（fd 亲和必须留在 IO 线程）。
+//         - 非 pinned 且所在 scheduler 是 IO（reactor != NULL）→
+//           写 co->migrate_sched = compute 池 scheduler，协程在下一个让出点
+//           （含预算耗尽 LM_BUMP_REDS）被 drain/worker 经 handle_migrate 迁走。
+//         - 已在 compute 池（reactor == NULL）→ 不迁（compute 池本就轮转，
+//           且无 IO 可卡，长任务留池中是预期行为）。
+//   平台无线程 CPU 计量时回退旧行为（确认窗满即迁移）。
 #include "lm_sysmon.h"
 #include "lm_scheduler.h"
 #include "lm_co.h"
@@ -29,10 +35,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <mach/mach.h>         /* pthread_mach_thread_np / thread_info（CPU 时间确认） */
+#endif
 
 #define LM_SYSMON_DELAY_MIN_NS   20000ULL     /* 20µs 起步 */
 #define LM_SYSMON_DELAY_MAX_NS   10000000ULL  /* 10ms 封顶 */
 #define LM_SYSMON_MAX_SCHEDS     256
+/* T4：嫌疑确认窗——首轮停滞登记后隔此时长复审 CPU 增量。
+ * 2ms：远小于真实卡死的可容忍救援延迟（10ms 检测 + 2ms 确认），
+ * 足以让 CPU 增量判定拉开「抢占≈0」与「烧 CPU≈窗口全长」的差距。 */
+#define LM_SYSMON_CONFIRM_NS     2000000ULL
 /* Phase 8.13：stuck 协程扫描间隔（墙钟节流，复用 reaper 模式）。
  * 1s 一轮：检测精度不依赖超时猜测，间隔只影响确认延迟（两轮确认 ≈2s）。 */
 #define LM_STUCK_SCAN_INTERVAL_NS  1000000000ULL  /* 1s */
@@ -41,6 +54,31 @@ static _Atomic int g_sysmon_started = 0;
 static _Atomic int g_sysmon_stop = 0;
 static pthread_t g_sysmon_thread;
 static pthread_mutex_t g_sysmon_once_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* T4：读线程 CPU 时间（user+system，单调 ns 口径仅用于差分）。
+ * 失败返回 (uint64_t)-1（调用方回退旧行为）。 */
+static uint64_t sysmon_thread_cpu_ns(pthread_t tid) {
+#ifdef __APPLE__
+    thread_act_t act = pthread_mach_thread_np(tid);
+    if (!act) return (uint64_t)-1;
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(act, THREAD_BASIC_INFO, (thread_info_t)&info, &count) != KERN_SUCCESS) {
+        return (uint64_t)-1;
+    }
+    return ((uint64_t)info.user_time.seconds + (uint64_t)info.system_time.seconds) * 1000000000ULL
+         + ((uint64_t)info.user_time.microseconds + (uint64_t)info.system_time.microseconds) * 1000ULL;
+#elif defined(__linux__)
+    clockid_t cid;
+    if (pthread_getcpuclockid(tid, &cid) != 0) return (uint64_t)-1;
+    struct timespec ts;
+    if (clock_gettime(cid, &ts) != 0) return (uint64_t)-1;
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#else
+    (void)tid;
+    return (uint64_t)-1;   /* 无 CPU 计量：调用方回退旧行为 */
+#endif
+}
 
 /* 单轮扫描：取注册表快照，检测卡住的 scheduler，执行强制迁移。
  * 返回本轮是否发现超时 scheduler（用于退避决策）。 */
@@ -65,14 +103,19 @@ static int sysmon_scan_once(uint64_t now_ns) {
          * 等价于"schedtick 连续两轮未变"但更直接（tick_ns 自带墙钟语义）。
          * 注：scheduler 空闲（无协程）时 drain 也不运行，tick_ns 同样不更新，
          * 但此时 current==NULL，不会误触发迁移。 */
-        if (now_ns - tick_ns <= force_ns) continue;
+        if (now_ns - tick_ns <= force_ns) {
+            /* 恢复健康（tick 重新走动）：撤销在审嫌疑。 */
+            atomic_store_explicit(&s->suspect_co, NULL, memory_order_relaxed);
+            continue;
+        }
 
         /* 超时：取当前运行协程。current 为 NULL = 空闲，跳过。
          * current 由 owner 线程在 resume 前置位、resume 返回后清 NULL（原子写）。 */
         lm_co_t* co = atomic_load_explicit(&s->current, memory_order_acquire);
-        if (!co) continue;
-
-        found_timeout = 1;
+        if (!co) {
+            atomic_store_explicit(&s->suspect_co, NULL, memory_order_relaxed);
+            continue;
+        }
 
         /* pinned 协程（fd 绑定）不迁——fd 亲和必须留在 IO 线程。 */
         if (co->pinned) continue;
@@ -80,7 +123,43 @@ static int sysmon_scan_once(uint64_t now_ns) {
         /* 已在 compute 池（reactor==NULL）不迁——compute 池本就轮转。 */
         if (s->reactor == NULL) continue;
 
-        /* Phase 8.5 E：非 pinned + IO 线程卡死 → 强制迁到 compute 池。
+        found_timeout = 1;   /* 有在审/确认对象：保持快速复扫 */
+
+        pthread_t tid = atomic_load_explicit(&s->drain_seen, memory_order_acquire)
+                        ? s->drain_tid : s->owner;
+
+        /* T4 首轮：只登记嫌疑基线（drain 线程 CPU 时间 + 墙钟），不迁移。 */
+        if (atomic_load_explicit(&s->suspect_co, memory_order_relaxed) != co) {
+            s->suspect_cpu0 = sysmon_thread_cpu_ns(tid);
+            atomic_store_explicit(&s->suspect_wall0, now_ns, memory_order_relaxed);
+            atomic_store_explicit(&s->suspect_co, co, memory_order_relaxed);
+            continue;
+        }
+
+        /* T4 复审：确认窗未满继续观察。 */
+        uint64_t wall0 = atomic_load_explicit(&s->suspect_wall0, memory_order_relaxed);
+        if (now_ns - wall0 < LM_SYSMON_CONFIRM_NS) continue;
+
+        /* 确认窗满：CPU 增量判定，结案（撤销嫌疑，无论迁移与否）。 */
+        uint64_t cpu0 = s->suspect_cpu0;
+        uint64_t cpu1 = sysmon_thread_cpu_ns(tid);
+        atomic_store_explicit(&s->suspect_co, NULL, memory_order_relaxed);
+        if (cpu0 != (uint64_t)-1 && cpu1 != (uint64_t)-1) {
+            uint64_t wall_d = now_ns - wall0;
+            uint64_t cpu_d = (cpu1 > cpu0) ? (cpu1 - cpu0) : 0;
+            if (cpu_d < wall_d / 2) {
+                /* 线程在停滞窗口内几乎未获 CPU = 被 OS 抢占，协程无责。
+                 * 不迁移；若之后仍在烧 CPU 卡死，下轮停滞会重新登记。 */
+                fprintf(stderr,
+                    "[sysmon] io-sched=%p tick stalled %.2fms but drain thread cpu "
+                    "advanced only %.2fms (co=%p) — thread preempted, not migrating\n",
+                    (void*)s, (now_ns - tick_ns) / 1000000.0,
+                    cpu_d / 1000000.0, (void*)co);
+                continue;
+            }
+        }
+
+        /* 真卡死（或平台无 CPU 计量 → 回退旧行为）：强制迁到 compute 池。
          * 复用迁移协议：设 migrate_sched，协程在下一个让出点（LM_BUMP_REDS
          * 或自愿 yield）经 handle_migrate 迁走。
          * try_set（CAS 空→target）：若已设（上轮扫描设的，协程尚未让出消费；

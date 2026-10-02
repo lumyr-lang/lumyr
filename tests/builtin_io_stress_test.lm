@@ -1,0 +1,201 @@
+// builtin_io_stress_test.lm —— T4（TR-4.2）：C 内置检查点 × 混合 IO 压力
+//
+// 同一 reactor（单 worker 线程）上并发：
+//   - 4 个回显连接（server accept 协程 + 每连接 echo 协程，fd 等待自动 pinned）：
+//     客户端每轮发 16KB 确定性载荷，收满回显后逐字节比对；
+//   - 2 个 burner 协程：反复 json 解析 300KB 文本 + 20 万元素 TypedArray sort
+//     （字节计费 checkpoint，全程数百万次 lm_co_builtin_checkpoint 调用，
+//     其中含 yield 让出 >> 20 万次）。
+//   - TR-4.3 顺带覆盖：burner 每轮执行非平衡点嵌套调用 `7 + json(...).len() + 11`。
+//
+// 断言：
+//   ioBad == 0（回显逐字节一致、收发计数完整）
+//   jsonBad / sortBad / unbalBad == 0（checkpoint 让出不破坏 C 内置中间状态）
+//   clientsDone == 4 且 burnersDone == 2（无丢唤醒、无协程丢失）
+//
+// 运行：./bin/lumyr tests/builtin_io_stress_test.lm
+import <NetWork/Reactor>;
+
+ELEM = 6000;       // json 数组元素数（文本约 300KB）
+SORTN = 200000;    // sort 元素数
+PORT = 19255;
+NCLI = 4;          // 并发客户端数
+ROUNDS = 40;       // 每客户端回显轮数
+PAYLEN = 16384;    // 每轮载荷字节数
+DEADLINE_MS = 30000;  // 全局兜底时限（防 hang 变超时僵死）
+
+g = { "r": null, "accepted": 0, "clientsDone": 0, "burnersDone": 0,
+      "ioBad": 0, "big": "", "arr": null, "payload": "", "echoes": [] };
+b_st = { "jsonBad": 0, "sortBad": 0, "unbalBad": 0, "jsonRounds": 0, "sortRounds": 0 };
+
+func buildBig(n) {
+    a = [];
+    i = 0;
+    while (i < n) {
+        a.add({"k": i, "v": "abcdefghijklmnopqrstuvwxyz0123456789"});
+        i = i + 1;
+    }
+    return stringify(a);
+}
+
+func buildArr(n) {
+    a = <int64>[0];
+    seed = 12345;
+    i = 0;
+    while (i < n) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        a.add(seed % 1000000);
+        i = i + 1;
+    }
+    return a;
+}
+
+func buildPayload(n) {
+    // 确定性载荷：固定块重复到目标长度（块内含索引文本，逐字节可校验）
+    blk = "0123456789abcdefABCDEF#";
+    s = "";
+    while (s.len() < n) { s = s + blk; }
+    return s.substr(0, n);
+}
+
+func burner(arg) {
+    a = g["arr"];
+    an = a.len();
+    deadline = timestamp_ms() + DEADLINE_MS;
+    while (g["clientsDone"] < NCLI && timestamp_ms() < deadline) {
+        v = json(g["big"]);
+        if (v.len() != ELEM) { b_st["jsonBad"] = b_st["jsonBad"] + 1; }
+        else if (v[ELEM - 1]["k"] != ELEM - 1) { b_st["jsonBad"] = b_st["jsonBad"] + 1; }
+        b_st["jsonRounds"] = b_st["jsonRounds"] + 1;
+        a.reverse();
+        a.sort();
+        if (a[0] > a[an - 1]) { b_st["sortBad"] = b_st["sortBad"] + 1; }
+        b_st["sortRounds"] = b_st["sortRounds"] + 1;
+        // TR-4.3：非平衡点嵌套调用——期望值恒 21
+        t = 7 + json("[1,2,3]").len() + 11;
+        if (t != 21) { b_st["unbalBad"] = b_st["unbalBad"] + 1; }
+    }
+    g["burnersDone"] = g["burnersDone"] + 1;
+}
+
+func sendAll(c, s) {
+    off = 0;
+    total = s.len();
+    while (off < total) {
+        n = c.send(s.substr(off, total - off));
+        if (n <= 0) { return false; }
+        off = off + n;
+    }
+    return true;
+}
+
+func recvFull(c, total) {
+    acc = "";
+    while (acc.len() < total) {
+        d = c.recv();
+        if (d == "") { break; }
+        acc = acc + d;
+    }
+    return acc;
+}
+
+func echoConn(c) {
+    while (true) {
+        d = c.recv();
+        if (d == "") { break; }
+        if (!sendAll(c, d)) { break; }
+    }
+    c.close();
+}
+
+func acceptCo(srv) {
+    while (g["accepted"] < NCLI) {
+        c = srv.accept();
+        if (c != null) {
+            h = Coroutine(echoConn, c);
+            // 协程内 spawn 不投递就绪队列（vm_builtin.c:4053 设计）：
+            // 显式 resume 踢到首个 fd 等待点，之后由 reactor 事件驱动
+            h.resume();
+            // 句柄存全局：防 GC 回收挂起中的协程
+            g["echoes"].add(h);
+            g["accepted"] = g["accepted"] + 1;
+        }
+    }
+}
+
+func clientCo(id) {
+    cli = <TcpSocket>{host: "127.0.0.1", port: PORT};
+    payload = g["payload"];
+    i = 0;
+    while (i < ROUNDS) {
+        if (!sendAll(cli, payload)) { g["ioBad"] = g["ioBad"] + 1; break; }
+        back = recvFull(cli, payload.len());
+        if (back != payload) { g["ioBad"] = g["ioBad"] + 1; break; }
+        i = i + 1;
+    }
+    cli.close();
+    g["clientsDone"] = g["clientsDone"] + 1;
+}
+
+func finisher(arg) {
+    deadline = timestamp_ms() + DEADLINE_MS;
+    while (timestamp_ms() < deadline) {
+        if (g["clientsDone"] >= NCLI && g["burnersDone"] >= 2) { break; }
+        coYield();
+    }
+    g["r"].stop();
+}
+
+func runTest() {
+    g["big"] = buildBig(ELEM);
+    g["arr"] = buildArr(SORTN);
+    g["payload"] = buildPayload(PAYLEN);
+
+    srv = TcpSocket();
+    srv.setOption("reuseAddr", 1);
+    srv.bind("127.0.0.1", PORT);
+    srv.listen();
+
+    r = ReactorInstance(65536);
+    g["r"] = r;
+    setReactor(r);
+    sched = scheduler(r.impl);
+    setScheduler(sched);
+
+    Coroutine(acceptCo, srv);
+    i = 0;
+    while (i < NCLI) { Coroutine(clientCo, i); i = i + 1; }
+    Coroutine(burner, null);
+    Coroutine(burner, null);
+    Coroutine(finisher, null);
+
+    r.run();
+
+    clearScheduler(sched);
+    destroyScheduler(sched);
+    clearReactor();
+    r.destroy();
+    srv.close();
+
+    print("accepted: " + g["accepted"] + " clientsDone: " + g["clientsDone"]
+        + " burnersDone: " + g["burnersDone"]);
+    print("jsonRounds: " + b_st["jsonRounds"] + " sortRounds: " + b_st["sortRounds"]);
+    print("ioBad: " + g["ioBad"] + " jsonBad: " + b_st["jsonBad"]
+        + " sortBad: " + b_st["sortBad"] + " unbalBad: " + b_st["unbalBad"]);
+
+    ok = true;
+    if (g["ioBad"] != 0) { ok = false; }
+    if (b_st["jsonBad"] != 0) { ok = false; }
+    if (b_st["sortBad"] != 0) { ok = false; }
+    if (b_st["unbalBad"] != 0) { ok = false; }
+    if (g["clientsDone"] != NCLI) { ok = false; }
+    if (g["burnersDone"] != 2) { ok = false; }
+    if (b_st["jsonRounds"] < 2) { ok = false; }   // 确认 burner 确实跑了多轮
+    if (ok) {
+        print("BUILTIN IO STRESS OK");
+    } else {
+        print("BUILTIN IO STRESS FAIL");
+    }
+}
+
+runTest();

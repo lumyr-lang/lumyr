@@ -6,6 +6,7 @@
 #include "stack_manager.h"
 #include "ast/stackframe.h"
 #include "lm_value.h"
+#include <stdio.h>
 
 /* ref 辅助：把调用方 typed 存储 box 成 Value */
 static Value ref_box(RefDesc* r) {
@@ -67,9 +68,26 @@ static void ref_unbox(RefDesc* r, Value v) {
 }
 
 /* 确保帧的槽位数组已分配到至少 need 个元素 */
+/* g_main_root_frame 定义在下方（main 根帧，全线程共享），此处前向声明以便
+ * 对共享帧的意外扩容做深度防御告警。 */
+extern StackFrame* g_main_root_frame;
 static void frame_ensure_slots(StackFrame* f, int need) {
     if(!f) return;
     if(need <= f->cap) return;
+    /* 深度防御：main 根帧已在 vm_run 执行用户代码前按 main_fn->sym_cnt 一次性
+     * 定稿，正常路径下 need 永远 <= cap。若此处仍要对共享根帧扩容，说明出现了
+     * 编译期槽位上界之外的访问路径——多 worker 并发 LOAD_GLOBAL 时是无锁 realloc
+     * 数据竞争。保留扩容兜底正确性，但必须一次性双语告警把问题暴露出来。 */
+    if(f == g_main_root_frame) {
+        static _Thread_local int g_root_grow_warned = 0;
+        if(!g_root_grow_warned) {
+            g_root_grow_warned = 1;
+            fprintf(stderr,
+                "警告: 全局根帧在运行期扩容(need=%d cap=%d)，存在多线程槽位竞争风险\n"
+                "warning: global root frame grows at runtime (need=%d cap=%d); "
+                "possible multi-thread slot race\n", need, f->cap, need, f->cap);
+        }
+    }
     int oldcap = f->cap;
     int newcap = f->cap > 0 ? f->cap : 16;
     while(newcap < need) newcap *= 2;

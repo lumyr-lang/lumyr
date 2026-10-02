@@ -497,7 +497,7 @@ void lm_co_set_can_preempt_hook(lm_co_can_preempt_hook_t cb) {
  * 派发点实参含 receiver 正压栈）时让出会把活值留在 per-thread 共享栈数据
  * 区，被同线程后运行的协程覆盖，resume 后实参/receiver 串改成他人对象
  * （file.recv 跨协程类型串改根因）。此时借一个时间片继续，平衡派发点
- * （JMP 回边、弹参后的 callee 派发点）有界可达，不影响轮转公平。 */
+ *  （JMP 回边、弹参后的 callee 派发点）有界可达，不影响轮转公平。 */
 void lm_co_slice_bump(lm_co_t* co) {
     if (!co) return;
     if (g_co_can_preempt_hook && !g_co_can_preempt_hook(co)) {
@@ -506,6 +506,25 @@ void lm_co_slice_bump(lm_co_t* co) {
     }
     co->slice_yield = 1;   /* 标记时间片耗尽，drain_ready 重入队 */
     lm_co_yield();
+}
+
+/* Phase 8.5 J：C 内置检查点原语。
+ * 长 C 内置（json parse/dump、sort 等）在主循环周期调用。
+ * 语义 = LM_BUMP_REDS：扣 1 预算，归零时经 can_preempt 门控决定让出/借片。
+ * 让出后 C 栈随协程冻结（fcontext），resume 后沿原栈继续——
+ * 局部变量、循环计数器、qsort 内部状态全部保留，无需显式续体。
+ * 非协程上下文（co==NULL，main/纯 C 线程）直接返回。 */
+void lm_co_builtin_checkpoint(void) {
+    lm_co_t* co = lm_co_current();
+    if (!co) return;
+    LM_BUMP_REDS(co);
+}
+
+/* 按量扣减变体：字节计费场景（json 等），契约见 lm_co.h。 */
+void lm_co_builtin_checkpoint_n(long n) {
+    lm_co_t* co = lm_co_current();
+    if (!co) return;
+    LM_BUMP_REDS_N(co, n);
 }
 
 void lm_co_yield(void) {

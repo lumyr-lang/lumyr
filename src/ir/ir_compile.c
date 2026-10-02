@@ -2874,7 +2874,10 @@ static const char* c_expr_type_name(Ctx* c, AstNode* node) {
 
     /* 变量：查符号表，返回变量类型的规范名 */
     if(node->type == AST_VAR) {
-        int bf_idx = bf_sym(c->fn, node->u.varname);
+        /* 只读查找：不可用 bf_sym（缺失即插入）。本函数在类型推断期调用，
+         * 插入会破坏 Ctx/fn->syms 下标对齐（LOAD_GLOBAL fixup 错槽位，见
+         * bytecode.h bf_sym_lookup 注释）。未注册名字即类型未知 → unknown。 */
+        int bf_idx = bf_sym_lookup(c->fn, node->u.varname);
         if(bf_idx >= 0 && bf_idx < c->fn->sym_cnt) {
             CastKind ck = (CastKind)c->fn->var_type_tags[bf_idx];
             return castkind_canonical_name(ck);

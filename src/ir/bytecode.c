@@ -126,6 +126,13 @@ int bf_sym(BytecodeFunc* fn, const char* name)
     return newidx;
 }
 
+/* 只读查找：不插入（契约见 bytecode.h）。 */
+int bf_sym_lookup(BytecodeFunc* fn, const char* name)
+{
+    if(!fn || !name) return -1;
+    return symhash_lookup(&fn->sym_idx, fn->syms, name);
+}
+
 /* 添加 int64 到大常量池，返回索引 */
 int bf_add_i64_const(BytecodeFunc* fn, int64_t val) {
     /* 去重检查 */

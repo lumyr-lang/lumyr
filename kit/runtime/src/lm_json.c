@@ -11,6 +11,8 @@
 #include "lm_calendar.h"
 #include "lumyr_typed_arrays.h"
 #include "gc_runtime.h"
+#include "lm_co.h"          /* Phase 8.5 J：lm_co_builtin_checkpoint */
+#include "lm_array.h"       /* lumyr_array_add：GC 管理数组追加（T4 根修） */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +82,11 @@ static Value jp_parse_string(JP* j)
 {
     j->p++; /* 跳过 " */
     size_t cap = 16, len = 0;
+    size_t billed = 0;   /* T4：分段记账水位——单条巨型字符串（MB 级）的拷贝
+                            循环自身也构成无界长循环，每 4KB 记一次账，
+                            防整体拷贝成为越过 sysmon 阈值的单切片。
+                            这些字节随后会被外层容器循环的 delta 重复计入
+                            （<2x，预算为启发式记账，无害）。 */
     char* buf = (char*)malloc(cap);
     while(j->p < j->end) {
         unsigned char c = (unsigned char)*j->p;
@@ -130,6 +137,7 @@ static Value jp_parse_string(JP* j)
             j->p++;
         }
         if(len + 8 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+        if(len - billed >= 4096) { lm_co_builtin_checkpoint_n((long)(len - billed)); billed = len; }
     }
     buf[len] = '\0';
     Value v = lumyr_make_string(buf);  // 转为 gc_alloc 字符串
@@ -185,6 +193,7 @@ static Value jp_parse_value(JP* j)
         jp_ws(j);
         if(j->p < j->end && *j->p == '}') { j->p++; return m; }
         for(;;) {
+            lm_co_builtin_checkpoint();   /* T4：不持操作数栈裸指针 */
             jp_ws(j);
             if(j->p >= j->end || *j->p != '"') { jp_fail("json parse error: expect string key"); return m; }
             Value k = jp_parse_string(j);
@@ -203,23 +212,24 @@ static Value jp_parse_value(JP* j)
     }
     if(c == '[') {
         j->p++;
-        size_t cap = 8, len = 0;
-        Value* items = (Value*)malloc(cap * sizeof(Value));
+        /* T4 根修：元素直接累积进 GC 管理的 ValueArray（写屏障 + remembered set）。
+         * 旧实现用裸 malloc items[] 暂存，checkpoint yield 后 GC 扫描不到
+         * buffer 内容，已解析元素会被误回收（UAF）。r 在冻结 C 栈上被保守
+         * 扫描 → 数组对象标记 → items 内容精确扫描 → 元素安全。 */
+        Value r = val_array(0);
         jp_ws(j);
-        if(j->p < j->end && *j->p == ']') { j->p++; Value r = val_array(len); for(size_t i = 0; i < len; i++) { gc_write_barrier(items[i]); r.v.array->items[i] = items[i]; } free(items); return r; }
+        if(j->p < j->end && *j->p == ']') { j->p++; return r; }
         for(;;) {
+            const char* mark = j->p;   /* T4：按本元素消耗字节记账（含嵌套递归） */
             Value val = jp_parse_value(j);
-            if(len >= cap) { cap *= 2; items = (Value*)realloc(items, cap * sizeof(Value)); }
-            items[len++] = val;
+            lm_co_builtin_checkpoint_n((long)(j->p - mark));   /* 不持操作数栈裸指针 */
+            lumyr_array_add(&r, val);
             jp_ws(j);
             if(j->p < j->end && *j->p == ',') { j->p++; continue; }
             if(j->p < j->end && *j->p == ']') { j->p++; break; }
             runtime_error("json parse error: expect ',' or ']'");
             break;
         }
-        Value r = val_array(len);
-        for(size_t i = 0; i < len; i++) { gc_write_barrier(items[i]); r.v.array->items[i] = items[i]; }
-        free(items);
         return r;
     }
     if(c == '"') return jp_parse_string(j);
@@ -296,6 +306,8 @@ static void sb_puts(SB* b, const char* s) { size_t n = strlen(s); sb_grow(b, n);
 static void sb_json_string(SB* b, const char* s)
 {
     sb_putc(b, '"');
+    const unsigned char* billed = (const unsigned char*)s;   /* T4：分段记账水位
+        ——巨型字符串（MB 级）转义循环每 4KB 记一次账，防单切片越过 sysmon 阈值 */
     for(const unsigned char* p = (const unsigned char*)s; *p; p++) {
         unsigned char c = *p;
         switch(c) {
@@ -315,6 +327,7 @@ static void sb_json_string(SB* b, const char* s)
                     sb_putc(b, (char)c);
                 }
         }
+        if((size_t)(p - billed) >= 4096) { lm_co_builtin_checkpoint_n((long)(p - billed)); billed = p; }
     }
     sb_putc(b, '"');
 }
@@ -447,8 +460,10 @@ static void jq_stringify(SB* b, Value v, Value enc)
         case VAL_ARRAY: {
             sb_putc(b, '[');
             for(int i = 0; i < v.v.array->len; i++) {
+                size_t mark = b->len;   /* T4：按本元素产出字节记账（含嵌套递归） */
                 if(i > 0) sb_putc(b, ',');
                 jq_stringify(b, v.v.array->items[i], enc);
+                lm_co_builtin_checkpoint_n((long)(b->len - mark));   /* 不持操作数栈裸指针 */
             }
             sb_putc(b, ']');
             break;
@@ -458,6 +473,7 @@ static void jq_stringify(SB* b, Value v, Value enc)
             MapIter it; map_iter_init(&it, v.v.map);
             Value k, vv; int first = 1;
             while(map_iter_next(&it, &k, &vv)) {
+                lm_co_builtin_checkpoint();   /* T4：不持操作数栈裸指针 */
                 if(!first) sb_putc(b, ',');
                 first = 0;
                 char* kstr = value_to_str(k);
@@ -475,6 +491,7 @@ static void jq_stringify(SB* b, Value v, Value enc)
             int n = lumyr_tuple_len(v);
             sb_putc(b, '[');
             for(int i = 0; i < n; i++) {
+                lm_co_builtin_checkpoint();   /* T4：不持操作数栈裸指针 */
                 if(i > 0) sb_putc(b, ',');
                 jq_stringify(b, lumyr_tuple_get(v, i), enc);
             }
@@ -486,8 +503,10 @@ static void jq_stringify(SB* b, Value v, Value enc)
             int n = a.v.array ? a.v.array->len : 0;
             sb_putc(b, '[');
             for(int i = 0; i < n; i++) {
+                size_t mark = b->len;   /* T4：按本元素产出字节记账 */
                 if(i > 0) sb_putc(b, ',');
                 jq_stringify(b, a.v.array->items[i], enc);
+                lm_co_builtin_checkpoint_n((long)(b->len - mark));   /* 不持操作数栈裸指针 */
             }
             sb_putc(b, ']');
             break;
@@ -538,6 +557,7 @@ static void jq_stringify(SB* b, Value v, Value enc)
             const TypedArray* ta = (const TypedArray*)v.v.typed_array;
             sb_putc(b, '[');
             for(int i = 0; i < ta->len; i++) {
+                lm_co_builtin_checkpoint();   /* T4：不持操作数栈裸指针 */
                 if(i > 0) sb_putc(b, ',');
                 jq_stringify(b, jq_typed_elem(ta->elem_type, ta->items, i), enc);
             }

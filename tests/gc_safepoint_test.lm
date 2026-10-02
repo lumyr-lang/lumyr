@@ -1,0 +1,96 @@
+// gc_safepoint_test.lm —— T3（P0）：VM 回边 GC 安全点轮询
+//
+// 背景：GC STW 期间，在解释循环里跑纯算术 tight loop（不 gc_alloc、不上锁、
+// 不 IO）的线程只有在回边（JMP 家族）才有机会轮询 g_gc_stw。T3 在回边钩子
+// VM_BACKEDGE_HOOK 内加 gc_stw_check_fast()，且对 co==NULL 的 Thread 裸线程
+// 同样生效。
+//
+// 架构事实（取证后修正原 spec 假设）：VM 通道线程没有长期 GCThreadEntry
+// （仅 gc_protect_push 瞬窗注册），纯算术 Thread 本不在 STW 等待集——
+// 运行中协程/线程的存活由"新对象预标记为黑 + 写屏障 + 冻结栈/全局根扫描"保证。
+// 故本测试锁定的是时序契约与无回归：
+//   1) 纯算术 worker 背景下 100 次强制 GC 快速完成（总 STW 远低于 2s 预算）；
+//   2) GC 与分配压力并发时 worker 结果不错乱、进程无死锁；
+//   3) GC 后丢弃的垃圾被回收、存活数据完好。
+//
+// 运行：./bin/lumyr tests/gc_safepoint_test.lm
+import <Thread/Thread>;
+
+// 纯算术燃烧线程：整个生命周期只有回边与整数运算，零堆分配/锁/IO
+class Burner {
+    n: int;
+    func Burner(n: int) { self.n = n; }
+    func run() {
+        i = 0;
+        x = 0;
+        while (i < self.n) {
+            x = x + (i % 7);
+            i = i + 1;
+        }
+        return x;
+    }
+}
+
+// 迭代数取 300 万：无优化（-g）解释器下 4 线程纯算术约 10s 量级，足以覆盖
+// 100 轮 GC 的全部时间窗；GC 时延断言与迭代数无关。
+ITERS = 3000000;
+GC_ROUNDS = 100;
+
+b0 = Burner(ITERS);
+b1 = Burner(ITERS);
+b2 = Burner(ITERS);
+b3 = Burner(ITERS);
+t0 = Thread("burn0", b0).start();
+t1 = Thread("burn1", b1).start();
+t2 = Thread("burn2", b2).start();
+t3 = Thread("burn3", b3).start();
+
+// 主线程在 worker 燃烧期间：强制 GC 100 轮测 STW 时延，期间穿插制造垃圾
+maxMs = 0;
+sumMs = 0;
+g = 0;
+survivor = "";
+while (g < GC_ROUNDS) {
+    // 制造短命垃圾（每轮重建 4000 元素数组与字符串，旧值立刻失根）
+    junk = <int64>[0];
+    k = 0;
+    while (k < 4000) {
+        junk.add(k * g);
+        k = k + 1;
+    }
+    survivor = "round-" + g;   // 不断被新值覆盖，旧字符串也是垃圾
+    tA = timestamp_ms();
+    gc_collect();
+    tB = timestamp_ms();
+    d = tB - tA;
+    sumMs = sumMs + d;
+    if (d > maxMs) { maxMs = d; }
+    g = g + 1;
+}
+
+r0 = t0.join();
+r1 = t1.join();
+r2 = t2.join();
+r3 = t3.join();
+
+// 存活数据完好
+survivorOk = (survivor == "round-99");
+// 四个同构燃烧线程结果必须一致且非 0
+burnOk = (r0 != 0 && r0 == r1 && r1 == r2 && r2 == r3);
+
+print("gc rounds:", GC_ROUNDS, "maxMs:", maxMs, "sumMs:", sumMs,
+      "gc_stw_ns:", gc_stw_ns());
+print("burner results:", r0, r1, r2, r3, "survivorOk:", survivorOk, "burnOk:", burnOk);
+
+bad = 0;
+// TR-3.1：100 轮 GC 总耗时 2s 内、单次不超过 500ms（实测正常构建总和毫秒级）
+if (sumMs >= 2000) { bad = bad + 1; print("FAIL: 100 轮 GC 总耗时超限", sumMs); }
+if (maxMs >= 500) { bad = bad + 1; print("FAIL: 单轮 GC 停顿超限", maxMs); }
+if (!survivorOk) { bad = bad + 1; print("FAIL: GC 后存活字符串损坏", survivor); }
+if (!burnOk)    { bad = bad + 1; print("FAIL: 燃烧线程结果不一致/为零"); }
+
+if (bad == 0) {
+    print("gc_safepoint_test ALL PASS");
+} else {
+    print("gc_safepoint_test FAIL: " + bad + " 项失败");
+}

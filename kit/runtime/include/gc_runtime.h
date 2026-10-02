@@ -142,14 +142,17 @@ void gc_register_global_root_scan(GCGlobalRootScanFn fn);
  *
  * 设计说明：不使用 gc_enter_native_block 包裹 yield。swapcontext 返回后
  *   reactor 主循环继续运行并可能变更 GC 根，at_safepoint=1 会误报安全点 →
- *   并发 GC 扫描期间根被修改 → UAF。STW 轮询由 reactor 主循环每轮
- *   gc_stw_check_fast() 承担，与 VM 解释循环的 gc_stw_check 一致。
- *   本 API 仅覆盖挂起协程的冻结栈；运行中协程的 C 栈扫描由 reactor 线程的
- *   GCThreadEntry + VM 解释循环 gc_stw_check 覆盖（Phase 4 VM 集成时验证）。 */
+ *   并发 GC 扫描期间根被修改 → UAF。STW 轮询点有三处：
+ *   reactor 主循环每轮 gc_stw_check_fast()、VM 解释循环回边（JMP 家族）
+ *   VM_BACKEDGE_HOOK 内 gc_stw_check_fast()、以及 gc_alloc/锁/native block 路径。
+ *   本 API 仅覆盖挂起协程的冻结栈；运行中协程不被 STW 等待（VM 通道无长期
+ *   GCThreadEntry），其存活正确性由"新分配对象预标记为黑 + 写屏障维持三色
+ *   不变式 + 挂起协程冻结栈/全局根扫描"共同保证。 */
 void gc_register_coroutine(void* stack_top, void* stack_bottom, void** sp_slot);
 void gc_unregister_coroutine(void* stack_top);
 
-/* 协作式 STW 安全点：VM 解释循环每条指令前调用，GC 运行时自旋等待 */
+/* 协作式 STW 安全点：在 VM 解释循环回边（JMP 家族）、gc_alloc、锁等待、
+ * native block 等位置调用；非 GC 期快速路径仅一次 volatile 读，GC 运行时自旋等待。 */
 void gc_stw_check(void);
 
 /* STW 全局标志：GC 运行时置 1 通知所有线程暂停，置 0 恢复。

@@ -73,6 +73,19 @@ typedef struct lm_scheduler_s {
     _Atomic uint64_t wake_count;
     _Atomic uint64_t lifo_quota_hits;
     _Atomic long ready_len;
+    /* T4（sysmon 误报根修，结构末尾追加）：wall-clock 停滞的二轮 CPU 时间确认。
+     * tick_ns 超 force_ns 未动仅证明"drain 循环没转"，无法区分「协程真卡死
+     *（不 yield）」与「drain 线程被 OS 抢占」——checkpoint 正常工作的协程每
+     * 数十 µs 让出一次，>10ms 的 tick 停滞几乎都源于后者（线程级抢占）。
+     * 首轮停滞只登记嫌疑（CPU/墙钟基线），LM_SYSMON_CONFIRM_NS 后复审：
+     * 窗口内线程 CPU 增量 < 墙钟一半 = 线程没跑 → 撤销嫌疑不迁移；
+     * CPU 增量随墙钟推进 = 协程真在烧 CPU 不 yield → 确认卡死，强制迁移。
+     * suspect_* 仅 sysmon 单线程读写；drain_tid 由 drain 入口惰性记录一次。 */
+    pthread_t drain_tid;            /* 实际 drain/pop 线程（单 drainer 设计） */
+    _Atomic int drain_seen;         /* drain_tid 是否已记录 */
+    _Atomic(lm_co_t*) suspect_co;   /* 在审嫌疑协程（sysmon 专用） */
+    _Atomic uint64_t suspect_wall0; /* 嫌疑登记墙钟 */
+    uint64_t suspect_cpu0;          /* 登记时 drain 线程 CPU 时间（(uint64_t)-1=不可用） */
 } lm_scheduler_t;
 
 /* LIFO slot 每调度轮连续消费配额（LIFO 配额=3，

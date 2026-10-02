@@ -43,6 +43,15 @@ Value vm_run(BytecodeFunc* fn) {
      * 否则工作线程只看到自己的空根帧，读任何顶层变量都得到空值 */
     vm_set_main_root_frame(ctx.frame);
 
+    /* 全局根帧容量定稿（并发安全的关键）：所有帧槽索引都是编译期符号表下标，
+     * main 执行期间可能访问的最大槽位上界 = main_fn->sym_cnt（含占位槽，预留无害）。
+     * 在执行任何用户代码（因此在任何 worker 线程启动）之前一次性分配六个槽位数组，
+     * 运行期 frame_ensure_slots 永远走 need<=cap 快路径，杜绝多线程无锁 realloc
+     * （worker LOAD_GLOBAL 与主线程后写顶层变量并发时会形成数据竞争）。 */
+    if(fn->sym_cnt > 0) {
+        stackframe_ensure_slots(ctx.frame, fn->sym_cnt);
+    }
+
     /* 执行字节码 */
     Value result = vm_execute(&ctx);
 

@@ -662,7 +662,11 @@ Value lumyr_type_call_method(Value obj, const char* method_name,
 
 /* ==================== 访问修饰符检查 ==================== */
 
-static const char* g_current_class = NULL;
+/* 访问控制上下文：标记"当前正在执行的方法属主类"，由 VM 在进入 class 方法时
+ * set、方法各出口 restore（vm_exec_loop）。必须是 _Thread_local：多 worker 并发
+ * 执行不同类方法时，进程级共享会令访问检查互相串扰（TSAN 数据竞争 + 语义误判）。
+ * 协程跨线程/同线程交错时的进一步隔离由 vm_co 的 resume/yield hook 快照负责。 */
+static _Thread_local const char* g_current_class = NULL;
 
 void lumyr_set_current_class(const char* class_name) { g_current_class = class_name; }
 const char* lumyr_get_current_class(void) { return g_current_class; }

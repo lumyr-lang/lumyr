@@ -187,6 +187,22 @@ void lm_co_slice_bump(lm_co_t* co);
 typedef int (*lm_co_can_preempt_hook_t)(lm_co_t* co);
 void lm_co_set_can_preempt_hook(lm_co_can_preempt_hook_t cb);
 
+/* Phase 8.5 J：C 内置检查点原语。
+ * 长 C 内置（json parse/dump、sort 等）在主循环周期调用：
+ *   lm_co_builtin_checkpoint()    —— 扣 1 预算（按元素/比较次记账）；
+ *   lm_co_builtin_checkpoint_n(n) —— 扣 n 预算（按消耗/产出字节记账）。
+ * 按字节计费的理由：元素粒度代价差异大（json 一个元素 ≈ 数十 VM 指令的
+ * 工作量），按元素扣 1 会把单切片拉长到十几毫秒，越过 sysmon 10ms 强迁
+ * 阈值被误判 stuck；按字节计费使切片墙钟稳定在亚毫秒量级。
+ * 预算归零时经 can_preempt 门控：操作数栈平衡（sp==entry_sp）则 yield
+ * 让出（有栈协程 fcontext 冻结整条 C 栈，resume 沿原栈继续——局部变量、
+ * 循环计数、qsort 内部状态全部保留）；非平衡则借片续跑并重载预算。
+ * 非协程上下文（co==NULL，main/纯 C 线程）直接返回。
+ * 内置作者契约：checkpoint 处不得持有指向操作数栈内容的裸指针
+ * （与 SSO 短串根因修复沉淀的同一纪律）。 */
+void lm_co_builtin_checkpoint(void);
+void lm_co_builtin_checkpoint_n(long n);
+
 /* Phase 8.5：reduction 扣减宏。
  * LM_BUMP_REDS(co)：扣 1 预算，归零则在指令边界 lm_co_yield() 让出（VM 状态一致）。
  *   仅在协程上下文（co != NULL）且 reds > 0 时扣减，避免无协程场景误触发。
@@ -196,6 +212,17 @@ void lm_co_set_can_preempt_hook(lm_co_can_preempt_hook_t cb);
     lm_co_t* _co = (co);                                            \
     if (_co && _co->reds > 0 && --_co->reds <= 0) {                 \
         lm_co_slice_bump(_co);                                      \
+    }                                                               \
+} while (0)
+
+/* 按量扣减变体：一次扣 n（n >= 剩余预算按耗尽处理），归零经同一门控让出。
+ * 字节计费场景用（json 按消耗/产出字节记账），避免逐字节函数调用开销。 */
+#define LM_BUMP_REDS_N(co, n) do {                                  \
+    lm_co_t* _co = (co);                                            \
+    long _n = (n);                                                  \
+    if (_co && _n > 0 && _co->reds > 0) {                           \
+        _co->reds = (_n >= _co->reds) ? 0 : (int32_t)(_co->reds - _n); \
+        if (_co->reds <= 0) lm_co_slice_bump(_co);                  \
     }                                                               \
 } while (0)
 

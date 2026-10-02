@@ -237,9 +237,14 @@ static void gc_set_self_at_safepoint(int val) {
     pthread_mutex_unlock(&g_gc_mutex);
 }
 
-/* 协作式 STW 安全点：VM 解释循环每条指令前调用，编译通道每N条指令/循环/调用前调用。
+/* 协作式 STW 安全点：VM 解释循环回边（JMP 家族，经 VM_BACKEDGE_HOOK）、
+ * gc_alloc、锁等待、native block 等位置调用。
  * 快速路径：无 GC 时直接返回（仅一次 volatile 读），降低频繁检查的开销。
- * GC 运行时设置 at_safepoint=1 后自旋，GC 线程轮询到所有线程 at_safepoint==1 才开始标记。 */
+ * GC 运行时设置 at_safepoint=1 后自旋，GC 线程轮询到所有已注册线程
+ * at_safepoint==1 才开始标记。注意：VM 通道线程没有长期 GCThreadEntry
+ * （仅 gc_protect_push 瞬窗注册），故纯算术 VM 线程本就不在 STW 等待集；
+ * 回边轮询是时序契约的纵深防御（STW 期不并发推进），并覆盖 protect
+ * 窗口等已注册场景。 */
 void gc_stw_check(void) {
     if (!g_gc_stw) return;
     /* 记录当前栈指针，供保守式 C 栈扫描 */
