@@ -7,19 +7,20 @@
 // 协商与判定（post 阶段处理 chain.next 返回的 ServerResponse）：
 //   1. 请求 Accept-Encoding 含 gzip（gzip;q=0 视为拒绝），否则直通
 //   2. 仅压缩 200 响应（304/206/错误页保持原语义）
-//   3. 响应未带 Content-Encoding（避免双重压缩）、未带 Transfer-Encoding、
-//      body 非流式 func（chunked 流式压缩本期不做，见文件尾说明）
+//   3. 响应未带 Content-Encoding（避免双重压缩）、未带 Transfer-Encoding
 //   4. Content-Type 命中白名单：text/* 全族 + 常见结构化文本类型
-//   5. 正文字节数 ≥ minLength（默认 1024；小块 gzip 封装开销不划算）
-//   6. 压缩结果确实更小才采用（已压缩/高熵数据负收益时保留原文）
-// 命中后：body 替换为 gzip bytes，设置 Content-Encoding: gzip；
+//   5. 正文字节数 ≥ minLength（默认 1024；小块 gzip 封装开销不划算）；
+//      流式 body（func）不适用阈值与负收益保护，直接增量压缩
+//   6. 一次性路径要求压缩结果确实更小才采用（已压缩/高熵数据负收益时保留原文）
+// 命中后：body 替换为 gzip bytes（或流式包装），设置 Content-Encoding: gzip；
 // 所有"可压缩但本次未压"的响应统一补 Vary: Accept-Encoding（缓存正确性）。
 // Content-Length 无需本过滤器处理——ServerResponse.sendTo 在压缩之后
 // 按替换后的 body 重新计算。HEAD 请求同样压缩 body（仅头部发出，
 // Content-Length 反映压缩后长度，与同条件 GET 一致）。
 //
 // 正文形态覆盖：string（→UTF-8 bytes）/bytes（原样）/file（读入后压缩，
-// 与 sendTo 既有"文件整体读入"行为同口径）；流式 func 不压缩。
+// 与 sendTo 既有"文件整体读入"行为同口径）一次性压缩；func（streamBody
+// 流式）经 GzipChunkWriter 逐块增量压缩（z_stream 句柄，C 层维持上下文）。
 //
 // 配置：
 //   GzipFilter()                 默认级别 6、阈值 1024 字节
@@ -150,17 +151,41 @@ public class GzipFilter implements WebFilter {
     func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
         resp = chain.next(req);
 
+        // 0. 构建未启用 zlib 后端：整体直通（不协商、不压缩、不加 Vary）
+        if (!gzipAvailable()) { return resp; }
         // 1. 协商：客户端不接受 gzip → 完全不动响应（含不加 Vary）
         if (!self.clientAcceptsGzip(req.header("Accept-Encoding"))) { return resp; }
         // 2. 仅 200
         if (resp.status != 200) { return resp; }
-        // 3. 已编码 / 已有传输编码 / 流式 body：不处理
+        // 3. 已编码 / 已有传输编码：不处理
         if (resp.headers.has("Content-Encoding")) { return resp; }
         if (resp.headers.has("Transfer-Encoding")) { return resp; }
-        bodyType = type(resp.body);
-        if (bodyType == "func") { return resp; }
         // 4. MIME 白名单
         if (!self.compressible(resp.headers.get("Content-Type"))) { return resp; }
+
+        bodyType = type(resp.body);
+
+        // 流式 body（func/chunked）：走有状态增量压缩——每 send 一块即
+        // deflate + SYNC_FLUSH 下投，对端逐块可解（G7，与 WebSocket 同期）。
+        // 流式无总长可预知，minLength 阈值与负收益保护不适用（同 nginx
+        // gzip_min_length 只作用于定长响应的语义）
+        if (bodyType == "func") {
+            origWriter = resp.body;
+            lvl = self.level;
+            resp.body = func(w) {
+                gz = GzipChunkWriter(w, lvl);
+                try {
+                    origWriter(gz);
+                } catch (e) {
+                    gz.abort();
+                    throw e;
+                }
+                gz.finish();
+            };
+            resp.headers.set("Content-Encoding", "gzip");
+            self.addVary(resp);
+            return resp;
+        }
 
         // 取原始字节：bytes 原样；file 读入；string 按 UTF-8 编码
         data = null;
@@ -188,8 +213,58 @@ public class GzipFilter implements WebFilter {
     }
 }
 
-// 流式压缩（streamBody/func body 逐块 gzip + chunked 传输）本期不做：
-// 一次性 deflate 无法跨 chunk 维持压缩上下文，需在 C 层暴露 z_stream
-// 增量压缩句柄（deflate/deflateEnd 配对的有状态 builtin），与 G7
-// WebSocket 帧改造同期评估更合适。当前流式响应会被本过滤器跳过（明文
-// chunked），功能不回退，仅不压缩。
+// 流式 gzip 压缩 ChunkWriter 包装（G7）：挂在 streamBody 的写出路径上，
+// 每 send 一块明文即增量 deflate + Z_SYNC_FLUSH 下投一个 gzip 块
+// （SYNC_FLUSH 保证块边界对端立即可解压，是 chunked 逐块可见性的关键）。
+// 压缩上下文由 C 层 z_stream 句柄维持（gzipStreamCreate/Write/Finish）。
+class GzipChunkWriter implements ChunkWriter {
+    inner: any;      // 下游 ChunkWriter（SocketChunkWriter：负责 chunked 框架）
+    // C 层 z_stream 句柄；-1 = 已结束（句柄销毁后置 -1，兼任 ended 幂等哨兵；
+    // handle 为语言保留字，字段名用 gz）
+    gz: int;
+
+    func GzipChunkWriter(inner, level: int) {
+        self.inner = inner;
+        self.gz = gzipStreamCreate(level);
+    }
+
+    // 写入一块明文：压缩后非空产出立即下投；返回写入的明文字节数
+    func send(chunk): int {
+        if (self.gz < 0) {
+            throw "gzip 流已结束 / gzip stream already finished";
+        }
+        n = 0;
+        if (type(chunk) == "bytes") { n = chunk.len; }
+        else { n = bytes(chunk).len; }
+        out = gzipStreamWrite(self.gz, chunk, true);
+        if (out.len > 0) { self.inner.send(out); }
+        return n;
+    }
+
+    // 正常收尾：gzip 尾部（CRC32 + 原始长度）下投并销毁句柄（幂等）
+    func finish() {
+        if (self.gz < 0) { return self; }
+        h = self.gz;
+        self.gz = -1;
+        tail = gzipStreamFinish(h);
+        if (tail.len > 0) { self.inner.send(tail); }
+        return self;
+    }
+
+    // 异常收尾：只销毁句柄不下投尾部（响应已失败，半截流由连接关闭截断）
+    func abort() {
+        if (self.gz < 0) { return self; }
+        h = self.gz;
+        self.gz = -1;
+        try { gzipStreamFinish(h); } catch (e) { x = 1; }
+        return self;
+    }
+}
+
+// ============================================================
+// 说明（G7 流式增量压缩落地后更新）：
+// 一次性路径（string/bytes/file body）行为不变；流式路径（streamBody）
+// 经 GzipChunkWriter 逐块增量压缩，不再跳过。流式不适用 minLength 阈值与
+// 负收益保护（无法预知总长）；不需要流式压缩的路由应避免返回流式 body，
+// 或在过滤器前自行排除。
+// ============================================================

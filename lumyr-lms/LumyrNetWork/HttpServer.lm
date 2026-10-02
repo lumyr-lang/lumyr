@@ -807,9 +807,15 @@ public class ServerResponse {
 
     // 分段发送到 socket：先发头部（UTF-8），再发正文（bytes 原样）
     // 流式 body（func）自动转 chunked；HEAD 模式只发头部
+    // 1xx 信息响应（RFC 7230 §3.3.2，如 101 协议升级）：只发头部，
+    //   不写 Content-Length、不发正文
     // 返回发送的总字节数
     func sendTo(sock): int {
         if (type(self.body) == "func") { return self.sendChunkedTo(sock); }
+        if (self.status >= 100 && self.status < 200) {
+            self.headers.remove("Content-Length");
+            return sock.send(bytes(self.headString()));
+        }
         self.headers.set("Content-Length", "" + self.bodyByteLen());
         hs = self.headString();
         hb = bytes(hs);

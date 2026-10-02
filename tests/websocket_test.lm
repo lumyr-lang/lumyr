@@ -1,0 +1,314 @@
+// ============================================================
+// G7 WebSocket（RFC 6455）服务端端到端测试
+//
+// T1 握手升级：101 状态行、Upgrade/Connection 标头、
+//    Sec-WebSocket-Accept == RFC 6455 §1.3 官方示例值
+//    （key "dGhlIHNhbXBsZSBub25jZQ==" → "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="）、
+//    101 响应不得携带 Content-Length/Content-Type（RFC 7230 §3.3.2）
+// T2 文本回显（func 形态处理器）：带掩码文本帧 → 无掩码回显帧逐字节精确
+// T3 二进制回显（含 0xFF，class 形态处理器）：含 0xFF 的负载逐字节往返
+// T4 分片重组：TEXT(fin=0 "he") + CONT(fin=1 "llo") → 单条 "hello" 回显
+// T5 close 握手：带码 1000 + 原因 "bye" → 服务端回 close（同码同因）后关闭
+// T6 ping 自动 pong（负载原样）；pong 帧静默吞掉不投递；随后文本仍正常
+// T7 未掩码帧协议错误：服务端回 close 1002（RFC 6455 §5.1 服务端强制掩码）
+// T8 非 WS 路由回归：普通 HTTP 响应不受升级挂载点影响
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 手工构造/解析帧 → stop/join。
+// 端口 18129-18131（避开既有测试 18111-18128）。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/WebSocket>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// ---- 客户端帧工具 ----
+
+// 构造客户端→服务端带掩码帧（payload 为 bytes），返回字节数组
+func maskedFrameBytes(op: int, payload): array {
+    raw = [];
+    mask = [17, 34, 51, 68];   // 固定掩码，便于排错
+    i = 0;
+    if (payload.len <= 125) {
+        raw.add(128 + op);
+        raw.add(128 + payload.len);
+    } else {
+        raw.add(128 + op);
+        raw.add(128 + 126);
+        raw.add((payload.len / 256) % 256);
+        raw.add(payload.len % 256);
+    }
+    raw.add(mask[0]); raw.add(mask[1]); raw.add(mask[2]); raw.add(mask[3]);
+    while (i < payload.len) {
+        raw.add(payload[i] ^ mask[i % 4]);
+        i = i + 1;
+    }
+    return raw;
+}
+
+// 文本负载版本
+func maskedFrame(op: int, s: string): array {
+    return maskedFrameBytes(op, bytes(s));
+}
+
+func sendBytes(cli, arr: array) {
+    cli.send(bytes(arr));
+    return 0;
+}
+
+// 读响应头（到空行为止），返回完整头部文本
+// 注意：仅限握手阶段使用——此后不再有文本数据，帧读取一律走 readExactBytes
+func readHeadRaw(cli): string {
+    cur = "";
+    sep = cur.indexOf(crlf + crlf);
+    while (sep < 0) {
+        part = cli.recv(4096);
+        check(part != "", "readHeadRaw: 等待响应头时连接意外关闭");
+        cur = cur + part;
+        sep = cur.indexOf(crlf + crlf);
+    }
+    return cur.slice(0, sep + 4);
+}
+
+// 精确读 n 字节（bytes 模式，字节保真）；leftover 槽为 int 数组，跨调用携带残留
+// cli.sock.recv(n, 0, 1) 返回 bytes，避开字符串模式对非 UTF-8 字节的编码损耗
+func readExactBytes(cli, n: int, leftover: array) {
+    acc = leftover[0];
+    while (acc.len < n) {
+        p = cli.sock.recv(4096, 0, 1);
+        check(p.len > 0, "readExactBytes: 连接意外关闭（已读 " + acc.len + "/" + n + " 字节）");
+        i = 0;
+        while (i < p.len) { acc.add(p[i]); i = i + 1; }
+    }
+    out = [];
+    i = 0;
+    while (i < n) { out.add(acc[i]); i = i + 1; }
+    rest = [];
+    while (i < acc.len) { rest.add(acc[i]); i = i + 1; }
+    leftover[0] = rest;
+    return bytes(out);
+}
+
+// 完成一次 WS 握手并校验 101，返回 [cli, leftover]
+func wsConnect(port: int, path: string, key: string) {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    cli.send("GET " + path + " HTTP/1.1" + crlf
+             + "Host: t" + crlf
+             + "Upgrade: websocket" + crlf
+             + "Connection: keep-alive, Upgrade" + crlf
+             + "Sec-WebSocket-Key: " + key + crlf
+             + "Sec-WebSocket-Version: 13" + crlf + crlf);
+    head = readHeadRaw(cli);
+    check(head.startsWith("HTTP/1.1 101"), "握手应 101，实际: [" + head + "]");
+    r = {};
+    r["cli"] = cli;
+    r["leftover"] = [[]];
+    return r;
+}
+
+// ---- 回显处理器（class 形态：文本回文本，二进制回二进制）----
+class EchoHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// ---- 启动真实服务 ----
+port = 18129;
+app = WebApplication("127.0.0.1", port);
+
+app.get("/ws", func(req) {
+    if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, EchoHandler()); }
+    r = ServerResponse(400);
+    r.text("WebSocket only");
+    return r;
+});
+
+app.get("/ws2", func(req) {
+    if (WebSocket.isUpgrade(req)) {
+        return WebSocket.accept(req, func(ws, data) { ws.sendText(data); });
+    }
+    r = ServerResponse(400);
+    r.text("WebSocket only");
+    return r;
+});
+
+app.get("/plain", func(req) {
+    r = ServerResponse(200);
+    r.text("PLAIN");
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 握手升级（RFC 示例 accept 值 + 101 无 Content-Length/Content-Type）
+// ------------------------------------------------------------
+print("[T1] 握手升级与 accept 密钥 / handshake and accept key");
+c1 = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+c1["cli"].close();
+// 重新握手一次以留 head 做标头断言
+c2 = ClientSocket("127.0.0.1", port);
+c2.setOption("recvTimeout", 3000);
+c2.send("GET /ws HTTP/1.1" + crlf + "Host: t" + crlf
+         + "Upgrade: websocket" + crlf + "Connection: Upgrade" + crlf
+         + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" + crlf
+         + "Sec-WebSocket-Version: 13" + crlf + crlf);
+head = readHeadRaw(c2);
+low = head.lower();
+check(low.contains("upgrade: websocket"), "T1 应带 Upgrade: websocket，实际: [" + head + "]");
+check(low.contains("connection: upgrade"), "T1 应带 Connection: Upgrade，实际: [" + head + "]");
+check(head.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+      "T1 accept 值应为 RFC 示例，实际: [" + head + "]");
+check(!low.contains("content-length"), "T1 101 不应携带 Content-Length，实际: [" + head + "]");
+check(!low.contains("content-type"), "T1 101 不应携带 Content-Type，实际: [" + head + "]");
+c2.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: 文本回显（func 形态处理器）
+// ------------------------------------------------------------
+print("[T2] 文本回显 / text echo");
+c = wsConnect(port, "/ws2", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+sendBytes(cli, maskedFrame(WebSocket.OP_TEXT, "hello"));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 129 && h[1] == 5,
+      "T2 回显帧头应为 0x81 0x05，实际: " + h[0] + " " + h[1]);
+body = readExactBytes(cli, 5, lb);
+check(body.decode() == "hello", "T2 回显负载应为 hello，实际: [" + body.decode() + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 二进制回显（含 0xFF，class 形态处理器）
+// ------------------------------------------------------------
+print("[T3] 二进制回显 / binary echo");
+c = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+sendBytes(cli, maskedFrameBytes(WebSocket.OP_BINARY, bytes([1, 2, 3, 255])));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 130 && h[1] == 4,
+      "T3 回显帧头应为 0x82 0x04，实际: " + h[0] + " " + h[1]);
+b = readExactBytes(cli, 4, lb);
+check(b[0] == 1 && b[1] == 2 && b[2] == 3 && b[3] == 255,
+      "T3 二进制负载应逐字节往返");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 分片重组（TEXT fin=0 + CONT fin=1）
+// ------------------------------------------------------------
+print("[T4] 分片重组 / fragmented message reassembly");
+c = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+// 首帧：fin=0 opcode=TEXT → 首字节 0x01（maskedFrame 默认置 fin，改回 0）
+f1raw = maskedFrame(WebSocket.OP_TEXT, "he");
+f1raw[0] = 1;
+sendBytes(cli, f1raw);
+// 续帧：fin=1 opcode=CONT
+sendBytes(cli, maskedFrame(WebSocket.OP_CONT, "llo"));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 129 && h[1] == 5,
+      "T4 重组后应按单帧回显，实际帧头: " + h[0] + " " + h[1]);
+body = readExactBytes(cli, 5, lb);
+check(body.decode() == "hello", "T4 重组负载应为 hello，实际: [" + body.decode() + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: close 握手（1000 + "bye"）
+// ------------------------------------------------------------
+print("[T5] close 握手 / close handshake");
+c = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+// 关闭负载：状态码大端 2 字节 + 原因
+closePayload = bytes([3, 232, 98, 121, 101]);   // 1000=0x03E8, "bye"
+sendBytes(cli, maskedFrameBytes(WebSocket.OP_CLOSE, closePayload));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 136 && h[1] == 5,
+      "T5 应回 close 帧（0x88 len=5），实际: " + h[0] + " " + h[1]);
+cf = readExactBytes(cli, 5, lb);
+check(cf[0] == 3 && cf[1] == 232, "T5 回显关闭码应为 1000");
+check(cf[2] == 98 && cf[3] == 121 && cf[4] == 101, "T5 回显关闭原因应为 bye");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T6: ping 自动 pong；pong 静默；文本不受影响
+// ------------------------------------------------------------
+print("[T6] ping/pong 保活 / ping auto-pong");
+c = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+sendBytes(cli, maskedFrame(WebSocket.OP_PING, "ping-1"));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 138 && h[1] == 6,
+      "T6 应回 pong 帧（0x8A len=6），实际: " + h[0] + " " + h[1]);
+pongPayload = readExactBytes(cli, 6, lb);
+check(pongPayload.decode() == "ping-1", "T6 pong 负载应原样回弹，实际: [" + pongPayload.decode() + "]");
+// 客户端回 pong（应被静默吞掉，不投递给处理器）
+sendBytes(cli, maskedFrame(WebSocket.OP_PONG, "pong-data"));
+// 随后文本帧仍正常回显
+sendBytes(cli, maskedFrame(WebSocket.OP_TEXT, "after"));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 129 && h[1] == 5, "T6 pong 后文本回显帧头应正确");
+body = readExactBytes(cli, 5, lb);
+check(body.decode() == "after", "T6 pong 后文本应正常回显");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T7: 未掩码帧 → 协议错误 close 1002
+// ------------------------------------------------------------
+print("[T7] 未掩码帧拒绝 / unmasked frame rejected");
+c = wsConnect(port, "/ws", "dGhlIHNhbXBsZSBub25jZQ==");
+cli = c["cli"];
+lb = c["leftover"];
+// fin=1 opcode=1 mask=0 len=5 payload "hi!!!"（RFC 6455：客户端帧必须掩码）
+cli.send(bytes([129, 5, 104, 105, 33, 33, 33]));
+h = readExactBytes(cli, 2, lb);
+check(h[0] == 136, "T7 应回 close 帧（0x88），实际: " + h[0] + " " + h[1]);
+cf = readExactBytes(cli, h[1], lb);
+check(cf[0] == 3 && cf[1] == 234,
+      "T7 关闭码应为 1002（协议错误），实际: " + (cf[0] * 256 + cf[1]));
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T8: 非 WS 路由回归（普通 HTTP 响应不受影响）
+// ------------------------------------------------------------
+print("[T8] 非 WS 路由回归 / plain route regression");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send("GET /plain HTTP/1.1" + crlf + "Host: t" + crlf
+         + "Connection: close" + crlf + crlf);
+all = "";
+while (true) {
+    part = cli.recv(4096);
+    if (part == "") { break; }
+    all = all + part;
+}
+check(all.startsWith("HTTP/1.1 200"), "T8 应 200，实际: [" + all.slice(0, 60) + "]");
+check(all.endsWith("PLAIN"), "T8 正文应为 PLAIN，实际: [" + all + "]");
+cli.close();
+print("  PASS");
+
+app.stop();
+app.join();
+
+print("websocket_test ALL PASS");

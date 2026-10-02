@@ -176,6 +176,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_thread.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_lock.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_ssl.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_gzip.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_ws.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_tls.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_http.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_json.c

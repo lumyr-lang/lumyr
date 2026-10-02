@@ -1,0 +1,274 @@
+// ============================================================
+// lumyr-WebSocket：RFC 6455 服务端 WebSocket（G7）
+// 分层：
+//   握手升级在 HTTP 层完成（101 Switching Protocols，Sec-WebSocket-Accept
+//   由 C 层 builtin wsAcceptKey 计算：Base64(SHA1(key + RFC GUID))）；
+//   升级成功后连接脱离 keep-alive 循环，进入本模块的帧消息循环。
+//   帧解析/编码走 C 层 builtin（wsParserFeed 流式状态机 / wsFrameEncode），
+//   性能敏感路径（逐字节状态机、掩码异或）不下放到本层。
+//
+// 用法：
+//   import <NetWork/WebSocket>;
+//   class EchoHandler implements WebSocketHandler {
+//       func onOpen(ws: WebSocketConn) { }
+//       func onMessage(ws: WebSocketConn, data: any) { ws.sendText(data); }
+//       func onClose(ws: WebSocketConn, code: int, reason: string) { }
+//   }
+//   app.get("/ws", func(req) {
+//       if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, EchoHandler()); }
+//       r = ServerResponse(400);
+//       r.text("WebSocket only");
+//       return r;
+//   });
+//
+// 也可传函数形态（func 仅等价于 onMessage）：
+//   app.get("/ws", func(req) {
+//       if (WebSocket.isUpgrade(req)) {
+//           return WebSocket.accept(req, func(ws, data) { ws.sendText(data); });
+//       }
+//       ...
+//   });
+//
+// 协议要点（RFC 6455 §5）：
+//   - 客户端→服务端帧必须带掩码（服务端解析器强制，否则协议错误 1002）
+//   - 服务端→客户端帧不带掩码（wsFrameEncode mask=0）
+//   - 控制帧（close/ping/pong）不可分片、负载 <= 125
+//   - 文本帧 payload 应为合法 UTF-8（本层按 UTF-8 decode 交付，不另行校验）
+// ============================================================
+
+import <NetWork/HttpServer>;
+
+// WebSocket 工具门面：握手判定 / 升级接受 / opcode 常量
+public class WebSocket {
+    public static const OP_CONT: int = 0;
+    public static const OP_TEXT: int = 1;
+    public static const OP_BINARY: int = 2;
+    public static const OP_CLOSE: int = 8;
+    public static const OP_PING: int = 9;
+    public static const OP_PONG: int = 10;
+
+    // 判定请求是否为合法的 WebSocket 升级请求（RFC 6455 §4.2.1 服务端视角）
+    public static func isUpgrade(req): bool {
+        if (req.method != HttpMethod.GET) { return false; }
+        if (req.header("Upgrade").lower() != "websocket") { return false; }
+        conn = req.header("Connection").lower();
+        hasUpgrade = false;
+        parts = conn.split(",");
+        i = 0;
+        while (i < parts.len) {
+            if (parts[i].trim() == "upgrade") { hasUpgrade = true; }
+            i = i + 1;
+        }
+        if (!hasUpgrade) { return false; }
+        if (req.header("Sec-WebSocket-Key") == "") { return false; }
+        if (req.header("Sec-WebSocket-Version") != "13") { return false; }
+        return true;
+    }
+
+    // 接受升级：返回 101 响应（含 Sec-WebSocket-Accept），
+    // 并把 handler 挂到请求属性 wsUpgrade——HttpConnectionHandler 在
+    // 发出 101 后据此把连接移交 WebSocket 消息循环（脱离 keep-alive）。
+    public static func accept(req, handler): ServerResponse {
+        key = req.header("Sec-WebSocket-Key");
+        if (key == "") {
+            throw "缺少 Sec-WebSocket-Key / missing Sec-WebSocket-Key";
+        }
+        resp = ServerResponse(101);
+        resp.setHeader("Upgrade", "websocket");
+        resp.setHeader("Connection", "Upgrade");
+        resp.setHeader("Sec-WebSocket-Accept", wsAcceptKey(key));
+        req.attributes["wsUpgrade"] = handler;
+        return resp;
+    }
+}
+
+// WebSocket 连接对象：消息循环内持有，处理器经它收发帧
+public class WebSocketConn {
+    sock: any;
+    open: bool;
+    maxMessageBytes: int;   // 消息级（分片重组后）上限，默认 16 MiB
+
+    func WebSocketConn(sock) {
+        self.sock = sock;
+        self.open = true;
+        self.maxMessageBytes = 16777216;
+    }
+
+    func setMaxMessageBytes(n: int) {
+        if (n > 0) { self.maxMessageBytes = n; }
+        return self;
+    }
+
+    // 发送文本帧（string 按 UTF-8 编码）
+    func sendText(s: string): int {
+        return self.sock.send(wsFrameEncode(s, WebSocket.OP_TEXT, 1, 0));
+    }
+
+    // 发送二进制帧（bytes 原样）
+    func sendBinary(b): int {
+        return self.sock.send(wsFrameEncode(b, WebSocket.OP_BINARY, 1, 0));
+    }
+
+    // 发送 ping（payload <= 125 字节，控制帧不分片）
+    func ping(payload) {
+        self.sock.send(wsFrameEncode(payload, WebSocket.OP_PING, 1, 0));
+        return self;
+    }
+
+    // 发送 pong（一般由消息循环自动应答 ping，手动调用仅做主动保活）
+    func pong(payload) {
+        self.sock.send(wsFrameEncode(payload, WebSocket.OP_PONG, 1, 0));
+        return self;
+    }
+
+    // 发送 close 帧并标记连接关闭（消息循环随后退出，连接被框架关闭）
+    //   code   关闭状态码（默认 1000 正常关闭；协议错误 1002；消息过大 1009）
+    //   reason 关闭原因（简短，<= 123 字节，UTF-8）
+    func close(code: int, reason: string) {
+        if (!self.open) { return self; }
+        arr = [];
+        arr.add((code / 256) % 256);
+        arr.add(code % 256);
+        rb = bytes(reason);
+        i = 0;
+        while (i < rb.len) { arr.add(rb[i]); i = i + 1; }
+        try {
+            self.sock.send(wsFrameEncode(bytes(arr), WebSocket.OP_CLOSE, 1, 0));
+        } catch (e) { x = 1; }   // 发送失败忽略——连接本就处于收尾路径
+        self.open = false;
+        return self;
+    }
+
+    // 消息循环（由 HttpConnectionHandler 在连接协程内调用）：
+    //   先消费升级请求残留的缓冲字节（connBuf，pipelining 首批帧可能已到），
+    //   再循环 recv → wsParserFeed 流式解析 → 事件分派。
+    //   协议错误（掩码缺失/RSV 非 0/控制帧分片等）→ 抛错 → 外层兜 1002 close。
+    func run(handler, connBuf: array) {
+        isFunc = (type(handler) == "func");
+        parser = wsParserCreate(1);   // 服务端角色：入向帧必须带掩码
+        closeCode = 1000;
+        closeReason = "";
+        // 分片重组状态（跨帧持有）：fragOp=-1 无分片；否则为消息首帧 opcode
+        fragOp = -1;
+        fragArr = [];
+        try {
+            // 升级后进入长连接：读取不挂超时（心跳由 ping/pong 驱动）
+            try { self.sock.setOption("recvTimeout", 0); } catch (e) { x = 1; }
+            if (!isFunc) { handler.onOpen(self); }
+            // 先喂升级请求缓冲区残留（客户端可能在收到 101 前已发帧）
+            if (connBuf.len > 0) {
+                resid = wsParserFeed(parser, bytes(connBuf));
+                for ev in resid {
+                    r = self.dispatchEvent(handler, isFunc, ev, fragOp, fragArr);
+                    fragOp = r[0]; fragArr = r[1];
+                    if (r[2] >= 0) { closeCode = r[2]; closeReason = r[3]; self.open = false; break; }
+                    if (!self.open) { break; }
+                }
+            }
+            while (self.open) {
+                chunk = self.sock.recv(ServerRequest.readChunkSize(), 0, true);
+                if (chunk.len == 0) { break; }   // 对端关闭
+                events = wsParserFeed(parser, chunk);
+                for ev in events {
+                    r = self.dispatchEvent(handler, isFunc, ev, fragOp, fragArr);
+                    fragOp = r[0]; fragArr = r[1];
+                    if (r[2] >= 0) { closeCode = r[2]; closeReason = r[3]; self.open = false; break; }
+                    if (!self.open) { break; }
+                }
+            }
+        } catch (e) {
+            // 协议错误：回 1002 后关闭（若还没发过 close）
+            if (self.open) {
+                self.close(1002, "protocol error");
+            }
+        }
+        wsParserDestroy(parser);
+        if (!isFunc) {
+            try { handler.onClose(self, closeCode, closeReason); } catch (e) { x = 1; }
+        }
+        return self;
+    }
+
+    // 单条帧事件分派。返回 [fragOp, fragArr, closeCode, closeReason]：
+    //   closeCode >= 0 表示收到 close 帧或已主动关闭，调用方应退出循环
+    private func dispatchEvent(handler, isFunc, ev, fragOp: int, fragArr: array): array {
+        op = ev["opcode"];
+        fin = ev["fin"];
+        payload = ev["payload"];
+
+        // ---- 控制帧 ----
+        if (op == WebSocket.OP_CLOSE) {
+            code = 1000;
+            reason = "";
+            if (payload.len >= 2) {
+                code = payload[0] * 256 + payload[1];
+                if (payload.len > 2) {
+                    sub = [];
+                    i = 2;
+                    while (i < payload.len) { sub.add(payload[i]); i = i + 1; }
+                    reason = bytes(sub).decode();
+                }
+            }
+            // 回 close 帧（若未发过）再退出
+            if (self.open) {
+                self.close(code, reason);
+            }
+            self.open = false;
+            return [fragOp, fragArr, code, reason];
+        }
+        if (op == WebSocket.OP_PING) {
+            self.pong(payload);
+            return [fragOp, fragArr, -1, ""];
+        }
+        if (op == WebSocket.OP_PONG) {
+            return [fragOp, fragArr, -1, ""];
+        }
+
+        // ---- 数据帧（含分片重组）----
+        if (op == WebSocket.OP_TEXT || op == WebSocket.OP_BINARY) {
+            if (fin) {
+                self.deliver(handler, isFunc, op, payload);
+                return [fragOp, fragArr, -1, ""];
+            }
+            // 分片首帧：攒入 fragArr
+            i = 0;
+            while (i < payload.len) { fragArr.add(payload[i]); i = i + 1; }
+            if (fragArr.len > self.maxMessageBytes) {
+                self.close(1009, "message too big");
+                return [-1, [], 1009, "message too big"];
+            }
+            return [op, fragArr, -1, ""];
+        }
+        // op == OP_CONT（续帧）
+        i = 0;
+        while (i < payload.len) { fragArr.add(payload[i]); i = i + 1; }
+        if (fragArr.len > self.maxMessageBytes) {
+            self.close(1009, "message too big");
+            return [-1, [], 1009, "message too big"];
+        }
+        if (fin) {
+            whole = bytes(fragArr);
+            self.deliver(handler, isFunc, fragOp, whole);
+            return [-1, [], -1, ""];
+        }
+        return [fragOp, fragArr, -1, ""];
+    }
+
+    // 完整消息交付：文本帧按 UTF-8 解为 string，二进制帧保持 bytes
+    private func deliver(handler, isFunc, op: int, payload) {
+        if (op == WebSocket.OP_TEXT) {
+            data = payload.decode();
+            if (isFunc) { handler(self, data); } else { handler.onMessage(self, data); }
+        } else {
+            if (isFunc) { handler(self, payload); } else { handler.onMessage(self, payload); }
+        }
+        return self;
+    }
+}
+
+// 处理器契约：三方法齐备（func 形态仅收 onMessage）
+public interface WebSocketHandler {
+    func onOpen(ws: WebSocketConn);
+    func onMessage(ws: WebSocketConn, data: any);
+    func onClose(ws: WebSocketConn, code: int, reason: string);
+}

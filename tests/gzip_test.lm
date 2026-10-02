@@ -1,5 +1,5 @@
 // ============================================================
-// G6 gzip 响应压缩端到端测试
+// G6 gzip 响应压缩端到端测试（G7 起含流式增量压缩）
 //
 // T1  协商压缩：Accept-Encoding: gzip + 大文本 → Content-Encoding: gzip、
 //     魔数 1f 8b、Content-Length 为压缩长、Vary、gunzip 往返等于原文
@@ -8,11 +8,17 @@
 // T4  白名单：application/octet-stream 不压缩（body 逐字节一致）
 // T5  阈值：低于 minLength 的文本不压缩，但补 Vary
 // T6  级别：level 1 与 level 9 均正确往返（9 ≤ 1 体积）
-// T7  流式：streamBody（chunked）跳过压缩，保留 Transfer-Encoding
+// T7  流式（G7 起压缩）：chunked + Content-Encoding: gzip、首块即含 gzip
+//     魔数、解 chunked 后 gunzip 往返等于逐块拼接原文
 // T8  已编码：响应自带 Content-Encoding 不二次压缩
 // T9  非 200：404 不压缩
 // T10 JSON：application/json 白名单压缩
 // T11 builtin 单元：二进制含 NUL 往返、坏数据/坏级别抛错
+// T12 静态文件（file body）压缩
+// T13 流式不缓冲（G7）：首压缩块在流中 sleep 前到达（SYNC_FLUSH 逐块下投），
+//     全程解压后等于原文
+// T14 builtin 流式单元（G7）：gzipStreamCreate/Write/Finish 多块增量 +
+//     混合 string/bytes 往返、结束后再写/坏句柄抛错、gzipAvailable
 //
 // 自验证：raw TcpSocket 按 bytes 收完整响应（Connection: close 读到 EOF），
 // 解压用内置 gzipDecompress，不依赖 curl/外网。端口 18126-18128。
@@ -120,6 +126,38 @@ func contentLength(head: string): int {
     return n;
 }
 
+// 解 chunked 框架：body bytes → 明文 bytes（长度行十六进制，0 块终止）
+func dechunk(body): bytes {
+    out = [];
+    pos = 0;
+    while (true) {
+        // 找 CRLF 终止的长度行
+        le = -1;
+        k = pos;
+        while (k + 1 < body.len) {
+            if (body[k] == 13 && body[k + 1] == 10) { le = k; break; }
+            k = k + 1;
+        }
+        check(le >= 0, "dechunk: 缺少长度行终止 / missing chunk-size CRLF");
+        // 十六进制长度（大小写均可）
+        n = 0;
+        i = pos;
+        while (i < le) {
+            c = body[i];
+            if (c >= 48 && c <= 57) { n = n * 16 + (c - 48); }
+            else if (c >= 97 && c <= 102) { n = n * 16 + (c - 87); }
+            else if (c >= 65 && c <= 70) { n = n * 16 + (c - 55); }
+            i = i + 1;
+        }
+        pos = le + 2;
+        if (n == 0) { break; }   // 终止块
+        i = pos;
+        while (i < pos + n) { out.add(body[i]); i = i + 1; }
+        pos = pos + n + 2;   // 跳过块尾 CRLF
+    }
+    return bytes(out);
+}
+
 // ---- 构造三个应用：默认 / level1 / level9 ----
 func makeApp(port: int, level: int) {
     app = WebApplication("127.0.0.1", port);
@@ -149,9 +187,21 @@ func makeApp(port: int, level: int) {
     });
     app.get("/stream", func(req) {
         r = ServerResponse(200);
+        r.setContentType("text/plain");
         r.streamBody(func(w) {
             w.send("stream-chunk-1-");
             w.send("stream-chunk-2");
+        });
+        return r;
+    });
+    // T13：块间 sleep 的慢流（验证首压缩块不等整流结束即下投）
+    app.get("/streamslow", func(req) {
+        r = ServerResponse(200);
+        r.setContentType("text/plain");
+        r.streamBody(func(w) {
+            w.send("first-block-padding");
+            sleep(200);
+            w.send("second-block");
         });
         return r;
     });
@@ -245,12 +295,18 @@ check(r6b["body"].len <= r6a["body"].len,
       "T6 level9 体积应不大于 level1: " + r6b["body"].len + " vs " + r6a["body"].len);
 print("  level1=" + r6a["body"].len + " level9=" + r6b["body"].len + " PASS");
 
-// ---- T7 流式 chunked 跳过 ----
-print("[T7] chunked 流式响应跳过 / streaming body skipped");
+// ---- T7 流式 chunked 增量压缩（G7 起：流式不再跳过）----
+print("[T7] chunked 流式增量压缩 / streaming incremental gzip");
 r7 = httpRaw(18126, "/stream", "gzip");
 check(headerValue(r7["head"], "Transfer-Encoding").lower() == "chunked",
       "T7 应为 chunked: " + headerValue(r7["head"], "Transfer-Encoding"));
-check(headerValue(r7["head"], "Content-Encoding") == "", "T7 流式不应压缩");
+check(headerValue(r7["head"], "Content-Encoding") == "gzip",
+      "T7 流式应压缩（G7 起）: " + headerValue(r7["head"], "Content-Encoding"));
+check(headerValue(r7["head"], "Content-Length") == "", "T7 流式不应有 Content-Length");
+b7 = dechunk(r7["body"]);
+check(b7[0] == 0x1f && b7[1] == 0x8b, "T7 首字节应为 gzip 魔数（首块即含 gzip 头）");
+check(gzipDecompress(b7).decode() == "stream-chunk-1-stream-chunk-2",
+      "T7 解压应等于逐块拼接原文");
 print("  PASS");
 
 // ---- T8 已编码不二次压缩 ----
@@ -305,6 +361,92 @@ check(headerValue(r12["head"], "Content-Type").lower().startsWith("text/plain"),
       "T12 应为 text/plain: " + headerValue(r12["head"], "Content-Type"));
 check(headerValue(r12["head"], "Content-Encoding") == "gzip", "T12 文件应压缩");
 check(gzipDecompress(r12["body"]).decode() == bigText, "T12 解压应等于文件原文");
+print("  PASS");
+
+// ---- T13 流式不缓冲（首压缩块在流中 sleep 前到达）----
+print("[T13] 流式不缓冲（压缩态）/ streamed gzip not buffered");
+sock13 = TcpSocket();
+sock13.connect("127.0.0.1", 18126);
+sock13.setOption("recvTimeout", 3000);
+sock13.send("GET /streamslow HTTP/1.1" + crlf + "Host: g" + crlf
+            + "Accept-Encoding: gzip" + crlf + "Connection: close" + crlf + crlf);
+t0 = timestamp_ms();
+acc13 = [];
+firstMs = -1;
+while (firstMs < 0) {
+    ch = sock13.recv(8192, 0, 1);
+    check(ch.len > 0, "T13 等首压缩块时连接意外关闭");
+    j = 0;
+    while (j < ch.len) { acc13.add(ch[j]); j = j + 1; }
+    // 在累计字节中找 gzip 魔数 1f 8b（chunked 框架为 ASCII，不会误判）
+    k = 0;
+    while (k + 1 < acc13.len) {
+        if (acc13[k] == 0x1f && acc13[k + 1] == 0x8b) { firstMs = timestamp_ms() - t0; break; }
+        k = k + 1;
+    }
+}
+check(firstMs < 150, "T13 首压缩块应立即到达（实际 " + firstMs + "ms，缓冲式实现会 ≥200ms）");
+while (true) {
+    ch = sock13.recv(8192, 0, 1);
+    if (ch.len == 0) { break; }
+    j = 0;
+    while (j < ch.len) { acc13.add(ch[j]); j = j + 1; }
+}
+sock13.close();
+// 定位头部结束 13 10 13 10
+sep13 = -1;
+k = 0;
+while (k + 3 < acc13.len) {
+    if (acc13[k] == 13 && acc13[k + 1] == 10 && acc13[k + 2] == 13 && acc13[k + 3] == 10) {
+        sep13 = k;
+        break;
+    }
+    k = k + 1;
+}
+check(sep13 >= 0, "T13 响应缺少头部分隔符");
+body13 = dechunk(bytes(copyRange(acc13, sep13 + 4, acc13.len)));
+check(gzipDecompress(body13).decode() == "first-block-paddingsecond-block",
+      "T13 解压应等于逐块拼接原文");
+print("  首块 " + firstMs + "ms 到达 PASS");
+
+// ---- T14 builtin 流式单元 ----
+print("[T14] builtin 流式单元 / stream builtin unit cases");
+check(gzipAvailable(), "T14 本构建应有 zlib 后端");
+h14 = gzipStreamCreate(6);
+p1 = gzipStreamWrite(h14, bytes([98, 105, 110, 58]), true);
+p2 = gzipStreamWrite(h14, bytes([0, 255, 1]), true);
+p3 = gzipStreamFinish(h14);
+cat14 = [];
+i = 0;
+while (i < p1.len) { cat14.add(p1[i]); i = i + 1; }
+i = 0;
+while (i < p2.len) { cat14.add(p2[i]); i = i + 1; }
+i = 0;
+while (i < p3.len) { cat14.add(p3[i]); i = i + 1; }
+exp14 = bytes([98, 105, 110, 58, 0, 255, 1]);
+back14 = gzipDecompress(bytes(cat14));
+check(back14.len == exp14.len, "T14 流式往返长度");
+i = 0;
+ok14 = true;
+while (i < exp14.len) {
+    if (back14[i] != exp14[i]) { ok14 = false; }
+    i = i + 1;
+}
+check(ok14, "T14 流式往返逐字节");
+// 结束后句柄已销毁，再写/再 finish 均应抛错
+threwW = false;
+try { gzipStreamWrite(h14, "x", true); } catch (e) { threwW = true; }
+check(threwW, "T14 finish 后再 write 应抛错");
+threwF = false;
+try { gzipStreamFinish(h14); } catch (e) { threwF = true; }
+check(threwF, "T14 重复 finish 应抛错");
+threwBad = false;
+try { gzipStreamFinish(999999); } catch (e) { threwBad = true; }
+check(threwBad, "T14 坏句柄应抛错");
+// 默认级别（不传参）也可创建
+h14b = gzipStreamCreate();
+o14b = gzipStreamWrite(h14b, "default-level", true);
+o14b = gzipStreamFinish(h14b);
 print("  PASS");
 
 appA.stop();

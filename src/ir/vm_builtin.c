@@ -49,6 +49,7 @@
 #include "vm.h"
 #include "ir_compile.h"
 #include "ast/func_compile.h"
+#include "lm_ws.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -458,6 +459,25 @@ static int64_t bi_num_i64(Value v) {
     case VAL_LONG_DOUBLE: return (int64_t)v.v.ld;
     default:        return 0;
     }
+}
+
+/* string|bytes → 裸字节视图（二进制安全：string 用 lumyr_str_len 取字节长，
+ * 不用 strlen——可含 NUL）。类型不符返回 0（调用方接 bi_type_err）。
+ * 必须传 Value 指针：SSO 短串的数据内联在 Value 里，按值传参会令返回的
+ * 指针悬在已析构的栈副本上（SSO 内容变栈垃圾）。 */
+static int bi_bytes_view(const Value* v, const uint8_t** ptr, size_t* len) {
+    if(v->type == VAL_BYTES && v->v.bytes_obj) {
+        BytesObj* bo = (BytesObj*)v->v.bytes_obj;
+        *ptr = bo->data;
+        *len = (size_t)bo->len;
+        return 1;
+    }
+    if(v->type == VAL_STRING) {
+        *ptr = (const uint8_t*)lumyr_str_cstr(v);
+        *len = (size_t)lumyr_str_len(v);
+        return 1;
+    }
+    return 0;
 }
 
 /* 第 i 个元素作为 int64：整型聚合的零精度损失路径。
@@ -1938,6 +1958,137 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         *out = lumyr_bytes_from_buf(dst, (int)dstLen);
         free(dst);
+        return 1;
+    }
+    /* G7 流式增量 gzip：z_stream 句柄形态（chunked 流式响应逐块压缩） */
+    case BUILTIN_GZIP_AVAILABLE: {
+        if(is_method) { runtime_error("gzipAvailable() 不支持方法形式 / gzipAvailable() is global only"); return 0; }
+        *out = lumyr_make_bool(lm_gzip_available());
+        return 1;
+    }
+    case BUILTIN_GZIP_STREAM_CREATE: {
+        if(is_method) { runtime_error("gzipStreamCreate() 不支持方法形式 / gzipStreamCreate() is global only"); return 0; }
+        int level = -1;
+        if(argc >= 1) level = (int)bi_num_i64(argv[0]);
+        char gzErr[256] = {0};
+        int h = lm_gzip_stream_create(level, gzErr, sizeof(gzErr));
+        if(h < 0) {
+            runtime_error(gzErr[0] ? gzErr : "gzip 流创建失败 / gzip stream create failed");
+            return 0;
+        }
+        *out = lumyr_make_int(h);
+        return 1;
+    }
+    case BUILTIN_GZIP_STREAM_WRITE: {
+        if(is_method) { runtime_error("gzipStreamWrite() 不支持方法形式 / gzipStreamWrite() is global only"); return 0; }
+        if(argc < 3) { runtime_error("gzipStreamWrite() 需要 3 个参数 / gzipStreamWrite() requires 3 arguments"); return 0; }
+        int h = (int)bi_num_i64(argv[0]);
+        const uint8_t* in = NULL;
+        size_t inLen = 0;
+        if(!bi_bytes_view(&argv[1], &in, &inLen))
+            return bi_type_err("gzipStreamWrite", argv[1]);
+        int flush = (int)bi_num_i64(argv[2]) != 0;
+        uint8_t* dst = NULL;
+        size_t dstLen = 0;
+        char gzErr[256] = {0};
+        if(lm_gzip_stream_write(h, in, inLen, flush, &dst, &dstLen, gzErr, sizeof(gzErr)) != 0) {
+            runtime_error(gzErr[0] ? gzErr : "gzip 流压缩失败 / gzip stream write failed");
+            return 0;
+        }
+        *out = lumyr_bytes_from_buf(dst, (int)dstLen);
+        free(dst);
+        return 1;
+    }
+    case BUILTIN_GZIP_STREAM_FINISH: {
+        if(is_method) { runtime_error("gzipStreamFinish() 不支持方法形式 / gzipStreamFinish() is global only"); return 0; }
+        if(argc < 1) { runtime_error("gzipStreamFinish() 需要 1 个参数 / gzipStreamFinish() requires 1 argument"); return 0; }
+        int h = (int)bi_num_i64(argv[0]);
+        uint8_t* dst = NULL;
+        size_t dstLen = 0;
+        char gzErr[256] = {0};
+        /* 任何路径都销毁句柄（失败时 .lm 层也无需再清理） */
+        if(lm_gzip_stream_finish(h, &dst, &dstLen, gzErr, sizeof(gzErr)) != 0) {
+            runtime_error(gzErr[0] ? gzErr : "gzip 流收尾失败 / gzip stream finish failed");
+            return 0;
+        }
+        *out = lumyr_bytes_from_buf(dst, (int)dstLen);
+        free(dst);
+        return 1;
+    }
+    /* G7 WebSocket（RFC 6455）：握手密钥 + 帧编码 + 流式帧解析 */
+    case BUILTIN_WS_ACCEPT_KEY: {
+        if(is_method) { runtime_error("wsAcceptKey() 不支持方法形式 / wsAcceptKey() is global only"); return 0; }
+        if(argc < 1 || argv[0].type != VAL_STRING) { runtime_error("wsAcceptKey() 需要字符串参数 / wsAcceptKey() requires a string"); return 0; }
+        char* k = lm_ws_accept_key(lumyr_str_cstr(&argv[0]));
+        if(!k) { runtime_error("ws 握手密钥计算失败 / ws accept key failed"); return 0; }
+        *out = lumyr_make_string(k);
+        free(k);
+        return 1;
+    }
+    case BUILTIN_WS_FRAME_ENCODE: {
+        if(is_method) { runtime_error("wsFrameEncode() 不支持方法形式 / wsFrameEncode() is global only"); return 0; }
+        if(argc < 4) { runtime_error("wsFrameEncode() 需要 4 个参数 / wsFrameEncode() requires 4 arguments"); return 0; }
+        const uint8_t* in = NULL;
+        size_t inLen = 0;
+        if(!bi_bytes_view(&argv[0], &in, &inLen))
+            return bi_type_err("wsFrameEncode", argv[0]);
+        int opcode = (int)bi_num_i64(argv[1]);
+        int fin = (int)bi_num_i64(argv[2]) != 0;
+        int mask = (int)bi_num_i64(argv[3]) != 0;
+        uint8_t* dst = NULL;
+        size_t dstLen = 0;
+        if(lm_ws_frame_encode(fin, opcode, mask, in, (uint64_t)inLen, &dst, &dstLen) != 0) {
+            runtime_error("ws 帧编码失败 / ws frame encode failed");
+            return 0;
+        }
+        *out = lumyr_bytes_from_buf(dst, (int)dstLen);
+        free(dst);
+        return 1;
+    }
+    case BUILTIN_WS_PARSER_CREATE: {
+        if(is_method) { runtime_error("wsParserCreate() 不支持方法形式 / wsParserCreate() is global only"); return 0; }
+        int expectMasked = 1;
+        if(argc >= 1) expectMasked = (int)bi_num_i64(argv[0]) != 0;
+        int h = lm_ws_parser_create(expectMasked);
+        if(h < 0) { runtime_error("ws 解析器句柄数超限 / ws parser handle table full"); return 0; }
+        *out = lumyr_make_int(h);
+        return 1;
+    }
+    case BUILTIN_WS_PARSER_FEED: {
+        if(is_method) { runtime_error("wsParserFeed() 不支持方法形式 / wsParserFeed() is global only"); return 0; }
+        if(argc < 2) { runtime_error("wsParserFeed() 需要 2 个参数 / wsParserFeed() requires 2 arguments"); return 0; }
+        int h = (int)bi_num_i64(argv[0]);
+        const uint8_t* in = NULL;
+        size_t inLen = 0;
+        if(!bi_bytes_view(&argv[1], &in, &inLen))
+            return bi_type_err("wsParserFeed", argv[1]);
+        LmWsEvent* evs = NULL;
+        int n = 0;
+        char wsErr[256] = {0};
+        if(lm_ws_parser_feed(h, in, inLen, &evs, &n, wsErr, sizeof(wsErr)) != 0) {
+            /* 协议错误：调用方按 1002 关连接；句柄由 .lm 层 destroy */
+            runtime_error(wsErr[0] ? wsErr : "ws 帧协议错误 / ws frame protocol error");
+            return 0;
+        }
+        Value arr = val_array(0);
+        for(int k = 0; k < n; k++) {
+            Value m = val_map();
+            lumyr_map_set(&m, lumyr_make_string("fin"), lumyr_make_bool(evs[k].fin));
+            lumyr_map_set(&m, lumyr_make_string("opcode"), lumyr_make_int(evs[k].opcode));
+            lumyr_map_set(&m, lumyr_make_string("payload"),
+                          lumyr_bytes_from_buf(evs[k].payload, (int)evs[k].len));
+            lumyr_array_add(&arr, m);
+            free(evs[k].payload);
+        }
+        free(evs);
+        *out = arr;
+        return 1;
+    }
+    case BUILTIN_WS_PARSER_DESTROY: {
+        if(is_method) { runtime_error("wsParserDestroy() 不支持方法形式 / wsParserDestroy() is global only"); return 0; }
+        if(argc < 1) { runtime_error("wsParserDestroy() 需要 1 个参数 / wsParserDestroy() requires 1 argument"); return 0; }
+        lm_ws_parser_destroy((int)bi_num_i64(argv[0]));
+        *out = lumyr_make_int(0);
         return 1;
     }
     case BUILTIN_ENCODE_BASE64: {

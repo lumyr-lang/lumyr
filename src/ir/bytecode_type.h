@@ -380,6 +380,15 @@ typedef enum {
     BUILTIN_MD5,          // md5(s)：MD5 32 位十六进制小写
     BUILTIN_GZIP_COMPRESS,  // gzipCompress(data [, level])：gzip 压缩 → bytes（G6）
     BUILTIN_GZIP_DECOMPRESS,// gzipDecompress(data)：gzip 解压 → bytes（G6）
+    BUILTIN_GZIP_AVAILABLE, // gzipAvailable()：zlib 后端是否启用 → bool（G7）
+    BUILTIN_GZIP_STREAM_CREATE,  // gzipStreamCreate(level)：流式压缩句柄 → int（G7）
+    BUILTIN_GZIP_STREAM_WRITE,   // gzipStreamWrite(h, data, flush)：增量压缩 → bytes（G7）
+    BUILTIN_GZIP_STREAM_FINISH,  // gzipStreamFinish(h)：收尾并销毁句柄 → bytes（G7）
+    BUILTIN_WS_ACCEPT_KEY,       // wsAcceptKey(key)：Sec-WebSocket-Accept → string（G7）
+    BUILTIN_WS_FRAME_ENCODE,     // wsFrameEncode(payload, opcode, fin, mask) → bytes（G7）
+    BUILTIN_WS_PARSER_CREATE,    // wsParserCreate(expectMasked) → int 句柄（G7）
+    BUILTIN_WS_PARSER_FEED,      // wsParserFeed(h, data) → [{fin,opcode,payload}]（G7）
+    BUILTIN_WS_PARSER_DESTROY,   // wsParserDestroy(h)（G7）
     BUILTIN_ENCODE_BASE64,  // encodeBase64(s)：Base64 编码
     BUILTIN_DECODE_BASE64,  // decodeBase64(s)：Base64 解码
     BUILTIN_REGEX_MATCH,    // regex_match(s, pattern)：完整匹配 → bool

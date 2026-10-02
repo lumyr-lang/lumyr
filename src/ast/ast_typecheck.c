@@ -1086,6 +1086,9 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"__lmBuildStream", 1, 1}, {"__lmCheckHeader", 1, 1},
     {"debug", 1, 2}, {"info", 1, 2}, {"warn", 1, 2}, {"error", 1, 2}, {"fatal", 1, 2},
     {"gc_count", 0, 0}, {"gc_bytes", 0, 0}, {"gc_collect", 0, 0}, {"gc_stw_ns", 0, 0}, {"next", 1, 1}, {"send", 2, 2}, {"receive", 0, 0}, {"close", 1, 1}, {"GenThrow", 2, 2}, {"chain", 2, 2}, {"zip", 2, 2}, {"skip", 2, 2}, {"take", 2, 2}, {"enumerate", 1, 1},
+    /* G7：流式增量 gzip（z_stream 句柄）+ WebSocket（RFC 6455） */
+    {"gzipAvailable", 0, 0}, {"gzipStreamCreate", 0, 1}, {"gzipStreamWrite", 3, 3}, {"gzipStreamFinish", 1, 1},
+    {"wsAcceptKey", 1, 1}, {"wsFrameEncode", 4, 4}, {"wsParserCreate", 0, 1}, {"wsParserFeed", 2, 2}, {"wsParserDestroy", 1, 1},
 };
 
 static int is_builtin_name(const char* name) {

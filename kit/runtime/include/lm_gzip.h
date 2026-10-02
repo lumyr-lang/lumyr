@@ -29,4 +29,25 @@ int lm_gzip_decompress(const uint8_t* in, size_t inLen,
                        uint8_t** out, size_t* outLen,
                        char* errBuf, size_t errLen);
 
+// ===== 流式增量压缩（有状态 z_stream 句柄，G7 与 WebSocket 同期） =====
+// 用途：chunked 流式响应逐块压缩（GzipFilter 对 streamBody 的包装）。
+// 句柄为进程内 int 编号（句柄表，非指针）；同一句柄的调用须来自同一
+// 线程/协程上下文（压缩上下文不可交错），不同句柄间并发安全。
+
+// 创建压缩句柄（deflateInit2，gzip 封装）。成功返回句柄(>=0)，失败 -1。
+int lm_gzip_stream_create(int level, char* errBuf, size_t errLen);
+
+// 写入一块明文并取回本轮产出的 gzip 字节（malloc，调用方 free；可为 0 长）。
+//   flush 非 0：Z_SYNC_FLUSH——块边界对齐刷新，对端可立即解压到本块
+//              （chunked 逐块可见性所需，开销为每块几字节同步标记）
+// 失败返回 -1（句柄仍存活，可继续或 finish 销毁）。
+int lm_gzip_stream_write(int h, const uint8_t* in, size_t inLen, int flush,
+                         uint8_t** out, size_t* outLen,
+                         char* errBuf, size_t errLen);
+
+// 收尾：deflate(Z_FINISH) 取回尾部字节并销毁句柄（任何路径都销毁，
+// 失败时也返回 -1 且句柄已释放）。成功返回 0。
+int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
+                          char* errBuf, size_t errLen);
+
 #endif // LM_GZIP_H

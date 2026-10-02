@@ -17,4 +17,7 @@ char* lumyr_base64_decode(const char* s, int* outlen);
 // MD5（字符串 → 32 位十六进制小写，malloc）
 char* lumyr_md5_hex(const char* s, int len);
 
+// SHA-1（RFC 3174；任意字节 → 20 字节摘要，out 由调用方提供）
+void lumyr_sha1(const uint8_t* data, size_t len, uint8_t out[20]);
+
 #endif // LM_CRYPTO_H

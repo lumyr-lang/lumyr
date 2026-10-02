@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
 // ===== URL 编码/解码 =====
 char* lumyr_url_encode(const char* s) {
@@ -189,4 +190,57 @@ char* lumyr_md5_hex(const char* s, int len) {
     for(int i = 0; i < 16; i++) snprintf(out + i*2, 3, "%02x", digest[i]);
     out[32] = 0;
     return out;
+}
+
+// ===== SHA-1 (RFC 3174，一次性摘要) =====
+// 按 RFC 3174 第 7 节算法自写实现：消息调度 w[t] 与四轮 f/K 常量均为
+// 标准公开规格。供 WebSocket 握手（Sec-WebSocket-Accept）等场景使用。
+
+/* 单个 64 字节分块压缩：w 调度 80 步，四轮各自的 f 函数与 K 常量 */
+static void sha1_compress(uint32_t st[5], const uint8_t block[64]) {
+    uint32_t w[80];
+    for(int t = 0; t < 16; t++)
+        w[t] = ((uint32_t)block[t*4] << 24) | ((uint32_t)block[t*4+1] << 16) |
+               ((uint32_t)block[t*4+2] << 8) | (uint32_t)block[t*4+3];
+    for(int t = 16; t < 80; t++) {
+        uint32_t v = w[t-3] ^ w[t-8] ^ w[t-14] ^ w[t-16];
+        w[t] = (v << 1) | (v >> 31);
+    }
+    uint32_t a = st[0], b = st[1], c = st[2], d = st[3], e = st[4];
+    for(int t = 0; t < 80; t++) {
+        uint32_t f, k;
+        if(t < 20)      { f = (b & c) | (~b & d);          k = 0x5A827999u; }
+        else if(t < 40) { f = b ^ c ^ d;                   k = 0x6ED9EBA1u; }
+        else if(t < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+        else            { f = b ^ c ^ d;                   k = 0xCA62C1D6u; }
+        uint32_t tmp = ((a << 5) | (a >> 27)) + f + e + k + w[t];
+        e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = tmp;
+    }
+    st[0]+=a; st[1]+=b; st[2]+=c; st[3]+=d; st[4]+=e;
+}
+
+void lumyr_sha1(const uint8_t* data, size_t len, uint8_t out[20]) {
+    uint32_t st[5] = {0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u};
+    const uint8_t* p = data;
+    size_t left = len;
+    while(left >= 64) { sha1_compress(st, p); p += 64; left -= 64; }
+
+    /* 收尾：补 0x80、零填充至距块尾 8 字节，再附 64 位大端位长 */
+    uint8_t tail[128];
+    memset(tail, 0, sizeof(tail));
+    if(left) memcpy(tail, p, left);
+    tail[left] = 0x80;
+    size_t tailLen = (left < 56) ? 64 : 128;
+    uint64_t bitLen = (uint64_t)len * 8;
+    for(int i = 0; i < 8; i++)
+        tail[tailLen - 1 - i] = (uint8_t)((bitLen >> (i * 8)) & 0xFF);
+    sha1_compress(st, tail);
+    if(tailLen == 128) sha1_compress(st, tail + 64);
+
+    for(int i = 0; i < 5; i++) {
+        out[i*4]   = (uint8_t)((st[i] >> 24) & 0xFF);
+        out[i*4+1] = (uint8_t)((st[i] >> 16) & 0xFF);
+        out[i*4+2] = (uint8_t)((st[i] >> 8) & 0xFF);
+        out[i*4+3] = (uint8_t)(st[i] & 0xFF);
+    }
 }

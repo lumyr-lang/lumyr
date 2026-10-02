@@ -88,6 +88,7 @@ import <App/Container>;
 import <App/RequestBinder>;
 import <App/StaticFiles>;
 import <NetWork/HttpServer>;
+import <NetWork/WebSocket>;
 import <NetWork/NetError>;
 import <NetWork/Reactor>;
 
@@ -249,17 +250,31 @@ class HttpConnectionHandler {
                     }
                 }
                 // Connection 语义判定（异常响应恒关闭）
+                // G7 WebSocket 升级：WebSocket.accept 已把处理器挂到
+                // req.attributes["wsUpgrade"]；升级响应自带 Connection: Upgrade，
+                // 不做 keep-alive 标头改写，101 发出后连接移交消息循环
+                wsHandler = null;
+                if (!failed && req != null) { wsHandler = req.attributes["wsUpgrade"]; }
                 ka = false;
-                if (h.kaEnabled && !failed && req != null) {
+                if (wsHandler == null && h.kaEnabled && !failed && req != null) {
                     hdr = req.header("Connection").lower();
                     if (req.httpVersion == "1.1") { ka = (hdr != "close"); }
                     else { ka = (hdr == "keep-alive"); }
                 }
-                if (ka) { resp.setHeader("Connection", "keep-alive"); }
-                else { resp.setHeader("Connection", "close"); }
+                if (wsHandler == null) {
+                    if (ka) { resp.setHeader("Connection", "keep-alive"); }
+                    else { resp.setHeader("Connection", "close"); }
+                }
                 try {
                     resp.sendTo(c);
                 } catch (e2) {
+                    break;
+                }
+                if (wsHandler != null) {
+                    // 101 已发出：连接移交 WebSocket 消息循环（G7）。
+                    // 循环结束后本连接收尾关闭（WebSocket 无 keep-alive 语义）
+                    ws = WebSocketConn(c);
+                    ws.run(wsHandler, connBuf);
                     break;
                 }
                 if (!ka) { break; }

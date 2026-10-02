@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #ifdef LM_HAVE_ZLIB
 #include <zlib.h>
@@ -170,6 +171,142 @@ int lm_gzip_decompress(const uint8_t* in, size_t inLen,
     return 0;
 }
 
+/* ===== 流式增量压缩：z_stream 句柄表 =====
+ * 句柄为表槽位下标 + 代数校验（槽复用时旧句柄自然失效）。
+ * 表操作全程持锁；单句柄的 deflate 调用不持锁（约定同句柄不并发）。 */
+#define LM_GZIP_MAX_STREAMS 1024
+
+typedef struct {
+    z_stream strm;
+    uint32_t gen;      /* 代数：create 时递增，校验防野句柄 */
+    int inUse;
+} LmGzipSlot;
+
+static LmGzipSlot g_gzSlots[LM_GZIP_MAX_STREAMS];
+static pthread_mutex_t g_gzLock = PTHREAD_MUTEX_INITIALIZER;
+
+/* 句柄编码：slot * 4096 + (gen % 4096)（gen 永不为 0，0 保留为空槽标记） */
+static int gzMakeHandle(int slot, uint32_t gen) { return slot * 4096 + (int)(gen % 4096); }
+
+static LmGzipSlot* gzLookup(int h) {
+    if(h < 0) return NULL;
+    int slot = h / 4096;
+    uint32_t gen = (uint32_t)(h % 4096);
+    if(slot >= LM_GZIP_MAX_STREAMS) return NULL;
+    LmGzipSlot* s = &g_gzSlots[slot];
+    if(!s->inUse || (s->gen % 4096) != gen) return NULL;
+    return s;
+}
+
+int lm_gzip_stream_create(int level, char* errBuf, size_t errLen) {
+    if(level != -1 && (level < 0 || level > 9)) {
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 压缩级别必须为 -1 或 0..9 / gzip level must be -1 or 0..9");
+        return -1;
+    }
+    pthread_mutex_lock(&g_gzLock);
+    int slot = -1;
+    for(int i = 0; i < LM_GZIP_MAX_STREAMS; i++) {
+        if(!g_gzSlots[i].inUse) { slot = i; break; }
+    }
+    if(slot < 0) {
+        pthread_mutex_unlock(&g_gzLock);
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 流句柄数超限 / gzip stream handle table full");
+        return -1;
+    }
+    LmGzipSlot* s = &g_gzSlots[slot];
+    memset(&s->strm, 0, sizeof(s->strm));
+    int rc = deflateInit2(&s->strm, level, Z_DEFLATED, MAX_WBITS + 16,
+                          8, Z_DEFAULT_STRATEGY);
+    if(rc != Z_OK) {
+        pthread_mutex_unlock(&g_gzLock);
+        gzipDescribe(errBuf, errLen, "gzip 流初始化失败 / deflateInit2 failed", rc, NULL);
+        return -1;
+    }
+    s->gen++;
+    if(s->gen % 4096 == 0) s->gen++;   /* 跳过 0（空槽标记） */
+    s->inUse = 1;
+    int h = gzMakeHandle(slot, s->gen);
+    pthread_mutex_unlock(&g_gzLock);
+    return h;
+}
+
+int lm_gzip_stream_write(int h, const uint8_t* in, size_t inLen, int flush,
+                         uint8_t** out, size_t* outLen,
+                         char* errBuf, size_t errLen) {
+    if(!out || !outLen) return -1;
+    *out = NULL; *outLen = 0;
+    LmGzipSlot* s = gzLookup(h);
+    if(!s) {
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 流句柄无效 / invalid gzip stream handle");
+        return -1;
+    }
+    /* 输出上界：deflateBound 覆盖本块 + 存量；SYNC_FLUSH 再加 16 字节余量 */
+    uLong bound = deflateBound(&s->strm, (uLong)inLen) + 16;
+    uint8_t* dst = (uint8_t*)malloc(bound);
+    if(!dst) {
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 输出缓冲内存不足 / gzip out of memory");
+        return -1;
+    }
+    s->strm.next_in = (Bytef*)in;
+    s->strm.avail_in = (uInt)inLen;
+    s->strm.next_out = dst;
+    s->strm.avail_out = (uInt)bound;
+    int rc = deflate(&s->strm, flush ? Z_SYNC_FLUSH : Z_NO_FLUSH);
+    if(rc != Z_OK && rc != Z_BUF_ERROR) {
+        gzipDescribe(errBuf, errLen, "gzip 流压缩失败 / deflate failed", rc, s->strm.msg);
+        free(dst);
+        return -1;
+    }
+    *outLen = (size_t)((uint8_t*)s->strm.next_out - dst);
+    *out = dst;
+    return 0;
+}
+
+int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
+                          char* errBuf, size_t errLen) {
+    if(!out || !outLen) return -1;
+    *out = NULL; *outLen = 0;
+    pthread_mutex_lock(&g_gzLock);
+    LmGzipSlot* s = gzLookup(h);
+    if(!s) {
+        pthread_mutex_unlock(&g_gzLock);
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 流句柄无效 / invalid gzip stream handle");
+        return -1;
+    }
+    /* 先占位再解锁：销毁语义下不再接受其他线程拿到本句柄 */
+    s->inUse = 0;
+    pthread_mutex_unlock(&g_gzLock);
+
+    uLong bound = deflateBound(&s->strm, 0) + 32;
+    uint8_t* dst = (uint8_t*)malloc(bound);
+    if(!dst) {
+        deflateEnd(&s->strm);
+        if(errBuf && errLen)
+            snprintf(errBuf, errLen, "gzip 输出缓冲内存不足 / gzip out of memory");
+        return -1;
+    }
+    s->strm.next_in = NULL;
+    s->strm.avail_in = 0;
+    s->strm.next_out = dst;
+    s->strm.avail_out = (uInt)bound;
+    int rc = deflate(&s->strm, Z_FINISH);
+    if(rc != Z_STREAM_END) {
+        gzipDescribe(errBuf, errLen, "gzip 流收尾失败 / deflate finish failed", rc, s->strm.msg);
+        deflateEnd(&s->strm);
+        free(dst);
+        return -1;
+    }
+    *outLen = (size_t)((uint8_t*)s->strm.next_out - dst);
+    deflateEnd(&s->strm);
+    *out = dst;
+    return 0;
+}
+
 #else /* ===== nozlib 空实现：无 zlib 构建零成本降级 ===== */
 
 int lm_gzip_available(void) { return 0; }
@@ -192,6 +329,27 @@ int lm_gzip_decompress(const uint8_t* in, size_t inLen,
                        uint8_t** out, size_t* outLen,
                        char* errBuf, size_t errLen) {
     (void)in; (void)inLen; (void)out; (void)outLen;
+    gzipNoBackend(errBuf, errLen);
+    return -1;
+}
+
+int lm_gzip_stream_create(int level, char* errBuf, size_t errLen) {
+    (void)level;
+    gzipNoBackend(errBuf, errLen);
+    return -1;
+}
+
+int lm_gzip_stream_write(int h, const uint8_t* in, size_t inLen, int flush,
+                         uint8_t** out, size_t* outLen,
+                         char* errBuf, size_t errLen) {
+    (void)h; (void)in; (void)inLen; (void)flush; (void)out; (void)outLen;
+    gzipNoBackend(errBuf, errLen);
+    return -1;
+}
+
+int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
+                          char* errBuf, size_t errLen) {
+    (void)h; (void)out; (void)outLen;
     gzipNoBackend(errBuf, errLen);
     return -1;
 }
