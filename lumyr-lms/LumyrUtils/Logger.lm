@@ -1,0 +1,401 @@
+// ============================================================
+// lumyr-Logger：语言级日志框架（G2）
+// 分层（接口 + 抽象 + 实现）：
+//   LogLevel                级别常量（DEBUG/INFO/WARN/ERROR，数值越大越严重）
+//   LogRecord               一条日志记录（时间/级别/记录器名/消息/结构化字段）
+//   LogFormatter 接口        记录 → 单行文本
+//     TextFormatter         人类可读文本（默认）
+//     JsonFormatter         每行一个 JSON 对象（结构化采集）
+//   LogHandler 接口          记录出口
+//     AbstractLogHandler    公共流程（格式化后交 writeText）
+//     ConsoleLogHandler     控制台（print）
+//     FileLogHandler        文件落盘：内存缓冲攒批 + 批量 append
+//   Logger                  级别过滤 + 多出口；root/get 注册表
+//
+// 落盘模型（对标 nginx access_log 攒批 + slog handler 串行）：
+//   FileLogHandler 先在内存缓冲，达 batchSize 行或距首行超 intervalMs 时
+//   整块 flush；一次 flush = 一次 file(path).append——文件写在 C 运行时
+//   已按路由自动流放 blocking 池（协程内调用 yield 等待，调度线程不阻塞）。
+//   临界区只做缓冲行交换（纯内存），实际写盘在锁外，杜绝持锁跨 yield。
+//
+// 用法（三模式）：
+//   1. alias：import <Utils/Logger> as lg; → lg.Logger.root().info("hi");
+//   2. no-alias：import <Utils/Logger>; → log = Logger.get("order");
+//   3. rename：import <Utils/Logger> {Logger as L};
+//
+//   Logger.root().setLevel(LogLevel.DEBUG);
+//   Logger.root().addHandler(FileLogHandler("/var/log/app.log"));
+//   log = Logger.get("order");
+//   log.info("order created", {"orderId": "A1", "amount": 99});
+//   ...
+//   Logger.root().flush();   // 停机前强制落盘
+//
+// 多 worker 约定：日志器在应用 start 前完成配置（root/addHandler）；
+// get(name) 的注册表有互斥保护，请求期并发调用安全。
+// ============================================================
+
+// 日志级别（数值越大越严重；过滤规则：level >= 记录器级别才输出）
+public class LogLevel {
+    public static const DEBUG: int = 10;
+    public static const INFO: int = 20;
+    public static const WARN: int = 30;
+    public static const ERROR: int = 40;
+
+    // 级别数值 → 名称（未知级别回退数值串）
+    static func nameOf(level: int): string {
+        if (level == LogLevel.DEBUG) { return "DEBUG"; }
+        if (level == LogLevel.INFO) { return "INFO"; }
+        if (level == LogLevel.WARN) { return "WARN"; }
+        if (level == LogLevel.ERROR) { return "ERROR"; }
+        return "LV" + level;
+    }
+
+    // 名称 → 级别数值（未知返回 -1）
+    static func valueOf(name: string): int {
+        if (name == "DEBUG") { return LogLevel.DEBUG; }
+        if (name == "INFO") { return LogLevel.INFO; }
+        if (name == "WARN") { return LogLevel.WARN; }
+        if (name == "ERROR") { return LogLevel.ERROR; }
+        return -1;
+    }
+}
+
+// 一条日志记录（Logger 构造，Formatter 读取，Handler 传递）
+public class LogRecord {
+    timeMs: long;       // 记录时刻（timestamp_ms，毫秒精度）
+    level: int;         // LogLevel.* 数值
+    loggerName: string; // 记录器名（Logger.get(name) 的 name）
+    message: string;    // 日志消息
+    fields: any;        // 结构化字段（map；无字段为 null）
+
+    func LogRecord(timeMs: long, level: int, loggerName: string, message: string, fields) {
+        self.timeMs = timeMs;
+        self.level = level;
+        self.loggerName = loggerName;
+        self.message = message;
+        self.fields = fields;
+    }
+}
+
+// 格式化公共助手：时间戳文本 / 毫秒补零 / 文本字段渲染
+public class LogFormats {
+    // 毫秒时间戳 → "YYYY-MM-DD HH:MM:SS.mmm"（本地时区；毫秒手工补零）
+    static func stamp(timeMs: long): string {
+        dt = datetime(timeMs / 1000);
+        base = formatDate(dt, "%Y-%m-%d %H:%M:%S");
+        millis = timeMs % 1000;
+        if (millis < 10) { return base + ".00" + millis; }
+        if (millis < 100) { return base + ".0" + millis; }
+        return base + "." + millis;
+    }
+
+    // 结构化字段 → " k=v k2=v2" 文本后缀（无字段返回空串）
+    static func textFields(fields): string {
+        if (fields == null) { return ""; }
+        out = "";
+        ks = fields.keys();
+        i = 0;
+        while (i < ks.len) {
+            k = ks[i];
+            out = out + " " + k + "=" + fields[k];
+            i = i + 1;
+        }
+        return out;
+    }
+}
+
+// 格式化器契约：记录 → 单行文本（不含行尾换行）
+public interface LogFormatter {
+    func format(rec: LogRecord): string;
+}
+
+// 文本格式：2026-10-02 23:00:00.123 INFO [order] order created orderId=A1 amount=99
+public class TextFormatter implements LogFormatter {
+    func TextFormatter() { }
+
+    func format(rec: LogRecord): string {
+        return LogFormats.stamp(rec.timeMs)
+             + " " + LogLevel.nameOf(rec.level)
+             + " [" + rec.loggerName + "] "
+             + rec.message
+             + LogFormats.textFields(rec.fields);
+    }
+}
+
+// JSON 格式：每行一个 JSON 对象（ts/level/logger/msg/fields）
+public class JsonFormatter implements LogFormatter {
+    func JsonFormatter() { }
+
+    func format(rec: LogRecord): string {
+        obj = {};
+        obj["ts"] = LogFormats.stamp(rec.timeMs);
+        obj["level"] = LogLevel.nameOf(rec.level);
+        obj["logger"] = rec.loggerName;
+        obj["msg"] = rec.message;
+        if (rec.fields != null) { obj["fields"] = rec.fields; }
+        return stringify(obj);
+    }
+}
+
+// 日志出口契约
+public interface LogHandler {
+    func emit(rec: LogRecord);   // 输出一条记录
+    func flush();                // 强制落盘（无缓冲出口 no-op）
+    func close();                // 关闭出口（先 flush）
+}
+
+// 出口抽象基类：格式化委托 formatter，子类只实现 writeText
+public abstract class AbstractLogHandler implements LogHandler {
+    formatter: any;   // LogFormatter
+
+    func AbstractLogHandler() {
+        self.formatter = TextFormatter();
+    }
+
+    func AbstractLogHandler(formatter: LogFormatter) {
+        self.formatter = formatter;
+    }
+
+    func emit(rec: LogRecord) {
+        self.writeText(self.formatter.format(rec));
+    }
+
+    // writeText 由具体子类实现：输出一行（控制台 print、文件追加带 \n）。
+    // 抽象类豁免接口方法实现检查，不在此声明空方法（语言不支持抽象方法声明）。
+
+    func flush() { }
+    func close() { self.flush(); }
+}
+
+// 控制台出口：print 到标准输出（默认出口，无缓冲）
+public class ConsoleLogHandler extends AbstractLogHandler {
+    func ConsoleLogHandler() {
+        super();
+    }
+
+    func ConsoleLogHandler(formatter: LogFormatter) {
+        super(formatter);
+    }
+
+    func writeText(line: string) {
+        print(line);
+    }
+}
+
+// 文件出口：内存缓冲攒批 + 整块 append（协程内落盘自动流放 blocking 池）
+public class FileLogHandler extends AbstractLogHandler {
+    path: string;
+    batchSize: int;       // 达此行数触发 flush
+    intervalMs: long;     // 距首行缓冲超过此毫秒触发 flush（惰性，emit 时判定）
+    buffer: array;        // 待落盘文本行
+    firstMs: long;        // 当前缓冲首行时刻（0 = 空缓冲）
+    lockId: int;          // 缓冲交换互斥（多 worker 并发 emit）
+    dirReady: bool;       // 父目录已确保存在
+
+    // 默认参数：文本格式、64 行/批、1000ms 时间窗
+    func FileLogHandler(path: string) {
+        self.initHandler(path, TextFormatter(), 64, 1000);
+    }
+
+    // 自定义格式化器（传 JsonFormatter() 即结构化日志）
+    func FileLogHandler(path: string, formatter: LogFormatter) {
+        self.initHandler(path, formatter, 64, 1000);
+    }
+
+    // 全参数：路径 + 格式化器 + 批量行数 + 时间窗毫秒
+    func FileLogHandler(path: string, formatter: LogFormatter, batchSize: int, intervalMs: long) {
+        self.initHandler(path, formatter, batchSize, intervalMs);
+    }
+
+    private func initHandler(path: string, formatter: LogFormatter, batchSize: int, intervalMs: long) {
+        super(formatter);
+        self.path = path;
+        self.batchSize = batchSize;
+        if (self.batchSize < 1) { self.batchSize = 1; }
+        self.intervalMs = intervalMs;
+        self.buffer = [];
+        self.firstMs = 0;
+        self.lockId = mutex();
+        self.dirReady = false;
+    }
+
+    // 确保父目录存在（folder.create 递归幂等；惰性只做一次，竞争下重复创建无害）
+    private func ensureDir() {
+        if (self.dirReady) { return; }
+        parts = self.path.split("/");
+        if (parts.len > 1) {
+            parent = parts.slice(0, parts.len - 1).join("/");
+            if (parent != "" && parent != ".") { folder(parent).create(); }
+        }
+        self.dirReady = true;
+    }
+
+    // 临界区只交换缓冲；写盘在锁外（file.append 在协程内 yield 流放
+    // blocking 池，持锁跨 yield 会把其他 worker 的日志调用整个挂起）
+    func emit(rec: LogRecord) {
+        line = self.formatter.format(rec);
+        due = false;
+        lock(self.lockId);
+        if (self.firstMs == 0) { self.firstMs = rec.timeMs; }
+        self.buffer.add(line);
+        if (self.buffer.len >= self.batchSize
+            || rec.timeMs - self.firstMs >= self.intervalMs) {
+            due = true;
+        }
+        pending = null;
+        if (due) {
+            pending = self.buffer;
+            self.buffer = [];
+            self.firstMs = 0;
+        }
+        unlock(self.lockId);
+        if (due) { self.persist(pending); }
+    }
+
+    // 整块追加落盘：一次 open/append/close（C 层 "ab" 自动建文件）。
+    // 失败兜底：降级 print 输出，绝不静默丢日志。
+    private func persist(lines: array) {
+        text = "";
+        i = 0;
+        while (i < lines.len) {
+            text = text + lines[i] + "\n";
+            i = i + 1;
+        }
+        try {
+            self.ensureDir();
+            file(self.path).append(text);
+        } catch (e) {
+            print("[lumyr-log][error] 日志落盘失败，降级标准输出（" + self.path + "）/ file log sink failed, fallback to stdout: " + e);
+            j = 0;
+            while (j < lines.len) {
+                print(lines[j]);
+                j = j + 1;
+            }
+        }
+    }
+
+    func flush() {
+        lock(self.lockId);
+        pending = self.buffer;
+        self.buffer = [];
+        self.firstMs = 0;
+        unlock(self.lockId);
+        if (pending.len > 0) { self.persist(pending); }
+    }
+}
+
+// 日志器：级别过滤 + 多出口。root 为全局默认（控制台/INFO）；
+// get(name) 的具名日志器共享 root 的出口数组引用，级别默认继承 root。
+public class Logger {
+    name: string;
+    level: int;        // 0 = 继承 root 级别
+    handlers: array;   // LogHandler 数组（具名日志器与 root 共享同一数组引用）
+
+    // ---- 全局注册表（root + 具名缓存 + 注册表锁）----
+    // 静态属性初始化后只读，故用静态 map 承载可变状态（映射项可写）。
+    static registry: map = {"root": null, "named": {}, "lock": 0};
+
+    func Logger(name: string) {
+        self.name = name;
+        self.level = 0;
+        self.handlers = [];
+    }
+
+    // 全局根日志器（惰性创建：控制台出口 + INFO 级别）
+    static func root(): Logger {
+        if (Logger.registry["root"] != null) { return Logger.registry["root"]; }
+        lg = Logger("root");
+        lg.level = LogLevel.INFO;
+        lg.handlers.add(ConsoleLogHandler());
+        Logger.registry["root"] = lg;
+        Logger.registry["lock"] = mutex();
+        return lg;
+    }
+
+    // 具名日志器（缓存；与 root 共享出口数组，级别继承 root 直到显式 setLevel）
+    static func get(name: string): Logger {
+        root = Logger.root();
+        named = Logger.registry["named"];
+        lock(Logger.registry["lock"]);
+        if (named.contains(name)) {
+            lg = named[name];
+            unlock(Logger.registry["lock"]);
+            return lg;
+        }
+        lg = Logger(name);
+        lg.handlers = root.handlers;
+        named[name] = lg;
+        unlock(Logger.registry["lock"]);
+        return lg;
+    }
+
+    // 生效级别：自身设置优先，否则继承 root
+    func effectiveLevel(): int {
+        if (self.level > 0) { return self.level; }
+        return Logger.root().level;
+    }
+
+    // 设置级别（数值用 LogLevel.* 常量；名称 "DEBUG"/"INFO"/"WARN"/"ERROR"）
+    func setLevel(level: int) {
+        self.level = level;
+        return self;
+    }
+
+    func setLevelByName(name: string) {
+        v = LogLevel.valueOf(name);
+        if (v < 0) { throw "未知日志级别：" + name + " / unknown log level: " + name; }
+        self.level = v;
+        return self;
+    }
+
+    // 增加/移除出口
+    func addHandler(handler: LogHandler) {
+        self.handlers.add(handler);
+        return self;
+    }
+
+    // 核心记录入口：级别过滤 → 构造记录 → 各出口 emit
+    func log(level: int, message: string, fields) {
+        if (level < self.effectiveLevel()) { return; }
+        rec = LogRecord(timestamp_ms(), level, self.name, message, fields);
+        i = 0;
+        while (i < self.handlers.len) {
+            self.handlers[i].emit(rec);
+            i = i + 1;
+        }
+    }
+
+    // ---- 级别便捷方法（fields 可省略；同名方法不支持重载，用默认参数合并）----
+    func debug(message: string, fields = null) { self.log(LogLevel.DEBUG, message, fields); }
+    func info(message: string, fields = null) { self.log(LogLevel.INFO, message, fields); }
+    func warn(message: string, fields = null) { self.log(LogLevel.WARN, message, fields); }
+    func error(message: string, fields = null) { self.log(LogLevel.ERROR, message, fields); }
+
+    // 全部出口强制落盘（停机前调用）
+    static func flush() {
+        root = Logger.registry["root"];
+        if (root == null) { return; }
+        i = 0;
+        while (i < root.handlers.len) {
+            root.handlers[i].flush();
+            i = i + 1;
+        }
+    }
+
+    // 全部出口 flush + close（进程退出前调用）
+    static func shutdown() {
+        root = Logger.registry["root"];
+        if (root == null) { return; }
+        i = 0;
+        while (i < root.handlers.len) {
+            root.handlers[i].close();
+            i = i + 1;
+        }
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "Logger(" + self.name + ", level=" + LogLevel.nameOf(self.effectiveLevel())
+             + ", handlers=" + self.handlers.len + ")";
+    }
+}

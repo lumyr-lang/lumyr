@@ -1,0 +1,200 @@
+// ============================================================
+// 语言级日志框架端到端测试（G2：Logger / Formatter / Handler）
+//
+// T1 级别过滤 + 文本文件：低于级别的记录被丢弃；缓冲 flush 后文本行
+//    含时间戳/级别/记录器名/消息/结构化字段
+// T2 JSON 文件 + 批量自动 flush：达 batchSize 自动整块落盘，JSON 行含
+//    ts/level/logger/msg/fields
+// T3 时间窗惰性 flush：batchSize 未到但距首行超 intervalMs 时，下次 emit
+//    触发整批落盘
+// T4 多线程并发：4 线程各 50 条，共享出口 + 互斥缓冲不丢行（共 200 行）
+// T5 HTTP access log 集成：MetricsFilter.attachLogger 把每请求一行写入
+//    独立文件日志器，请求后落盘可见
+//
+// 自验证，不依赖外部进程；落盘文件写 /tmp，结束后删除。
+// ============================================================
+
+import <Utils/Logger>;
+import <IO/Files>;
+import <App/WebApplication>;
+import <App/HttpMetrics>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 统计文本中的非空行数（日志文件每行以 \n 结尾）
+func countNonEmptyLines(text: string): int {
+    n = 0;
+    parts = text.split("\n");
+    i = 0;
+    while (i < parts.len) {
+        if (parts[i] != "") { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+crlf = "" + '\r' + '\n';
+
+func fetch(port, path: string): string {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    cli.send("GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    cli.close();
+    return all;
+}
+
+txtPath = "/tmp/lm_logger_text.log";
+jsonPath = "/tmp/lm_logger_json.log";
+winPath = "/tmp/lm_logger_win.log";
+mtPath = "/tmp/lm_logger_mt.log";
+accessPath = "/tmp/lm_logger_access.log";
+Files.delete(txtPath);
+Files.delete(jsonPath);
+Files.delete(winPath);
+Files.delete(mtPath);
+Files.delete(accessPath);
+
+root = Logger.root();
+root.setLevel(LogLevel.DEBUG);
+
+// ------------------------------------------------------------
+// T1: 级别过滤 + 文本文件
+// ------------------------------------------------------------
+print("[T1] 级别过滤与文本文件 / level filter and text file");
+fh = FileLogHandler(txtPath);
+root.addHandler(fh);
+lg = Logger.get("order");
+lg.debug("debug-line", {"k": 1});
+lg.info("info-line", {"orderId": "A1", "amount": 99});
+lg.warn("warn-line");
+root.setLevel(LogLevel.WARN);
+lg.info("should-be-dropped");
+root.setLevel(LogLevel.DEBUG);
+Logger.flush();
+txt = Files.readText(txtPath);
+lines = txt.split("\n");
+check(lines[0].contains("DEBUG [order] debug-line k=1"), "T1 DEBUG 文本行不符: [" + lines[0] + "]");
+check(lines[1].contains("INFO [order] info-line orderId=A1 amount=99"),
+      "T1 INFO 字段行不符: [" + lines[1] + "]");
+check(lines[2].contains("WARN [order] warn-line"), "T1 WARN 文本行不符: [" + lines[2] + "]");
+check(!txt.contains("should-be-dropped"), "T1 WARN 级别下 INFO 应被过滤");
+check(lines[0].contains(" DEBUG [order] "), "T1 行应含 ' LEVEL [name] ' 结构");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: JSON 文件 + 批量自动 flush（batchSize=2）
+// ------------------------------------------------------------
+print("[T2] JSON 与批量自动落盘 / json and auto-batch flush");
+jh = FileLogHandler(jsonPath, JsonFormatter(), 2, 100000);
+root.addHandler(jh);
+lg.info("stock-low", {"sku": "S7", "qty": 0});
+check(!Files.exists(jsonPath), "T2 仅 1 行未达批量不应落盘");
+lg.error("boom");
+check(Files.exists(jsonPath), "T2 达 batchSize=2 应自动整块落盘");
+jc = Files.readText(jsonPath);
+jl = jc.split("\n");
+check(jl[0].contains("\"level\":\"INFO\""), "T2 第 1 行应 INFO: " + jl[0]);
+check(jl[0].contains("\"logger\":\"order\""), "T2 第 1 行应含 logger");
+check(jl[0].contains("\"fields\":{\"sku\":\"S7\",\"qty\":0}"),
+      "T2 第 1 行应含结构化字段: " + jl[0]);
+check(jl[1].contains("\"level\":\"ERROR\"") && jl[1].contains("\"msg\":\"boom\""),
+      "T2 第 2 行应为 ERROR boom: " + jl[1]);
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 时间窗惰性 flush（batchSize 很大，仅靠 intervalMs=50ms）
+// ------------------------------------------------------------
+print("[T3] 时间窗惰性 flush / lazy interval flush");
+wh = FileLogHandler(winPath, TextFormatter(), 100000, 50);
+root.addHandler(wh);
+wg = Logger.get("win");
+wg.info("first");
+check(!Files.exists(winPath), "T3 首行后不应立即落盘");
+sleep(120);
+wg.info("second");
+check(Files.exists(winPath), "T3 超时间窗后再次 emit 应触发整批落盘");
+wc = Files.readText(winPath);
+check(wc.contains("[win] first") && wc.contains("[win] second"),
+      "T3 时间窗 flush 应含两行");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 多线程并发（4×50 = 200 行，互斥缓冲不丢行）
+// ------------------------------------------------------------
+print("[T4] 多线程并发日志 / concurrent logging");
+mh = FileLogHandler(mtPath, TextFormatter(), 100000, 100000);
+root.addHandler(mh);
+tids = [];
+worker = func(idx) {
+    g = Logger.get("worker" + idx);
+    i = 0;
+    while (i < 50) {
+        g.info("line", {"w": idx, "i": i});
+        i = i + 1;
+    }
+    return idx;
+};
+w = 0;
+while (w < 4) {
+    tids.add(thread(worker, w));
+    w = w + 1;
+}
+j = 0;
+while (j < tids.len) { thread_join(tids[j]); j = j + 1; }
+Logger.flush();
+mc = Files.readText(mtPath);
+check(countNonEmptyLines(mc) == 200, "T4 4×50 应落盘 200 行，实际: " + countNonEmptyLines(mc));
+check(mc.contains("[worker0]") && mc.contains("[worker3]"), "T4 应含各 worker 记录器名");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: HTTP access log 集成（MetricsFilter.attachLogger）
+// ------------------------------------------------------------
+print("[T5] HTTP access log 集成 / http access log integration");
+port = 18120;
+app = WebApplication("127.0.0.1", port);
+metrics = MetricsFilter();
+// 独立文件日志器（不经 root 出口，避免控制台噪声）；batchSize=1 每条即落盘
+accessLog = Logger("access");
+accessLog.setLevel(LogLevel.INFO);
+afh = FileLogHandler(accessPath, TextFormatter(), 1, 100000);
+accessLog.addHandler(afh);
+metrics.attachLogger(accessLog);
+app.addFilter(metrics);
+app.get("/ping", func(req) {
+    r = ServerResponse(200);
+    r.text("pong");
+    return r;
+});
+app.startAsync();
+sleep(300);
+r = fetch(port, "/ping");
+check(r.contains("HTTP/1.1 200"), "T5 应 200，实际: [" + r.slice(0, 40) + "]");
+r = fetch(port, "/nope");
+check(r.contains("HTTP/1.1 404"), "T5 未命中应 404");
+app.stop();
+app.join();
+afh.flush();
+ac = Files.readText(accessPath);
+check(countNonEmptyLines(ac) == 2, "T5 每请求一行应 2 行，实际: " + countNonEmptyLines(ac));
+check(ac.contains("INFO [access] GET /ping -> 200"),
+      "T5 第 1 行应为 /ping 200: " + ac.split("\n")[0]);
+check(ac.contains("GET /nope -> 404"), "T5 第 2 行应为 /nope 404");
+print("  PASS");
+
+Files.delete(txtPath);
+Files.delete(jsonPath);
+Files.delete(winPath);
+Files.delete(mtPath);
+Files.delete(accessPath);
+
+print("logger_test ALL PASS");

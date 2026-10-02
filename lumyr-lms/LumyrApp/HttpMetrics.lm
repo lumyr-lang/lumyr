@@ -71,6 +71,14 @@ public class MetricsFilter implements WebFilter {
         return self;
     }
 
+    // G2：接入语言级日志器（每请求一行以 INFO 记录；Utils/Logger）。
+    // 典型：m.attachLogger(Logger.get("access"))；logger 的出口/级别/落盘
+    // 策略统一在 Logger 侧配置，过滤器只产出记录行。
+    func attachLogger(logger) {
+        self.setAccessLog(func(line) { logger.info(line); });
+        return self;
+    }
+
     // cost（毫秒）落到桶下标：线性扫 12 桶（常数开销）
     private func bucketIndex(costMs: long): int {
         bounds = MetricsFilter.boundsMs;
