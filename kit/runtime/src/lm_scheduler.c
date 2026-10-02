@@ -232,6 +232,10 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     lm_scheduler_t* s = (lm_scheduler_t*)calloc(1, sizeof(lm_scheduler_t));
     if (!s) return NULL;
     s->reactor = reactor;
+    /* 持有 reactor 一个引用（与 sched_destroy_internal 的 release 配对）：
+     * scheduler 活着期间，timer 回调等异步唤醒源经 s->reactor 写 self-pipe，
+     * reactor 必须存活。owner 自身的引用由 lm_reactor_destroy 释放。 */
+    lm_reactor_retain(reactor);
     atomic_store_explicit(&s->current, NULL, memory_order_relaxed);
     s->ready_head = NULL;
     s->ready_tail = NULL;
@@ -243,6 +247,7 @@ lm_scheduler_t* lm_scheduler_new(lm_reactor_t* reactor) {
     s->lifo_used = 0;
     if (lm_wsq_init(&s->wsq, 0) != 0) {
         pthread_mutex_destroy(&s->ready_mutex);
+        lm_reactor_release(reactor);
         free(s);
         return NULL;
     }

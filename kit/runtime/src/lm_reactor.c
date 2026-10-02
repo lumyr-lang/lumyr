@@ -14,6 +14,7 @@
 // posted 队列：双队列（accept 优先 + 一般事件），避免事件回调内递归调用。
 #include "lm_reactor.h"
 #include "gc_runtime.h"
+#include "lm_scheduler.h"   /* T5：入站投递唤醒 owner receiver（lm_scheduler_wakeup） */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -470,6 +471,36 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     r->posted_events_count = 0;
     r->stop_flag = 0;
     r->free_conns = NULL;
+    /* 异步唤醒源引用计数：创建即持 owner 引用（=1）。scheduler 绑定时再
+     * retain、销毁时 release；lm_reactor_destroy 释放本 owner 引用。
+     * 不初始化则首个外部 retain/release 周期（如 T5 RR 选 worker）会
+     * 错误归零并在 reactor 运行中释放（UAF）。 */
+    atomic_store_explicit(&r->refcnt, 1, memory_order_relaxed);
+    /* T5 RR：入站队列默认有界（env LM_INBOUND_CAP 可覆盖，仅测试/调优用）。
+     * 正常背压下 acceptor 按负载选 worker，队列深度恒近 0；上限纯属安全网。 */
+    r->inbound_head = NULL;
+    r->inbound_tail = NULL;
+    r->inbound_free = NULL;
+    r->inbound_pending = 0;
+    r->inbound_cap = 4096;
+    r->reg_idx = -1;
+    atomic_store_explicit(&r->inbound_load, 0, memory_order_relaxed);
+    atomic_store_explicit(&r->inbound_reserved, 0, memory_order_relaxed);
+    r->inbound_wait_co = NULL;
+    r->inbound_wait_sched = NULL;
+    {
+        const char* env_cap = getenv("LM_INBOUND_CAP");
+        if (env_cap && env_cap[0]) {
+            int v = atoi(env_cap);
+            if (v >= 1) r->inbound_cap = v;
+        }
+    }
+    if (pthread_mutex_init(&r->inbound_mtx, NULL) != 0) {
+        free(r->connections); free(r->fd_map);
+        free(r->posted_accept); free(r->posted_events);
+        free(r);
+        return NULL;
+    }
     /* 初始化连接池：所有节点都入 free list（next_free 串联，反向） */
     for (int i = conn_capacity - 1; i >= 0; i--) {
         r->connections[i].fd = -1;
@@ -482,6 +513,7 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
     if (r->actions->init(r) != 0) {
         free(r->connections); free(r->fd_map);
         free(r->posted_accept); free(r->posted_events);
+        pthread_mutex_destroy(&r->inbound_mtx);
         free(r);
         return NULL;
     }
@@ -517,6 +549,30 @@ lm_reactor_t* lm_reactor_new(int conn_capacity) {
 
 static void reactor_destroy_internal(lm_reactor_t* r) {
     if (r->actions && r->actions->fini) r->actions->fini(r);
+    /* T5：残余入站 fd 全部在 owner 线程 close——shutdown 竞态下 acceptor 可能
+     * 刚投递而 receiver 未及消费，这里兜底保证 fd 不泄漏（fd 守恒）。 */
+    pthread_mutex_lock(&r->inbound_mtx);
+    lm_inbound_t* node = r->inbound_head;
+    while (node) {
+        lm_inbound_t* nx = node->next;
+        if (node->fd >= 0) close(node->fd);
+        free(node);
+        node = nx;
+    }
+    r->inbound_head = NULL;
+    r->inbound_tail = NULL;
+    node = r->inbound_free;
+    while (node) {
+        lm_inbound_t* nx = node->next;
+        free(node);
+        node = nx;
+    }
+    r->inbound_free = NULL;
+    r->inbound_pending = 0;
+    r->inbound_wait_co = NULL;
+    r->inbound_wait_sched = NULL;
+    pthread_mutex_unlock(&r->inbound_mtx);
+    pthread_mutex_destroy(&r->inbound_mtx);
     /* fini 已关 backend_fd，wake read 端注册随之失效；关管道两端 */
     if (r->wake_pipe[0] >= 0) { close(r->wake_pipe[0]); r->wake_pipe[0] = -1; }
     if (r->wake_pipe[1] >= 0) { close(r->wake_pipe[1]); r->wake_pipe[1] = -1; }
@@ -543,7 +599,10 @@ void lm_reactor_release(lm_reactor_t* r) {
 void lm_reactor_destroy(lm_reactor_t* r) {
     /* release 语义：owner 引用减一；scheduler（及其异步唤醒源）持引用期间
      * 只减不 free，推迟到最后一个 release——修复 r.destroy() 与 timer 回调
-     * 经 scheduler->reactor 写 self-pipe 并发的 use-after-free。 */
+     * 经 scheduler->reactor 写 self-pipe 并发的 use-after-free。
+     * T5：注销必须先于最终 release——注销后 by_idx 立即取不到本 reactor，
+     * 已在锁内 retain 到指针的提交者其 release 会把释放推迟到本调用之后。 */
+    lm_reactor_unregister(r);
     lm_reactor_release(r);
 }
 
@@ -702,4 +761,202 @@ int lm_reactor_connect_check(lm_connection_t* c, int* out_errno) {
         return -1;
     }
     return 0;
+}
+
+/* ============================================================
+ * T5：reactor 注册表（RR acceptor 按 worker idx 投递）
+ * ============================================================
+ * 与 g_scheds 同构但独立：RR 交接的载荷是裸 fd、目标是 reactor 本身，
+ * 不经过 scheduler。槽位按 worker idx 显式占用（注册顺序与 worker 创建
+ * 顺序无竞态）；by_idx 在锁内 retain，注销先于 reactor 最终 release，
+ * 跨线程提交期间 reactor 不可能被 free。 */
+
+static lm_reactor_t* g_reactors[LM_REACTOR_MAX_REG];
+static pthread_mutex_t g_reactors_mutex = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int g_reactors_count = 0;
+
+int lm_reactor_register(lm_reactor_t* r, int idx) {
+    if (!r || idx < 0 || idx >= LM_REACTOR_MAX_REG) return -1;
+    pthread_mutex_lock(&g_reactors_mutex);
+    if (r->reg_idx >= 0 || g_reactors[idx] != NULL) {
+        pthread_mutex_unlock(&g_reactors_mutex);
+        return -1;
+    }
+    r->reg_idx = idx;
+    g_reactors[idx] = r;
+    atomic_fetch_add_explicit(&g_reactors_count, 1, memory_order_acq_rel);
+    pthread_mutex_unlock(&g_reactors_mutex);
+    return 0;
+}
+
+void lm_reactor_unregister(lm_reactor_t* r) {
+    if (!r || r->reg_idx < 0) return;
+    pthread_mutex_lock(&g_reactors_mutex);
+    if (r->reg_idx < LM_REACTOR_MAX_REG && g_reactors[r->reg_idx] == r) {
+        g_reactors[r->reg_idx] = NULL;
+        atomic_fetch_sub_explicit(&g_reactors_count, 1, memory_order_acq_rel);
+    }
+    r->reg_idx = -1;
+    pthread_mutex_unlock(&g_reactors_mutex);
+}
+
+int lm_reactor_registry_count(void) {
+    return atomic_load_explicit(&g_reactors_count, memory_order_acquire);
+}
+
+lm_reactor_t* lm_reactor_by_idx_retained(int idx) {
+    if (idx < 0 || idx >= LM_REACTOR_MAX_REG) return NULL;
+    pthread_mutex_lock(&g_reactors_mutex);
+    lm_reactor_t* r = g_reactors[idx];
+    /* 锁内 retain：unregister→release 与本序列在同一把锁上串行，
+     * 拿到的指针在 release 前必然有效。 */
+    if (r) lm_reactor_retain(r);
+    pthread_mutex_unlock(&g_reactors_mutex);
+    return r;
+}
+
+/* ============================================================
+ * T5：入站新连接 MPSC 队列
+ * ============================================================ */
+
+/* 节点取池：先复用 freelist（owner pop 后归还），否则 malloc。持 mtx 调用。 */
+static lm_inbound_t* inbound_node_take_locked(lm_reactor_t* r) {
+    lm_inbound_t* n = r->inbound_free;
+    if (n) {
+        r->inbound_free = n->next;
+        return n;
+    }
+    return (lm_inbound_t*)malloc(sizeof(lm_inbound_t));
+}
+
+int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind,
+                         const struct sockaddr* addr, socklen_t addrlen,
+                         int max_conn) {
+    if (!r || fd < 0) return -2;
+    lm_co_t* wake_co = NULL;
+    lm_scheduler_t* wake_sched = NULL;
+    pthread_mutex_lock(&r->inbound_mtx);
+    /* 权威容量门控（锁内，与 publish_load 校准线性化）：reserved 已达
+     * per-worker 上限即拒，acceptor 换下一个 worker；突发受理也不超卖。 */
+    if (max_conn > 0 &&
+        atomic_load_explicit(&r->inbound_reserved, memory_order_acquire) >= max_conn) {
+        pthread_mutex_unlock(&r->inbound_mtx);
+        return -1;
+    }
+    if (r->inbound_pending >= r->inbound_cap) {
+        pthread_mutex_unlock(&r->inbound_mtx);
+        return -1;   /* 有界队列满：调用方换 worker / 停 accept 反压 */
+    }
+    lm_inbound_t* n = inbound_node_take_locked(r);
+    if (!n) {
+        pthread_mutex_unlock(&r->inbound_mtx);
+        return -2;
+    }
+    n->fd = fd;
+    n->kind = kind;
+    n->next = NULL;
+    n->addrlen = 0;
+    memset(&n->addr, 0, sizeof(n->addr));
+    if (addr && addrlen > 0) {
+        socklen_t cp = addrlen;
+        if (cp > (socklen_t)sizeof(n->addr)) cp = (socklen_t)sizeof(n->addr);
+        memcpy(&n->addr, addr, cp);
+        n->addrlen = cp;
+    }
+    if (r->inbound_tail) r->inbound_tail->next = n;
+    else r->inbound_head = n;
+    r->inbound_tail = n;
+    r->inbound_pending++;
+    /* 占 reservation：入队即计入权威占用，直到 owner publish 校准
+     *（active+pending 仍含本 fd，计数不丢）。 */
+    atomic_fetch_add_explicit(&r->inbound_reserved, 1, memory_order_acq_rel);
+    /* owner receiver 正在等：一次性摘走等待者并在解锁后唤醒（post + self-pipe，
+     * 跨线程安全）。未在等说明 receiver 正在 pop/处理循环中，必将自行取到，
+     * 无需 wakeup（fd 本身尚未挂任何 epoll，唤醒只服务于等待协程）。 */
+    if (r->inbound_wait_co) {
+        wake_co = (lm_co_t*)r->inbound_wait_co;
+        wake_sched = (lm_scheduler_t*)r->inbound_wait_sched;
+        r->inbound_wait_co = NULL;
+        r->inbound_wait_sched = NULL;
+    }
+    pthread_mutex_unlock(&r->inbound_mtx);
+    if (wake_co && wake_sched) lm_scheduler_wakeup(wake_sched, wake_co);
+    return 0;
+}
+
+int lm_reactor_inbound_pop(lm_reactor_t* r, lm_inbound_t* out) {
+    if (!r || !out) return 0;
+    int got = 0;
+    pthread_mutex_lock(&r->inbound_mtx);
+    lm_inbound_t* n = r->inbound_head;
+    if (n) {
+        r->inbound_head = n->next;
+        if (!r->inbound_head) r->inbound_tail = NULL;
+        r->inbound_pending--;
+        *out = *n;                         /* POD 拷贝（含 fd/kind/addr） */
+        out->next = NULL;
+        n->next = r->inbound_free;         /* 节点回 freelist 复用 */
+        r->inbound_free = n;
+        got = 1;
+    }
+    pthread_mutex_unlock(&r->inbound_mtx);
+    return got;
+}
+
+int lm_reactor_inbound_arm(lm_reactor_t* r, void* co, void* sched) {
+    if (!r || !co) return 0;
+    int armed = 0;
+    pthread_mutex_lock(&r->inbound_mtx);
+    /* 锁内复查：提交与登记在同一把锁上串行——
+     * 先入队则此处必见非空（调用方立即再 pop，不丢连接）；
+     * 先登记则提交方负责摘等待者并唤醒。 */
+    if (!r->inbound_head) {
+        r->inbound_wait_co = co;
+        r->inbound_wait_sched = sched;
+        armed = 1;
+    }
+    pthread_mutex_unlock(&r->inbound_mtx);
+    return armed;
+}
+
+void lm_reactor_inbound_cancel(lm_reactor_t* r, void* co) {
+    if (!r || !co) return;
+    pthread_mutex_lock(&r->inbound_mtx);
+    if (r->inbound_wait_co == co) {
+        r->inbound_wait_co = NULL;
+        r->inbound_wait_sched = NULL;
+    }
+    pthread_mutex_unlock(&r->inbound_mtx);
+}
+
+int lm_reactor_inbound_pending(lm_reactor_t* r) {
+    if (!r) return 0;
+    pthread_mutex_lock(&r->inbound_mtx);
+    int n = r->inbound_pending;
+    pthread_mutex_unlock(&r->inbound_mtx);
+    return n;
+}
+
+int lm_reactor_inbound_capacity(lm_reactor_t* r) {
+    return r ? r->inbound_cap : 0;
+}
+
+void lm_reactor_publish_load(lm_reactor_t* r, int load) {
+    if (!r) return;
+    /* 入站锁内校准：reserved = 在役 + 已入队未 pop。与 submit 的
+     * reserve 自增在同一把锁线性化——publish 覆盖不会丢失提交增量
+     *（增量若已入队则体现在 pending，若已被 pop 则体现在 load）。 */
+    pthread_mutex_lock(&r->inbound_mtx);
+    atomic_store_explicit(&r->inbound_load, load, memory_order_release);
+    atomic_store_explicit(&r->inbound_reserved,
+                          load + r->inbound_pending, memory_order_release);
+    pthread_mutex_unlock(&r->inbound_mtx);
+}
+
+int lm_reactor_inbound_load(lm_reactor_t* r) {
+    return r ? atomic_load_explicit(&r->inbound_load, memory_order_acquire) : 0;
+}
+
+int lm_reactor_inbound_reserved(lm_reactor_t* r) {
+    return r ? atomic_load_explicit(&r->inbound_reserved, memory_order_acquire) : 0;
 }

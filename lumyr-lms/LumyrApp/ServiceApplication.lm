@@ -37,6 +37,9 @@
 //                        n 个 ServiceWorker（n-1 子线程 + 主线程）各自独立
 //                        reactor + scheduler + SO_REUSEPORT 同端口 listen，
 //                        内核按连接 hash 分发；maxConnections 转为 per-worker 限制
+//   dispatch     string  默认 "reuseport"（多线程模式内核分发，行为不变）；
+//                        "rr" 启用 T5 单 acceptor + 应用层负载感知 RR 分派
+//                        （worker 0 单 listener，全满不 accept 走 backlog 反压）
 //   connCapacity int     默认 65536（Phase 7.6）：reactor 连接池容量，
 //                        即可跟踪的最大 fd 数（连接对象池按 fd 索引预分配）。
 //                        取值应 ≥ 进程 fd 上限（ulimit -n）；fd 超出容量时
@@ -254,6 +257,116 @@ public class AcceptLoop {
 }
 
 // ============================================================
+// RrAcceptLoop：T5 单 acceptor + 应用层 RR 分派的 accept 循环
+// 与 AcceptLoop（reuseport 模式）同级，错误分类/监督重启规则一致，
+// 差异只在受理原语：srv.acceptRr(n, maxConn) 在 C 层完成
+//   负载感知选 worker（RR 游标 + 在役数/入站队列水位跳过高压 worker）
+//   → accept 裸 fd → 投递目标 worker reactor MPSC 入站队列。
+// 返回码（见 Socket.lm acceptRr 注释）：
+//    0 已投递；1 全 worker 高压（未 accept，连接留 backlog，短让出反压）；
+//    2 worker reactor 未全部注册（启动屏障，等待）；
+//   -1 fd 耗尽（指数退避）；-2 瞬时错误；-3 监听套接字致命（退出）。
+// RR 模式下 gate/throttle 不再需要：全满即不 accept（rc=1），
+// 等价硬上限排队语义且对全部 worker 生效；87.5% 平滑档由负载选择天然覆盖。
+// ============================================================
+public class RrAcceptLoop {
+    static BACKOFF_INIT_MS: int = 200;
+    static BACKOFF_MAX_MS: int = 5000;
+    static RESTART_LIMIT: int = 5;
+    static RESTART_WINDOW_MS: int = 60000;
+
+    host: any;       // ServiceWorker（owner=worker 0）
+    srv: any;        // 唯一 listen socket
+    nworkers: int;
+    backoffMs: int;
+    restartN: int;
+    windowStartMs: int;
+
+    func RrAcceptLoop(host, srv, nworkers: int) {
+        self.host = host;
+        self.srv = srv;
+        self.nworkers = nworkers;
+        self.backoffMs = RrAcceptLoop.BACKOFF_INIT_MS;
+        self.restartN = 0;
+        self.windowStartMs = 0;
+    }
+
+    // 单次受理。返回 false = 退出循环（致命/停机）
+    func acceptOnce(): bool {
+        rc = self.srv.acceptRr(self.nworkers, self.host.app.maxConnections);
+        if (rc == 0) {
+            // 受理成功：退避复位
+            self.backoffMs = RrAcceptLoop.BACKOFF_INIT_MS;
+            return true;
+        }
+        if (rc == 1) {
+            // 全部 worker 高压（在役满/队列满）：本轮未 accept，listener 保持
+            // ET 未读，连接留内核 backlog；短让出后由在役排空驱动重试。
+            coSleep(2);
+            return true;
+        }
+        if (rc == 2) {
+            // worker reactor 未全部注册：启动屏障未满足，等待就绪
+            coSleep(1);
+            return true;
+        }
+        if (rc == -1) {
+            self.host.onLoopError("exhausted",
+                "RR accept 资源耗尽（fd 耗尽），退避 " + self.backoffMs + "ms 后继续 / RR accept fd exhausted, backing off");
+            coSleep(self.backoffMs);
+            self.backoffMs = self.backoffMs * 2;
+            if (self.backoffMs > RrAcceptLoop.BACKOFF_MAX_MS) {
+                self.backoffMs = RrAcceptLoop.BACKOFF_MAX_MS;
+            }
+            return true;
+        }
+        if (rc == -3) {
+            self.host.onLoopError("fatal",
+                "RR accept 监听套接字失效，退出受理循环 / RR listen socket broken, accept loop exiting");
+            return false;
+        }
+        // rc == -2：瞬时错误，继续受理
+        self.host.onLoopError("transient",
+            "RR accept 瞬时错误，继续受理 / RR transient accept error");
+        return true;
+    }
+
+    // 循环体：acceptor 协程入口（监督重启规则同 AcceptLoop）
+    func run() {
+        while (self.host.loopRunning()) {
+            self.host.reapDueHandlers();
+            self.host.checkHandlerBudget();
+            try {
+                if (self.acceptOnce() == false) { return; }
+            } catch (e) {
+                if (self.host.loopRunning() == false) { return; }   // 主动 stop 不重启
+                now = timestamp_ms();
+                if (self.windowStartMs == 0 || now - self.windowStartMs > RrAcceptLoop.RESTART_WINDOW_MS) {
+                    self.windowStartMs = now;
+                    self.restartN = 0;
+                }
+                self.restartN = self.restartN + 1;
+                if (self.restartN > RrAcceptLoop.RESTART_LIMIT) {
+                    self.host.onLoopError("failure",
+                        "RR accept 协程异常重启超限（" + RrAcceptLoop.RESTART_LIMIT + " 次/"
+                        + (RrAcceptLoop.RESTART_WINDOW_MS / 1000) + "s），停止受理 / RR accept supervisor gave up: "
+                        + AcceptLoop.errText(e));
+                    return;
+                }
+                delay = RrAcceptLoop.BACKOFF_INIT_MS;
+                i = 1;
+                while (i < self.restartN) { delay = delay * 2; i = i + 1; }
+                if (delay > RrAcceptLoop.BACKOFF_MAX_MS) { delay = RrAcceptLoop.BACKOFF_MAX_MS; }
+                self.host.onLoopError("supervise",
+                    "RR accept 协程异常退出，" + delay + "ms 后第 " + self.restartN + " 次重启 / RR accept coroutine died, restarting (attempt "
+                    + self.restartN + "): " + AcceptLoop.errText(e));
+                coSleep(delay);
+            }
+        }
+    }
+}
+
+// ============================================================
 // ServiceConnectionHandler：单连接处理协程
 // 构造即 spawn 协程（state=READY，不立即执行）；start() resume 一次跑到第一个
 // yield（recv/send 等待 IO 事件）；协程内 try handleConnection → 兜底 close →
@@ -336,6 +449,8 @@ class ServiceWorker {
     reactorInst: any;
     scheduler: any;
     acceptCo: any;
+    recvCo: any;        // T5 RR 模式：本 worker receiver 协程（消费入站队列）
+    rrEnabled: bool;    // T5：本 worker 是否跑 RR 分派（决定是否发布在役负载）
     finishedHandlers: array;
     activeHandlers: array;
     activeCount: int;
@@ -348,6 +463,7 @@ class ServiceWorker {
     budgetOverrunCount: long;
     longSchedCount: long;
     stopRequested: bool;
+    stopIssued: bool;       // reactor.stop 单次发放（外部 stop 与收尾路径可能重入）
     tid: int;
     error: any;
 
@@ -358,6 +474,8 @@ class ServiceWorker {
         self.reactorInst = null;
         self.scheduler = null;
         self.acceptCo = null;
+        self.recvCo = null;
+        self.rrEnabled = false;
         self.finishedHandlers = [];
         self.activeHandlers = [];
         self.activeCount = 0;
@@ -369,6 +487,7 @@ class ServiceWorker {
         self.budgetOverrunCount = 0;
         self.longSchedCount = 0;
         self.stopRequested = false;
+        self.stopIssued = false;
         self.tid = 0;
         self.error = null;
     }
@@ -402,8 +521,11 @@ class ServiceWorker {
     }
 
     // worker 主流程（主线程直接调 / 子线程入口调）：
-    //   建 reactor + scheduler（TLS 均为线程本地）→ SO_REUSEPORT 同端口 listen
-    //   → spawn accept loop 协程 → reactor.run → 退出后清理 + 拆 scheduler/reactor
+    //   公共：建 reactor + scheduler（TLS 均为线程本地）→ 按分派模式跑
+    //   事件循环 → 退出后统一清理 + 拆 scheduler/reactor。
+    //   reuseport（默认）：SO_REUSEPORT 同端口 listen + 本 worker AcceptLoop；
+    //   rr（T5）：worker 0 建唯一 listener + RrAcceptLoop 投递，
+    //             全部 worker 跑 receiver 协程消费本 reactor 入站队列。
     func run() {
         app = self.app;
         self.reactorInst = ReactorInstance(app.connCapacity());
@@ -412,28 +534,12 @@ class ServiceWorker {
         setScheduler(self.scheduler);
         // stop 先于 run 到达（reactor 建立前）：立即停，不进事件循环
         if (self.stopRequested) { self.reactorInst.stop(); }
-        // SO_REUSEPORT：多 worker 同端口 listen，内核 hash 分发连接
-        srv = ServerSocket(app.host(), app.port(), app.backlog(), 1);
-        self.serverSock = srv;
-        // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
-        self.acceptCo = Coroutine(func(w) {
-            loop = AcceptLoop(w, w.serverSock);
-            loop.run();
-        }, self);
-        // Phase 8.2：accept loop 钉住本线程（listen fd 挂本 reactor，
-        // 防 WSQ 窃取窗口——spawn 后首次 yield 前协程可被窃取）
-        coSetPinned(self.acceptCo.impl);
-        self.acceptCo.resume();
-        self.reactorInst.run();
-        // reactor 退出后清理：accept 协程 + listen socket + 挂起 handler 协程
-        if (self.acceptCo != null) {
-            self.acceptCo.destroy();
-            self.acceptCo = null;
+        if (app.dispatchMode() == "rr") {
+            self.serveRr();
+        } else {
+            self.serveReusePort();
         }
-        if (self.serverSock != null) {
-            self.serverSock.close();
-            self.serverSock = null;
-        }
+        // reactor 退出后统一清理：挂起 handler 协程 + scheduler/reactor
         self.reapFinished();
         self.destroyActive();
         // onStop 等价：清 scheduler（TLS + drain 钩子）+ destroy + clearReactor
@@ -449,10 +555,100 @@ class ServiceWorker {
         }
     }
 
+    // reuseport 模式服务体：同端口 listen + 公共 AcceptLoop 跑满事件循环，
+    // 退出后销毁 accept 协程 + listen socket。
+    private func serveReusePort() {
+        app = self.app;
+        srv = ServerSocket(app.host(), app.port(), app.backlog(), 1);
+        self.serverSock = srv;
+        // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
+        self.acceptCo = Coroutine(func(w) {
+            loop = AcceptLoop(w, w.serverSock);
+            loop.run();
+        }, self);
+        // Phase 8.2：accept loop 钉住本线程（listen fd 挂本 reactor，
+        // 防 WSQ 窃取窗口——spawn 后首次 yield 前协程可被窃取）
+        coSetPinned(self.acceptCo.impl);
+        self.acceptCo.resume();
+        self.reactorInst.run();
+        if (self.acceptCo != null) {
+            self.acceptCo.destroy();
+            self.acceptCo = null;
+        }
+        if (self.serverSock != null) {
+            self.serverSock.close();
+            self.serverSock = null;
+        }
+    }
+
+    // T5 RR 模式服务体：
+    //   全部 worker：按 idx 注册 reactor（acceptor 启动屏障/投递寻址）+ receiver 协程；
+    //   worker 0：额外建唯一 listener（无 reuseport）+ RrAcceptLoop 协程。
+    private func serveRr() {
+        app = self.app;
+        self.rrEnabled = true;
+        n = app.workerCount();
+        self.reactorInst.registerIdx(self.idx);
+        if (self.idx == 0) {
+            // 全进程唯一 listener：不设 SO_REUSEPORT
+            self.serverSock = ServerSocket(app.host(), app.port(), app.backlog(), 0);
+        }
+        // receiver：所有 worker（含 worker 0）都消费自己 reactor 的入站队列
+        self.recvCo = Coroutine(func(w) { w.rrRecvLoop(); }, self);
+        coSetPinned(self.recvCo.impl);
+        self.recvCo.resume();
+        // acceptor 仅 worker 0；registryCount==n 的启动屏障在 C 层/循环内兜底
+        if (self.idx == 0) {
+            self.acceptCo = Coroutine(func(w) {
+                loop = RrAcceptLoop(w, w.serverSock, n);
+                loop.run();
+            }, self);
+            coSetPinned(self.acceptCo.impl);
+            self.acceptCo.resume();
+        }
+        self.reactorInst.run();
+        // 退出清理：先取消 receiver 等待登记再销毁协程（避免等待者悬空），
+        // 残余入站 fd 由 reactor 销毁路径 drain 关闭（无泄漏）。
+        if (self.recvCo != null) {
+            self.reactorInst.cancelInboundWait();
+            self.recvCo.destroy();
+            self.recvCo = null;
+        }
+        if (self.acceptCo != null) {
+            self.acceptCo.destroy();
+            self.acceptCo = null;
+        }
+        if (self.serverSock != null) {
+            self.serverSock.close();
+            self.serverSock = null;
+        }
+    }
+
+    // T5 RR receiver 循环：阻塞取本 reactor 入站连接（空则内部 yield），
+    // 取到后复用 onAccepted 受理路径（与普通 accept 完全一致）。
+    func rrRecvLoop() {
+        while (self.loopRunning()) {
+            conn = self.reactorInst.recvInbound();
+            // stop 到达后取到的残余连接直接关闭（owner 线程 close，符合不变量）
+            if (self.loopRunning() == false) {
+                try { conn.close(); } catch (e) { x = 1; }
+                return;
+            }
+            self.onAccepted(conn);
+        }
+    }
+
     // 停止：置标志位 + reactor.stop 打破事件循环（跨线程调用安全：
-    // reactor.stop 走 C 层 stop_flag + self-pipe 唤醒）
+    // reactor.stop 走 C 层 stop_flag + self-pipe 唤醒）。
+    // 单次发放：外部 ServiceApplication.stop 与 runMultiWorker 收尾会对
+    // 同一 worker 各调一次，重入时拆机可能已完成（impl 已空/释放），
+    // 第二次直接忽略，杜绝重入报错与释放后访问。
     func stop() {
         self.stopRequested = true;
+        if (self.stopIssued) {
+            return self;
+        }
+        self.stopIssued = true;
         if (self.reactorInst != null) {
             self.reactorInst.stop();
         }
@@ -476,6 +672,11 @@ class ServiceWorker {
         a = self.app;
         // 并发上限保护：多线程模式下 maxConnections 为 per-worker 限制
         if (a.maxConnections > 0 && self.activeCount >= a.maxConnections) {
+            // RR 下 C 层 reserved 门控已保证几乎不可达；万一因竞态拒收，
+            // 立即校准本 worker 的 reserved（active+pending），防计数虚高。
+            if (self.rrEnabled && self.reactorInst != null) {
+                self.reactorInst.publishLoad(self.activeCount);
+            }
             a.onRejectConnection(conn);
             return;
         }
@@ -484,6 +685,8 @@ class ServiceWorker {
         self.activeHandlers.add(h);
         self.activeCount = self.activeCount + 1;
         self.acceptTotal = self.acceptTotal + 1;
+        // T5 RR：发布最新在役数，acceptor 据此负载感知跳过本 worker
+        if (self.rrEnabled) { self.reactorInst.publishLoad(self.activeCount); }
         h.start();
     }
 
@@ -575,6 +778,10 @@ class ServiceWorker {
         h.active = false;
         self.finishedHandlers.add(h);
         self.activeCount = self.activeCount - 1;
+        // T5 RR：在役下降立即发布，全满反压期间 acceptor 可尽快恢复投递
+        if (self.rrEnabled && self.reactorInst != null) {
+            self.reactorInst.publishLoad(self.activeCount);
+        }
     }
 
     // 回收已完成的连接协程（run 退出时调用，destroy 释放协程栈）
@@ -634,6 +841,10 @@ public class ServiceApplication extends Application {
     // 硬上限排队模式（0 = 未设置走配置/默认 false；1 = 开；-1 = 关）。
     // 开启后在役达 maxConnections 不 reject，而是暂停 accept 让连接在 backlog 排队。
     acceptQueueVal: int;
+    // T5：新连接分派模式（"" = 未设置，走配置表键 dispatch / 默认 reuseport）。
+    //   "reuseport"：每 worker 同端口 listen，内核 hash 分发（默认，行为不变）；
+    //   "rr"：worker 0 单 listener accept，按 worker 在役负载 RR 应用层分派。
+    dispatchVal: string;
 
     func ServiceApplication() {
         super();
@@ -699,6 +910,7 @@ public class ServiceApplication extends Application {
         self.workerList = null;
         self.connCapacityVal = 0;
         self.acceptQueueVal = 0;
+        self.dispatchVal = "";
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -766,6 +978,34 @@ public class ServiceApplication extends Application {
         }
         self.workerCountVal = n;
         return self;
+    }
+
+    // ---- T5：新连接分派模式（workers > 1 时生效）----
+    // "reuseport"（默认）：n 个 worker 各自 SO_REUSEPORT 同端口 listen，
+    //   内核 hash 分发，既有行为完全不变；
+    // "rr"：worker 0 单 listener 做 acceptor，按各 worker 在役连接数/入站
+    //   队列水位负载感知 RR 应用层分派（全满不 accept，连接留 backlog 反压）。
+    // workers=1 时无分派差异，rr 配置不生效（走单线程直连路径）。
+    // 配置表键 dispatch（string）；编程式设置优先。
+    func setDispatch(mode: string) {
+        if (mode != "reuseport" && mode != "rr") {
+            throw "未知分派模式：" + mode + "（仅支持 reuseport / rr） / unknown dispatch mode: "
+                + mode + " (expected reuseport or rr)";
+        }
+        self.dispatchVal = mode;
+        return self;
+    }
+
+    // 当前生效分派模式（编程式优先，其次配置表，默认 reuseport）
+    func dispatchMode(): string {
+        if (self.dispatchVal != "") { return self.dispatchVal; }
+        m = self.configString("dispatch", "reuseport");
+        if (m != "reuseport" && m != "rr") {
+            print("[lumyr-app][warn] 未知分派模式配置：" + m + "，回退 reuseport / unknown dispatch config: "
+                + m + ", falling back to reuseport");
+            return "reuseport";
+        }
+        return m;
     }
 
     // ---- Phase 7.6：reactor 连接池容量（connCapacity）----

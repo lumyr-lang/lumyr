@@ -604,6 +604,13 @@ typedef enum {
     BUILTIN_SCHED_STATS,        // __private_system__sched_stats()：全局计数 + pending 直方图 + per-scheduler 行
     BUILTIN_FD_LIMIT,           // __private_system__fd_limit()：进程 fd 软上限（-1=无上限/不支持，App 服务层封装）
     BUILTIN_COSLEEP,            // coSleep(ms)：协程友好休眠（定时器+yield，不阻塞 reactor；App 退避用）
+    /* ===== T5：单 acceptor + 应用层 RR 分派（私有机制内置，Reactor.lm/框架封装） ===== */
+    BUILTIN_REACTOR_REGISTER,       // __private_system__reactor_register(impl, idx)：worker reactor 按 idx 注册
+    BUILTIN_REACTOR_REGISTRY_COUNT, // __private_system__reactor_registry_count()：已注册 reactor 数
+    BUILTIN_REACTOR_PUBLISH_LOAD,  // __private_system__reactor_publish_load(impl, load)：发布在役连接数
+    BUILTIN_REACTOR_RECV_INBOUND,  // __private_system__reactor_recv_inbound(impl)：worker receiver 取入站连接 → socket
+    BUILTIN_REACTOR_INBOUND_CANCEL,// __private_system__reactor_inbound_cancel(impl)：shutdown 取消等待登记
+    BUILTIN_SOCKET_ACCEPT_RR,      // __private_system__socket_accept_rr(sock, n, maxConn)：RR 选 worker+accept+投递 → 状态码
     /* ===== 三角/反三角/对数/指数（全局形式透传，1~2 参，返回 double） ===== */
     BUILTIN_SIN,           // sin(x)：正弦（弧度）
     BUILTIN_COS,           // cos(x)：余弦（弧度）

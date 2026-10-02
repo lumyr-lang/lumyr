@@ -1,0 +1,321 @@
+// rr_dispatch_test.lm —— T5 单测：单 acceptor + 应用层负载感知 RR 分派
+// 验证 ServiceApplication 多线程 RR 模式（dispatch="rr"，workers=4）：
+//   [1] 长连接 echo：800 条长连全部 echo 成功（长会话 handler 循环到 EOF）
+//   [2] 分布偏差：acceptTotal 最大/最小 worker 相对均值偏差 ≤15%（TR-5.1）
+//   [3] 容量打满：per-worker maxConnections 打满后新连接留 backlog 排队，
+//       在役排空后自动补入，全程 echo 成功，无死锁（TR-5.2）
+//   [4] 停机在役归零：stop/join 后各 worker activeCount==0，受理总数守恒
+//   [5] dispatch 配置：默认 reuseport；setDispatch 非法值抛错；配置表键生效
+//   [6] WebApplication RR 冒烟：workers=4 的 HTTP 服务路由正常
+// reuseport 默认模式行为不变由 reuseport_test/conn_capacity_test 等回归覆盖。
+// 运行：ulimit -n 8192 && ./bin/lumyr tests/rr_dispatch_test.lm
+import <App/ServiceApplication>;
+import <App/WebApplication>;
+import <NetWork/Socket>;
+
+// 长会话 echo handler：recv→send 循环到对端 EOF（连接持续在役，模拟长连）
+class EchoSession implements ServiceHandler {
+    func serve(conn) {
+        while (true) {
+            data = conn.recv(4096);
+            if (data == "") { return; }
+            conn.send(data);
+        }
+    }
+}
+
+// 分布统计：返回 "min,max,mean,deviation%" 文本；偏差超 thresholdPct 置 *ok=false
+func distributionReport(workers, total: int, thresholdPct: int, okRef: array): string {
+    n = workers.len;
+    sum = 0;
+    mn = -1;
+    mx = -1;
+    dist = "";
+    for w in workers {
+        sum = sum + w.acceptTotal;
+        if (mn < 0 || w.acceptTotal < mn) { mn = w.acceptTotal; }
+        if (mx < 0 || w.acceptTotal > mx) { mx = w.acceptTotal; }
+        if (dist != "") { dist = dist + ","; }
+        dist = dist + w.acceptTotal;
+    }
+    mean = total / n;
+    devUp = 0;
+    devDn = 0;
+    if (mean > 0) {
+        devUp = (mx - mean) * 100 / mean;
+        devDn = (mean - mn) * 100 / mean;
+    }
+    if (sum != total) {
+        print("  FAIL: acceptTotal 总和 " + sum + " != " + total);
+        okRef[0] = false;
+    }
+    if (devUp > thresholdPct || devDn > thresholdPct) {
+        print("  FAIL: 分布 [" + dist + "] 偏差上 " + devUp + "% 下 " + devDn
+            + "% 超 " + thresholdPct + "%");
+        okRef[0] = false;
+    }
+    return "[" + dist + "] 均值 " + mean + " 偏差 -" + devDn + "%/+ " + devUp + "%";
+}
+
+// 测试 1+2+4：800 长连 echo + 分布 ≤15% + 停机归零
+func testLongConnDistribution(): bool {
+    print("[1] 4 worker RR / 800 长连 echo + 分布偏差 ≤15%");
+    port = 19401;
+    app = ServiceApplication("127.0.0.1", port, EchoSession());
+    app.setWorkers(4);
+    app.setDispatch("rr");
+    app.setConnCapacity(8192);
+    app.startAsync();
+    sleep(500);
+
+    total = 800;
+    clients = [];
+    i = 0;
+    while (i < total) {
+        clients.add(ClientSocket("127.0.0.1", port));
+        i = i + 1;
+    }
+    // 全部长连就绪后做一轮 echo（连接持续持有，不关闭）
+    ok = 0;
+    i = 0;
+    while (i < total) {
+        msg = "p" + i;
+        clients[i].send(msg);
+        resp = clients[i].recv(4096);
+        if (resp == msg) { ok = ok + 1; }
+        i = i + 1;
+    }
+    sleep(200);
+    print("  echo 成功 " + ok + "/" + total + " / echo ok");
+    if (ok != total) {
+        for c in clients { try { c.close(); } catch (e) { x = 1; } }
+        app.stop();
+        app.join();
+        return false;
+    }
+
+    // 分布断言（acceptTotal 总和 + 偏差 ≤15%）
+    flag = [true];
+    rep = distributionReport(app.workerList, total, 15, flag);
+    print("  worker 分布: " + rep + " / distribution");
+    if (!flag[0]) {
+        for c in clients { try { c.close(); } catch (e) { x = 1; } }
+        app.stop();
+        app.join();
+        return false;
+    }
+
+    print("[4] 停机在役归零 / shutdown active-count drain");
+    for c in clients { try { c.close(); } catch (e) { x = 1; } }
+    sleep(500);   // 等 EOF 到达各 worker，handler 收尾
+    app.stop();
+    app.join();
+    left = 0;
+    for w in app.workerList { left = left + w.activeCount; }
+    if (left != 0) {
+        print("  FAIL: 停机后在役残留 " + left);
+        return false;
+    }
+    print("  在役归零，受理总数守恒 / active drained to 0");
+    print("  PASS");
+    return true;
+}
+
+// 测试 3：容量打满有限排队，排空后补入，无死锁
+func testCapacityBacklog(): bool {
+    print("[3] 容量打满 backlog 有限排队 → 排空补入 / capacity backlog admit");
+    port = 19403;
+    perWorker = 25;       // 4 worker × 25 = 100 在役上限
+    app = ServiceApplication("127.0.0.1", port, EchoSession());
+    app.setWorkers(4);
+    app.setDispatch("rr");
+    app.setMaxConnections(perWorker);
+    app.setConnCapacity(4096);
+    okFlag = true;
+    app.startAsync();
+    sleep(500);
+
+    cap = perWorker * 4;
+    active = [];
+    i = 0;
+    while (i < cap) {
+        active.add(ClientSocket("127.0.0.1", port));
+        i = i + 1;
+    }
+    i = 0;
+    while (i < cap) {
+        active[i].send("a" + i);
+        if (active[i].recv(4096) != "a" + i) {
+            print("  FAIL: 在役连接 echo 失败 @" + i);
+            okFlag = false;
+        }
+        i = i + 1;
+    }
+    sleep(300);
+    accepted = 0;
+    for w in app.workerList { accepted = accepted + w.acceptTotal; }
+    if (accepted != cap) {
+        print("  FAIL: 打满基线受理 " + accepted + " != " + cap);
+        okFlag = false;
+    } else {
+        print("  在役打满 " + cap + " 全部受理 / saturated baseline");
+    }
+
+    // 超出容量的 20 条：TCP 握手留 backlog，acceptor 不受理
+    extra = 20;
+    queued = [];
+    i = 0;
+    while (i < extra) {
+        queued.add(ClientSocket("127.0.0.1", port));
+        i = i + 1;
+    }
+    sleep(500);
+    accepted = 0;
+    for w in app.workerList { accepted = accepted + w.acceptTotal; }
+    if (accepted != cap) {
+        print("  FAIL: 打满期间误受理 " + accepted + "（应保持 " + cap + "）");
+        okFlag = false;
+    } else {
+        print("  打满期间新连接留 backlog 未受理（" + accepted + "）/ queued in backlog");
+    }
+
+    // 释放 20 条在役 → acceptor 恢复投递 → 排队连接补入
+    i = 0;
+    while (i < extra) {
+        active[i].close();
+        i = i + 1;
+    }
+    sleep(800);
+    i = 0;
+    while (i < extra) {
+        queued[i].send("q" + i);
+        if (queued[i].recv(4096) != "q" + i) {
+            print("  FAIL: 排队补入连接 echo 失败 @" + i);
+            okFlag = false;
+        }
+        i = i + 1;
+    }
+    accepted = 0;
+    for w in app.workerList { accepted = accepted + w.acceptTotal; }
+    if (accepted != cap + extra) {
+        print("  FAIL: 补入后受理 " + accepted + " != " + (cap + extra));
+        okFlag = false;
+    } else {
+        print("  排空后排队连接全部补入（" + accepted + "）/ backlog drained, admitted");
+    }
+
+    // 统一清理（任何断言失败也必须 stop，避免 reactor 注册表残留污染后续用例）
+    for c in active { try { c.close(); } catch (e) { x = 1; } }
+    for c in queued { try { c.close(); } catch (e) { x = 1; } }
+    sleep(300);
+    app.stop();
+    app.join();
+    left = 0;
+    for w in app.workerList { left = left + w.activeCount; }
+    if (left != 0) {
+        print("  FAIL: 停机后在役残留 " + left);
+        okFlag = false;
+    }
+    if (okFlag) { print("  PASS"); }
+    return okFlag;
+}
+
+// 测试 5：dispatch 配置（默认值 / 非法值抛错 / 编程式生效 / 配置表键）
+func testDispatchConfig(): bool {
+    print("[5] dispatch 配置 / dispatch configuration");
+    a = ServiceApplication(0);
+    if (a.dispatchMode() != "reuseport") {
+        print("  FAIL: 默认分派应为 reuseport");
+        return false;
+    }
+    threw = false;
+    try {
+        a.setDispatch("hash");
+    } catch (e) {
+        threw = true;
+    }
+    if (!threw) {
+        print("  FAIL: 非法分派模式未抛错");
+        return false;
+    }
+    a.setDispatch("rr");
+    if (a.dispatchMode() != "rr") {
+        print("  FAIL: setDispatch(rr) 未生效");
+        return false;
+    }
+    // 配置表键 dispatch=rr
+    b = ServiceApplication({"dispatch": "rr"});
+    if (b.dispatchMode() != "rr") {
+        print("  FAIL: 配置表 dispatch=rr 未生效");
+        return false;
+    }
+    // 非法配置值回退 reuseport（warn，不抛错）
+    c = ServiceApplication({"dispatch": "bad"});
+    if (c.dispatchMode() != "reuseport") {
+        print("  FAIL: 非法配置未回退 reuseport");
+        return false;
+    }
+    print("  PASS");
+    return true;
+}
+
+// 测试 6：WebApplication RR 冒烟（workers=4 HTTP）
+func testHttpRr(): bool {
+    print("[6] Web RR 冒烟 / multi-worker HTTP over RR");
+    port = 19406;
+    app = WebApplication("127.0.0.1", port);
+    app.setWorkers(4);
+    app.setDispatch("rr");
+    app.get("/hello", func(req) {
+        r = ServerResponse(200);
+        r.text("hi-rr");
+        return r;
+    });
+    app.startAsync();
+    sleep(500);
+
+    total = 16;
+    ok = 0;
+    crlf = "" + '\r' + '\n';
+    req = "GET /hello HTTP/1.1" + crlf + "Host: x" + crlf + "Connection: close" + crlf + crlf;
+    i = 0;
+    while (i < total) {
+        cli = ClientSocket("127.0.0.1", port);
+        cli.send(req);
+        resp = "";
+        while (true) {
+            chunk = cli.recv(4096);
+            if (chunk == "") { break; }
+            resp = resp + chunk;
+        }
+        cli.close();
+        if (resp.indexOf("200") >= 0 && resp.indexOf("hi-rr") >= 0) { ok = ok + 1; }
+        i = i + 1;
+    }
+    app.stop();
+    app.join();
+    if (ok != total) {
+        print("  FAIL: HTTP 成功 " + ok + "/" + total);
+        return false;
+    }
+    print("  HTTP 成功 " + ok + "/" + total + " / http ok");
+    print("  PASS");
+    return true;
+}
+
+func main() {
+    fail = 0;
+    if (!testDispatchConfig()) { fail = fail + 1; }
+    if (!testLongConnDistribution()) { fail = fail + 1; }
+    if (!testCapacityBacklog()) { fail = fail + 1; }
+    if (!testHttpRr()) { fail = fail + 1; }
+    print("----------------------------------------");
+    if (fail == 0) {
+        print("rr_dispatch_test: ALL PASS");
+    } else {
+        print("rr_dispatch_test: FAIL (" + fail + " failed)");
+    }
+    if (fail != 0) { throw "rr_dispatch_test FAILED (" + fail + " failed)"; }
+}
+
+main();

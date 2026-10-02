@@ -20,6 +20,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
+#include <pthread.h>
+#include <sys/socket.h>
 #include "lm_timer.h"   /* Phase 8.4：定时器集中化，add_timer/del_timer 转发 lm_timer_* */
 
 #ifdef __cplusplus
@@ -124,6 +126,17 @@ const lm_event_actions_t* lm_reactor_backend(void);
  * reactor 主对象
  * ============================================================ */
 
+/* T5 单 acceptor + 应用层 RR 分派：跨线程投递的新连接消息（MPSC）。
+ * acceptor 线程 accept 后只把裸 fd + 对端地址投入目标 reactor 队列，
+ * fd 在 owner 线程 pop 并首次 ADD 前不挂任何 epoll/kqueue。 */
+typedef struct lm_inbound_s {
+    int fd;
+    int kind;                       /* SocketObj kind（SOCK_KIND_*） */
+    struct sockaddr_storage addr;
+    socklen_t addrlen;
+    struct lm_inbound_s* next;      /* 队列链 / freelist 链（C 内部用） */
+} lm_inbound_t;
+
 struct lm_reactor_s {
     int backend_fd;                       /* epoll_fd / kqfd */
     const lm_event_actions_t* actions;    /* 后端函数表 */
@@ -160,6 +173,20 @@ struct lm_reactor_s {
      * 销毁时 release——timer 回调经 scheduler->reactor 写 self-pipe 唤醒时，
      * 只要 scheduler 活着 reactor 必活（修复 r.destroy() 与回调并发的 UAF）。 */
     _Atomic int refcnt;
+    /* T5 RR：入站新连接 MPSC 队列。acceptor 线程持锁入队（self-pipe 唤醒由
+     * 等待协程的 lm_scheduler_wakeup 顺带完成）；owner 线程 pop 后才 wrap
+     * SocketObj + ADD 事件。全部跨线程交接仅为裸 fd，零跨线程 epoll_ctl。 */
+    pthread_mutex_t inbound_mtx;
+    lm_inbound_t* inbound_head;       /* 待 owner 消费（FIFO） */
+    lm_inbound_t* inbound_tail;
+    lm_inbound_t* inbound_free;       /* 节点复用 freelist */
+    int inbound_pending;              /* 队列深度（持 mtx） */
+    int inbound_cap;                  /* 有界深度（满则 submit 拒绝，全满停 accept） */
+    int reg_idx;                      /* 注册表槽位（-1 = 未注册） */
+    _Atomic int inbound_load;         /* owner 发布的在役连接数（观测用） */
+    _Atomic int inbound_reserved;     /* 权威占用 = 在役 + 已入队未 pop（容量门控依据） */
+    void* inbound_wait_co;            /* owner 侧等待协程（lm_co_t*，单等待者） */
+    void* inbound_wait_sched;         /* 等待协程所属 scheduler（lm_scheduler_t*） */
 };
 
 /* ============================================================
@@ -250,6 +277,59 @@ int lm_reactor_connect(lm_reactor_t* r, lm_connection_t* c);
 /* connect 完成检查（写事件就绪后调）：getsockopt(SO_ERROR) 判断。
  * 返回 0：连接成功。返回 -1：连接失败（errno 在 *out_errno）。 */
 int lm_reactor_connect_check(lm_connection_t* c, int* out_errno);
+
+/* ============================================================
+ * T5：单 acceptor + 应用层 RR 分派
+ *
+ * 模型（libhv detach/post/attach 范式）：acceptor 线程 accept 裸 fd 后经
+ * lm_reactor_submit_fd 投入目标 worker reactor 的 MPSC 队列；owner 线程的
+ * receiver 协程 pop 后才 wrap SocketObj、首次 ADD 事件并 spawn handler。
+ * fd 在 ADD 前不挂任何 epoll/kqueue，拒收 close 全部发生在 owner 线程。
+ * ============================================================ */
+
+#define LM_REACTOR_MAX_REG 128   /* RR 注册表槽位上限（对齐 LM_MAX_SCHEDS） */
+
+/* 注册表：reactor 创建后由 worker 显式按 worker idx 占槽注册；
+ * 返回 0 成功，-1 越界/槽位已占/重复注册。 */
+int lm_reactor_register(lm_reactor_t* r, int idx);
+/* 注销（幂等）。必须先于最终 release——注销后 by_idx 取不到本 reactor。 */
+void lm_reactor_unregister(lm_reactor_t* r);
+/* 已注册 reactor 数快照（acceptor 开闸前等其 == worker 数）。 */
+int lm_reactor_registry_count(void);
+/* 按 idx 取 reactor（锁内 retain）：返回的指针可跨线程安全使用，
+ * 调用方用完必须 lm_reactor_release；槽位空返回 NULL。 */
+lm_reactor_t* lm_reactor_by_idx_retained(int idx);
+
+/* 投递新连接（acceptor 线程）：
+ * 返回 0 已入队；-1 目标满（reserved 达 max_conn 或队列深达 cap，
+ * 调用方应换 worker 或停止 accept 反压）；
+ * -2 参数错/分配失败（调用方负责 close fd）。
+ * max_conn>0 时在入队锁内做权威容量判定并占 reservation（保证突发受理
+ * 也不会越过 per-worker 上限）；<=0 不按连接数限流（仅队列深度安全网）。
+ * 入队成功且 owner receiver 已在等待时，内部经 lm_scheduler_wakeup 唤醒。 */
+int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind,
+                         const struct sockaddr* addr, socklen_t addrlen,
+                         int max_conn);
+
+/* owner 线程弹出一条入站连接（消息拷贝到 *out，节点回收 freelist）：
+ * 返回 1 取到（out->fd 有效）/ 0 队列空。 */
+int lm_reactor_inbound_pop(lm_reactor_t* r, lm_inbound_t* out);
+/* owner 线程登记等待者：锁内复查队列——非空返回 0（勿等，立即再 pop）；
+ * 已登记返回 1（随后可 lm_co_yield，提交者会经 scheduler 唤醒本协程）。 */
+int lm_reactor_inbound_arm(lm_reactor_t* r, void* co, void* sched);
+/* 取消等待登记（shutdown 在 destroy receiver 协程前调用，防陈旧投递；
+ * 仅当登记的等待者恰为 co 时清除，幂等）。 */
+void lm_reactor_inbound_cancel(lm_reactor_t* r, void* co);
+
+/* 队列深度 / 有界容量（acceptor 负载感知用，内部加锁/快照）。 */
+int lm_reactor_inbound_pending(lm_reactor_t* r);
+int lm_reactor_inbound_capacity(lm_reactor_t* r);
+/* owner 发布在役连接数：内部把 reserved 校准为 load + 当前队列深度，
+ * 与提交占 reservation 在同一把入站锁线性化（acceptor 突发也不超卖）。 */
+void lm_reactor_publish_load(lm_reactor_t* r, int load);
+int lm_reactor_inbound_load(lm_reactor_t* r);
+/* 权威占用快照（reserved = 在役 + 已入队未 pop），acceptor 选 worker 用。 */
+int lm_reactor_inbound_reserved(lm_reactor_t* r);
 
 #ifdef __cplusplus
 }

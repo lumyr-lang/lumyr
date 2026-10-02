@@ -4062,6 +4062,63 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = val_none();
         return 1;
     }
+    /* ===== T5：单 acceptor + 应用层 RR 分派（私有机制内置）===== */
+    case BUILTIN_REACTOR_REGISTER: {
+        /* __private_system__reactor_register(impl, idx)：worker reactor 按
+         * worker idx 显式占槽注册（RR acceptor 按 idx 投递）。 */
+        if (argc < 2 || argv[0].type != VAL_STRUCT_PTR) {
+            runtime_error("reactor_register(impl, idx) 参数错误 / reactor_register: bad args");
+        }
+        int idx = (int)bi_num_i64(argv[1]);
+        if (lm_reactor_register((lm_reactor_t*)argv[0].v.struct_ptr, idx) != 0) {
+            runtime_error("reactor_register 注册失败（idx 越界/重复/槽位占用）/ reactor_register: register failed");
+        }
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_REACTOR_REGISTRY_COUNT: {
+        *out = lumyr_make_int(lm_reactor_registry_count());
+        return 1;
+    }
+    case BUILTIN_REACTOR_PUBLISH_LOAD: {
+        /* __private_system__reactor_publish_load(impl, load)：owner worker
+         * 在 accept/完成连接后发布在役数，供 acceptor 负载感知选 worker。 */
+        if (argc < 2 || argv[0].type != VAL_STRUCT_PTR) {
+            runtime_error("reactor_publish_load(impl, load) 参数错误 / reactor_publish_load: bad args");
+        }
+        lm_reactor_publish_load((lm_reactor_t*)argv[0].v.struct_ptr, (int)bi_num_i64(argv[1]));
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_REACTOR_RECV_INBOUND: {
+        /* __private_system__reactor_recv_inbound(impl)：owner receiver 协程
+         * 取入站连接（空则内部 yield），返回对端 socket。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if (!p) { runtime_error("recvInbound(impl) 需 reactor 实例 / recvInbound: need reactor instance"); }
+        *out = lumyr_reactor_recv_inbound((lm_reactor_t*)p);
+        return 1;
+    }
+    case BUILTIN_REACTOR_INBOUND_CANCEL: {
+        /* __private_system__reactor_inbound_cancel(impl)：shutdown 销毁
+         * receiver 协程前取消其等待登记（等待者恰为当前协程时清除）。 */
+        void* p = (argc > 0 && argv[0].type == VAL_STRUCT_PTR) ? argv[0].v.struct_ptr
+                  : ((recv.type == VAL_STRUCT_PTR) ? recv.v.struct_ptr : NULL);
+        if (p) lm_reactor_inbound_cancel((lm_reactor_t*)p, lm_co_current());
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SOCKET_ACCEPT_RR: {
+        /* __private_system__socket_accept_rr(listener, nworkers, maxConn)：
+         * 返回 0 已投递 / 1 全高压反压 / 2 worker 未就绪 / 负值错误码。 */
+        if (argc < 3 || argv[0].type != VAL_SOCKET) {
+            runtime_error("acceptRr(listener, nworkers, maxConn) 参数错误 / acceptRr: bad args");
+        }
+        int n = (int)bi_num_i64(argv[1]);
+        int maxConn = (int)bi_num_i64(argv[2]);
+        *out = lumyr_make_int(lumyr_socket_accept_rr(argv[0], n, maxConn));
+        return 1;
+    }
     case BUILTIN_CO_SPAWN: {
         if(argc < 1 || argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
             runtime_error("spawn(f, [arg]) 首参须为函数 / spawn: first arg must be function");
@@ -4806,6 +4863,12 @@ const char* builtin_id_name(int id) {
     case BUILTIN_REACTOR_ADD_TIMER: return "addTimer";
     case BUILTIN_REACTOR_DEL_TIMER: return "delTimer";
     case BUILTIN_SET_SOCKET_REACTOR: return "__private_system__set_socket_reactor";
+    case BUILTIN_REACTOR_REGISTER: return "__private_system__reactor_register";
+    case BUILTIN_REACTOR_REGISTRY_COUNT: return "__private_system__reactor_registry_count";
+    case BUILTIN_REACTOR_PUBLISH_LOAD: return "__private_system__reactor_publish_load";
+    case BUILTIN_REACTOR_RECV_INBOUND: return "__private_system__reactor_recv_inbound";
+    case BUILTIN_REACTOR_INBOUND_CANCEL: return "__private_system__reactor_inbound_cancel";
+    case BUILTIN_SOCKET_ACCEPT_RR: return "__private_system__socket_accept_rr";
     case BUILTIN_CO_SPAWN: return "spawn";
     case BUILTIN_CO_RESUME: return "resume";
     case BUILTIN_CO_YIELD: return "yield";

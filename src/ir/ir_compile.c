@@ -311,6 +311,13 @@ int builtin_id_by_name(const char* name) {
         {"delTimer", BUILTIN_REACTOR_DEL_TIMER},
         {"__private_system__destroy_reactor", BUILTIN_REACTOR_DEL},  /* reactor 销毁，Reactor.lm destroy 封装 */
         {"__private_system__set_socket_reactor", BUILTIN_SET_SOCKET_REACTOR},  /* Reactor.lm setReactor/clearReactor 封装 */
+        /* T5 单 acceptor + RR 分派（Reactor.lm/ServiceApplication 封装） */
+        {"__private_system__reactor_register", BUILTIN_REACTOR_REGISTER},
+        {"__private_system__reactor_registry_count", BUILTIN_REACTOR_REGISTRY_COUNT},
+        {"__private_system__reactor_publish_load", BUILTIN_REACTOR_PUBLISH_LOAD},
+        {"__private_system__reactor_recv_inbound", BUILTIN_REACTOR_RECV_INBOUND},
+        {"__private_system__reactor_inbound_cancel", BUILTIN_REACTOR_INBOUND_CANCEL},
+        {"__private_system__socket_accept_rr", BUILTIN_SOCKET_ACCEPT_RR},
         {"spawn", BUILTIN_CO_SPAWN},
         {"resume", BUILTIN_CO_RESUME},
         {"coYield", BUILTIN_CO_YIELD},             /* 协程让出：与 lm 的 yield 关键字（generator 语句）分离 */

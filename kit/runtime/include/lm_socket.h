@@ -64,4 +64,19 @@ void lm_socket_set_dns_timeout_ms(int ms);
 struct lm_reactor_s;
 void lm_socket_set_reactor(struct lm_reactor_s* r);
 
+/* ===== T5：单 acceptor + 应用层 RR 分派 =====
+ * lumyr_socket_accept_rr：acceptor 协程内调用。按 worker 在役负载/队列水位
+ * 负载感知选 worker（RR 游标），accept 裸 fd 后投递到目标 reactor 入站队列。
+ * 返回：0=已投递；1=全部 worker 高压（未 accept，调用方应让出反压）；
+ *       2=reactor 注册表未满 n（worker 尚未就绪，调用方应等待）；
+ *       -1=fd 耗尽（EMFILE/ENFILE，调用方退避）；
+ *       -2=accept 瞬时错误（调用方记录后继续）；-3=监听套接字致命错误（退出）。
+ * maxConn>0 时在役数 >= maxConn 的 worker 跳过；<=0 不限。 */
+int lumyr_socket_accept_rr(Value listener, int nworkers, int maxConn);
+
+/* lumyr_reactor_recv_inbound：worker receiver 协程内调用。pop 本 reactor
+ * 入站队列，取到即 wrap 成对端 SocketObj 返回；空则 yield 等 acceptor 投递。
+ * 必须在 owner 线程的协程内调用。 */
+Value lumyr_reactor_recv_inbound(struct lm_reactor_s* r);
+
 #endif // LM_SOCKET_H

@@ -876,6 +876,156 @@ Value lumyr_socket_accept(Value v) {
     return lumyr_socket_from_fd(cfd, (int)o->kind, 1);
 }
 
+/* ============================================================
+ * T5：单 acceptor + 应用层 RR 分派
+ * ============================================================
+ * 交接不变量：acceptor 只产出裸 fd 投到目标 reactor 的 MPSC 入站队列；
+ * fd 在 owner receiver pop 并 wrap/ADD 前不挂任何 epoll/kqueue；
+ * 拒收 close 全部在 owner 线程发生。
+ *
+ * 关键生命周期约束：不能把 retained 的目标 reactor 指针跨 co_wait_fd 的
+ * yield 持有——被强毁的挂起协程直接释放 fcontext 栈、不走 C 栈展开，
+ * 跨 yield 的 release 不会执行（reactor 引用随每次 RR 启停泄漏）。
+ * 故"选 worker"只产出 idx，retain 收紧到 accept 之后的提交瞬间。 */
+
+/* RR 选择游标（进程内单 listener 语义；多 listener 共享只影响分布均匀性）。 */
+static _Atomic unsigned g_rr_cursor = 0;
+
+/* 判定某 worker 当前是否合格（权威占用 reserved 未达上限且入站队列未满）。
+ * 调用时 t 已 retain；本函数不 release。 */
+static int rr_worker_fits(lm_reactor_t* t, int maxConn) {
+    if (lm_reactor_inbound_pending(t) >= lm_reactor_inbound_capacity(t)) return 0;
+    if (maxConn > 0 && lm_reactor_inbound_reserved(t) >= maxConn) return 0;
+    return 1;
+}
+
+/* 从游标起选第一个合格 worker：只返回 idx（瞬时 retain 做读检查后即释放，
+ * 不跨 yield）；全部高压或注册表未就绪返回 -1。 */
+static int rr_pick_idx(int nworkers, int maxConn) {
+    unsigned cur = atomic_load_explicit(&g_rr_cursor, memory_order_relaxed);
+    for (int k = 0; k < nworkers; k++) {
+        int idx = ((int)cur + k) % nworkers;
+        lm_reactor_t* t = lm_reactor_by_idx_retained(idx);
+        if (!t) continue;
+        int fits = rr_worker_fits(t, maxConn);
+        lm_reactor_release(t);
+        if (fits) return idx;
+    }
+    return -1;
+}
+
+/* accept 已得 cfd 后提交：先试首选，满则按 RR 序换其余 worker（每个只在
+ * 锁内 retain 到提交完成）。返回 0 已被某 worker 接管；-1 全部失败
+ *（调用方 close cfd；fd 不挂任何 epoll，close 安全）。 */
+static int rr_submit_or_fail(int chosen, int nworkers, int cfd, int kind,
+                             const struct sockaddr* addr, socklen_t addrlen,
+                             int maxConn) {
+    for (int k = 0; k < nworkers; k++) {
+        int idx = (chosen + k) % nworkers;
+        lm_reactor_t* t = lm_reactor_by_idx_retained(idx);
+        if (!t) continue;
+        int rc = lm_reactor_submit_fd(t, cfd, kind, addr, addrlen, maxConn);
+        lm_reactor_release(t);
+        if (rc == 0) return 0;
+        if (rc == -2) return -1;   /* 参数/分配错误：重试无意义 */
+        /* rc == -1 容量/队列满：换下一个 worker */
+    }
+    return -1;
+}
+
+int lumyr_socket_accept_rr(Value v, int nworkers, int maxConn) {
+    if(v.type != VAL_SOCKET) {
+        runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError",
+            "acceptRr() 仅适用于 socket 对象 / acceptRr: socket object required");
+        return -3;
+    }
+    SocketObj* o = (SocketObj*)v.v.socket_obj;
+    if(!o || o->closed || o->fd < 0) {
+        runtime_error_code(NET_ERR_BAD_STATE, "SocketError",
+            "acceptRr() 监听套接字无效或已关闭 / acceptRr: invalid or closed listener");
+        return -3;
+    }
+    if (nworkers < 1) return -3;
+    /* 注册表未满：worker reactor 尚未全部就绪，让出等待（启动屏障）。 */
+    if (lm_reactor_registry_count() < nworkers) return 2;
+    lm_co_t* co = lm_co_current();
+    if (!co || !g_socket_reactor) {
+        runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError",
+            "acceptRr() 必须在 worker 协程内调用 / acceptRr: must run inside a worker coroutine");
+        return -3;
+    }
+    socket_mark_io_affine();
+    set_nonblock(o->fd);
+    /* 先选 worker 再 accept：全高压时不 accept，listener 保持 ET 未读状态，
+     * 连接留在内核 backlog（全满停 accept 的自然反压语义）。 */
+    int chosen = rr_pick_idx(nworkers, maxConn);
+    if (chosen < 0) return 1;
+    atomic_store_explicit(&g_rr_cursor, (unsigned)(chosen + 1) % (unsigned)nworkers,
+                          memory_order_relaxed);
+    struct sockaddr_storage cli;
+    socklen_t clilen = sizeof(cli);
+    int cfd;
+    for (;;) {
+        cfd = accept(o->fd, (struct sockaddr*)&cli, &clilen);
+        if (cfd >= 0) break;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            /* ET 无更多连接：挂 listener 读事件等就绪后重试。
+             * 此处不持有任何目标 reactor 引用（见函数头生命周期约束）。 */
+            if (co_wait_fd(o->fd, 1, 0) != 0) return -2;
+            continue;
+        }
+        if (errno == EMFILE || errno == ENFILE || errno == ENOMEM) return -1;
+        if (errno == EINTR) continue;          /* 信号中断：内部重试，不产生瞬时报错 */
+        if (errno == EBADF || errno == EINVAL) return -3;
+        return -2;
+    }
+    /* 新 cfd 设非阻塞 + CLOEXEC（与 lumyr_socket_accept 同口径，跨平台）。 */
+    {
+        int fl = fcntl(cfd, F_GETFL, 0);
+        if (fl != -1) fcntl(cfd, F_SETFL, fl | O_NONBLOCK);
+        int fd = fcntl(cfd, F_GETFD, 0);
+        if (fd != -1) fcntl(cfd, F_SETFD, fd | FD_CLOEXEC);
+    }
+    if (rr_submit_or_fail(chosen, nworkers, cfd, (int)o->kind,
+                          (struct sockaddr*)&cli, clilen, maxConn) == 0) {
+        return 0;
+    }
+    /* 全部 worker 队列竞态满：close 并反压（等价一次拒绝，下一连接重试）。 */
+    close(cfd);
+    return 1;
+}
+
+Value lumyr_reactor_recv_inbound(lm_reactor_t* r) {
+    if (!r) {
+        runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError",
+            "recvInbound 需要 reactor 实例 / recvInbound: reactor instance required");
+        return val_none();
+    }
+    lm_co_t* co = lm_co_current();
+    if (!co) {
+        runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError",
+            "recvInbound 必须在协程内调用 / recvInbound: must run inside a coroutine");
+        return val_none();
+    }
+    /* receiver 全程 pinned：fd 事件挂本线程 reactor，唤醒必须回本线程。 */
+    co->pinned = 1;
+    for (;;) {
+        lm_inbound_t msg;
+        if (lm_reactor_inbound_pop(r, &msg)) {
+            /* owner 线程 wrap：SocketObj GC 对象在本线程分配，
+             * 随后 onAccepted 路径与普通 accept 完全一致。 */
+            return lumyr_socket_from_fd(msg.fd, msg.kind, 1);
+        }
+        lm_scheduler_t* sched = lm_scheduler_get_current();
+        if (lm_reactor_inbound_arm(r, co, sched)) {
+            /* 已登记等待者：提交方入队时摘走并经 scheduler 唤醒。 */
+            lm_co_yield();
+        }
+        /* arm 返回 0 = 锁内复查已有入站（提交先于登记），直接循环 pop 必中，
+         * 零空转；yield 返回后同理。 */
+    }
+}
+
 Value lumyr_socket_send(Value v, const char* data, int len, int flags) {
     if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "send() 仅适用于 socket 对象"); return lumyr_make_int(-1); }
     SocketObj* o = (SocketObj*)v.v.socket_obj;

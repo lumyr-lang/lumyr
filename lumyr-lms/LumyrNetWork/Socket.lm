@@ -110,6 +110,17 @@ public class ServerSocket implements ServerSocketInterface {
         return self.sock.accept();
     }
 
+    // T5 单 acceptor + RR 分派：负载感知选 worker（RR 游标 + 在役/队列水位），
+    // accept 裸 fd 并投递到目标 worker reactor 的入站队列，fd 所有权移交。
+    // 返回（由 App accept 循环解释，不抛业务异常）：
+    //   0=已投递；1=全部 worker 高压（未 accept，调用方让出反压）；
+    //   2=worker reactor 未全部注册（启动屏障未满足，等待重试）；
+    //  -1=fd 耗尽（指数退避）；-2=瞬时错误；-3=监听套接字致命错误（退出）。
+    // maxConn>0 时在役数 >= maxConn 的 worker 跳过；<=0 不限。
+    func acceptRr(nworkers: int, maxConn: int): int {
+        return __private_system__socket_accept_rr(self.sock, nworkers, maxConn);
+    }
+
     func send(data): int {
         return self.sock.send(data);
     }

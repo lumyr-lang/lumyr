@@ -64,7 +64,11 @@ public class ReactorInstance implements ReactorInterface {
     }
 
     func stop() {
-        stop(self.impl);
+        // 幂等：多 worker 停机时外部 stop 与 runMultiWorker 收尾可能重入，
+        // destroy 后 impl 已置 null——重入直接忽略（不再解引用空指针）。
+        if (self.impl != null) {
+            stop(self.impl);
+        }
         self.stopped = true;
     }
 
@@ -76,6 +80,32 @@ public class ReactorInstance implements ReactorInterface {
 
     func delTimer(id: int) {
         delTimer(self.impl, id);
+    }
+
+    // ===== T5：单 acceptor + 应用层 RR 分派（框架内部机制，业务不直接调）=====
+    // registerIdx：worker 线程按 worker idx 显式占槽注册本 reactor。
+    // acceptor 的启动屏障是 registryCount == nworkers；idx 必须唯一且 <128。
+    func registerIdx(idx: int) {
+        __private_system__reactor_register(self.impl, idx);
+    }
+
+    // publishLoad：owner worker 发布在役连接数（accept/连接结束时），
+    // acceptor 按该负载负载感知跳过高压 worker。
+    func publishLoad(load: int) {
+        __private_system__reactor_publish_load(self.impl, load);
+    }
+
+    // recvInbound：worker receiver 协程取 acceptor 投递的入站连接；
+    // 队列为空时框架内部 yield，唤醒后返回对端 socket。
+    // 必须在本 reactor owner 线程的协程内调用。
+    func recvInbound() {
+        return __private_system__reactor_recv_inbound(self.impl);
+    }
+
+    // cancelInboundWait：shutdown 销毁 receiver 协程前取消等待登记，
+    // 避免 reactor 残留指向已毁协程的等待者。
+    func cancelInboundWait() {
+        __private_system__reactor_inbound_cancel(self.impl);
     }
 
     func destroy() {
@@ -130,4 +160,9 @@ public func setReactor(r: ReactorInstance) {
 // （后续 socket 操作虽走阻塞路径，但悬空指针是隐患）
 public func clearReactor() {
     __private_system__set_socket_reactor(null);
+}
+
+// 全局函数：已注册 worker reactor 数（T5 acceptor 启动屏障用）。
+public func reactorRegistryCount(): int {
+    return __private_system__reactor_registry_count();
 }

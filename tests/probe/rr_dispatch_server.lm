@@ -1,0 +1,88 @@
+// ============================================================
+// TR-5.1 探针：单 acceptor + 应用层 RR 分派，4 worker × 2000 长连
+//
+// 目的（验收口径）：
+//   1) 2000 条长连接全部建立并 echo 成功（驱动侧校验 100%）；
+//   2) worker 受理分布占比偏差 ≤15%（服务端打印 acceptTotal 分布）；
+//   3) fd 守恒：连接全关闭并排空后，服务端 fd 数回落到基线 ±5%
+//      （外部 lsof 在探针打印的 BASELINE/ACTIVE/DRAINED 三个时间点采样）。
+//
+// 时间线（主协程 sleep 驱动，worker 在独立线程，不受影响）：
+//   t≈0   startAsync，打印 STATE BASELINE（外部采基线 fd）
+//   0~5s  驱动建立 2000 长连并逐条 echo
+//   t≈5.5 打印 STATE ACTIVE + 分布（外部采在役 fd）
+//   t≈6   驱动关闭全部连接；探针轮询 activeCount 归零
+//   归零后打印 STATE DRAINED + 分布（外部采回落 fd），留 3s 采样窗后停机
+//
+// 用法：
+//   ulimit -n 8192
+//   ./bin/lumyr tests/probe/rr_dispatch_server.lm
+// 配合 asyncio 驱动（建连/echo/保活/关闭）与 lsof 外部采样。
+// ============================================================
+
+import <App/ServiceApplication>;
+
+PORT = 19510;
+WORKERS = 4;
+MAX_CONN = 600;        // per-worker（4 × 600 = 2400，容纳 2000 长连）
+BACKLOG = 2048;
+CONN_CAPACITY = 8192;
+
+// 长连 echo：连接保活期间反复 echo，客户端关闭（recv 得空串）即返回
+class ProbeEchoHandler implements ServiceHandler {
+    func serve(conn) {
+        while (true) {
+            data = conn.recv(4096);
+            if (data == "") { return; }
+            conn.send(data);
+        }
+    }
+}
+
+// 汇总 worker 受理/在役分布（runMultiWorker 返回后 workerList 只读）
+func snapshot(): string {
+    acc = [];
+    act = [];
+    totalAcc = 0;
+    totalAct = 0;
+    for w in app.workerList {
+        acc.add(w.acceptTotal);
+        act.add(w.activeCount);
+        totalAcc = totalAcc + w.acceptTotal;
+        totalAct = totalAct + w.activeCount;
+    }
+    return "accepted=" + totalAcc + " active=" + totalAct
+           + " acceptDist=" + acc + " activeDist=" + act;
+}
+
+app = ServiceApplication({"host": "127.0.0.1", "port": PORT, "backlog": BACKLOG,
+                          "workers": WORKERS, "connCapacity": CONN_CAPACITY,
+                          "dispatch": "rr", "acceptQueue": true});
+app.setHandler(ProbeEchoHandler());
+app.setMaxConnections(MAX_CONN);
+app.startAsync();
+sleep(1000);
+print("STATE BASELINE workers=" + WORKERS + " maxConn(per-worker)=" + MAX_CONN);
+
+// 驱动在 0~5s 建连 + echo；到点打印在役分布
+sleep(5000);
+print("STATE ACTIVE " + snapshot());
+
+// 驱动 t≈6s 关闭全部连接；轮询在役归零（最多等 10s）
+sleep(1500);
+drained = false;
+waited = 0;
+while (waited < 10000) {
+    total = 0;
+    for w in app.workerList { total = total + w.activeCount; }
+    if (total == 0) { drained = true; break; }
+    sleep(200);
+    waited = waited + 200;
+}
+print("STATE DRAINED drained=" + drained + " " + snapshot());
+
+// 留 3s 外部 lsof 回落采样窗，然后优雅停机
+sleep(3000);
+app.stop();
+app.join();
+print("STATE EXIT " + snapshot());

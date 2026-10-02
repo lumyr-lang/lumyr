@@ -159,3 +159,77 @@ P0-A 容量定稿的实施前提（main 帧何时创建、全局槽数何时可�
 - RR 模式 fd 交接窗口：靠"ADD 前不注册 + owner 线程 close"两条不变量保证，专项 fd 号循环复用测试；
 - 全局帧定稿：先写最小多 worker 竞态复现（TSAN 必报），修复后同口径转净才算闭环；
 - 性能：reds/GC 检查共用回边，热路径只增一次分支，验收 QPS 回归 ≤5%。
+
+## 8. T5 实施取证与详细设计（2026-10）
+
+### 8.1 现状事实链（文件:行号）
+
+- **accept 在 lumin 层，不在 C 层**：`lm_reactor_accept_one`（lm_reactor.c:630）
+  全仓零调用；实际路径是 lumin accept 协程循环调 `socket.accept()` 内建
+  （`lumyr_socket_accept`，lm_socket.c:827）：EAGAIN 时 `co_wait_fd(listener_fd,
+  读)` 挂起协程，事件就绪 resume 后重试，每次只 accept 一个并 wrap 成 SocketObj
+  GC 对象（`lumyr_socket_from_fd`）返回 lumin，由 AcceptLoop 调 `onAccepted`
+  spawn handler 协程（ServiceApplication.lm:170-254）。
+- **多 worker 现状**：ServiceWorker.run（ServiceApplication.lm:407-450）各线程
+  自建 reactor+scheduler（TLS），各自 `ServerSocket(host,port,backlog,1)` 置
+  SO_REUSEPORT 同端口 listen（Socket.lm:84-96），内核 hash 分派；workerList
+  保留 acceptTotal 供分布统计。
+- **reactor 主循环钩子点**：lm_reactor.c:589-624，process_events →
+  posted_accept → posted_events；self-pipe `lm_reactor_wakeup`（:567）与
+  ready_drain 钩子（:579）均为现成跨线程唤醒机制。
+- **跨线程唤醒协程范式**：timer 线程已在用 `lm_scheduler_wakeup(sched, co)`
+  （post 入 mutex 定向队列 + self-pipe，lm_scheduler.c:367），fired-before-yield
+  由 fd 等待字三态仲裁（lm_socket.c:156-360）与 scheduler 入队语义覆盖。
+- **reactor 引用计数**：refcnt 释放制（lm_reactor.c:530-548），跨线程持指针
+  必须 retain/release——注册表 by_idx 取指针须在锁内 retain。
+- **scheduler 注册表 g_scheds[128]**（lm_scheduler.c:41）是同构参考，但 RR
+  投递目标是 reactor 而非 sched（worker drain 在 reactor 线程，fd 直接入
+  reactor 队列），故单独建 reactor 注册表，显式按 worker idx 占槽。
+
+### 8.2 C 层设计
+
+1. **每 reactor 入站 MPSC 队列**（lm_reactor.c）：mutex + 单链表节点
+   `{fd, kind, addr, addrlen, next}` + 节点 freelist；`inbound_pending`
+   持锁计数；`inbound_cap` 有界（默认 4096，env `LM_INBOUND_CAP` 覆盖供测试）；
+   `_Atomic int inbound_load` 由 owner 线程发布在役连接数。
+   - `lm_reactor_submit_fd`：满返回 -1；入队后若有 arm 的等待协程则取走 waiter
+     （一次性）并 `lm_scheduler_wakeup`，无需额外 wakeup（未 arm 说明 owner
+     正在 pop 循环里，必将自行取到）。
+   - `lm_reactor_inbound_pop`（owner 线程）/`lm_reactor_inbound_arm`
+     （锁内复查队列：非空返回"勿等"，空则登记 `(co,sched)` 等待者）。
+   - reactor 销毁时 drain 残余节点全部 close（fd 守恒兜底）。
+2. **reactor 注册表**：`lm_reactor_register(r, idx)`（显式 worker 槽位）/
+   unregister/count/by_idx_retained（锁内 retain）；注销先于最终 release，
+   杜绝"取到即将释放的 reactor"。
+3. **两个内建原语**（实现放 lm_socket.c，复用 co_wait_fd/包装函数）：
+   - `accept_rr(listener, n, maxConn)`：先按 `(inbound_load, inbound_pending)`
+     负载感知从 RR 游标选合格 worker（load<maxConn 且 pending<cap）；全忙→
+     返回 1（不 accept，ET 反压）；注册表未满 n→返回 2；然后 accept（EAGAIN
+     走 co_wait_fd），提交；竞态满员则换下一 worker，皆失败 close fd 返回 1；
+     EMFILE/ENFILE→-1 退避码，致命→-3。
+   - `recv_inbound(impl)`：owner 线程 receiver 协程用——pop 即 wrap 成
+     SocketObj 返回；空则 arm + yield，被 submit 唤醒后重试。
+   - 不变量：fd 在 owner 首次 ADD 前不挂任何 epoll/kqueue；拒收 close 全部
+     在 owner 线程 receiver 内执行。
+
+### 8.3 lumin 层设计（ServiceApplication.lm）
+
+- 配置 `dispatch`（"reuseport" 默认 / "rr"）+ `setDispatch(mode)`。
+- RR 模式：worker 0 建**唯一** listener（reusePort=0）并跑 RrAcceptLoop；
+  **所有** worker（含 0）跑 RrRecvLoop（recv_inbound → onAccepted）；
+  reactor 创建后显式 register(impl, idx)，acceptor 等 registry_count==n 开闸。
+- onAccepted/markFinished 后 `publishLoad(impl, activeCount)`；容量判定保持
+  在 worker drain 点（onAccepted 满员走既有 onRejectConnection，owner 线程 close）。
+- 监督重启/错误分级复用 AcceptLoop 既有策略（RR 循环单独实现，避免抽象耦合）。
+- WebApplication.run 仅 super.run()，RR 自动生效，无需改动（T5-d 仅验证）。
+
+### 8.4 验证设计
+
+- VM 枚举内 `tests/rr_dispatch_test.lm`：4 worker RR 长连 echo 全对；
+  acceptTotal 偏差 ≤15%；小 maxConnections 压满后 backlog 排队→释放后补入
+  无死锁；停机后统计在役归零。
+- probe：tests/probe/rr_dispatch_server.lm + rr_drive.py，2000 长连
+  lsof 双采样（fd 回落 ±5%）、容量打满、echo 100%。
+- reuseport 默认模式回归（reuseport/conn_capacity/stress_concurrent/
+  stream_reactor）+ 全量枚举 90+ 用例；ASAN 双模式零报告（含 fd 快速复用）；
+  RR vs reuseport echo QPS 对比（≥3 次中位数，回归 ≤5%）。
