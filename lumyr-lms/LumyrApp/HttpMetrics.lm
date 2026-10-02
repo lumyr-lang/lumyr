@@ -1,0 +1,227 @@
+// ============================================================
+// lumyr-HttpMetrics：请求级指标过滤器 + access log
+// 洋葱过滤器形态挂在 WebApplication 上（app.addFilter(MetricsFilter())），
+// 在 post 阶段记账：每请求累计状态码分类计数、延迟直方图、按路由模式聚合。
+// 路由键取 req.attributes["route"]（WebApplication.handleRequest 命中路由时
+// 写入的 "METHOD 模式串"，如 "GET /users/:id"）——按模式聚合而非原始路径，
+// 避免 id 类可变段导致基数爆炸；未命中路由（404）或自定义分派未标记时
+// 退化为 "METHOD 原始路径"。
+//
+// 并发模型：多 worker 连接协程并发记账，一把可重入锁（rmutex）保护全部
+// 计数状态。临界区为纯内存整数累加（纳秒级），HTTP 请求自身开销远大于此，
+// 单锁不会成为瓶颈；未来需要更高吞吐可再分片。
+//
+// 延迟直方图：毫秒对数桶（1,2,4,...,1024 + 溢出），与调度层 SchedStats
+// 的桶思想一致；分位数取桶上界（同 SchedStats.percentileUs 算法）。
+// 时间源 timestamp_ms()（毫秒精度，快于 1ms 的请求落在首桶）。
+//
+// access log：setAccessLog(fn) 注册接收单行文本的回调（null 关闭，默认关）。
+// 落盘/结构化输出属 G2 Logger 范畴，此处只负责产出与转交。
+//
+// 用法：
+//   import <App/HttpMetrics>;
+//   m = MetricsFilter();
+//   m.setAccessLog(func(line) { print("[access] " + line); });
+//   app.addFilter(m);          // 建议注册为最外层（第一个 addFilter）
+//   ...
+//   snap = m.snapshot();
+//   print("total=" + snap["total"] + " p99Ms=" + snap["p99Ms"]);
+// ============================================================
+
+import <App/WebApplication>;
+
+public class MetricsFilter implements WebFilter {
+    // ---- 配置（启动后只读）----
+    logSink: any;       // access log 回调（func(line: string)；null 关闭）
+
+    // ---- 计数状态（lockId 保护）----
+    lockId: int;        // 可重入锁句柄（rmutex()）
+    total: long;        // 请求总数
+    s2: long;           // 2xx 计数
+    s3: long;           // 3xx 计数
+    s4: long;           // 4xx 计数
+    s5: long;           // 5xx 计数
+    sumMs: long;        // 延迟总和（毫秒）
+    maxMs: long;        // 延迟最大值（毫秒）
+    hist: array;        // 延迟直方图（12 桶，与 boundsMs 一一对应）
+    routes: map;        // 路由键 → {count, errors, sumMs, maxMs, buckets}
+
+    // 桶上界（毫秒，对数）：样本 cost ≤ bounds[i] 落桶 i；超 1024 落溢出桶
+    private static boundsMs: array = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 0];
+
+    func MetricsFilter() {
+        self.logSink = null;
+        self.lockId = rmutex();
+        self.total = 0;
+        self.s2 = 0;
+        self.s3 = 0;
+        self.s4 = 0;
+        self.s5 = 0;
+        self.sumMs = 0;
+        self.maxMs = 0;
+        self.hist = [];
+        i = 0;
+        while (i < 12) { self.hist.add(0); i = i + 1; }
+        self.routes = {};
+    }
+
+    // 注册 access log 回调（每请求一行：METHOD path -> status costMs route）
+    func setAccessLog(fn) {
+        self.logSink = fn;
+        return self;
+    }
+
+    // cost（毫秒）落到桶下标：线性扫 12 桶（常数开销）
+    private func bucketIndex(costMs: long): int {
+        bounds = MetricsFilter.boundsMs;
+        i = 0;
+        while (i < bounds.len - 1) {
+            if (costMs <= bounds[i]) { return i; }
+            i = i + 1;
+        }
+        return bounds.len - 1;   // 溢出桶
+    }
+
+    // 单行聚合（routes 表内可变行）：确保行存在后返回
+    private func routeRow(key: string) {
+        if (self.routes.contains(key)) { return self.routes[key]; }
+        row = {};
+        row["count"] = 0;
+        row["errors"] = 0;
+        row["sumMs"] = 0;
+        row["maxMs"] = 0;
+        row["buckets"] = [];
+        i = 0;
+        while (i < 12) { row["buckets"].add(0); i = i + 1; }
+        self.routes[key] = row;
+        return row;
+    }
+
+    // 记账 + access log（post 阶段调用；记账串行化，日志回调在锁外执行）
+    private func record(req: ServerRequest, resp: ServerResponse, costMs: long) {
+        routeKey = req.getAttribute("route");
+        if (routeKey == null) { routeKey = req.method + " " + req.path; }
+
+        st = resp.status;
+        cls = st / 100;
+
+        lock(self.lockId);
+        try {
+            self.total = self.total + 1;
+            if (cls == 2) { self.s2 = self.s2 + 1; }
+            else if (cls == 3) { self.s3 = self.s3 + 1; }
+            else if (cls == 4) { self.s4 = self.s4 + 1; }
+            else if (cls == 5) { self.s5 = self.s5 + 1; }
+            self.sumMs = self.sumMs + costMs;
+            if (costMs > self.maxMs) { self.maxMs = costMs; }
+            bi = self.bucketIndex(costMs);
+            self.hist[bi] = self.hist[bi] + 1;
+
+            row = self.routeRow(routeKey);
+            row["count"] = row["count"] + 1;
+            if (cls == 5) { row["errors"] = row["errors"] + 1; }
+            row["sumMs"] = row["sumMs"] + costMs;
+            if (costMs > row["maxMs"]) { row["maxMs"] = costMs; }
+            row["buckets"][bi] = row["buckets"][bi] + 1;
+        } finally {
+            unlock(self.lockId);
+        }
+
+        // access log 在锁外：回调可能做 IO/格式化，不应扩大临界区
+        if (self.logSink != null) {
+            line = req.method + " " + req.path + " -> " + st + " " + costMs + "ms " + routeKey;
+            self["logSink"](line);
+        }
+    }
+
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        start = timestamp_ms();
+        resp = chain.next(req);
+        cost = timestamp_ms() - start;
+        if (cost < 0) { cost = 0; }
+        self.record(req, resp, cost);
+        return resp;
+    }
+
+    // 分位数（毫秒，q ∈ (0,1]，如 0.50/0.99）：对数桶累计定位，返回桶上界
+    // （同 SchedStats.percentileUs 算法；无样本返回 0）
+    private func percentile(buckets: array, total: long, q: double): long {
+        if (total == 0) { return 0; }
+        bounds = MetricsFilter.boundsMs;
+        need = total * q;
+        cum = 0;
+        i = 0;
+        while (i < buckets.len) {
+            cum = cum + buckets[i];
+            if (cum > need) {
+                if (i >= bounds.len - 1) { return bounds[bounds.len - 2]; }   // 溢出桶取最后有效上界
+                return bounds[i];
+            }
+            i = i + 1;
+        }
+        return bounds[bounds.len - 2];
+    }
+
+    // 快照（只读出口，锁内复制；字段：
+    //   total / status2xx / status3xx / status4xx / status5xx
+    //   avgMs / p50Ms / p99Ms / maxMs
+    //   histogramMs（12 桶数组）/ histogramBoundsMs（桶上界数组）
+    //   routes：{ "GET /a": {count, errors, avgMs, p50Ms, p99Ms, maxMs} })
+    func snapshot(): map {
+        lock(self.lockId);
+        try {
+            routesOut = {};
+            ks = self.routes.keys();
+            i = 0;
+            while (i < ks.len) {
+                row = self.routes[ks[i]];
+                out = {};
+                out["count"] = row["count"];
+                out["errors"] = row["errors"];
+                out["avgMs"] = (row["count"] > 0 ? row["sumMs"] / row["count"] : 0);
+                out["p50Ms"] = self.percentile(row["buckets"], row["count"], 0.50);
+                out["p99Ms"] = self.percentile(row["buckets"], row["count"], 0.99);
+                out["maxMs"] = row["maxMs"];
+                routesOut[ks[i]] = out;
+                i = i + 1;
+            }
+            snap = {};
+            snap["total"] = self.total;
+            snap["status2xx"] = self.s2;
+            snap["status3xx"] = self.s3;
+            snap["status4xx"] = self.s4;
+            snap["status5xx"] = self.s5;
+            snap["avgMs"] = (self.total > 0 ? self.sumMs / self.total : 0);
+            snap["p50Ms"] = self.percentile(self.hist, self.total, 0.50);
+            snap["p99Ms"] = self.percentile(self.hist, self.total, 0.99);
+            snap["maxMs"] = self.maxMs;
+            snap["histogramMs"] = [];
+            hi = 0;
+            while (hi < self.hist.len) { snap["histogramMs"].add(self.hist[hi]); hi = hi + 1; }
+            snap["histogramBoundsMs"] = [];
+            hi = 0;
+            while (hi < MetricsFilter.boundsMs.len) { snap["histogramBoundsMs"].add(MetricsFilter.boundsMs[hi]); hi = hi + 1; }
+            snap["routes"] = routesOut;
+            return snap;
+        } finally {
+            unlock(self.lockId);
+        }
+    }
+
+    // 单行摘要（健康检查/控制台输出）
+    func summary(): string {
+        snap = self.snapshot();
+        return "[http-metrics] total=" + snap["total"]
+             + " 2xx=" + snap["status2xx"] + " 3xx=" + snap["status3xx"]
+             + " 4xx=" + snap["status4xx"] + " 5xx=" + snap["status5xx"]
+             + " avg=" + snap["avgMs"] + "ms"
+             + " p50=" + snap["p50Ms"] + "ms"
+             + " p99=" + snap["p99Ms"] + "ms"
+             + " max=" + snap["maxMs"] + "ms";
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "MetricsFilter(total=" + self.snapshot()["total"] + ")";
+    }
+}

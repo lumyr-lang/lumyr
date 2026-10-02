@@ -64,7 +64,9 @@
 //      整个请求分派：chain.next(req) 之前可改写 ServerRequest（改 header、
 //      setAttribute 传上下文），之后可改写 ServerResponse（加 header、
 //      包装 body）；不调 chain.next 即短路（如鉴权失败直接回 401）。
-//      404/500 兜底响应同样经过滤链。
+//      404/500 兜底响应同样经过滤链。内置过滤器：
+//      <App/HttpMetrics> MetricsFilter（请求指标 + access log）、
+//      <App/RateLimit> RateLimitFilter（令牌桶限流）
 //   3. 继承重写：class MyApp extends WebApplication 重写
 //      handleRequest(req)（可 super.handleRequest(req) 回退路由表）、
 //      onNotFound(req)、onStart()/onStop() 等钩子；重写 dispatchWithFilters
@@ -84,6 +86,7 @@
 import <App/ServiceApplication>;
 import <App/Container>;
 import <App/RequestBinder>;
+import <App/StaticFiles>;
 import <NetWork/HttpServer>;
 import <NetWork/NetError>;
 import <NetWork/Reactor>;
@@ -667,6 +670,7 @@ public class WebApplication extends ServiceApplication {
 
         p = {};
         p["method"] = m;
+        p["pattern"] = path;   // 原始模式串（route 属性标记 / 观测聚合用）
         p["segments"] = segments;
         p["star"] = star;
         p["starName"] = starName;
@@ -681,6 +685,30 @@ public class WebApplication extends ServiceApplication {
     func delete(path: string, handler)  { return self.route(HttpMethod.DELETE, path, handler); }
     func patch(path: string, handler)   { return self.route(HttpMethod.PATCH, path, handler); }
     func head(path: string, handler)    { return self.route(HttpMethod.HEAD, path, handler); }
+
+    // 静态文件便捷注册：把 URL 前缀映射到本地目录。
+    // 内部注册模式路由 prefix + "/*filePath"（星号段为 0..n 段，目录请求
+    // rel 为 "" 自动找 index.html）。GET/HEAD 之外的数据方法（POST/PUT/
+    // DELETE/PATCH）也注册，由 handler 统一回 405+Allow（RFC 7231：目标
+    // 资源存在但方法不支持时应 405 而非 404）；OPTIONS/TRACE/CONNECT 不
+    // 注册，走路由默认 404。安全边界与目录/404/405 语义见
+    // <App/StaticFiles> 的 StaticFileHandler。prefix 须以 / 开头。
+    func serveStatic(prefix: string, rootDir: string) {
+        p = prefix;
+        if (!p.startsWith("/")) {
+            throw "静态资源前缀必须以 / 开头 / static prefix must start with /";
+        }
+        while (p.len > 1 && p.endsWith("/")) { p = p.slice(0, p.len - 1); }
+        h = StaticFileHandler(rootDir);
+        pat = p + "/*filePath";
+        self.route(HttpMethod.GET, pat, h);
+        self.route(HttpMethod.HEAD, pat, h);
+        self.route(HttpMethod.POST, pat, h);
+        self.route(HttpMethod.PUT, pat, h);
+        self.route(HttpMethod.DELETE, pat, h);
+        self.route(HttpMethod.PATCH, pat, h);
+        return self;
+    }
 
     // 模式匹配：命中返回路径参数 map（:name 逐段、*name 收剩余多段），未命中返回 null
     private func matchPattern(p: map, reqSegments: array) {
@@ -731,6 +759,9 @@ public class WebApplication extends ServiceApplication {
     func handleRequest(req: ServerRequest): ServerResponse {
         key = req.method + " " + req.path;
         if (self.exactRoutes.contains(key)) {
+            // 路由模式标记（观测用）：过滤器 post 阶段可读 route 聚合指标/access log，
+            // 避免按原始路径（含 id 等可变段）聚合导致基数爆炸
+            req.setAttribute("route", key);
             return self.invokeHandler(self.exactRoutes[key], req);
         }
 
@@ -740,6 +771,7 @@ public class WebApplication extends ServiceApplication {
                 pathParams = self.matchPattern(p, reqSegments);
                 if (pathParams != null) {
                     req.pathParams = pathParams;
+                    req.setAttribute("route", req.method + " " + p["pattern"]);
                     return self.invokeHandler(p["handler"], req);
                 }
             }

@@ -1,0 +1,239 @@
+// ============================================================
+// chunked 流式响应端到端测试（ServerResponse.streamBody / ChunkWriter）
+//
+// T1 两块流式：Transfer-Encoding: chunked、无 Content-Length、
+//    分块框架逐字节精确（"3\r\nhel\r\n2\r\nlo\r\n0\r\n\r\n"）、
+//    终止块后 keep-alive 连接可继续发下一请求（chunked 自定界）
+// T2 bytes 块 + 大块：32 字节块长行 "20"、300 字节块长行 "12c"（多位十六进制）
+// T3 流式不缓冲：首块立即到达（流中 sleep(150) 后写次块），
+//    首块到达应远早于整流结束
+// T4 过滤器与流式组合：post 阶段给流式响应加标头生效
+// T5 toBytes 对流式 body 抛错（不可物化）
+// T6 非流式响应不受影响：仍带 Content-Length（回归保护）
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 收发断言 → stop/join。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// 读响应头（到空行为止），返回完整头部文本；残留写入 leftover 槽
+func readHead(cli, leftover: array): string {
+    cur = leftover[0];
+    sep = cur.indexOf(crlf + crlf);
+    while (sep < 0) {
+        part = cli.recv(4096);
+        check(part != "", "readHead: 等待响应头时连接意外关闭");
+        cur = cur + part;
+        sep = cur.indexOf(crlf + crlf);
+    }
+    leftover[0] = cur.slice(sep + 4, cur.len);
+    return cur.slice(0, sep + 4);
+}
+
+// 读 chunked 体到终止块（"\r\n0\r\n\r\n" 结尾），返回 body 区原始框架文本
+func readChunkedBody(cli, leftover: array): string {
+    cur = leftover[0];
+    while (!cur.endsWith(crlf + "0" + crlf + crlf)) {
+        part = cli.recv(4096);
+        check(part != "", "readChunkedBody: 等待终止块时连接意外关闭");
+        cur = cur + part;
+    }
+    return cur;
+}
+
+// 读到对端关闭（Connection: close 场景），先拼上 leftover 残留字节
+func readAll(cli): string {
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    return all;
+}
+
+// close 语义收尾：leftover 残留 + 读到 EOF（readHead 可能 over-read 到正文）
+func readRest(cli, leftover: array): string {
+    return leftover[0] + readAll(cli);
+}
+
+// ---- 启动真实服务 ----
+port = 18111;
+app = WebApplication("127.0.0.1", port);
+
+// T1/T3 路由：两块字符串，块间 sleep（验证流式不缓冲）
+app.get("/stream2", func(req) {
+    r = ServerResponse(200);
+    r.setContentType("text/plain");
+    r.streamBody(func(w) {
+        w.send("hel");
+        sleep(150);
+        w.send("lo");
+    });
+    return r;
+});
+
+// T2 路由：bytes 块 + 大块（300 字节，块长行 "12c"）
+app.get("/bytes300", func(req) {
+    r = ServerResponse(200);
+    r.streamBody(func(w) {
+        b = bytes("AB");          // 2 字节 bytes 块
+        w.send(b);
+        big = "";
+        i = 0;
+        while (i < 300) { big = big + "x"; i = i + 1; }
+        w.send(big);
+    });
+    return r;
+});
+
+// T4 路由：流式响应被外层过滤器 post 包装
+app.get("/wrapped", func(req) {
+    r = ServerResponse(200);
+    r.streamBody(func(w) { w.send("core"); });
+    return r;
+});
+app.addFilter(func(req, chain) {
+    resp = chain.next(req);
+    resp.setHeader("X-Stream-Wrapped", "1");
+    return resp;
+});
+
+// T6 路由：普通定长响应（回归保护）
+app.get("/fixed", func(req) {
+    r = ServerResponse(200);
+    r.text("FIXED");
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 两块流式 + 精确框架 + keep-alive 续用
+// ------------------------------------------------------------
+print("[T1] 两块流式精确框架 / exact chunked framing");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+leftover = [""];
+cli.send("GET /stream2 HTTP/1.1" + crlf + "Host: t" + crlf + crlf);
+head = readHead(cli, leftover);
+check(head.startsWith("HTTP/1.1 200"), "T1 应 200，实际: [" + head + "]");
+low = head.lower();
+check(low.contains("transfer-encoding: chunked"), "T1 应带 Transfer-Encoding: chunked，实际: [" + head + "]");
+check(!low.contains("content-length"), "T1 流式响应不应有 Content-Length，实际: [" + head + "]");
+framed = readChunkedBody(cli, leftover);
+check(framed == "3" + crlf + "hel" + crlf + "2" + crlf + "lo" + crlf + "0" + crlf + crlf,
+      "T1 分块框架应逐字节精确，实际: [" + framed + "]");
+// 终止块后同连接续发（chunked 自定界，keep-alive 不受影响）
+cli.send("GET /fixed HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+head = readHead(cli, leftover);
+check(head.startsWith("HTTP/1.1 200"), "T1 续发请求应 200");
+tail = readRest(cli, leftover);
+check(tail.endsWith("FIXED"), "T1 续发请求应返回定长体，实际: [" + tail + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: bytes 块 + 300 字节大块（块长 "2" / "12c"）
+// ------------------------------------------------------------
+print("[T2] bytes 块与大块十六进制块长 / bytes chunk and long hex size");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+leftover = [""];
+cli.send("GET /bytes300 HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+head = readHead(cli, leftover);
+check(head.lower().contains("transfer-encoding: chunked"), "T2 应 chunked，实际: [" + head + "]");
+raw = readRest(cli, leftover);
+check(raw.contains("2" + crlf + "AB" + crlf), "T2 bytes 块框架应精确，实际: [" + raw.slice(0, 80) + "]");
+check(raw.contains("12c" + crlf), "T2 300 字节块长行应为十六进制 12c");
+// 剥出大块区，验证恰为 300 个 x 单块 + 终止块收尾
+bigX = "";
+xi = 0;
+while (xi < 300) { bigX = bigX + "x"; xi = xi + 1; }
+chunkStart = raw.indexOf("12c" + crlf) + 5;
+check(raw.slice(chunkStart, raw.len) == bigX + crlf + "0" + crlf + crlf,
+      "T2 大块应按 300 字节单块发送并以终止块收尾");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 流式不缓冲——首块立即到达（流中 sleep(150) 不影响首块）
+// ------------------------------------------------------------
+print("[T3] 流式不缓冲 / streamed, not buffered");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+cli.send("GET /stream2 HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+// 循环收包直到首块数据出现（头部与数据块可能分多个 TCP 段到达）
+t0 = timestamp_ms();
+acc = "";
+while (!acc.contains("hel")) {
+    part = cli.recv(4096);
+    check(part != "", "T3 等待首块时连接意外关闭");
+    acc = acc + part;
+}
+firstMs = timestamp_ms() - t0;
+check(firstMs < 100, "T3 首块应立即到达（实际 " + firstMs + "ms，缓冲式实现会 ≥150ms）");
+rest = readAll(cli);
+check((acc + rest).endsWith("0" + crlf + crlf), "T3 应以终止块收尾");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 过滤器 post 阶段包装流式响应
+// ------------------------------------------------------------
+print("[T4] 过滤器包装流式响应 / filter wraps streamed response");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+leftover = [""];
+cli.send("GET /wrapped HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+head = readHead(cli, leftover);
+check(head.lower().contains("x-stream-wrapped: 1"), "T4 过滤器应能给流式响应加标头，实际: [" + head + "]");
+raw = readRest(cli, leftover);
+check(raw.endsWith("4" + crlf + "core" + crlf + "0" + crlf + crlf),
+      "T4 流式体应完整，实际: [" + raw + "]");
+cli.close();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: toBytes 对流式 body 抛错
+// ------------------------------------------------------------
+print("[T5] toBytes 不可物化流式 body / toBytes rejects streaming body");
+threw = false;
+try {
+    r = ServerResponse(200);
+    r.streamBody(func(w) { w.send("x"); });
+    r.toBytes();
+} catch (e) {
+    threw = true;
+}
+check(threw, "T5 toBytes 对流式 body 应抛错");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T6: 非流式响应不受影响（Content-Length 仍在）
+// ------------------------------------------------------------
+print("[T6] 定长响应回归 / fixed-length regression");
+cli = ClientSocket("127.0.0.1", port);
+cli.setOption("recvTimeout", 3000);
+leftover = [""];
+cli.send("GET /fixed HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+head = readHead(cli, leftover);
+check(head.lower().contains("content-length: 5"), "T6 定长响应应带 Content-Length: 5，实际: [" + head + "]");
+check(!head.lower().contains("transfer-encoding"), "T6 定长响应不应有 Transfer-Encoding，实际: [" + head + "]");
+tail = readRest(cli, leftover);
+check(tail.endsWith("FIXED"), "T6 定长体应正确，实际: [" + tail + "]");
+cli.close();
+print("  PASS");
+
+app.stop();
+app.join();
+
+print("web_chunked_test ALL PASS");

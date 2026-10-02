@@ -1,0 +1,138 @@
+// ============================================================
+// 静态文件 handler 端到端测试（StaticFileHandler / app.serveStatic）
+//
+// T1 目录请求：/static/ → index.html 内容 + text/html
+// T2 子路径文件：/static/css/a.css → 内容 + text/css；多级目录
+// T3 文件不存在 → 404；目录无 index → 404
+// T4 目录穿越：/static/../secret.txt → 403（不泄露根目录外文件）
+// T5 非 GET/HEAD → 405（带 Allow: GET, HEAD）
+// T6 HEAD：头部完整（Content-Length = 真实大小）且无正文
+// T7 手动挂模式路由形态：app.get(prefix + "/*filePath", handler) 等价可用
+//
+// 自验证：/tmp 下建临时目录写文件 → startAsync → 断言 → stop/join → 清理。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <IO/Files>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// 发 GET/HEAD 请求并读完整响应（Connection: close 读到 EOF）
+func fetch(port, method: string, path: string): string {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    reqLine = method + " " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf;
+    cli.send(reqLine);
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    cli.close();
+    return all;
+}
+
+// ---- 准备临时静态目录 ----
+root = "/tmp/lm_static_test_root";
+Files.delete(root);   // 幂等清理
+Files.createDir(root);
+Files.createDir(root + "/css");
+Files.createDir(root + "/sub");
+Files.writeText(root + "/index.html", "<h1>home</h1>");
+Files.writeText(root + "/css/a.css", "body { color: red; }");
+Files.writeText(root + "/sub/b.txt", "B-CONTENT");
+Files.writeText("/tmp/lm_static_test_secret.txt", "SECRET-MUST-NOT-LEAK");
+
+port = 18112;
+app = WebApplication("127.0.0.1", port);
+app.serveStatic("/static", root);
+
+// T7：手动挂模式路由形态（星号段名必须 filePath）
+app.get("/files/*filePath", StaticFileHandler(root));
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 目录请求 → index.html
+// ------------------------------------------------------------
+print("[T1] 目录请求默认页 / directory index");
+r = fetch(port, "GET", "/static/");
+check(r.contains("HTTP/1.1 200"), "T1 应 200，实际: [" + r.slice(0, 60) + "]");
+check(r.contains("<h1>home</h1>"), "T1 应返回 index.html 内容，实际: [" + r + "]");
+check(r.lower().contains("content-type: text/html"), "T1 应 text/html");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: 子路径多级文件 + MIME
+// ------------------------------------------------------------
+print("[T2] 多级子路径与 MIME / nested path and MIME");
+r = fetch(port, "GET", "/static/css/a.css");
+check(r.contains("HTTP/1.1 200"), "T2 应 200，实际: [" + r.slice(0, 60) + "]");
+check(r.contains("body { color: red; }"), "T2 应返回 css 内容");
+check(r.lower().contains("content-type: text/css"), "T2 应 text/css");
+r = fetch(port, "GET", "/static/sub/b.txt");
+check(r.contains("B-CONTENT"), "T2 二级目录文件应可访问");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 404——文件不存在 / 目录无 index（此处目录有 index，改测缺文件）
+// ------------------------------------------------------------
+print("[T3] 缺文件 404 / missing file 404");
+r = fetch(port, "GET", "/static/nope.txt");
+check(r.contains("HTTP/1.1 404"), "T3 缺文件应 404，实际: [" + r.slice(0, 60) + "]");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 目录穿越防护
+// ------------------------------------------------------------
+print("[T4] 目录穿越 403 / path traversal blocked");
+r = fetch(port, "GET", "/static/../lm_static_test_secret.txt");
+check(r.contains("HTTP/1.1 403"), "T4 穿越应 403，实际: [" + r.slice(0, 60) + "]");
+check(!r.contains("SECRET-MUST-NOT-LEAK"), "T4 不得泄露根外文件内容");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: 方法不允许
+// ------------------------------------------------------------
+print("[T5] POST 405 / method not allowed");
+r = fetch(port, "POST", "/static/");
+check(r.contains("HTTP/1.1 405"), "T5 POST 应 405，实际: [" + r.slice(0, 60) + "]");
+check(r.lower().contains("allow: get, head"), "T5 应带 Allow 标头");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T6: HEAD——头部完整无正文
+// ------------------------------------------------------------
+print("[T6] HEAD 只发头部 / head only");
+r = fetch(port, "HEAD", "/static/css/a.css");
+check(r.contains("HTTP/1.1 200"), "T6 HEAD 应 200，实际: [" + r.slice(0, 60) + "]");
+clen = Files.size(root + "/css/a.css");
+check(r.lower().contains("content-length: " + clen), "T6 Content-Length 应为真实大小 " + clen);
+check(!r.contains("body {"), "T6 HEAD 不应发送正文");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T7: 手动挂模式路由形态
+// ------------------------------------------------------------
+print("[T7] 手动模式路由 / manual pattern route");
+r = fetch(port, "GET", "/files/index.html");
+check(r.contains("<h1>home</h1>"), "T7 手动挂载应可用，实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "GET", "/files/");
+check(r.contains("<h1>home</h1>"), "T7 目录请求应可用，实际: [" + r.slice(0, 60) + "]");
+print("  PASS");
+
+app.stop();
+app.join();
+
+// 清理临时目录
+Files.delete(root);
+Files.delete("/tmp/lm_static_test_secret.txt");
+
+print("web_static_test ALL PASS");

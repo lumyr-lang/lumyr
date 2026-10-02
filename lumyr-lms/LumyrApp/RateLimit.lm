@@ -1,0 +1,193 @@
+// ============================================================
+// lumyr-RateLimit：令牌桶限流过滤器
+// 洋葱过滤器形态挂在 WebApplication 上（app.addFilter(RateLimitFilter(...))），
+// 请求到达时按 key 取桶尝试取令牌：桶空 → 直接 429 短路（不进后续链）；
+// 有令牌 → 放行。泄漏桶语义的排队不做（HTTP 场景拒绝比排队务实）。
+//
+// 令牌桶（整数毫令牌实现，避免浮点误差）：
+//   桶容量 = burst（令牌数，即瞬时突发上限）；初始满桶。
+//   速率 = ratePerSec 令牌/秒 → 毫秒时间轴上按 elapsed 毫秒懒补充
+//   （不做后台定时线程，检查时一次性补齐），令牌以毫令牌记账
+//   （1 令牌 = 1000 毫令牌），补充量 = elapsed * rateMilli / 1000。
+//
+// key 维度（构造形态三选一，另可完全自定义）：
+//   全局限流   RateLimitFilter(rate, burst)           —— 整个服务一个桶
+//   按路径限流 RateLimitFilter.perPath(rate, burst)    —— 每个原始路径一个桶
+//                （过滤器先于路由分派执行，模式串属性此时未写入，取
+//                "METHOD 原始路径"；模式路由按实际路径逐个限流，key 基数
+//                由 maxKeys 兜底）
+//   按标头限流 RateLimitFilter.perHeader(name, rate, burst)
+//                —— 每个标头值一个桶（反代场景 name 传 X-Forwarded-For 即按
+//                客户端 IP 限流；直连场景运行时暂无对端地址内置，后续
+//                C 层补充 peer 地址 builtin 后可加 perIp 形态）
+//   自定义     f.setKeyFn(func(req): string)          —— 任意维度
+//
+// key 基数防护：桶数达 maxKeys（默认 65536）后整体清空重建（不逐出最旧，
+// 防内存被慢速长尾 key 撑爆；清空瞬间等于重发一轮突发额度，限流语义
+// 短暂放宽，属可接受折中）。
+//
+// 用法：
+//   import <App/RateLimit>;
+//   app.addFilter(RateLimitFilter.perHeader("X-Forwarded-For", 100, 200));
+//   // 每客户端 IP 100 QPS、突发上限 200；超限回 429 + Retry-After: 1
+// ============================================================
+
+import <App/WebApplication>;
+
+// 令牌桶：整数毫令牌记账，懒补充（检查时按 elapsed 一次性补齐）
+public class TokenBucket {
+    capacityMilli: long;   // 桶容量（毫令牌）
+    tokensMilli: long;     // 当前令牌（毫令牌）
+    rateMilli: long;       // 补充速率（毫令牌/秒）
+    lastMs: long;          // 上次补充时间戳（毫秒）
+
+    func TokenBucket(ratePerSec: int, burst: int, nowMs: long) {
+        self.rateMilli = ratePerSec * 1000;
+        self.capacityMilli = burst * 1000;
+        self.tokensMilli = self.capacityMilli;   // 初始满桶
+        self.lastMs = nowMs;
+    }
+
+    // 尝试取 1 个令牌：补充 → 够则扣减返回 true，不够返回 false
+    func tryAcquire(nowMs: long): bool {
+        elapsed = nowMs - self.lastMs;
+        if (elapsed > 0) {
+            self.tokensMilli = self.tokensMilli + elapsed * self.rateMilli / 1000;
+            if (self.tokensMilli > self.capacityMilli) { self.tokensMilli = self.capacityMilli; }
+            self.lastMs = nowMs;
+        }
+        if (self.tokensMilli >= 1000) {
+            self.tokensMilli = self.tokensMilli - 1000;
+            return true;
+        }
+        return false;
+    }
+}
+
+public class RateLimitFilter implements WebFilter {
+    ratePerSec: int;    // 补充速率（令牌/秒）
+    burst: int;         // 桶容量（令牌数，突发上限）
+    rejectStatus: int;  // 拒绝状态码（默认 429）
+    maxKeys: int;       // 桶数上限（达到即整体清空，防 key 基数撑爆内存）
+    keyFn: any;         // 自定义 key 提取（func(req): string；null 走 keyMode）
+    keyMode: int;       // 0=全局单桶 1=按路由模式 2=按请求标头
+    headerName: string; // keyMode=2 时的标头名
+    buckets: map;       // key → TokenBucket
+    lockId: int;        // 可重入锁（保护 buckets 查改）
+
+    func RateLimitFilter(ratePerSec: int, burst: int) {
+        self.initCommon(ratePerSec, burst);
+        self.keyMode = 0;
+        self.headerName = "";
+    }
+
+    // 按路径限流：每个原始路径一个桶（pre 阶段路由属性未写入，
+    // keyOf 走 "METHOD 原始路径" 退化分支）
+    public static func perPath(ratePerSec: int, burst: int): RateLimitFilter {
+        f = RateLimitFilter(ratePerSec, burst);
+        f.keyMode = 1;
+        return f;
+    }
+
+    // 按请求标头限流（反代场景传 X-Forwarded-For 即按客户端 IP 维度）
+    public static func perHeader(name: string, ratePerSec: int, burst: int): RateLimitFilter {
+        if (name == "") {
+            throw "标头名不能为空 / header name must not be empty";
+        }
+        f = RateLimitFilter(ratePerSec, burst);
+        f.keyMode = 2;
+        f.headerName = name;
+        return f;
+    }
+
+    private func initCommon(ratePerSec: int, burst: int) {
+        if (ratePerSec < 0) {
+            throw "限流速率不能为负 / rate must not be negative";
+        }
+        if (burst < 1) {
+            throw "突发容量必须 ≥ 1 / burst must be at least 1";
+        }
+        self.ratePerSec = ratePerSec;
+        self.burst = burst;
+        self.rejectStatus = 429;
+        self.maxKeys = 65536;
+        self.keyFn = null;
+        self.keyMode = 0;
+        self.headerName = "";
+        self.buckets = {};
+        self.lockId = rmutex();
+    }
+
+    // 自定义 key 提取函数（优先级高于 keyMode；返回 "" 视为全局限流）
+    func setKeyFn(fn) {
+        self.keyFn = fn;
+        return self;
+    }
+
+    // 自定义拒绝状态码（如 503）
+    func setRejectStatus(code: int) {
+        self.rejectStatus = code;
+        return self;
+    }
+
+    // 调整桶数上限
+    func setMaxKeys(n: int) {
+        if (n < 1) {
+            throw "桶数上限必须 ≥ 1 / maxKeys must be at least 1";
+        }
+        self.maxKeys = n;
+        return self;
+    }
+
+    // 提取请求的限流 key
+    private func keyOf(req: ServerRequest): string {
+        if (self.keyFn != null) {
+            k = self["keyFn"](req);
+            return k == null ? "" : k;
+        }
+        if (self.keyMode == 1) {
+            routeKey = req.getAttribute("route");
+            if (routeKey != null) { return routeKey; }
+            return req.method + " " + req.path;   // 自定义分派未标记时的退化
+        }
+        if (self.keyMode == 2) {
+            return req.header(self.headerName);
+        }
+        return "";   // 全局单桶
+    }
+
+    // 取桶（锁内调用）：不存在则建；桶数达上限整体清空重建
+    private func bucketFor(key: string, nowMs: long): TokenBucket {
+        if (self.buckets.contains(key)) { return self.buckets[key]; }
+        if (self.buckets.keys().len >= self.maxKeys) { self.buckets = {}; }
+        b = TokenBucket(self.ratePerSec, self.burst, nowMs);
+        self.buckets[key] = b;
+        return b;
+    }
+
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        key = self.keyOf(req);
+        allow = false;
+        now = timestamp_ms();
+        lock(self.lockId);
+        try {
+            allow = self.bucketFor(key, now).tryAcquire(now);
+        } finally {
+            unlock(self.lockId);
+        }
+        if (allow) { return chain.next(req); }
+        r = ServerResponse(self.rejectStatus);
+        r.setHeader("Retry-After", "1");
+        r.text("Too Many Requests / 请求过于频繁");
+        return r;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        mode = "global";
+        if (self.keyMode == 1) { mode = "path"; }
+        else if (self.keyMode == 2) { mode = "header:" + self.headerName; }
+        else if (self.keyFn != null) { mode = "custom"; }
+        return "RateLimitFilter(" + mode + " rate=" + self.ratePerSec + "/s burst=" + self.burst + ")";
+    }
+}

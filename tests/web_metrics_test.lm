@@ -1,0 +1,166 @@
+// ============================================================
+// 请求级指标过滤器端到端测试（MetricsFilter + access log）
+//
+// T1 基础记账：GET /ok → 200；snapshot.total/status2xx/routes 行计数
+// T2 模式路由聚合：/users/42 与 /users/43 聚合进 "GET /users/:id" 一行
+//    （route 属性按模式串标记，原始路径不产生基数爆炸）
+// T3 路由未命中：GET /miss → 404；status4xx 计数；
+//    route 属性缺失时退化 key = "GET /miss"（原始路径）
+// T4 处理器抛错：GET /boom → 500 兜底经过滤链；status5xx 计数；
+//    行 errors 计数 = 1
+// T5 直方图与分位数：histogramMs 各桶求和 == total；
+//    p50Ms/p99Ms/maxMs 在合法桶上界范围内；summary() 含 total
+// T6 access log：每请求一行、行序与请求序一致、
+//    行格式 "METHOD path -> status costMs route"
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 收发断言 → stop/join。
+// ============================================================
+
+import <App/WebApplication>;
+import <App/HttpMetrics>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// 发单请求并读完整响应（Connection: close 读到 EOF）
+func fetch(port, path: string): string {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    cli.send("GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf + "Connection: close" + crlf + crlf);
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    cli.close();
+    return all;
+}
+
+// ---- 启动真实服务 ----
+port = 18113;
+app = WebApplication("127.0.0.1", port);
+
+// 指标过滤器注册为最外层（第一个 addFilter）：404/500 兜底响应同样入账
+metrics = MetricsFilter();
+sink = [];   // access log 行收集槽（闭包捕获）
+metrics.setAccessLog(func(line) { sink.add(line); });
+app.addFilter(metrics);
+
+app.get("/ok", func(req) {
+    r = ServerResponse(200);
+    r.text("OK");
+    return r;
+});
+app.get("/boom", func(req) {
+    throw "boom";
+});
+app.get("/users/:id", func(req) {
+    r = ServerResponse(200);
+    r.text("U-" + req.pathParams["id"]);
+    return r;
+});
+
+app.startAsync();
+sleep(300);
+
+// ------------------------------------------------------------
+// T1: 基础记账
+// ------------------------------------------------------------
+print("[T1] 基础记账 / basic accounting");
+r = fetch(port, "/ok");
+check(r.contains("HTTP/1.1 200"), "T1 应 200，实际: [" + r.slice(0, 60) + "]");
+snap = metrics.snapshot();
+check(snap["total"] == 1, "T1 total 应为 1，实际: " + snap["total"]);
+check(snap["status2xx"] == 1, "T1 status2xx 应为 1，实际: " + snap["status2xx"]);
+check(snap["routes"].contains("GET /ok"), "T1 routes 应含 GET /ok");
+check(snap["routes"]["GET /ok"]["count"] == 1, "T1 GET /ok 行 count 应为 1");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: 模式路由聚合（id 可变段不产生新行）
+// ------------------------------------------------------------
+print("[T2] 模式路由聚合 / pattern route aggregation");
+r = fetch(port, "/users/42");
+check(r.contains("U-42"), "T2 /users/42 应 200 U-42，实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "/users/43");
+check(r.contains("U-43"), "T2 /users/43 应 200 U-43");
+snap = metrics.snapshot();
+check(snap["total"] == 3, "T2 total 应为 3，实际: " + snap["total"]);
+check(snap["status2xx"] == 3, "T2 status2xx 应为 3");
+check(snap["routes"].contains("GET /users/:id"), "T2 routes 应按模式串聚合 GET /users/:id");
+check(snap["routes"]["GET /users/:id"]["count"] == 2,
+      "T2 GET /users/:id 行 count 应为 2（两个不同 id 聚合），实际: "
+      + snap["routes"]["GET /users/:id"]["count"]);
+check(!snap["routes"].contains("GET /users/42"), "T2 原始路径不应单独成行（防基数爆炸）");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 路由未命中 404（退化 key = 原始路径）
+// ------------------------------------------------------------
+print("[T3] 未命中 404 记账 / route miss accounting");
+r = fetch(port, "/miss");
+check(r.contains("HTTP/1.1 404"), "T3 /miss 应 404，实际: [" + r.slice(0, 60) + "]");
+snap = metrics.snapshot();
+check(snap["total"] == 4, "T3 total 应为 4");
+check(snap["status4xx"] == 1, "T3 status4xx 应为 1");
+check(snap["routes"].contains("GET /miss"), "T3 未命中应退化按原始路径记 GET /miss");
+check(snap["routes"]["GET /miss"]["count"] == 1, "T3 GET /miss 行 count 应为 1");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 处理器抛错 → 500 兜底经过滤链
+// ------------------------------------------------------------
+print("[T4] 500 记账 / error accounting");
+r = fetch(port, "/boom");
+check(r.contains("HTTP/1.1 500"), "T4 /boom 应 500，实际: [" + r.slice(0, 60) + "]");
+snap = metrics.snapshot();
+check(snap["total"] == 5, "T4 total 应为 5");
+check(snap["status5xx"] == 1, "T4 status5xx 应为 1");
+check(snap["routes"].contains("GET /boom"), "T4 routes 应含 GET /boom");
+check(snap["routes"]["GET /boom"]["errors"] == 1, "T4 GET /boom 行 errors 应为 1");
+check(snap["routes"]["GET /boom"]["count"] == 1, "T4 GET /boom 行 count 应为 1");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: 直方图与分位数
+// ------------------------------------------------------------
+print("[T5] 直方图与分位数 / histogram and percentiles");
+snap = metrics.snapshot();
+histSum = 0;
+i = 0;
+while (i < snap["histogramMs"].len) { histSum = histSum + snap["histogramMs"][i]; i = i + 1; }
+check(histSum == 5, "T5 直方图各桶求和应等于 total 5，实际: " + histSum);
+check(snap["histogramBoundsMs"].len == 12, "T5 桶上界数组应为 12 桶");
+check(snap["p50Ms"] >= 1 && snap["p50Ms"] <= 1024, "T5 p50Ms 应落在桶上界范围内");
+check(snap["p99Ms"] >= snap["p50Ms"], "T5 p99Ms 不应小于 p50Ms");
+check(snap["maxMs"] >= 0 && snap["maxMs"] <= 1024, "T5 maxMs 应在合法范围");
+check(snap["avgMs"] >= 0, "T5 avgMs 应非负");
+summaryLine = metrics.summary();
+check(summaryLine.contains("total=5"), "T5 summary 应含 total=5，实际: [" + summaryLine + "]");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T6: access log 行内容与顺序
+// ------------------------------------------------------------
+print("[T6] access log / access log lines");
+check(sink.len == 5, "T6 access log 应有 5 行，实际: " + sink.len);
+check(sink[0].startsWith("GET /ok -> 200 ") && sink[0].endsWith("ms GET /ok"),
+      "T6 第 1 行格式应为 'GET /ok -> 200 <cost>ms GET /ok'，实际: [" + sink[0] + "]");
+check(sink[1].startsWith("GET /users/42 -> 200 ") && sink[1].endsWith("GET /users/:id"),
+      "T6 第 2 行应为原始路径 + 模式路由 key，实际: [" + sink[1] + "]");
+check(sink[2].startsWith("GET /users/43 -> 200 "), "T6 第 3 行应为 /users/43");
+check(sink[3].startsWith("GET /miss -> 404 ") && sink[3].endsWith("GET /miss"),
+      "T6 第 4 行应为 404 退化 key，实际: [" + sink[3] + "]");
+check(sink[4].startsWith("GET /boom -> 500 ") && sink[4].endsWith("GET /boom"),
+      "T6 第 5 行应为 500，实际: [" + sink[4] + "]");
+print("  PASS");
+
+app.stop();
+app.join();
+
+print("web_metrics_test ALL PASS");

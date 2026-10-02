@@ -1,0 +1,184 @@
+// ============================================================
+// 令牌桶限流过滤器端到端测试（RateLimitFilter / TokenBucket）
+//
+// T1 参数校验（纯构造，无服务）：负速率 / burst<1 / maxKeys<1 /
+//    空标头名 → 构造或配置时抛错
+// T2 全局限流：rate=2/s burst=2 → 连发 2 个 200，第 3 个 429
+//    （+ Retry-After: 1）；sleep(1100) 后令牌懒补充恢复 200
+// T3 按路径限流：perPath(1,1) → /a 耗尽后 /b 独立桶不受影响
+// T4 按标头限流：perHeader("X-Client",1,1) → 不同标头值独立桶，
+//    缺标头退化为 "" 单桶
+// T5 自定义 keyFn + 自定义拒绝码：setKeyFn 按标头分桶；
+//    setRejectStatus(503) 拒绝时回 503 而非 429
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket 收发断言 → stop/join。
+// ============================================================
+
+import <App/WebApplication>;
+import <App/RateLimit>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// 发单请求（hdrName 为 "" 时不带自定义标头），Connection: close 读到 EOF
+func fetchHdr(port, path: string, hdrName: string, hdrVal: string): string {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    req = "GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf;
+    if (hdrName != "") { req = req + hdrName + ": " + hdrVal + crlf; }
+    req = req + "Connection: close" + crlf + crlf;
+    cli.send(req);
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    cli.close();
+    return all;
+}
+
+func fetch(port, path: string): string {
+    return fetchHdr(port, path, "", "");
+}
+
+// ------------------------------------------------------------
+// T1: 参数校验（纯构造断言，无服务）
+// ------------------------------------------------------------
+print("[T1] 参数校验 / parameter validation");
+threw = false;
+try { RateLimitFilter(-1, 1); } catch (e) { threw = true; }
+check(threw, "T1 负速率应抛错");
+threw = false;
+try { RateLimitFilter(1, 0); } catch (e) { threw = true; }
+check(threw, "T1 burst=0 应抛错");
+threw = false;
+try { RateLimitFilter(1, 1).setMaxKeys(0); } catch (e) { threw = true; }
+check(threw, "T1 maxKeys=0 应抛错");
+threw = false;
+try { RateLimitFilter.perHeader("", 1, 1); } catch (e) { threw = true; }
+check(threw, "T1 空标头名应抛错");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: 全局限流（单桶，burst 2，恢复验证）
+// ------------------------------------------------------------
+print("[T2] 全局限流与恢复 / global limit and recovery");
+port = 18114;
+app = WebApplication("127.0.0.1", port);
+app.addFilter(RateLimitFilter(2, 2));
+app.get("/rl", func(req) {
+    r = ServerResponse(200);
+    r.text("ok");
+    return r;
+});
+app.startAsync();
+sleep(300);
+
+r = fetch(port, "/rl");
+check(r.contains("HTTP/1.1 200"), "T2 第 1 个请求应 200，实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "/rl");
+check(r.contains("HTTP/1.1 200"), "T2 第 2 个请求应 200（burst 内）");
+r = fetch(port, "/rl");
+check(r.contains("HTTP/1.1 429"), "T2 第 3 个请求应 429，实际: [" + r.slice(0, 60) + "]");
+check(r.lower().contains("retry-after: 1"), "T2 429 应带 Retry-After: 1，实际: [" + r + "]");
+check(r.contains("Too Many Requests"), "T2 429 应带拒绝说明");
+sleep(1100);   // 懒补充：1100ms * 2 令牌/秒 ≈ 2 令牌
+r = fetch(port, "/rl");
+check(r.contains("HTTP/1.1 200"), "T2 速率恢复后应 200，实际: [" + r.slice(0, 60) + "]");
+app.stop();
+app.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: 按路径限流（/a 与 /b 独立桶）
+// ------------------------------------------------------------
+print("[T3] 按路径限流 / per-path limit");
+port = 18115;
+app = WebApplication("127.0.0.1", port);
+app.addFilter(RateLimitFilter.perPath(1, 1));
+app.get("/a", func(req) {
+    r = ServerResponse(200);
+    r.text("A");
+    return r;
+});
+app.get("/b", func(req) {
+    r = ServerResponse(200);
+    r.text("B");
+    return r;
+});
+app.startAsync();
+sleep(300);
+
+r = fetch(port, "/a");
+check(r.contains("HTTP/1.1 200"), "T3 /a 第 1 次应 200，实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "/a");
+check(r.contains("HTTP/1.1 429"), "T3 /a 第 2 次应 429");
+r = fetch(port, "/b");
+check(r.contains("HTTP/1.1 200"), "T3 /b 应不受 /a 耗尽影响（独立桶），实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "/b");
+check(r.contains("HTTP/1.1 429"), "T3 /b 第 2 次应 429");
+app.stop();
+app.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 按标头限流（不同标头值独立桶；缺标头退化 "" 单桶）
+// ------------------------------------------------------------
+print("[T4] 按标头限流 / per-header limit");
+port = 18116;
+app = WebApplication("127.0.0.1", port);
+app.addFilter(RateLimitFilter.perHeader("X-Client", 1, 1));
+app.get("/h", func(req) {
+    r = ServerResponse(200);
+    r.text("H");
+    return r;
+});
+app.startAsync();
+sleep(300);
+
+r = fetchHdr(port, "/h", "X-Client", "c1");
+check(r.contains("HTTP/1.1 200"), "T4 c1 第 1 次应 200，实际: [" + r.slice(0, 60) + "]");
+r = fetchHdr(port, "/h", "X-Client", "c1");
+check(r.contains("HTTP/1.1 429"), "T4 c1 第 2 次应 429");
+r = fetchHdr(port, "/h", "X-Client", "c2");
+check(r.contains("HTTP/1.1 200"), "T4 c2 应独立桶 200，实际: [" + r.slice(0, 60) + "]");
+r = fetch(port, "/h");
+check(r.contains("HTTP/1.1 200"), "T4 缺标头应退化独立 key 200，实际: [" + r.slice(0, 60) + "]");
+app.stop();
+app.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T5: 自定义 keyFn + 自定义拒绝状态码
+// ------------------------------------------------------------
+print("[T5] 自定义 keyFn 与拒绝码 / custom key fn and reject status");
+port = 18117;
+app = WebApplication("127.0.0.1", port);
+f = RateLimitFilter(1, 1);
+f.setKeyFn(func(req) { return req.header("X-K"); });
+f.setRejectStatus(503);
+app.addFilter(f);
+app.get("/k", func(req) {
+    r = ServerResponse(200);
+    r.text("K");
+    return r;
+});
+app.startAsync();
+sleep(300);
+
+r = fetchHdr(port, "/k", "X-K", "ka");
+check(r.contains("HTTP/1.1 200"), "T5 ka 第 1 次应 200，实际: [" + r.slice(0, 60) + "]");
+r = fetchHdr(port, "/k", "X-K", "ka");
+check(r.contains("HTTP/1.1 503"), "T5 ka 第 2 次应 503（自定义拒绝码），实际: [" + r.slice(0, 60) + "]");
+r = fetchHdr(port, "/k", "X-K", "kb");
+check(r.contains("HTTP/1.1 200"), "T5 kb 应独立桶 200，实际: [" + r.slice(0, 60) + "]");
+app.stop();
+app.join();
+print("  PASS");
+
+print("web_ratelimit_test ALL PASS");

@@ -1,0 +1,105 @@
+// ============================================================
+// lumyr-StaticFiles：静态文件请求处理器
+// 把 URL 路径映射到本地目录下的文件，构造带 MIME 类型的文件响应：
+//   目录请求（无相对路径或以 / 结尾）→ 找 index 文件（默认 index.html）
+//   命中文件   → 200 + Content-Type（按扩展名推断）+ Content-Length
+//   HEAD 请求  → 同 200 头部（Content-Length 为真实文件大小），不发送正文
+//   目录无 index / 文件不存在 → 404
+//   路径含 ".." 段（目录穿越尝试）→ 403
+//   非 GET/HEAD 方法 → 405（带 Allow 标头）
+//
+// 安全边界：
+//   拒绝任何含 ".." 段的相对路径（目录穿越）；URL 不做百分号解码，
+//   "%2e%2e" 等编码穿越原样按文件名查找（查不到自然 404）；
+//   绝对路径段（"//" 开头）会被归一化为相对路径，仍锁定在根目录内。
+//   Range 断点续传 / sendfile 零拷贝属后续增强，不在本实现范围。
+//
+// 用法一（便捷注册，推荐）：
+//   app.serveStatic("/static", "/var/www/my-site");
+//   // GET/HEAD /static → /var/www/my-site/index.html
+//   // GET/HEAD /static/css/a.css → /var/www/my-site/css/a.css
+//
+// 用法二（手动挂模式路由，星号段名必须是 filePath）：
+//   import <App/StaticFiles>;
+//   app.get("/static/*filePath", StaticFileHandler("/var/www/my-site"));
+// ============================================================
+
+import <NetWork/HttpServer>;
+import <IO/Files>;
+
+public class StaticFileHandler {
+    rootDir: string;    // 静态资源根目录（构造时去掉尾部路径分隔符）
+    indexName: string;  // 目录默认页文件名（默认 index.html，可换）
+
+    func StaticFileHandler(rootDir: string) {
+        self.rootDir = rootDir;
+        sep = Files.separator;
+        while (self.rootDir.len > 1 && self.rootDir.endsWith(sep)) {
+            self.rootDir = self.rootDir.slice(0, self.rootDir.len - sep.len);
+        }
+        self.indexName = "index.html";
+    }
+
+    // 自定义目录默认页文件名（如 "default.htm"）
+    func withIndex(name: string) {
+        if (name == "") {
+            throw "默认页文件名不能为空 / index file name must not be empty";
+        }
+        self.indexName = name;
+        return self;
+    }
+
+    // RequestHandler 契约实现（serve(req): ServerResponse，鸭子类型兼容）
+    func serve(req: ServerRequest): ServerResponse {
+        if (req.method != "GET" && req.method != "HEAD") {
+            r = ServerResponse(405);
+            r.setHeader("Allow", "GET, HEAD");
+            r.text("Method Not Allowed / 不支持的请求方法");
+            return r;
+        }
+
+        // 星号路由剩余路径（*filePath 段，注册形态见文件头）；可为 ""（目录请求）
+        rel = "";
+        if (req.pathParams != null && req.pathParams.contains("filePath")) {
+            rel = req.pathParams["filePath"];
+        }
+        while (rel.startsWith("/")) { rel = rel.slice(1, rel.len); }
+
+        // 目录穿越防护：任何路径段为 ".." 直接 403
+        segs = rel.split("/");
+        for seg in segs {
+            if (seg == "..") {
+                r = ServerResponse(403);
+                r.text("Forbidden / 非法路径");
+                return r;
+            }
+        }
+
+        // 逐段拼出目标路径（避免整串 join 引入歧义）
+        target = self.rootDir;
+        i = 0;
+        while (i < segs.len) {
+            if (segs[i] != "") { target = target + Files.separator + segs[i]; }
+            i = i + 1;
+        }
+
+        // 目录请求：找默认页；无默认页按 404 处理（不做目录列举，防信息泄露）
+        if (Files.isDir(target)) {
+            target = target + Files.separator + self.indexName;
+        }
+
+        if (!Files.isFile(target)) {
+            return ServerResponse(404).text("Not Found / 文件不存在");
+        }
+
+        r = ServerResponse(200);
+        r.sendFile(target);   // Content-Type 按扩展名推断
+        if (req.method == "HEAD") { r.headOnly(); }
+        return r;
+    }
+
+    @FuncAlias("toStr")
+    func toString(): string {
+        return "StaticFileHandler(" + self.rootDir + ")";
+    }
+}

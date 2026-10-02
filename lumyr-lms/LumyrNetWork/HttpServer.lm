@@ -4,7 +4,10 @@
 //   Url            URL 解析（scheme/host/port/path/query/fragment）
 //   ServerRequest  从原始字节解析请求行/标头/正文/查询参数
 //   ServerResponse 构建状态行/标头/正文并序列化为 HTTP 响应字节
+//                  （支持 streamBody 流式正文：自动转 chunked 分块发送；
+//                   headOnly：HEAD 响应只发头部不发送正文）
 //   HttpMethod     HTTP 方法常量
+//   ChunkWriter    chunked 流式写出契约（SocketChunkWriter 为默认实现）
 //
 // 依赖：<NetWork/Http> 的 Headers（大小写不敏感标头）、HttpStatus、Cookie
 //
@@ -529,26 +532,105 @@ public class ServerRequest {
 
 // ============================================================
 // ServerResponse：服务端 HTTP 响应构建
-// body 支持三种形态：
+// body 支持四种形态：
 //   string —— 文本/JSON/HTML（toBytes 按 UTF-8 编码）
 //   bytes  —— 二进制正文（二进制安全，可含 NUL，sendTo 原样发送）
 //   file   —— 文件正文（发送时按需 readBytes 读取）
+//   func   —— 流式正文（streamBody 设置；sendTo 自动转 chunked 分块发送）
 // 序列化：
-//   toBytes()     —— 一次性拿到完整响应 bytes（文件会被读入内存）
-//   sendTo(sock)  —— 分段发送：头部、正文分别 send，避免超大响应一次性拼内存
+//   toBytes()     —— 一次性拿到完整响应 bytes（文件会被读入内存；
+//                    流式 body 无法序列化，会抛错）
+//   sendTo(sock)  —— 分段发送：头部、正文分别 send，避免超大响应一次性拼内存；
+//                    流式 body 走 chunked：头部 + 逐块 + 终止块
+// HEAD 响应：headOnly() 后头部照常（Content-Length 反映真实正文长度），
+//            正文不发送
 // ============================================================
+
+// ChunkWriter：chunked 流式写出契约（命名接口，回调参数形态明确）
+// send(chunk) 发送一块：块长十六进制 + CRLF + 数据 + CRLF
+// （chunk 为 string|bytes；方法名不可用 write——语言保留字）
+public interface ChunkWriter {
+    func send(chunk): int;
+}
+
+// ChunkWriter 默认实现：包 socket 与已发字节计数槽（单元素数组，回调内累加）
+public class SocketChunkWriter implements ChunkWriter {
+    sock: any;
+    sent: array;
+
+    func SocketChunkWriter(sock, sent: array) {
+        self.sock = sock;
+        self.sent = sent;
+    }
+
+    // 块长十六进制（如 26 → "1a"；0 → "0" 终止块）
+    private static func hexLen(n: int): string {
+        digits = "0123456789abcdef";
+        if (n <= 0) { return "0"; }
+        s = "";
+        v = n;
+        while (v > 0) {
+            s = digits.slice(v % 16, v % 16 + 1) + s;
+            v = v / 16;
+        }
+        return s;
+    }
+
+    func send(chunk): int {
+        n = 0;
+        if (type(chunk) == "bytes") { n = chunk.len; }
+        else if (type(chunk) == "string") { n = bytes(chunk).len; }
+        else {
+            throw "chunk 必须是 string 或 bytes / chunk must be a string or bytes";
+        }
+        headStr = SocketChunkWriter.hexLen(n) + crlf;
+        self.sock.send(bytes(headStr));
+        self.sock.send(chunk);
+        self.sock.send(bytes(crlf));
+        // 计入框架字节：块长行 + CRLF + 数据 + CRLF
+        self.sent[0] = self.sent[0] + headStr.len + n + crlf.len;
+        return n;
+    }
+}
+
 public class ServerResponse {
     status: int;
     headers: Headers;
-    body: any;  // string | bytes | file
+    body: any;       // string | bytes | file | func（流式）
+    headMode: bool;  // HEAD 响应：只发头部，正文跳过（Content-Length 保留真实长度）
 
     func ServerResponse(status: int) {
         self.status = status;
         self.headers = Headers();
         self.body = "";
+        self.headMode = false;
         // 默认标头
         self.headers.set("Server", "lumyr");
         self.headers.set("Connection", "close");
+    }
+
+    // 分块长度十六进制转换在 SocketChunkWriter.hexLen（块框架属写出侧职责）
+
+    // HEAD 响应模式：Content-Length 反映真实正文长度，但正文不发送
+    func headOnly() {
+        self.headMode = true;
+        return self;
+    }
+
+    // 流式正文（chunked 传输编码）：writer 为 func(w: ChunkWriter)。
+    // sendTo 时回调在连接协程内执行（可 sleep/IO，协程化让出不阻塞 reactor），
+    // 经 ChunkWriter.send 逐块写出；响应自动不带 Content-Length，
+    // 改用 Transfer-Encoding: chunked。仅适用于 HTTP/1.1 客户端
+    // （chunked 为 1.1 特性；1.0 客户端请返回定长响应）。
+    // 注意：回调内 sleep() 为线程级休眠（usleep），会阻塞所在 worker 线程
+    // 的其他协程——做节奏控制请用协程化 IO（recv/send 等）或纯计算，
+    // 定时推送类需求待 C 层补充协程友好定时等待后完善。
+    func streamBody(writer) {
+        if (type(writer) != "func") {
+            throw "streamBody 需要函数回调 / streamBody requires a func callback";
+        }
+        self.body = writer;
+        return self;
     }
 
     func setHeader(name: string, value: string) {
@@ -691,6 +773,9 @@ public class ServerResponse {
 
     // 一次性序列化为完整响应 bytes（适合小响应；文件 body 会读入内存）
     func toBytes() {
+        if (type(self.body) == "func") {
+            throw "流式响应无法序列化为 bytes，请用 sendTo 分块发送 / streaming body cannot be serialized, use sendTo";
+        }
         self.headers.set("Content-Length", "" + self.bodyByteLen());
         head = bytes(self.headString());
         // head 与 body 分段拼接：string 头已是 bytes，body 转 bytes
@@ -704,14 +789,33 @@ public class ServerResponse {
         return bytes(arr);
     }
 
+    // 分块流式发送（HTTP/1.1 Transfer-Encoding: chunked）：
+    // body 为 func（streamBody 设置）时走此路径——头部（无 Content-Length，
+    // 带 Transfer-Encoding: chunked）→ 回调经 ChunkWriter 逐块写出 →
+    // 终止块 "0" + CRLF + CRLF。回调在连接协程内执行，中途可让出。
+    func sendChunkedTo(sock): int {
+        if (self.headers.has("Content-Length")) {
+            self.headers.remove("Content-Length");
+        }
+        self.headers.set("Transfer-Encoding", "chunked");
+        sent = [0];   // 单元素数组当可变计数槽（writer 回调内累加）
+        total = sock.send(bytes(self.headString()));
+        self["body"](SocketChunkWriter(sock, sent));
+        total = total + sent[0] + sock.send(bytes("0" + crlf + crlf));
+        return total;
+    }
+
     // 分段发送到 socket：先发头部（UTF-8），再发正文（bytes 原样）
+    // 流式 body（func）自动转 chunked；HEAD 模式只发头部
     // 返回发送的总字节数
     func sendTo(sock): int {
+        if (type(self.body) == "func") { return self.sendChunkedTo(sock); }
         self.headers.set("Content-Length", "" + self.bodyByteLen());
         hs = self.headString();
         hb = bytes(hs);
         total = 0;
         total = total + sock.send(hb);
+        if (self.headMode) { return total; }   // HEAD：头部照常，正文跳过
         t = type(self.body);
         if (t == "file") {
             total = total + sock.send(self.body.readBytes());
