@@ -36,7 +36,9 @@ void lm_scheduler_set_current(lm_scheduler_t* s) {
  * （窃取只在本地全空的冷路径发生，锁开销可忽略；注销在锁内置 NULL 槽位
  * 后才释放结构，窃取者不会访问已释放 scheduler）。
  * ============================================================ */
-#define LM_MAX_SCHEDS 128
+/* 对齐 LM_MAX_WORKERS_CAP(256) 与 LM_REACTOR_MAX_REG：workers 在 129~256
+ * 区间时 scheduler/reactor 注册表都须有槽，否则 RR 注册与窃取注册表缺失。 */
+#define LM_MAX_SCHEDS 256
 
 static lm_scheduler_t* g_scheds[LM_MAX_SCHEDS];
 static int g_scheds_n = 0;

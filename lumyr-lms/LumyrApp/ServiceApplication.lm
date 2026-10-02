@@ -45,6 +45,13 @@
 //   dispatch     string  默认 "reuseport"（多线程模式内核分发，行为不变）；
 //                        "rr" 启用 T5 单 acceptor + 应用层负载感知 RR 分派
 //                        （worker 0 单 listener，全满不 accept 走 backlog 反压）
+//   acceptBackoffInitMs  int 默认 200：accept 资源耗尽/异常重启指数退避起步毫秒
+//   acceptBackoffMaxMs   int 默认 5000：退避封顶毫秒（对标 nginx EMFILE 退避）
+//   acceptRestartLimit   int 默认 5：监督窗口内最大异常重启次数，超限停止受理
+//   acceptRestartWindowMs int 默认 60000：监督窗口毫秒（对标 OTP supervisor
+//                        max_restarts/max_seconds、systemd StartLimitBurst）；
+//                        四键均可用 setAcceptBackoffInitMs 等同名 setter 覆盖，
+//                        非法值（<1）双语 warn 并回退默认
 //   connCapacity int     Task 7 起默认自动对齐：用户未显式设置时
 //                        per-worker = min(ulimit -n 软上限 - 256 余量, 65536)，
 //                        探测失败回退 1024 并双语告警，RLIM_INFINITY 取 65536；
@@ -112,6 +119,14 @@ public interface AcceptLoopHost {
     func onAccepted(conn);
     func onLoopError(kind: string, msg: string);
     func countHandlerError(e);
+    // accept 监督参数（对标 OTP supervisor max_restarts/max_seconds、
+    // systemd StartLimitBurst/StartLimitIntervalSec）：
+    //   acceptBackoffInitMs/MaxMs 资源耗尽与异常重启的指数退避起步/封顶；
+    //   acceptRestartLimit/WindowMs 窗口内最大重启次数与窗口毫秒数。
+    func acceptBackoffInitMs(): int;
+    func acceptBackoffMaxMs(): int;
+    func acceptRestartLimit(): int;
+    func acceptRestartWindowMs(): int;
     // P1-6：accept 限速平滑档——返回需让位的毫秒数（0=不限速）。
     // 在役逼近有效容量 87.5% 时返回短延时，让内核 backlog 暂存新连接、
     // 在途连接排空，避免生硬拒绝（对标 nginx accept_disabled）。
@@ -166,7 +181,7 @@ public class AcceptLoop {
     func AcceptLoop(host, srv) {
         self.host = host;
         self.srv = srv;
-        self.backoffMs = AcceptLoop.BACKOFF_INIT_MS;
+        self.backoffMs = host.acceptBackoffInitMs();
         self.restartN = 0;
         self.windowStartMs = 0;
     }
@@ -206,8 +221,8 @@ public class AcceptLoop {
                     "accept 资源耗尽（fd 耗尽），退避 " + self.backoffMs + "ms 后继续 / accept fd exhausted, backing off: " + msg);
                 coSleep(self.backoffMs);
                 self.backoffMs = self.backoffMs * 2;
-                if (self.backoffMs > AcceptLoop.BACKOFF_MAX_MS) {
-                    self.backoffMs = AcceptLoop.BACKOFF_MAX_MS;
+                if (self.backoffMs > self.host.acceptBackoffMaxMs()) {
+                    self.backoffMs = self.host.acceptBackoffMaxMs();
                 }
                 return true;
             }
@@ -221,7 +236,7 @@ public class AcceptLoop {
             return true;
         }
         // 受理成功：退避复位；stop 到达时新连接直接关闭退出
-        self.backoffMs = AcceptLoop.BACKOFF_INIT_MS;
+        self.backoffMs = self.host.acceptBackoffInitMs();
         if (self.host.loopRunning() == false) {
             try { conn.close(); } catch (e2) { x = 1; }
             return false;
@@ -242,20 +257,23 @@ public class AcceptLoop {
             } catch (e) {
                 if (self.host.loopRunning() == false) { return; }   // 主动 stop 不重启
                 now = timestamp_ms();
-                if (self.windowStartMs == 0 || now - self.windowStartMs > AcceptLoop.RESTART_WINDOW_MS) {
+                windowMs = self.host.acceptRestartWindowMs();
+                limitN = self.host.acceptRestartLimit();
+                if (self.windowStartMs == 0 || now - self.windowStartMs > windowMs) {
                     self.windowStartMs = now;
                     self.restartN = 0;
                 }
                 self.restartN = self.restartN + 1;
-                if (self.restartN > AcceptLoop.RESTART_LIMIT) {
+                if (self.restartN > limitN) {
                     self.host.onLoopError("failure",
-                        "accept 协程异常重启超限（" + AcceptLoop.RESTART_LIMIT + " 次/" + (AcceptLoop.RESTART_WINDOW_MS / 1000) + "s），停止受理 / accept supervisor gave up: " + AcceptLoop.errText(e));
+                        "accept 协程异常重启超限（" + limitN + " 次/" + (windowMs / 1000) + "s），停止受理 / accept supervisor gave up: " + AcceptLoop.errText(e));
                     return;
                 }
-                delay = AcceptLoop.BACKOFF_INIT_MS;
+                delay = self.host.acceptBackoffInitMs();
                 i = 1;
                 while (i < self.restartN) { delay = delay * 2; i = i + 1; }
-                if (delay > AcceptLoop.BACKOFF_MAX_MS) { delay = AcceptLoop.BACKOFF_MAX_MS; }
+                maxBackoff = self.host.acceptBackoffMaxMs();
+                if (delay > maxBackoff) { delay = maxBackoff; }
                 self.host.onLoopError("supervise",
                     "accept 协程异常退出，" + delay + "ms 后第 " + self.restartN + " 次重启 / accept coroutine died, restarting (attempt " + self.restartN + "): " + AcceptLoop.errText(e));
                 coSleep(delay);
@@ -294,7 +312,7 @@ public class RrAcceptLoop {
         self.host = host;
         self.srv = srv;
         self.nworkers = nworkers;
-        self.backoffMs = RrAcceptLoop.BACKOFF_INIT_MS;
+        self.backoffMs = host.acceptBackoffInitMs();
         self.restartN = 0;
         self.windowStartMs = 0;
     }
@@ -304,7 +322,7 @@ public class RrAcceptLoop {
         rc = self.srv.acceptRr(self.nworkers, self.host.app.maxConnections);
         if (rc == 0) {
             // 受理成功：退避复位
-            self.backoffMs = RrAcceptLoop.BACKOFF_INIT_MS;
+            self.backoffMs = self.host.acceptBackoffInitMs();
             return true;
         }
         if (rc == 1) {
@@ -323,8 +341,8 @@ public class RrAcceptLoop {
                 "RR accept 资源耗尽（fd 耗尽），退避 " + self.backoffMs + "ms 后继续 / RR accept fd exhausted, backing off");
             coSleep(self.backoffMs);
             self.backoffMs = self.backoffMs * 2;
-            if (self.backoffMs > RrAcceptLoop.BACKOFF_MAX_MS) {
-                self.backoffMs = RrAcceptLoop.BACKOFF_MAX_MS;
+            if (self.backoffMs > self.host.acceptBackoffMaxMs()) {
+                self.backoffMs = self.host.acceptBackoffMaxMs();
             }
             return true;
         }
@@ -349,22 +367,25 @@ public class RrAcceptLoop {
             } catch (e) {
                 if (self.host.loopRunning() == false) { return; }   // 主动 stop 不重启
                 now = timestamp_ms();
-                if (self.windowStartMs == 0 || now - self.windowStartMs > RrAcceptLoop.RESTART_WINDOW_MS) {
+                windowMs = self.host.acceptRestartWindowMs();
+                limitN = self.host.acceptRestartLimit();
+                if (self.windowStartMs == 0 || now - self.windowStartMs > windowMs) {
                     self.windowStartMs = now;
                     self.restartN = 0;
                 }
                 self.restartN = self.restartN + 1;
-                if (self.restartN > RrAcceptLoop.RESTART_LIMIT) {
+                if (self.restartN > limitN) {
                     self.host.onLoopError("failure",
-                        "RR accept 协程异常重启超限（" + RrAcceptLoop.RESTART_LIMIT + " 次/"
-                        + (RrAcceptLoop.RESTART_WINDOW_MS / 1000) + "s），停止受理 / RR accept supervisor gave up: "
+                        "RR accept 协程异常重启超限（" + limitN + " 次/"
+                        + (windowMs / 1000) + "s），停止受理 / RR accept supervisor gave up: "
                         + AcceptLoop.errText(e));
                     return;
                 }
-                delay = RrAcceptLoop.BACKOFF_INIT_MS;
+                delay = self.host.acceptBackoffInitMs();
                 i = 1;
                 while (i < self.restartN) { delay = delay * 2; i = i + 1; }
-                if (delay > RrAcceptLoop.BACKOFF_MAX_MS) { delay = RrAcceptLoop.BACKOFF_MAX_MS; }
+                maxBackoff = self.host.acceptBackoffMaxMs();
+                if (delay > maxBackoff) { delay = maxBackoff; }
                 self.host.onLoopError("supervise",
                     "RR accept 协程异常退出，" + delay + "ms 后第 " + self.restartN + " 次重启 / RR accept coroutine died, restarting (attempt "
                     + self.restartN + "): " + AcceptLoop.errText(e));
@@ -675,6 +696,23 @@ class ServiceWorker {
         return self.app.running;
     }
 
+    // accept 监督参数：worker 不持配置，统一委托 app（配置单点生效）
+    func acceptBackoffInitMs(): int {
+        return self.app.acceptBackoffInitMs();
+    }
+
+    func acceptBackoffMaxMs(): int {
+        return self.app.acceptBackoffMaxMs();
+    }
+
+    func acceptRestartLimit(): int {
+        return self.app.acceptRestartLimit();
+    }
+
+    func acceptRestartWindowMs(): int {
+        return self.app.acceptRestartWindowMs();
+    }
+
     // 已受理连接的入队与启动（原内联循环体逻辑，per-worker 限制）
     func onAccepted(conn) {
         a = self.app;
@@ -857,6 +895,12 @@ public class ServiceApplication extends Application {
     //   "reuseport"：每 worker 同端口 listen，内核 hash 分发（默认，行为不变）；
     //   "rr"：worker 0 单 listener accept，按 worker 在役负载 RR 应用层分派。
     dispatchVal: string;
+    // accept 监督参数（0 = 未设置，走配置键/内置默认；对标 OTP supervisor/
+    // systemd StartLimit）。AcceptLoop/RrAcceptLoop 经 AcceptLoopHost 读取。
+    acceptBackoffInitVal: int;
+    acceptBackoffMaxVal: int;
+    acceptRestartLimitVal: int;
+    acceptRestartWindowVal: int;
 
     func ServiceApplication() {
         super();
@@ -925,6 +969,10 @@ public class ServiceApplication extends Application {
         self.autoCapResolved = false;
         self.acceptQueueVal = 0;
         self.dispatchVal = "";
+        self.acceptBackoffInitVal = 0;
+        self.acceptBackoffMaxVal = 0;
+        self.acceptRestartLimitVal = 0;
+        self.acceptRestartWindowVal = 0;
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -1020,6 +1068,92 @@ public class ServiceApplication extends Application {
             return "reuseport";
         }
         return m;
+    }
+
+    // ---- accept 监督参数（对标 OTP supervisor / systemd StartLimit）----
+    // 优先级同为 setter > 配置表 > 内置默认；配置值非法（<1）时双语 warn
+    // 并回退默认，杜绝退避 0 导致 accept 循环空转、监督限次 0 即放弃受理。
+
+    // 资源耗尽/异常重启指数退避起步毫秒（默认 200，×2 递增）
+    func acceptBackoffInitMs(): int {
+        if (self.acceptBackoffInitVal > 0) { return self.acceptBackoffInitVal; }
+        v = self.configInt("acceptBackoffInitMs", AcceptLoop.BACKOFF_INIT_MS);
+        if (v < 1) {
+            self.warnInvalidAcceptTuning("acceptBackoffInitMs", v, AcceptLoop.BACKOFF_INIT_MS);
+            return AcceptLoop.BACKOFF_INIT_MS;
+        }
+        return v;
+    }
+
+    func setAcceptBackoffInitMs(ms: int) {
+        if (ms < 1) {
+            throw "accept 退避起步必须 ≥ 1 毫秒 / accept backoff init must be at least 1ms";
+        }
+        self.acceptBackoffInitVal = ms;
+        return self;
+    }
+
+    // 退避封顶毫秒（默认 5000）
+    func acceptBackoffMaxMs(): int {
+        if (self.acceptBackoffMaxVal > 0) { return self.acceptBackoffMaxVal; }
+        v = self.configInt("acceptBackoffMaxMs", AcceptLoop.BACKOFF_MAX_MS);
+        if (v < 1) {
+            self.warnInvalidAcceptTuning("acceptBackoffMaxMs", v, AcceptLoop.BACKOFF_MAX_MS);
+            return AcceptLoop.BACKOFF_MAX_MS;
+        }
+        return v;
+    }
+
+    func setAcceptBackoffMaxMs(ms: int) {
+        if (ms < 1) {
+            throw "accept 退避封顶必须 ≥ 1 毫秒 / accept backoff max must be at least 1ms";
+        }
+        self.acceptBackoffMaxVal = ms;
+        return self;
+    }
+
+    // 监督窗口内最大重启次数（默认 5，超限停止受理）
+    func acceptRestartLimit(): int {
+        if (self.acceptRestartLimitVal > 0) { return self.acceptRestartLimitVal; }
+        v = self.configInt("acceptRestartLimit", AcceptLoop.RESTART_LIMIT);
+        if (v < 1) {
+            self.warnInvalidAcceptTuning("acceptRestartLimit", v, AcceptLoop.RESTART_LIMIT);
+            return AcceptLoop.RESTART_LIMIT;
+        }
+        return v;
+    }
+
+    func setAcceptRestartLimit(n: int) {
+        if (n < 1) {
+            throw "accept 监督重启次数必须 ≥ 1 / accept restart limit must be at least 1";
+        }
+        self.acceptRestartLimitVal = n;
+        return self;
+    }
+
+    // 监督窗口毫秒数（默认 60000）
+    func acceptRestartWindowMs(): int {
+        if (self.acceptRestartWindowVal > 0) { return self.acceptRestartWindowVal; }
+        v = self.configInt("acceptRestartWindowMs", AcceptLoop.RESTART_WINDOW_MS);
+        if (v < 1) {
+            self.warnInvalidAcceptTuning("acceptRestartWindowMs", v, AcceptLoop.RESTART_WINDOW_MS);
+            return AcceptLoop.RESTART_WINDOW_MS;
+        }
+        return v;
+    }
+
+    func setAcceptRestartWindowMs(ms: int) {
+        if (ms < 1) {
+            throw "accept 监督窗口必须 ≥ 1 毫秒 / accept restart window must be at least 1ms";
+        }
+        self.acceptRestartWindowVal = ms;
+        return self;
+    }
+
+    // accept 监督参数非法值统一告警（纯文案挂钩，便于双语齐全）
+    func warnInvalidAcceptTuning(key: string, v: int, fallback: int) {
+        print("[lumyr-app][warn] 配置 " + key + " 非法（" + v + "），回退默认 " + fallback
+            + " / invalid " + key + " (" + v + "), falling back to " + fallback);
     }
 
     // ---- Task 7：connCapacity 自动对齐 fd rlimit ----

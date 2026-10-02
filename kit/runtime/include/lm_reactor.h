@@ -287,7 +287,7 @@ int lm_reactor_connect_check(lm_connection_t* c, int* out_errno);
  * fd 在 ADD 前不挂任何 epoll/kqueue，拒收 close 全部发生在 owner 线程。
  * ============================================================ */
 
-#define LM_REACTOR_MAX_REG 128   /* RR 注册表槽位上限（对齐 LM_MAX_SCHEDS） */
+#define LM_REACTOR_MAX_REG 256   /* RR 注册表槽位上限（对齐 LM_MAX_WORKERS_CAP） */
 
 /* 注册表：reactor 创建后由 worker 显式按 worker idx 占槽注册；
  * 返回 0 成功，-1 越界/槽位已占/重复注册。 */

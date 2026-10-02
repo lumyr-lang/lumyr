@@ -16,6 +16,7 @@
 #include "lm_sched_stats.h" /* Phase 8.11：存活协程计数 + pending_time 记账 */
 #include "gc_runtime.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -223,16 +224,48 @@ static void co_trampoline(void* arg) {
  * API
  * ============================================================ */
 
+/* 默认协程栈字节数：env LM_CO_STACK_SIZE，未设置取 LM_CO_DEFAULT_STACK_SIZE
+ * (128KiB)。对标 Java -Xss / Tokio Builder::stack_size（Go/BEAM 派靠栈自动
+ * 增长而不可配，本运行时为固定 mmap 栈，走启动参数派）。
+ * 非 16/128KiB 标准档的尺寸不经栈池缓存（归还即 munmap，见
+ * lm_stack_pool_get_sized）；非法值（非整数或 <16KiB）回退默认并一次性
+ * 双语告警。尺寸在栈池分配时按页向上对齐，此处不做对齐。 */
+static size_t lm_co_default_stack_size(void) {
+    static size_t cached = 0;
+    if (cached) return cached;
+    size_t v = LM_CO_DEFAULT_STACK_SIZE;
+    const char* e = getenv("LM_CO_STACK_SIZE");
+    if (e && *e) {
+        char* end = NULL;
+        long parsed = strtol(e, &end, 10);
+        if (end == e || parsed < (long)LM_STACK_SMALL) {
+            fprintf(stderr,
+                "[lumyr] LM_CO_STACK_SIZE 非法（%s）：须为 ≥ %d 字节的整数，"
+                "回退默认 %zu 字节；非标准档栈不入栈池缓存 / "
+                "invalid LM_CO_STACK_SIZE (%s): expected integer >= %d bytes, "
+                "falling back to %zu; non-standard sizes bypass stack pool\n",
+                e, (int)LM_STACK_SMALL, (size_t)LM_CO_DEFAULT_STACK_SIZE,
+                e, (int)LM_STACK_SMALL, (size_t)LM_CO_DEFAULT_STACK_SIZE);
+        } else {
+            v = (size_t)parsed;
+        }
+    }
+    cached = v;
+    return v;
+}
+
 lm_co_t* lm_co_spawn(lm_co_entry_t entry, void* arg, size_t stack_size) {
-    if (stack_size == 0) stack_size = LM_CO_DEFAULT_STACK_SIZE;
-    /* Phase 8.6：按 stack_size 推断栈档（≤SMALL→SMALL 桶，否则 NORMAL）。 */
+    if (stack_size == 0) stack_size = lm_co_default_stack_size();
+    /* Phase 8.6：按 stack_size 推断栈档（≤SMALL→SMALL 桶，否则 NORMAL）。
+     * 自定义尺寸（如 env LM_CO_STACK_SIZE=65536）按 NORMAL 档记账。 */
     int stack_class = (stack_size <= LM_STACK_SMALL) ? LM_STACK_CLASS_SMALL
                                                      : LM_STACK_CLASS_NORMAL;
     lm_co_t* co = (lm_co_t*)calloc(1, sizeof(lm_co_t));
     if (!co) return NULL;
-    /* Phase 8.6 C：从 per-thread 栈池取栈（池命中复用，池空 mmap 新栈）。 */
+    /* Phase 8.6 C：取栈——标准档走 per-thread 栈池（命中复用），
+     * 非标准尺寸直接 mmap（不入池，归还时 munmap）。 */
     lm_stack_storage_t st;
-    if (lm_stack_pool_get(stack_class, &st) != 0) {
+    if (lm_stack_pool_get_sized(stack_size, &st) != 0) {
         free(co);
         return NULL;
     }

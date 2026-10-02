@@ -1,0 +1,132 @@
+// accept_supervisor_config_test.lm —— accept 监督参数配置单测：
+//   acceptBackoffInitMs / acceptBackoffMaxMs /
+//   acceptRestartLimit / acceptRestartWindowMs
+// 验证（均不启动监听，纯配置语义）：
+//   [1] 四键内置默认（200/5000/5/60000）
+//   [2] 同名 setter 生效；setter 优先于配置表；非法值（<1）抛错
+//   [3] 配置表键生效；非法值（0/负数）双语 warn 并回退默认
+//   [4] AcceptLoop 经 AcceptLoopHost 实际读到配置值（构造时取起步退避）
+// 运行：./bin/lumyr tests/accept_supervisor_config_test.lm
+import <App/ServiceApplication>;
+
+func fail(msg): bool {
+    print("  FAIL: " + msg);
+    return false;
+}
+
+// [1] 默认值
+func testDefaults(): bool {
+    print("[1] 默认值 / defaults");
+    app = ServiceApplication(18096);
+    if (app.acceptBackoffInitMs() != AcceptLoop.BACKOFF_INIT_MS
+        || AcceptLoop.BACKOFF_INIT_MS != 200) {
+        return fail("acceptBackoffInitMs 默认 " + app.acceptBackoffInitMs() + " != 200");
+    }
+    if (app.acceptBackoffMaxMs() != AcceptLoop.BACKOFF_MAX_MS
+        || AcceptLoop.BACKOFF_MAX_MS != 5000) {
+        return fail("acceptBackoffMaxMs 默认 " + app.acceptBackoffMaxMs() + " != 5000");
+    }
+    if (app.acceptRestartLimit() != AcceptLoop.RESTART_LIMIT
+        || AcceptLoop.RESTART_LIMIT != 5) {
+        return fail("acceptRestartLimit 默认 " + app.acceptRestartLimit() + " != 5");
+    }
+    if (app.acceptRestartWindowMs() != AcceptLoop.RESTART_WINDOW_MS
+        || AcceptLoop.RESTART_WINDOW_MS != 60000) {
+        return fail("acceptRestartWindowMs 默认 " + app.acceptRestartWindowMs() + " != 60000");
+    }
+    return true;
+}
+
+// [2] setter 生效 / 优先配置表 / 非法抛错
+func testSetters(): bool {
+    print("[2] setter 语义 / setters");
+    // 配置表给一组值，setter 再覆盖，getter 必须取 setter（优先级）
+    app = ServiceApplication({"port": 18097, "acceptBackoffInitMs": 111,
+        "acceptBackoffMaxMs": 222, "acceptRestartLimit": 3,
+        "acceptRestartWindowMs": 444});
+    app.setAcceptBackoffInitMs(305);
+    app.setAcceptBackoffMaxMs(7001);
+    app.setAcceptRestartLimit(9);
+    app.setAcceptRestartWindowMs(12345);
+    if (app.acceptBackoffInitMs() != 305) { return fail("setter 起步退避未覆盖配置表"); }
+    if (app.acceptBackoffMaxMs() != 7001) { return fail("setter 封顶退避未覆盖配置表"); }
+    if (app.acceptRestartLimit() != 9) { return fail("setter 重启次数未覆盖配置表"); }
+    if (app.acceptRestartWindowMs() != 12345) { return fail("setter 监督窗口未覆盖配置表"); }
+    // 链式返回 self
+    app2 = ServiceApplication(18098);
+    if (app2.setAcceptRestartLimit(7) != app2) { return fail("setter 未返回 self"); }
+    if (app2.acceptRestartLimit() != 7) { return fail("链式 setter 后取值不符"); }
+    // 非法值抛错
+    pairs = [["setAcceptBackoffInitMs", 0], ["setAcceptBackoffInitMs", -3],
+             ["setAcceptBackoffMaxMs", 0], ["setAcceptRestartLimit", 0],
+             ["setAcceptRestartWindowMs", -1]];
+    i = 0;
+    while (i < pairs.len) {
+        threw = false;
+        try {
+            if (pairs[i][0] == "setAcceptBackoffInitMs") { app2.setAcceptBackoffInitMs(pairs[i][1]); }
+            else if (pairs[i][0] == "setAcceptBackoffMaxMs") { app2.setAcceptBackoffMaxMs(pairs[i][1]); }
+            else if (pairs[i][0] == "setAcceptRestartLimit") { app2.setAcceptRestartLimit(pairs[i][1]); }
+            else { app2.setAcceptRestartWindowMs(pairs[i][1]); }
+        } catch (e) { threw = true; }
+        if (!threw) { return fail(pairs[i][0] + "(" + pairs[i][1] + ") 未抛错"); }
+        i = i + 1;
+    }
+    return true;
+}
+
+// [3] 配置表键生效；非法值回退默认（此用例打印 warn 属预期）
+func testConfigMap(): bool {
+    print("[3] 配置表与非法值回退 / config map & fallback（预期 8 行 warn）");
+    app = ServiceApplication({"port": 18099, "acceptBackoffInitMs": 88,
+        "acceptBackoffMaxMs": 99, "acceptRestartLimit": 2,
+        "acceptRestartWindowMs": 1001});
+    if (app.acceptBackoffInitMs() != 88) { return fail("配置表 acceptBackoffInitMs 未生效"); }
+    if (app.acceptBackoffMaxMs() != 99) { return fail("配置表 acceptBackoffMaxMs 未生效"); }
+    if (app.acceptRestartLimit() != 2) { return fail("配置表 acceptRestartLimit 未生效"); }
+    if (app.acceptRestartWindowMs() != 1001) { return fail("配置表 acceptRestartWindowMs 未生效"); }
+    // 非法值（0 / 负数）：warn 后回退默认，不崩、不取非法值
+    bad = ServiceApplication({"port": 18100, "acceptBackoffInitMs": 0,
+        "acceptBackoffMaxMs": -5, "acceptRestartLimit": 0,
+        "acceptRestartWindowMs": -1});
+    if (bad.acceptBackoffInitMs() != 200) { return fail("非法起步退避未回退 200"); }
+    if (bad.acceptBackoffMaxMs() != 5000) { return fail("非法封顶退避未回退 5000"); }
+    if (bad.acceptRestartLimit() != 5) { return fail("非法重启次数未回退 5"); }
+    if (bad.acceptRestartWindowMs() != 60000) { return fail("非法监督窗口未回退 60000"); }
+    return true;
+}
+
+// [4] AcceptLoop 经 host 实际取到配置值（构造时读取起步退避；不 run，srv 传 null 安全）
+func testLoopReadsHost(): bool {
+    print("[4] AcceptLoop 经 host 读配置 / loop reads host");
+    app = ServiceApplication(18101);
+    app.setAcceptBackoffInitMs(333);
+    loop = AcceptLoop(app, null);
+    if (loop.backoffMs != 333) {
+        return fail("AcceptLoop 构造起步退避 " + loop.backoffMs + " != 333");
+    }
+    // 默认配置下取内置默认
+    app2 = ServiceApplication(18102);
+    loop2 = AcceptLoop(app2, null);
+    if (loop2.backoffMs != 200) {
+        return fail("默认 AcceptLoop 构造起步退避 " + loop2.backoffMs + " != 200");
+    }
+    // RrAcceptLoop 同样经 host 读取
+    rr = RrAcceptLoop(app, null, 2);
+    if (rr.backoffMs != 333) {
+        return fail("RrAcceptLoop 构造起步退避 " + rr.backoffMs + " != 333");
+    }
+    return true;
+}
+
+// ---- main ----
+print("=== accept 监督参数配置测试 / accept supervisor config tests ===");
+r1 = testDefaults();
+r2 = testSetters();
+r3 = testConfigMap();
+r4 = testLoopReadsHost();
+if (r1 && r2 && r3 && r4) {
+    print("=== ALL PASS / 全部通过 ===");
+} else {
+    print("=== FAILED / 存在失败 ===");
+}

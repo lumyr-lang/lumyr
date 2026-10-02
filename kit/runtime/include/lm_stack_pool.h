@@ -40,6 +40,13 @@ typedef struct lm_stack_storage {
  * 成功返回 0 并填充 *out；失败（mmap 失败）返回 -1。 */
 int lm_stack_pool_get(int stack_class, lm_stack_storage_t* out);
 
+/* 按显式字节数取栈（LM_CO_STACK_SIZE 自定义默认栈路径）：
+ * want_size 等于 SMALL/NORMAL 标准档时等价 lm_stack_pool_get（享受池缓存）；
+ * 非标准尺寸直接 mmap+guard 分配、不入池——归还时 lm_stack_pool_return
+ * 识别尺寸不匹配走 munmap，池只缓存标准档以保证命中尺寸一致。
+ * want_size 在分配时按页向上对齐。成功 0 填充 *out，失败 -1。 */
+int lm_stack_pool_get_sized(size_t want_size, lm_stack_storage_t* out);
+
 /* 归还栈到 per-thread 池。st 字段与 get 返回时一致。
  * poison 整个可用区 + 入栈（未满）或 munmap（池满）。
  * st 可为栈上局部变量，return 内部拷贝字段。 */

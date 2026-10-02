@@ -183,6 +183,16 @@ int lm_stack_pool_get(int stack_class, lm_stack_storage_t* out) {
     return pool_alloc_stack(want_size, out);
 }
 
+int lm_stack_pool_get_sized(size_t want_size, lm_stack_storage_t* out) {
+    if (!out) return -1;
+    /* 标准档走桶（池命中复用）；非标准尺寸直接 mmap，不入池 */
+    if (want_size == (size_t)LM_STACK_SMALL)
+        return lm_stack_pool_get(LM_STACK_CLASS_SMALL, out);
+    if (want_size == (size_t)LM_STACK_NORMAL)
+        return lm_stack_pool_get(LM_STACK_CLASS_NORMAL, out);
+    return pool_alloc_stack(want_size, out);
+}
+
 void lm_stack_pool_return(const lm_stack_storage_t* st) {
     if (!st || !st->mmap_base) return;
     lm_pool_tls_t* pool = pool_for_thread();
