@@ -317,3 +317,57 @@ P0-A 容量定稿的实施前提（main 帧何时创建、全局槽数何时可�
 - SMALL 试点后全量枚举 + ASAN 零报告（重点：无 guard page SIGSEGV/SIGBUS）；
 - 热路径开销：trace 关闭时采样仍计（原子加），与 pending 记账同量级，
   QPS 回归沿用既有口径抽测。
+
+## 10. Task 7：connCapacity 自动对齐 fd rlimit（实施取证与设计）
+
+### 10.1 现状取证
+
+- 容量语义：`lm_reactor_new(conn_capacity)` 按 fd 索引预分配两个 calloc 数组
+  （`connections` + `fd_map`，每槽位百字节量级），fd 超容量直接拒绝
+  （`lm_reactor.c:285-289`）。容量是**每 worker** 值：单线程在
+  `onStart` 建 reactor，多线程在每个 `ServiceWorker.run` 建 reactor，
+  均调 `app.connCapacity()`（`ServiceApplication.lm:531/1078`）。
+- 取值链（改前）：`connCapacity()` = 编程式 `setConnCapacity` > 配置表键
+  `connCapacity` > 硬编码默认 65536。**默认值与实际 rlimit 完全无关**：
+  典型开发机 `ulimit -n` 仅 256 时照样按 65536 预分配（白耗内存），
+  反过来低 rlimit 下服务能跟踪的连接数被 fd 卡死。
+- 已有半成品：`checkFdBudget()`（run 入口调用，reactor 建立前）仅在
+  cap > fdLimit 时双语 warn，**不自动改值**；内置
+  `__private_system__fd_limit()` 走 `getrlimit(RLIMIT_NOFILE)`，
+  约定 >0=软上限，-1=RLIM_INFINITY/查询失败/平台不支持（三态合一）。
+- 既有测试 `tests/conn_capacity_test.lm` 断言"默认 == 65536"，语义随
+  本任务改变，需同步改为与 `calcAutoConnCapacity(真实 fdLimit)` 对齐。
+
+### 10.2 设计
+
+1. **优先级**（显式优先，与 spec 一致）：编程式 `setConnCapacity` >
+   配置表键 `connCapacity`（配置文件也是用户显式意图）> 自动对齐。
+   自动路径用实例字段惰性缓存（`autoCapResolved/autoCapVal`）——
+   `onStart` 先于 `run()` 的 `checkFdBudget` 执行，不能靠 run 入口预算；
+   缓存同时保证多 worker 下只探测/告警一次。
+2. **公式**：`per-worker cap = min(65536, max(1, fdLimit - 256))`。
+   - 余量 256：stdio(3) + 每 worker listen/kqueue/self-pipe + 日志文件 +
+     出站 fd + 库内部分配，256 覆盖常见部署且与 nginx 保守余量同量级；
+   - 上限 65536：沿用历史默认，即自动对齐只"往下收"，不会悄悄放大
+     内存预分配；
+   - 极低 rlimit（fdLimit-256 < 64）：改取 `min(64, max(1, fdLimit-8))`
+     保底（64 是最小可用池；reactor 容量 ≤0 会被 C 层重置为 65536，
+     必须显式给出 ≥1 值）。
+3. **探测返回三态分立**（小改内置，语义不再含糊）：>0=软上限；
+   **-2=RLIM_INFINITY（无上限 → 直接取上限 65536，不告警）**；
+   -1=查询失败/平台不支持 → 保守回退 1024 + 双语告警。旧调用方
+   `checkFdBudget` 判 `fdLimit > 0`，两种负值天然跳过，兼容。
+4. **可测性**：决策抽成**纯静态函数**
+   `ServiceApplication.calcAutoConnCapacity(fdLimit)`，
+   单测注入 fdLimit 覆盖高/低/极低/无上限/失败五态，不依赖改进程 rlimit；
+   告警文案抽成纯函数 `fdLimitWarnMsg(fdLimit)`，单测断言中英双语标记
+   （`/` 分隔 + 英文 "ulimit" 片段）。
+5. **自动对齐结果打印一次双语 info**（含 fdLimit 与取定值），为 T8
+   万级长连基准留口径；checkFdBudget 保留，此后只可能对显式值告警。
+
+### 10.3 验证设计
+
+- 扩展 `tests/conn_capacity_test.lm`：五态纯函数断言 + 显式（编程式/
+  配置表）优先断言 + 真实 fdLimit 端到端取值一致断言 + 双语文案断言；
+  原 echo 功能/多 worker 两个场景保留不动；
+- TR-7.2：全量枚举（正常 + ASAN），零新增 FAIL。

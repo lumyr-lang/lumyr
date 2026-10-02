@@ -1,11 +1,16 @@
-// conn_capacity_test.lm —— Phase 7.6 单测：reactor 连接池容量（connCapacity）可配
+// conn_capacity_test.lm —— Phase 7.6 / Task 7 单测：
+// reactor 连接池容量（connCapacity）可配 + 未显式设置时按 fd rlimit 自动对齐
 // 验证 ServiceApplication 的 connCapacity 配置：
-//   [1] getter/setter 语义：默认 65536；setConnCapacity 生效；非法值抛错；
+//   [1] getter/setter 语义：未设置时自动对齐 calcAutoConnCapacity(真实fdLimit)；
+//       setConnCapacity 生效；非法值抛错；
 //       配置表 connCapacity 键生效；编程式设置优先于配置表
 //   [2] 小容量功能验证：connCapacity=1024 时 echo 服务正常工作
 //       （reactor 连接池按 fd 索引，小容量不影响少量连接）
 //   [3] 多线程模式小容量：workers=2 + connCapacity=1024，echo 正常
 //       （验证 per-worker reactor 均使用 app.connCapacity()）
+//   [4] Task 7 自动对齐纯函数五态（注入 fdLimit，不依赖改进程 rlimit）：
+//       高 rlimit 取上限 / 低 rlimit 减余量 / 极低保底 / 无上限取上限 /
+//       探测失败回退 1024；端到端实例取值与纯函数一致；双语文案齐全
 // 运行：./bin/lumyr tests/conn_capacity_test.lm
 import <App/ServiceApplication>;
 import <NetWork/Socket>;
@@ -23,10 +28,18 @@ class EchoHandler implements ServiceHandler {
 // 测试 1：getter/setter 语义
 func testConfigSemantics() {
     print("[1] connCapacity 配置语义 / config semantics");
-    // 默认值
+    // 未显式设置：Task 7 自动对齐 calcAutoConnCapacity(真实 fd 软上限)
+    realFdLimit = __private_system__fd_limit();
+    expectAuto = ServiceApplication.calcAutoConnCapacity(realFdLimit);
     app = ServiceApplication(18091);
-    if (app.connCapacity() != 65536) {
-        print("  FAIL: 默认 connCapacity " + app.connCapacity() + " != 65536");
+    if (app.connCapacity() != expectAuto) {
+        print("  FAIL: 自动对齐 connCapacity " + app.connCapacity()
+            + " != calc(" + realFdLimit + ")=" + expectAuto);
+        return false;
+    }
+    // 自动对齐结果惰性缓存：二次取值一致（不重复探测）
+    if (app.connCapacity() != expectAuto) {
+        print("  FAIL: 自动对齐缓存二次取值不一致");
         return false;
     }
     // 编程式设置
@@ -145,12 +158,87 @@ func testMultiWorkerSmallCapacity() {
     return true;
 }
 
+// 测试 4：Task 7 自动对齐纯函数（注入 fdLimit 五态）+ 双语文案
+func testAutoAlign() {
+    print("[4] connCapacity 自动对齐 rlimit / auto-align to fd rlimit");
+    // 高 rlimit：减余量后超上限 → 取上限 65536
+    if (ServiceApplication.calcAutoConnCapacity(1048576) != 65536) {
+        print("  FAIL: 高 rlimit 1048576 未取上限 65536");
+        return false;
+    }
+    if (ServiceApplication.calcAutoConnCapacity(70000) != 65536) {
+        print("  FAIL: rlimit 70000 未取上限 65536");
+        return false;
+    }
+    // 低 rlimit：fdLimit-256（1024 → 768）
+    if (ServiceApplication.calcAutoConnCapacity(1024) != 768) {
+        print("  FAIL: 低 rlimit 1024 期望 768，实际 "
+            + ServiceApplication.calcAutoConnCapacity(1024));
+        return false;
+    }
+    // 极低 rlimit：保底路径（256-256=0 <64 → min(64, 256-8)=64）
+    if (ServiceApplication.calcAutoConnCapacity(256) != 64) {
+        print("  FAIL: 极低 rlimit 256 期望 64，实际 "
+            + ServiceApplication.calcAutoConnCapacity(256));
+        return false;
+    }
+    // 超小 rlimit：fdLimit-8 封顶 64 保底 1（70 → 62，9 → 1）
+    if (ServiceApplication.calcAutoConnCapacity(70) != 62) {
+        print("  FAIL: rlimit 70 期望 62，实际 "
+            + ServiceApplication.calcAutoConnCapacity(70));
+        return false;
+    }
+    if (ServiceApplication.calcAutoConnCapacity(9) != 1) {
+        print("  FAIL: rlimit 9 期望 1，实际 "
+            + ServiceApplication.calcAutoConnCapacity(9));
+        return false;
+    }
+    // 无上限 RLIM_INFINITY(-2)：取上限，不告警
+    if (ServiceApplication.calcAutoConnCapacity(-2) != 65536) {
+        print("  FAIL: 无上限 -2 期望 65536");
+        return false;
+    }
+    // 探测失败/不支持(-1)：保守回退 1024
+    if (ServiceApplication.calcAutoConnCapacity(-1) != 1024) {
+        print("  FAIL: 探测失败 -1 期望回退 1024");
+        return false;
+    }
+    // 端到端：实例自动取值 == 纯函数(真实 fdLimit)
+    fdLimit = __private_system__fd_limit();
+    app = ServiceApplication(18094);
+    if (app.connCapacity() != ServiceApplication.calcAutoConnCapacity(fdLimit)) {
+        print("  FAIL: 实例自动取值与纯函数结果不一致");
+        return false;
+    }
+    // 显式优先：即使真实 fdLimit 极小/极大，编程式与配置键都原样生效
+    app.setConnCapacity(128);
+    if (app.connCapacity() != 128) {
+        print("  FAIL: 显式 128 未优先");
+        return false;
+    }
+    appCfg = ServiceApplication({"port": 18095, "connCapacity": 512});
+    if (appCfg.connCapacity() != 512) {
+        print("  FAIL: 配置键 512 未优先");
+        return false;
+    }
+    // 探测失败告警文案：中英双语齐全
+    msg = ServiceApplication.fdLimitWarnMsg(-1);
+    if (msg.contains("保守默认") == false || msg.contains("ulimit -n") == false
+        || msg.contains("conservative 1024") == false) {
+        print("  FAIL: 探测失败告警非中英双语：" + msg);
+        return false;
+    }
+    print("  五态/端到端/显式优先/双语文案 全部正确 / auto-align ok");
+    return true;
+}
+
 // ---- main ----
-print("=== Phase 7.6 connCapacity 测试 / connCapacity tests ===");
+print("=== Phase 7.6 / Task 7 connCapacity 测试 / connCapacity tests ===");
 r1 = testConfigSemantics();
 r2 = testSmallCapacityEcho();
 r3 = testMultiWorkerSmallCapacity();
-if (r1 && r2 && r3) {
+r4 = testAutoAlign();
+if (r1 && r2 && r3 && r4) {
     print("=== ALL PASS / 全部通过 ===");
 } else {
     print("=== FAILED / 存在失败 ===");

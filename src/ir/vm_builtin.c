@@ -4509,14 +4509,17 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     }
     case BUILTIN_FD_LIMIT: {
         /* __private_system__fd_limit()：进程 fd 软上限（getrlimit RLIMIT_NOFILE）。
-         * App 服务层 fd 预算自检用：启动时校验连接容量与系统 fd 上限余量。
-         * 返回软上限数值；-1 = 无上限（RLIM_INFINITY）、查询失败或平台不支持。 */
+         * App 服务层 fd 预算自检 / Task 7 connCapacity 自动对齐用。
+         * 返回值三态：>0=软上限数值；-2=无上限（RLIM_INFINITY，按容量上限取）；
+         * -1=查询失败或平台不支持（调用方保守回退 + 双语告警）。 */
 #ifdef _WIN32
         *out = lumyr_make_int(-1);
 #else
         struct rlimit rl;
-        if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY) {
+        if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
             *out = lumyr_make_int(-1);
+        } else if (rl.rlim_cur == RLIM_INFINITY) {
+            *out = lumyr_make_int(-2);
         } else {
             *out = lumyr_make_int64((int64_t)rl.rlim_cur);
         }

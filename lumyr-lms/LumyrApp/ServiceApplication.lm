@@ -40,10 +40,12 @@
 //   dispatch     string  默认 "reuseport"（多线程模式内核分发，行为不变）；
 //                        "rr" 启用 T5 单 acceptor + 应用层负载感知 RR 分派
 //                        （worker 0 单 listener，全满不 accept 走 backlog 反压）
-//   connCapacity int     默认 65536（Phase 7.6）：reactor 连接池容量，
-//                        即可跟踪的最大 fd 数（连接对象池按 fd 索引预分配）。
-//                        取值应 ≥ 进程 fd 上限（ulimit -n）；fd 超出容量时
-//                        新连接被直接拒绝。多线程模式下为 per-worker 容量。
+//   connCapacity int     Task 7 起默认自动对齐：用户未显式设置时
+//                        per-worker = min(ulimit -n 软上限 - 256 余量, 65536)，
+//                        探测失败回退 1024 并双语告警，RLIM_INFINITY 取 65536；
+//                        显式设置（编程式/配置键）优先。reactor 连接池容量，
+//                        即可跟踪的最大 fd 数（连接对象池按 fd 索引预分配）；
+//                        fd 超出容量时新连接被直接拒绝。多线程为 per-worker。
 //
 // 两个"连接数"概念的区分：
 //   connCapacity    资源容量：reactor 连接池大小，决定能跟踪多少 fd，
@@ -55,7 +57,8 @@
 //   fd 上限       每连接占 1 个 fd，进程 fd 上限决定连接数天花板。
 //                 macOS: launchctl limit maxfiles / ulimit -n；
 //                 Linux: /etc/security/limits.conf + systemd LimitNOFILE。
-//                 调高 fd 上限后 connCapacity 需同步调大（≥ ulimit -n）。
+//                 Task 7 起未显式配置 connCapacity 时按软上限自动对齐
+//                 （per-worker = min(软上限-256, 65536)），无需手配。
 //   SO_REUSEADDR  ServerSocket 已默认开启（重启可绑 TIME_WAIT 残留端口）。
 //   SO_REUSEPORT  多线程模式自动开启（workers > 1 时各 worker 同端口 listen）。
 //   内存预算      单连接成本 ≈ 连接对象（约百字节，连接池预分配）
@@ -837,7 +840,11 @@ public class ServiceApplication extends Application {
     longSchedCount: long;
     workerCountVal: int;   // Phase 7.5：worker 线程数（0 = 未设置，走配置/默认 1）
     workerList: any;       // Phase 7.5：多线程模式下的 ServiceWorker 数组（null = 单线程）
-    connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/默认 65536）
+    connCapacityVal: int;  // Phase 7.6：reactor 连接池容量（0 = 未设置，走配置/自动对齐）
+    // Task 7：自动对齐结果惰性缓存（onStart 先于 run 预算执行，且多 worker
+    // 各调一次 connCapacity——缓存保证只探测/告警一次）
+    autoCapVal: int;
+    autoCapResolved: bool;
     // 硬上限排队模式（0 = 未设置走配置/默认 false；1 = 开；-1 = 关）。
     // 开启后在役达 maxConnections 不 reject，而是暂停 accept 让连接在 backlog 排队。
     acceptQueueVal: int;
@@ -909,6 +916,8 @@ public class ServiceApplication extends Application {
         self.workerCountVal = 0;
         self.workerList = null;
         self.connCapacityVal = 0;
+        self.autoCapVal = 0;
+        self.autoCapResolved = false;
         self.acceptQueueVal = 0;
         self.dispatchVal = "";
     }
@@ -1008,13 +1017,74 @@ public class ServiceApplication extends Application {
         return m;
     }
 
-    // ---- Phase 7.6：reactor 连接池容量（connCapacity）----
+    // ---- Task 7：connCapacity 自动对齐 fd rlimit ----
+    // 常量（公式见 docs/concurrency-model-research.md §10.2）：
+    //   65536 自动对齐上限（=历史默认，自动对齐只往下收，不放大预分配）
+    //   256   fd 安全余量（stdio/listen/kqueue/self-pipe/日志文件/出站 fd）
+    //   1024  探测失败/平台不支持时的保守回退值
+    //   64    极低 rlimit 下的最小可用池容量
+    // 纯函数：由 fd 软上限推导 per-worker 连接池容量（抽成静态便于单测注入）。
+    //   fdLimit >0：min(65536, fdLimit-256)；减余量后不足 64 时
+    //              改 min(64, max(1, fdLimit-8)) 保底（reactor 容量 ≤0
+    //              会被 C 层重置为 65536，必须显式给出 ≥1 值）
+    //   fdLimit == -2：RLIM_INFINITY 无上限 → 65536
+    //   fdLimit == -1：探测失败/平台不支持 → 1024（调用方双语告警）
+    static func calcAutoConnCapacity(fdLimit: int): int {
+        if (fdLimit == -2) { return 65536; }
+        if (fdLimit <= 0) { return 1024; }
+        budget = fdLimit - 256;
+        if (budget < 64) {
+            // 极低 rlimit：只留 8 个应急 fd，池容量封顶 64、保底 1
+            budget = fdLimit - 8;
+            if (budget < 1) { budget = 1; }
+            if (budget > 64) { budget = 64; }
+        }
+        if (budget > 65536) { budget = 65536; }
+        return budget;
+    }
+
+    // 探测失败双语告警文案（纯函数，便于单测断言双语齐全）
+    static func fdLimitWarnMsg(fdLimit: int): string {
+        return "无法确定系统 fd 上限（探测返回 " + fdLimit
+            + "），连接池容量回退保守默认 1024，建议显式配置 connCapacity 或调高 ulimit -n / "
+            + "cannot determine system fd limit (probe returned " + fdLimit
+            + "), connection pool capacity falls back to conservative 1024; "
+            + "set connCapacity explicitly or raise ulimit -n";
+    }
+
+    // ---- Phase 7.6 + Task 7：reactor 连接池容量（connCapacity）----
     // 资源容量语义（区别于 maxConnections 业务限流）：reactor 连接池按 fd
     // 索引预分配，决定可跟踪的最大 fd 数；fd 超出容量时新连接被直接拒绝。
-    // 取值应 ≥ 进程 fd 上限（ulimit -n）；多线程模式下为 per-worker 容量。
+    // 取值优先级：编程式 setConnCapacity > 配置表键 connCapacity（均为用户
+    // 显式意图）> Task 7 自动对齐 per-worker = min(fd软上限-256, 65536)；
+    // 探测失败回退 1024 并双语告警。多线程模式下为 per-worker 容量。
     func connCapacity(): int {
+        // 显式优先①：编程式 setConnCapacity
         if (self.connCapacityVal > 0) { return self.connCapacityVal; }
-        return self.configInt("connCapacity", 65536);
+        // 显式优先②：配置表键（配置文件也是用户显式意图）
+        if (self.config("connCapacity") != null) {
+            return self.configInt("connCapacity", 65536);
+        }
+        // 自动对齐（惰性缓存：onStart 先于 run 预算执行；多 worker 共享一次探测）
+        if (self.autoCapResolved) { return self.autoCapVal; }
+        fdLimit = __private_system__fd_limit();
+        cap = ServiceApplication.calcAutoConnCapacity(fdLimit);
+        self.autoCapVal = cap;
+        self.autoCapResolved = true;
+        if (fdLimit == -2) {
+            print("[lumyr-app] connCapacity 自动对齐：fd 无上限，per-worker 连接池容量取上限 "
+                + cap + " / connCapacity auto-aligned: fd unlimited, per-worker pool cap=" + cap);
+        } else if (fdLimit <= 0) {
+            print("[lumyr-app][warn] " + ServiceApplication.fdLimitWarnMsg(fdLimit));
+        } else {
+            // 实际预留 = 软上限 - 取值（常规 256；极低 rlimit 保底路径为 8）
+            print("[lumyr-app] connCapacity 自动对齐：fd 软上限 " + fdLimit
+                + "，per-worker 连接池容量 " + cap + "（预留 " + (fdLimit - cap)
+                + " 个 fd）/ connCapacity auto-aligned: fd soft limit " + fdLimit
+                + ", per-worker pool cap " + cap + " (" + (fdLimit - cap)
+                + " fds reserved)");
+        }
+        return cap;
     }
 
     // 编程式设置 reactor 连接池容量（须在 start 前调用）
