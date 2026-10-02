@@ -829,7 +829,7 @@ static lm_inbound_t* inbound_node_take_locked(lm_reactor_t* r) {
     return (lm_inbound_t*)malloc(sizeof(lm_inbound_t));
 }
 
-int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind,
+int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind, void* tls_ctx,
                          const struct sockaddr* addr, socklen_t addrlen,
                          int max_conn) {
     if (!r || fd < 0) return -2;
@@ -854,6 +854,7 @@ int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind,
     }
     n->fd = fd;
     n->kind = kind;
+    n->tls_ctx = tls_ctx;   /* G4：listener 的 TLS 服务端上下文（借用指针）随连接投递 */
     n->next = NULL;
     n->addrlen = 0;
     memset(&n->addr, 0, sizeof(n->addr));

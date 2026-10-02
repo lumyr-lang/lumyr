@@ -1,0 +1,227 @@
+// ============================================================
+// G4 TLS 服务端端到端测试（OpenSSL 后端，最低 TLS1.2）
+//
+// T1 单 worker HTTPS：WebApplication.setTls 后，TLS ClientSocket 发
+//    原始 HTTP/1.1 请求，验证 200/body/响应头；同一 TLS 连接 keep-alive
+//    连发两请求，验证会话复用与记录层循环读
+// T2 rr 多 worker HTTPS：setWorkers(2)+setDispatch("rr")，4 请求落不同
+//    worker（单 listener + SSL_CTX 跨线程入站投递路径）
+// T3 reuseport 多 worker HTTPS：setWorkers(2) 默认分派，4 请求（每 worker
+//    各持一份 SSL_CTX 的路径）
+// T4 配置错误路径：enableTls 证书路径不存在 → 抛 NetError.TLS_CONFIG(44)；
+//    私钥与证书不匹配 → 同样 TLS_CONFIG
+//
+// 自签证书 fixture（100 年有效，SAN 含 127.0.0.1/localhost）在
+// tests/fixtures/tls/；raw 客户端不验签。自验证，不依赖外网/curl。
+// ============================================================
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <NetWork/NetError>;
+import <IO/Files>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+cert = "tests/fixtures/tls/cert.pem";
+key = "tests/fixtures/tls/key.pem";
+
+// 在已建立的 TLS 连接上发一条原始 HTTP/1.1 请求并取完整响应
+func tlsRequest(port: int, path: string): string {
+    cli = ClientSocket("127.0.0.1", port, 1);
+    cli.setOption("recvTimeout", 3000);
+    cli.send("GET " + path + " HTTP/1.1" + crlf + "Host: t" + crlf
+             + "Connection: close" + crlf + crlf);
+    all = "";
+    while (true) {
+        part = cli.recv(4096);
+        if (part == "") { break; }
+        all = all + part;
+    }
+    cli.close();
+    return all;
+}
+
+// 从响应头里解析 content-length（服务端固定输出小写）；找不到返回 -1
+func parseContentLength(headers: string): int {
+    tag = "content-length: ";
+    p = headers.indexOf(tag);
+    if (p < 0) { return -1; }
+    raw = bytes(headers);
+    i = p + tag.len;
+    n = 0;
+    while (i < raw.len) {
+        v = raw[i];
+        if (v < 48 || v > 57) { break; }   // 48='0' 57='9'
+        n = n * 10 + (v - 48);
+        i = i + 1;
+    }
+    return n;
+}
+
+// 按 Content-Length 读取一条完整 HTTP 响应（keep-alive 无 EOF，必须分帧）
+func tlsReadResponse(cli): string {
+    all = "";
+    while (true) {
+        sep = all.indexOf(crlf + crlf);
+        if (sep >= 0) {
+            cl = parseContentLength(all.slice(0, sep));
+            if (cl >= 0 && all.len >= sep + 4 + cl) {
+                return all.slice(0, sep + 4 + cl);
+            }
+        }
+        part = cli.recv(8192);
+        if (part == "") { return all; }
+        all = all + part;
+    }
+}
+
+// keep-alive：同一 TLS 连接连发两条（Connection: keep-alive），按帧各取完整响应
+func tlsKeepAlivePair(port: int): array {
+    cli = ClientSocket("127.0.0.1", port, 1);
+    cli.setOption("recvTimeout", 3000);
+    out = [];
+    i = 0;
+    while (i < 2) {
+        p = "/ka" + i;
+        cli.send("GET " + p + " HTTP/1.1" + crlf + "Host: t" + crlf
+                 + "Connection: keep-alive" + crlf + crlf);
+        out.add(tlsReadResponse(cli));
+        i = i + 1;
+    }
+    cli.close();
+    return out;
+}
+
+// ------------------------------------------------------------
+// T1: 单 worker HTTPS + keep-alive
+// ------------------------------------------------------------
+print("[T1] 单 worker HTTPS 与 keep-alive / single-worker HTTPS and keep-alive");
+port1 = 18121;
+app1 = WebApplication("127.0.0.1", port1);
+app1.setTls(cert, key);
+app1.get("/ping", func(req) {
+    r = ServerResponse(200);
+    r.text("pong-tls");
+    return r;
+});
+app1.get("/ka0", func(req) {
+    r = ServerResponse(200);
+    r.text("ka0-body");
+    return r;
+});
+app1.get("/ka1", func(req) {
+    r = ServerResponse(200);
+    r.text("ka1-body");
+    return r;
+});
+app1.startAsync();
+sleep(300);
+resp1 = tlsRequest(port1, "/ping");
+check(resp1.contains("HTTP/1.1 200"), "T1 应 200，实际: [" + resp1.slice(0, 40) + "]");
+check(resp1.contains("pong-tls"), "T1 body 不符: " + resp1);
+pair = tlsKeepAlivePair(port1);
+check(pair.len == 2, "T1 keep-alive 应有 2 个响应");
+check(pair[0].contains("HTTP/1.1 200") && pair[0].contains("ka0-body"),
+      "T1 第 1 个 keep-alive 响应不符: " + pair[0]);
+check(pair[1].contains("HTTP/1.1 200") && pair[1].contains("ka1-body"),
+      "T1 第 2 个 keep-alive 响应不符: " + pair[1]);
+app1.stop();
+app1.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: rr 多 worker HTTPS（单 listener，SSL_CTX 随入站消息跨线程投递）
+// ------------------------------------------------------------
+print("[T2] rr 多 worker HTTPS / rr multi-worker HTTPS");
+port2 = 18122;
+app2 = WebApplication("127.0.0.1", port2);
+app2.setTls(cert, key);
+app2.setWorkers(2);
+app2.setDispatch("rr");
+app2.get("/w", func(req) {
+    r = ServerResponse(200);
+    r.text("worker-ok");
+    return r;
+});
+app2.startAsync();
+sleep(400);
+i2 = 0;
+while (i2 < 4) {
+    resp = tlsRequest(port2, "/w");
+    check(resp.contains("HTTP/1.1 200") && resp.contains("worker-ok"),
+          "T2 第 " + i2 + " 请求应 200: [" + resp.slice(0, 40) + "]");
+    i2 = i2 + 1;
+}
+app2.stop();
+app2.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: reuseport 多 worker HTTPS（每 worker 各持 SSL_CTX）
+// ------------------------------------------------------------
+print("[T3] reuseport 多 worker HTTPS / reuseport multi-worker HTTPS");
+port3 = 18123;
+app3 = WebApplication("127.0.0.1", port3);
+app3.setTls(cert, key);
+app3.setWorkers(2);   // 默认 dispatch=reuseport
+app3.get("/w", func(req) {
+    r = ServerResponse(200);
+    r.text("reuseport-ok");
+    return r;
+});
+app3.startAsync();
+sleep(400);
+i3 = 0;
+while (i3 < 4) {
+    resp = tlsRequest(port3, "/w");
+    check(resp.contains("HTTP/1.1 200") && resp.contains("reuseport-ok"),
+          "T3 第 " + i3 + " 请求应 200: [" + resp.slice(0, 40) + "]");
+    i3 = i3 + 1;
+}
+app3.stop();
+app3.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: TLS 配置错误路径（证书缺失/不匹配 → TLS_CONFIG=44）
+// ------------------------------------------------------------
+print("[T4] TLS 配置错误路径 / TLS config error paths");
+// T4.1 不存在的证书路径
+threw41 = false;
+code41 = 0;
+bad1 = null;
+try {
+    bad1 = ServerSocket("127.0.0.1", 18124);
+    bad1.enableTls("tests/fixtures/tls/no-such-cert.pem", key);
+} catch (e) {
+    threw41 = true;
+    code41 = e.getCode();
+}
+if (bad1 != null) { bad1.close(); }
+check(threw41, "T4.1 证书不存在应抛错");
+check(code41 == NetError.TLS_CONFIG, "T4.1 错误码应为 TLS_CONFIG(44)，实际: " + code41);
+
+// T4.2 私钥文件内容无效（空文件 → PEM 解析失败，等价于证书/私钥不匹配类配置错误）
+mismatchKey = "/tmp/lm_tls_bad_key.pem";
+Files.delete(mismatchKey);
+Files.writeText(mismatchKey, "");
+threw42 = false;
+code42 = 0;
+bad2 = null;
+try {
+    bad2 = ServerSocket("127.0.0.1", 18125);
+    bad2.enableTls(cert, mismatchKey);
+} catch (e) {
+    threw42 = true;
+    code42 = e.getCode();
+}
+if (bad2 != null) { bad2.close(); }
+check(threw42, "T4.2 无效私钥应抛错");
+check(code42 == NetError.TLS_CONFIG, "T4.2 错误码应为 TLS_CONFIG(44)，实际: " + code42);
+Files.delete(mismatchKey);
+print("  PASS");
+
+print("tls_server_test ALL PASS");

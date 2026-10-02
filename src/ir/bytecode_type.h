@@ -552,6 +552,9 @@ typedef enum {
     BUILTIN_SOCKET_SETOPT,      // s.setOption(name, val)
     BUILTIN_SOCKET_GETOPT,      // s.getOption(name)
     BUILTIN_SOCKET_FILENO,      // s.fileno() → int
+    /* ===== G4：TLS 传输层安全 ===== */
+    BUILTIN_SOCKET_ENABLE_TLS,  // s.enableTls(certPath, keyPath)：listener 启用 TLS
+    BUILTIN_SOCKET_CONNECT_TLS, // s.connectTls(host, port)：TCP + TLS 握手（不验签）
     /* ===== reactor + 协程（Phase 5：暴露给 lm 层）===== */
     BUILTIN_REACTOR_NEW,         // __private_system__reactor_new([capacity])：创建 reactor（Reactor.lm 构造封装）
     BUILTIN_REACTOR_DEL,         // __private_system__destroy_reactor(impl)：销毁 reactor（Reactor.lm destroy 封装）

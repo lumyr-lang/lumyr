@@ -32,5 +32,8 @@ public enum NetError {
     INVALID_VALUE = 40,
     EMPTY_NAME = 41,
     UNSUPPORTED = 42,
-    UNKNOWN_OPTION = 43
+    UNKNOWN_OPTION = 43,
+    TLS_CONFIG = 44,
+    TLS_HANDSHAKE = 45,
+    TLS_IO = 46
 }

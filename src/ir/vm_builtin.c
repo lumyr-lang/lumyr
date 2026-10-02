@@ -3912,6 +3912,28 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_socket_accept(recv);
         return 1;
     }
+    case BUILTIN_SOCKET_ENABLE_TLS: {
+        /* G4：s.enableTls(certPath, keyPath)——仅服务端 listener */
+        if(recv.type != VAL_SOCKET) return bi_type_err("enableTls", recv);
+        int nuser = is_method ? argc : argc - 1;
+        if(nuser < 2 || argv[1].type != VAL_STRING || argv[2].type != VAL_STRING) {
+            runtime_error("enableTls(certPath, keyPath) 需要 2 个字符串参数 / enableTls: 2 string args required");
+            return 0;
+        }
+        *out = lumyr_socket_enable_tls(recv, lumyr_str_cstr(&argv[1]), lumyr_str_cstr(&argv[2]));
+        return 1;
+    }
+    case BUILTIN_SOCKET_CONNECT_TLS: {
+        /* G4：s.connectTls(host, port)——TCP 连接后 TLS 握手（不验签） */
+        if(recv.type != VAL_SOCKET) return bi_type_err("connectTls", recv);
+        int nuser = is_method ? argc : argc - 1;
+        if(nuser < 2 || argv[1].type != VAL_STRING) {
+            runtime_error("connectTls(host, port) 需要 2 个参数 / connectTls: (host, port) required");
+            return 0;
+        }
+        *out = lumyr_socket_connect_tls(recv, lumyr_str_cstr(&argv[1]), (int)bi_num_i64(argv[2]));
+        return 1;
+    }
     case BUILTIN_SOCKET_RECV: {
         /* s.recv([len [, flags [, asBytes]]) → 字符串（默认）或 bytes（asBytes=true，二进制安全） */
         if(recv.type != VAL_SOCKET) return bi_type_err("recv", recv);
@@ -4941,6 +4963,8 @@ const char* builtin_id_name(int id) {
     case BUILTIN_SOCKET_BIND: return "bind";
     case BUILTIN_SOCKET_LISTEN: return "listen";
     case BUILTIN_SOCKET_ACCEPT: return "accept";
+    case BUILTIN_SOCKET_ENABLE_TLS: return "enableTls";
+    case BUILTIN_SOCKET_CONNECT_TLS: return "connectTls";
     case BUILTIN_SOCKET_RECV: return "recv";
     case BUILTIN_SOCKET_RECV_INTO: return "recvInto";
     case BUILTIN_SOCKET_SENDTO: return "sendTo";

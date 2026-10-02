@@ -37,7 +37,12 @@ typedef enum {
     NET_ERR_INVALID_VALUE = 40, /* 选项值类型错（需 int/bool） */
     NET_ERR_EMPTY_NAME = 41,    /* 选项名为空 */
     NET_ERR_UNSUPPORTED = 42,    /* 当前平台不支持该选项 */
-    NET_ERR_UNKNOWN_OPTION = 43 /* 未知选项名 */
+    NET_ERR_UNKNOWN_OPTION = 43, /* 未知选项名 */
+
+    /* G4 TLS 传输层安全 */
+    NET_ERR_TLS_CONFIG = 44,     /* TLS 配置失败（未启用后端/证书或私钥加载失败/不匹配） */
+    NET_ERR_TLS_HANDSHAKE = 45,  /* TLS 握手失败（协议协商/对端中断） */
+    NET_ERR_TLS_IO = 46          /* TLS 记录层读写失败（会话已失效） */
 } NetErrorCode;
 
 #endif /* LM_NET_ERRNO_H */

@@ -595,6 +595,7 @@ class ServiceWorker {
     private func serveReusePort() {
         app = self.app;
         srv = ServerSocket(app.host(), app.port(), app.backlog(), 1);
+        app.applyTls(srv);   // G4：reuseport 每 worker 各持一份 SSL_CTX
         self.serverSock = srv;
         // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
         self.acceptCo = Coroutine(func(w) {
@@ -627,6 +628,7 @@ class ServiceWorker {
         if (self.idx == 0) {
             // 全进程唯一 listener：不设 SO_REUSEPORT
             self.serverSock = ServerSocket(app.host(), app.port(), app.backlog(), 0);
+            app.applyTls(self.serverSock);   // G4：单 listener 持 SSL_CTX，随入站消息投递给 worker
         }
         // receiver：所有 worker（含 worker 0）都消费自己 reactor 的入站队列
         self.recvCo = Coroutine(func(w) { w.rrRecvLoop(); }, self);
@@ -910,6 +912,10 @@ public class ServiceApplication extends Application {
     // G1：信号优雅退出（信号表 + self-pipe，回调协程派发）
     signalWatched: bool;   // 信号处理器是否已安装（onStop 还原）
     signalHooks: any;      // 回调闭包持有数组（GC 根：C 侧表仅存值拷贝）
+    // G4：TLS 证书链与私钥路径（PEM；"" = 未设置，走配置表键 tlsCert/tlsKey，
+    // 均空 = 明文 HTTP；非空 = HTTPS，accept 连接自动握手）
+    tlsCertVal: string;
+    tlsKeyVal: string;
 
     func ServiceApplication() {
         super();
@@ -984,6 +990,8 @@ public class ServiceApplication extends Application {
         self.acceptRestartWindowVal = 0;
         self.signalWatched = false;
         self.signalHooks = [];
+        self.tlsCertVal = "";
+        self.tlsKeyVal = "";
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -1001,6 +1009,41 @@ public class ServiceApplication extends Application {
     func backlog(): int {
         if (self.backlogVal > 0) { return self.backlogVal; }
         return self.configInt("backlog", 128);
+    }
+
+    // ---- G4：TLS 配置（编程式优先，其次配置表 tlsCert/tlsKey，默认明文）----
+
+    func tlsCert(): string {
+        if (self.tlsCertVal != "") { return self.tlsCertVal; }
+        return self.configString("tlsCert", "");
+    }
+
+    func tlsKey(): string {
+        if (self.tlsKeyVal != "") { return self.tlsKeyVal; }
+        return self.configString("tlsKey", "");
+    }
+
+    // 是否启用 TLS（证书与私钥路径都配置才生效；只配一个视为配置错误，
+    // 在 listener 创建时由 C 层双语报错，这里不静默降级）
+    func tlsEnabled(): bool {
+        return self.tlsCert() != "" && self.tlsKey() != "";
+    }
+
+    // 编程式启用 HTTPS：PEM 证书链路径 + PEM 私钥路径（最低 TLS1.2）。
+    // 必须在 start/startAsync 前调用；reuseport 每 worker、rr 单 listener
+    // 的三条建 listener 路径统一在创建后挂载。
+    func setTls(certPath: string, keyPath: string) {
+        self.tlsCertVal = certPath;
+        self.tlsKeyVal = keyPath;
+        return self;
+    }
+
+    // listener 创建后统一挂载点（reuseport/rr/单线程三处调用，避免漏挂）。
+    // 包内方法：ServiceWorker 建 listener 后经 app 引用回调，不对外承诺 API。
+    func applyTls(srv) {
+        if (self.tlsEnabled()) {
+            srv.enableTls(self.tlsCert(), self.tlsKey());
+        }
     }
 
     // 设置并发连接上限：在役连接数达到上限后，新连接交 onRejectConnection
@@ -1384,6 +1427,7 @@ public class ServiceApplication extends Application {
             return;
         }
         srv = ServerSocket(self.host(), self.port(), self.backlog());
+        self.applyTls(srv);   // G4：单线程模式挂载 TLS
         self.serverSock = srv;
         // accept loop 协程：公共 AcceptLoop 收敛（P0-4），错误分类/退避/监督内置
         self.acceptCo = Coroutine(func(app) {

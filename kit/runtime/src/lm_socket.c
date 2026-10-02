@@ -6,6 +6,7 @@
 // 上层 catch(e) 后 e.getCode() == NetError.XXX 精确分派（不再字符串匹配）。
 #include "lm_socket.h"
 #include "lm_net_errno.h"
+#include "lm_ssl.h"        /* G4：TLS 传输层安全（抽象层，后端编译开关在 lm_ssl.c） */
 #include "lm_array.h"
 #include "lm_string.h"
 #include "lm_container.h"
@@ -629,6 +630,65 @@ static void build_unix(const char* path, struct sockaddr_un* addr) {
 }
 
 /* ============================================================
+ * G4：TLS 传输层安全接入（lm_ssl 抽象层的 socket 侧驱动）
+ * ============================================================
+ * lm_ssl_* 只做单步 SSL I/O；WANT_READ/WANT_WRITE 的事件等待复用裸 socket
+ * 同一套 co_wait_fd_timeout 路径，保证 TLS 连接与裸连接在 reactor 中语义
+ * 一致（超时码、线程 pinning、GC 安全点）。本层不感知具体 TLS 后端。 */
+
+/* 驱动完整握手。协程模式按 WANT 挂当前协程等事件；阻塞模式（thread-per-conn）
+ * SSL 在阻塞 fd 上于内核等待，WANT 仅理论可能，自旋重试兜底。
+ * 握手阶段无独立超时配置（0=不限，与 accept 等待同口径；请求超时从握手后
+ * 首字节读取起算）。返回 0 成功，-1 失败。 */
+static int socket_ssl_handshake(SocketObj* o) {
+    lm_ssl_session_t* s = (lm_ssl_session_t*)o->tls_session;
+    int inCo = (lm_co_current() != NULL && g_socket_reactor != NULL);
+    for (;;) {
+        int rc;
+        if (inCo) {
+            rc = lm_ssl_handshake_step(s);
+        } else {
+            /* 阻塞握手可能长时间在内核：标记 GC 安全点（同阻塞 accept/recv） */
+            gc_enter_native_block();
+            rc = lm_ssl_handshake_step(s);
+            gc_leave_native_block();
+        }
+        if (rc == LM_SSL_OK) return 0;
+        if (rc == LM_SSL_WANT_READ || rc == LM_SSL_WANT_WRITE) {
+            if (inCo) {
+                int wantRead = (rc == LM_SSL_WANT_READ);
+                if (co_wait_fd_timeout(o->fd, wantRead, !wantRead, 0) != 0) return -1;
+            }
+            continue;
+        }
+        return -1;
+    }
+}
+
+/* 在新 accept 的裸连接上创建服务端 TLS 会话并完成握手。
+ * 成功返回 0（o->tls_session 已置）；失败返回 -1（session 已内部清理，
+ * 错误原因写入 errOut，调用方负责关 fd）。 */
+static int socket_ssl_begin_server(SocketObj* o, void* serverCtx,
+                                   char* errOut, size_t errLen) {
+    if (!serverCtx) return 0;
+    lm_ssl_session_t* s = lm_ssl_session_accept_new((lm_ssl_server_ctx_t*)serverCtx, o->fd);
+    if (!s) {
+        if (errOut && errLen)
+            snprintf(errOut, errLen, "SSL session create failed");
+        return -1;
+    }
+    o->tls_session = s;
+    if (socket_ssl_handshake(o) != 0) {
+        if (errOut && errLen)
+            snprintf(errOut, errLen, "%s", lm_ssl_last_error(s));
+        lm_ssl_session_free(s);
+        o->tls_session = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+/* ============================================================
  * 公共 API
  * ============================================================ */
 
@@ -643,6 +703,8 @@ Value lumyr_socket_make(int kind) {
     o->stack_alloc = 0;
     o->recv_timeout_ms = 0;
     o->send_timeout_ms = 0;
+    o->tls_server_ctx = NULL;
+    o->tls_session = NULL;
     if(o->fd < 0) {
         /* 创建失败不中断（fileno() 返回 -1，后续操作报错） */
         o->fd = -1;
@@ -665,6 +727,8 @@ Value lumyr_socket_from_fd(int fd, int kind, int connected) {
     o->stack_alloc = 0;
     o->recv_timeout_ms = 0;
     o->send_timeout_ms = 0;
+    o->tls_server_ctx = NULL;
+    o->tls_session = NULL;
     Value r;
     r.type = VAL_SOCKET;
     r.str_inline = 0;
@@ -753,6 +817,80 @@ Value lumyr_socket_connect(Value v, const char* host, int port) {
         }
     }
     o->is_connected = 1;
+    return val_none();
+}
+
+/* G4：在已 listen 的服务端套接字上启用 TLS（加载证书链 + 私钥）。
+ * 之后 accept 出的每条连接自动完成 TLS 握手；RR 模式下上下文随入站消息
+ * 投递到 worker。重复调用替换旧上下文（旧引用计数释放）。 */
+Value lumyr_socket_enable_tls(Value v, const char* certPath, const char* keyPath) {
+    if(v.type != VAL_SOCKET) {
+        runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError",
+            "enableTls() 仅适用于 socket 对象 / enableTls: socket object required");
+        return val_none();
+    }
+    SocketObj* o = (SocketObj*)v.v.socket_obj;
+    if(!o || o->closed || o->fd < 0) {
+        runtime_error_code(NET_ERR_BAD_STATE, "SocketError",
+            "enableTls() 套接字无效或已关闭 / enableTls: invalid or closed socket");
+        return val_none();
+    }
+    if(!o->is_server) {
+        runtime_error_code(NET_ERR_BAD_STATE, "SocketError",
+            "enableTls() 只能在 bind+listen 后的服务端套接字上调用 / enableTls: only for bound/listening server sockets");
+        return val_none();
+    }
+    if(!lm_ssl_available()) {
+        runtime_error_code(NET_ERR_TLS_CONFIG, "SocketError",
+            "当前构建未启用 TLS 后端（需 OpenSSL 开发库重新构建）/ TLS backend not enabled in this build");
+        return val_none();
+    }
+    char err[320];
+    lm_ssl_server_ctx_t* ctx = lm_ssl_server_ctx_new(certPath, keyPath, err, sizeof(err));
+    if(!ctx) {
+        char buf[400];
+        snprintf(buf, sizeof(buf),
+            "TLS 配置失败（证书/私钥加载）/ TLS config failed: %s", err);
+        runtime_error_code(NET_ERR_TLS_CONFIG, "SocketError", buf);
+        return val_none();
+    }
+    if(o->tls_server_ctx) lm_ssl_server_ctx_free((lm_ssl_server_ctx_t*)o->tls_server_ctx);
+    o->tls_server_ctx = ctx;
+    return val_none();
+}
+
+/* G4：客户端方向——先完成 TCP 连接（复用既有 connect 全流程：DNS/非阻塞/
+ * 超时），再在裸 fd 上建立 TLS 会话（默认不校验证书，服务于自签/内网测试）。
+ * 握手失败抛 NET_ERR_TLS_HANDSHAKE，连接由调用方 close 回收。 */
+Value lumyr_socket_connect_tls(Value v, const char* host, int port) {
+    /* connect 失败内部已 longjmp 抛错；正常返回即 TCP 已建立 */
+    lumyr_socket_connect(v, host, port);
+    if(v.type != VAL_SOCKET) return val_none();
+    SocketObj* o = (SocketObj*)v.v.socket_obj;
+    if(!o || o->closed || o->fd < 0) return val_none();
+    if(!lm_ssl_available()) {
+        runtime_error_code(NET_ERR_TLS_CONFIG, "SocketError",
+            "当前构建未启用 TLS 后端（需 OpenSSL 开发库重新构建）/ TLS backend not enabled in this build");
+        return val_none();
+    }
+    char err[320];
+    lm_ssl_session_t* s = lm_ssl_session_connect_new(o->fd, 0, err, sizeof(err));
+    if(!s) {
+        char buf[400];
+        snprintf(buf, sizeof(buf), "TLS 客户端初始化失败 / TLS client init failed: %s", err);
+        runtime_error_code(NET_ERR_TLS_CONFIG, "SocketError", buf);
+        return val_none();
+    }
+    o->tls_session = s;
+    if(socket_ssl_handshake(o) != 0) {
+        char buf[400];
+        snprintf(buf, sizeof(buf),
+            "TLS 握手失败 / TLS handshake failed: %s", lm_ssl_last_error(s));
+        lm_ssl_session_free(s);
+        o->tls_session = NULL;
+        runtime_error_code(NET_ERR_TLS_HANDSHAKE, "SocketError", buf);
+        return val_none();
+    }
     return val_none();
 }
 
@@ -886,7 +1024,25 @@ Value lumyr_socket_accept(Value v) {
         return val_none();
     }
     /* 新客户端套接字，类型与服务端一致，已连接 */
-    return lumyr_socket_from_fd(cfd, (int)o->kind, 1);
+    Value nv = lumyr_socket_from_fd(cfd, (int)o->kind, 1);
+    /* G4：listener 启用 TLS 时，在新连接上完成握手后再交付上层。
+     * 握手失败按连接级错误抛 NET_ERR_TLS_HANDSHAKE（accept 循环记录后继续），
+     * 与裸 accept 的连接错误处理同口径。 */
+    if(o->tls_server_ctx) {
+        SocketObj* no = (SocketObj*)nv.v.socket_obj;
+        char tlsErr[320];
+        tlsErr[0] = 0;
+        if(socket_ssl_begin_server(no, o->tls_server_ctx, tlsErr, sizeof(tlsErr)) != 0) {
+            lumyr_socket_close(nv);
+            char buf[400];
+            snprintf(buf, sizeof(buf),
+                "TLS 握手失败，连接已拒绝 / TLS handshake failed, connection rejected: %s",
+                tlsErr[0] ? tlsErr : "unknown");
+            runtime_error_code(NET_ERR_TLS_HANDSHAKE, "SocketError", buf);
+            return val_none();
+        }
+    }
+    return nv;
 }
 
 /* ============================================================
@@ -931,13 +1087,14 @@ static int rr_pick_idx(int nworkers, int maxConn) {
  * 锁内 retain 到提交完成）。返回 0 已被某 worker 接管；-1 全部失败
  *（调用方 close cfd；fd 不挂任何 epoll，close 安全）。 */
 static int rr_submit_or_fail(int chosen, int nworkers, int cfd, int kind,
+                             void* tlsCtx,
                              const struct sockaddr* addr, socklen_t addrlen,
                              int maxConn) {
     for (int k = 0; k < nworkers; k++) {
         int idx = (chosen + k) % nworkers;
         lm_reactor_t* t = lm_reactor_by_idx_retained(idx);
         if (!t) continue;
-        int rc = lm_reactor_submit_fd(t, cfd, kind, addr, addrlen, maxConn);
+        int rc = lm_reactor_submit_fd(t, cfd, kind, tlsCtx, addr, addrlen, maxConn);
         lm_reactor_release(t);
         if (rc == 0) return 0;
         if (rc == -2) return -1;   /* 参数/分配错误：重试无意义 */
@@ -1000,6 +1157,7 @@ int lumyr_socket_accept_rr(Value v, int nworkers, int maxConn) {
         if (fd != -1) fcntl(cfd, F_SETFD, fd | FD_CLOEXEC);
     }
     if (rr_submit_or_fail(chosen, nworkers, cfd, (int)o->kind,
+                          o->tls_server_ctx,
                           (struct sockaddr*)&cli, clilen, maxConn) == 0) {
         return 0;
     }
@@ -1027,7 +1185,20 @@ Value lumyr_reactor_recv_inbound(lm_reactor_t* r) {
         if (lm_reactor_inbound_pop(r, &msg)) {
             /* owner 线程 wrap：SocketObj GC 对象在本线程分配，
              * 随后 onAccepted 路径与普通 accept 完全一致。 */
-            return lumyr_socket_from_fd(msg.fd, msg.kind, 1);
+            Value nv = lumyr_socket_from_fd(msg.fd, msg.kind, 1);
+            /* G4：TLS 连接在 worker（owner）线程完成握手；握手失败的连接
+             * 不向上层抛错（避免杀死 receiver 循环），关闭后继续取入站。 */
+            if (msg.tls_ctx) {
+                SocketObj* no = (SocketObj*)nv.v.socket_obj;
+                char tlsErr[320];
+                tlsErr[0] = 0;
+                if (socket_ssl_begin_server(no, msg.tls_ctx, tlsErr, sizeof(tlsErr)) != 0) {
+                    lumyr_socket_close(nv);
+                    /* 容量水位由 publish_load 周期校准，丢弃预握手连接不计数 */
+                    continue;
+                }
+            }
+            return nv;
         }
         lm_scheduler_t* sched = lm_scheduler_get_current();
         if (lm_reactor_inbound_arm(r, co, sched)) {
@@ -1058,13 +1229,35 @@ Value lumyr_socket_send(Value v, const char* data, int len, int flags) {
     ssize_t n;
     while (total < (size_t)len) {
         if (in_co) {
-            n = send(o->fd, data + total, (size_t)(len - total), flags);
+            /* G4：TLS 会话走记录层；WANT_READ 也可能出现（握手后重协商/
+             * 对端反压），按返回方向挂事件，语义与裸 fd EAGAIN 一致。 */
+            int waitRead = 0;
+            if (o->tls_session) {
+                size_t wn = 0;
+                int src = lm_ssl_write_step((lm_ssl_session_t*)o->tls_session,
+                                            data + total, (size_t)(len - total), &wn);
+                if (src == LM_SSL_OK) { n = (ssize_t)wn; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) {
+                    n = -1; errno = EAGAIN; waitRead = (src == LM_SSL_WANT_READ);
+                } else if (src == LM_SSL_EOF) {
+                    n = -1; errno = EPIPE;
+                } else {
+                    if (total > 0) return lumyr_make_int((int)total);
+                    char buf[400];
+                    snprintf(buf, sizeof(buf), "TLS 写出失败 / TLS write failed: %s",
+                             lm_ssl_last_error((lm_ssl_session_t*)o->tls_session));
+                    runtime_error_code(NET_ERR_TLS_IO, "SocketError", buf);
+                    return lumyr_make_int(-1);
+                }
+            } else {
+                n = send(o->fd, data + total, (size_t)(len - total), flags);
+            }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                /* 协程模式：挂写事件等可写，resume 后重试。
+                /* 协程模式：挂事件等可写/可读，resume 后重试。
                  * per-socket sendTimeout（SocketObj 字段）走 reactor 定时器：
                  * 超时返回 1，已写部分返回让上层判断，完全没写按超时码抛错
                  * （NET_ERR_SEND_TIMEOUT，与阻塞模式 SO_SNDTIMEO 同码）。 */
-                int wr = co_wait_fd_timeout(o->fd, 0, 1, o->send_timeout_ms);
+                int wr = co_wait_fd_timeout(o->fd, waitRead, !waitRead, o->send_timeout_ms);
                 if (wr != 0) {
                     if (total > 0) return lumyr_make_int((int)total);
                     if (wr == 1) {
@@ -1078,7 +1271,18 @@ Value lumyr_socket_send(Value v, const char* data, int len, int flags) {
             }
         } else {
             gc_enter_native_block();
-            n = send(o->fd, data + total, (size_t)(len - total), flags);
+            if (o->tls_session) {
+                /* 阻塞模式：SSL 在阻塞 fd 上于内核等待，循环直至写入/错误 */
+                size_t wn = 0;
+                int src = lm_ssl_write_step((lm_ssl_session_t*)o->tls_session,
+                                            data + total, (size_t)(len - total), &wn);
+                if (src == LM_SSL_OK) { n = (ssize_t)wn; errno = 0; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) { n = -1; errno = EAGAIN; }
+                else if (src == LM_SSL_EOF) { n = -1; errno = EPIPE; }
+                else { n = -1; errno = EIO; }
+            } else {
+                n = send(o->fd, data + total, (size_t)(len - total), flags);
+            }
             gc_leave_native_block();
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 /* 阻塞模式 SO_SNDTIMEO 到期：已写部分返回，完全没写按超时码抛错 */
@@ -1089,6 +1293,14 @@ Value lumyr_socket_send(Value v, const char* data, int len, int flags) {
         }
         if (n < 0) {
             /* 真错：已写部分返回让上层判断，完全没写抛错 */
+            if (o->tls_session) {
+                if (total > 0) return lumyr_make_int((int)total);
+                char buf[400];
+                snprintf(buf, sizeof(buf), "TLS 写出失败 / TLS write failed: %s",
+                         lm_ssl_last_error((lm_ssl_session_t*)o->tls_session));
+                runtime_error_code(NET_ERR_TLS_IO, "SocketError", buf);
+                return lumyr_make_int(-1);
+            }
             if (total > 0) return lumyr_make_int((int)total);
             sock_error_code("send", NET_ERR_SEND);
             return lumyr_make_int(-1);
@@ -1118,14 +1330,27 @@ Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes) {
         if(!buf) { runtime_error_code(NET_ERR_NO_MEMORY, "SocketError", "recv() 内存不足"); return lumyr_make_string(""); }
         ssize_t n;
         if (in_co) {
-            n = recv(o->fd, buf, (size_t)maxLen, flags);
+            /* G4：TLS 会话走记录层；WANT_WRITE（重协商等）同样挂 fd 事件 */
+            int waitRead = 1;
+            if (o->tls_session) {
+                size_t rn = 0;
+                int src = lm_ssl_read_step((lm_ssl_session_t*)o->tls_session,
+                                           buf, (size_t)maxLen, &rn);
+                if (src == LM_SSL_OK) { n = (ssize_t)rn; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) {
+                    n = -1; errno = EAGAIN; waitRead = (src == LM_SSL_WANT_READ);
+                } else if (src == LM_SSL_EOF) { n = 0; }
+                else { n = -1; errno = EIO; }
+            } else {
+                n = recv(o->fd, buf, (size_t)maxLen, flags);
+            }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 /* 协程模式：先释放 buffer 再挂读事件，resume 后重试。
                  * per-socket recvTimeout（SocketObj 字段）走 reactor 定时器：
                  * 超时返回 1，按 NET_ERR_RECV_TIMEOUT 抛错（与阻塞模式
                  * SO_RCVTIMEO 同码，上层 HTTP 408 分派自动生效）。 */
                 free(buf);
-                int wr = co_wait_fd_timeout(o->fd, 1, 0, o->recv_timeout_ms);
+                int wr = co_wait_fd_timeout(o->fd, waitRead, !waitRead, o->recv_timeout_ms);
                 if (wr != 0) {
                     if (wr == 1) {
                         runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
@@ -1141,7 +1366,17 @@ Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes) {
              * 与超时错误（runtime_error longjmp）交互会导致线程栈对象被误回收。
              * 错误处理（含 longjmp）统一放在 leave 之后，保证恢复 at_safepoint。 */
             gc_enter_native_block();
-            n = recv(o->fd, buf, (size_t)maxLen, flags);
+            if (o->tls_session) {
+                size_t rn = 0;
+                int src = lm_ssl_read_step((lm_ssl_session_t*)o->tls_session,
+                                           buf, (size_t)maxLen, &rn);
+                if (src == LM_SSL_OK) { n = (ssize_t)rn; errno = 0; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) { n = -1; errno = EAGAIN; }
+                else if (src == LM_SSL_EOF) { n = 0; errno = 0; }
+                else { n = -1; errno = EIO; }
+            } else {
+                n = recv(o->fd, buf, (size_t)maxLen, flags);
+            }
             gc_leave_native_block();
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 /* 阻塞模式 SO_RCVTIMEO 到期：专用错误码，上层（如 HTTP 请求读取）可
@@ -1153,6 +1388,13 @@ Value lumyr_socket_recv(Value v, int maxLen, int flags, int asBytes) {
         }
         if(n < 0) {
             free(buf);
+            if (o->tls_session) {
+                char eb[400];
+                snprintf(eb, sizeof(eb), "TLS 读取失败 / TLS read failed: %s",
+                         lm_ssl_last_error((lm_ssl_session_t*)o->tls_session));
+                runtime_error_code(NET_ERR_TLS_IO, "SocketError", eb);
+                return lumyr_make_string("");
+            }
             sock_error_code("recv", NET_ERR_RECV);
             return lumyr_make_string("");
         }
@@ -1233,9 +1475,22 @@ Value lumyr_socket_recv_into(Value v, Value buf, int flags, int maxLen) {
          * 循环内零新分配，流式收包内存与报文总量无关。 */
         ssize_t n;
         if (in_co) {
-            n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            /* G4：TLS 会话走记录层（零分配直接读入复用 bytes 缓冲） */
+            int waitRead = 1;
+            if (o->tls_session) {
+                size_t rn = 0;
+                int src = lm_ssl_read_step((lm_ssl_session_t*)o->tls_session,
+                                           bo->data, (size_t)readCap, &rn);
+                if (src == LM_SSL_OK) { n = (ssize_t)rn; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) {
+                    n = -1; errno = EAGAIN; waitRead = (src == LM_SSL_WANT_READ);
+                } else if (src == LM_SSL_EOF) { n = 0; }
+                else { n = -1; errno = EIO; }
+            } else {
+                n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                int wr = co_wait_fd_timeout(o->fd, 1, 0, o->recv_timeout_ms);
+                int wr = co_wait_fd_timeout(o->fd, waitRead, !waitRead, o->recv_timeout_ms);
                 if (wr != 0) {
                     if (wr == 1) {
                         runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
@@ -1248,7 +1503,17 @@ Value lumyr_socket_recv_into(Value v, Value buf, int flags, int maxLen) {
             }
         } else {
             gc_enter_native_block();
-            n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            if (o->tls_session) {
+                size_t rn = 0;
+                int src = lm_ssl_read_step((lm_ssl_session_t*)o->tls_session,
+                                           bo->data, (size_t)readCap, &rn);
+                if (src == LM_SSL_OK) { n = (ssize_t)rn; errno = 0; }
+                else if (src == LM_SSL_WANT_READ || src == LM_SSL_WANT_WRITE) { n = -1; errno = EAGAIN; }
+                else if (src == LM_SSL_EOF) { n = 0; errno = 0; }
+                else { n = -1; errno = EIO; }
+            } else {
+                n = recv(o->fd, bo->data, (size_t)readCap, flags);
+            }
             gc_leave_native_block();
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                 runtime_error_code(NET_ERR_RECV_TIMEOUT, "SocketError", "接收超时 / socket receive timeout");
@@ -1256,6 +1521,13 @@ Value lumyr_socket_recv_into(Value v, Value buf, int flags, int maxLen) {
             }
         }
         if(n < 0) {
+            if (o->tls_session) {
+                char eb[400];
+                snprintf(eb, sizeof(eb), "TLS 读取失败 / TLS read failed: %s",
+                         lm_ssl_last_error((lm_ssl_session_t*)o->tls_session));
+                runtime_error_code(NET_ERR_TLS_IO, "SocketError", eb);
+                return lumyr_make_int(-1);
+            }
             sock_error_code("recvInto", NET_ERR_RECV);
             return lumyr_make_int(-1);
         }
@@ -1360,12 +1632,23 @@ Value lumyr_socket_close(Value v) {
     if(v.type != VAL_SOCKET) { runtime_error_code(NET_ERR_INVALID_TYPE, "SocketError", "close() 仅适用于 socket 对象"); return val_none(); }
     SocketObj* o = (SocketObj*)v.v.socket_obj;
     if(!o) return val_none();
+    /* G4：连接会话先发 close_notify 再释放（必须在 close(fd) 前，否则记录
+     * 发不出去）；listener 的服务端上下文在 fd 关闭后释放。 */
+    if (o->tls_session) {
+        lm_ssl_shutdown_step((lm_ssl_session_t*)o->tls_session);
+        lm_ssl_session_free((lm_ssl_session_t*)o->tls_session);
+        o->tls_session = NULL;
+    }
     if(!o->closed && o->fd >= 0) {
         fd_wait_close_notify(o->fd);   /* Phase 8.8：先仲裁唤醒等待协程，再关 fd */
         close(o->fd);
         o->closed = 1;
         o->fd = -1;
         o->is_connected = 0;
+    }
+    if (o->tls_server_ctx) {
+        lm_ssl_server_ctx_free((lm_ssl_server_ctx_t*)o->tls_server_ctx);
+        o->tls_server_ctx = NULL;
     }
     return val_none();
 }

@@ -301,6 +301,9 @@ int builtin_id_by_name(const char* name) {
         {"setOption", BUILTIN_SOCKET_SETOPT},
         {"getOption", BUILTIN_SOCKET_GETOPT},
         {"fileno", BUILTIN_SOCKET_FILENO},
+        /* G4：TLS 传输层安全（socket 方法，Socket.lm 门面封装） */
+        {"enableTls", BUILTIN_SOCKET_ENABLE_TLS},
+        {"connectTls", BUILTIN_SOCKET_CONNECT_TLS},
         /* reactor + 协程（Phase 5）
          * 注：reactor 与 co 销毁用不同名避免 builtin id 冲突——
          * reactor 用 __private_system__destroy_reactor，co 用 destroy */

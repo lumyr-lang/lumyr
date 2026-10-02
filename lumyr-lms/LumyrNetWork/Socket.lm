@@ -40,11 +40,15 @@ public interface ServerSocketInterface extends SocketInterface {
     func bind(host: string, port: int);
     func listen(backlog: int);
     func accept();
+    // G4：启用 TLS（PEM 证书链 + 私钥）；必须在 accept 前、listen 后调用
+    func enableTls(certPath: string, keyPath: string);
 }
 
 // 客户端套接字契约：在通用能力上增加连接
 public interface ClientSocketInterface extends SocketInterface {
     func connect(host: string, port: int);
+    // G4：TCP + TLS 连接（不校验证书，用于自签/内网；对端为公网可信证书请走 requests）
+    func connectTls(host: string, port: int);
 }
 
 // TCP 服务端套接字：构造即 bind+listen，accept 返回对端连接（raw socket）
@@ -102,6 +106,14 @@ public class ServerSocket implements ServerSocketInterface {
 
     func listen(backlog: int) {
         self.sock.listen(backlog);
+        return self;
+    }
+
+    // G4：启用 TLS——加载 PEM 证书链与私钥（最低 TLS1.2）。之后 accept 出的
+    // 每条连接自动完成 TLS 握手，收发对上层透明（send/recv 即密文通道）。
+    // 必须在构造（bind+listen）之后、accept 循环之前调用一次。
+    func enableTls(certPath: string, keyPath: string) {
+        self.sock.enableTls(certPath, keyPath);
         return self;
     }
 
@@ -169,8 +181,27 @@ public class ClientSocket implements ClientSocketInterface {
         self.connect(host, port);
     }
 
+    // G4：useTls=1 时构造即走 TLS（TCP 连接 + 握手，不校验证书）
+    func ClientSocket(host: string, port: int, useTls: int) {
+        self.host = host;
+        self.port = port;
+        self.closed = false;
+        self.sock = TcpSocket();
+        if (useTls != 0) {
+            self.connectTls(host, port);
+        } else {
+            self.connect(host, port);
+        }
+    }
+
     func connect(host: string, port: int) {
         self.sock.connect(host, port);
+        return self;
+    }
+
+    // G4：TLS 连接（自签/内网测试用，不验签；公网可信服务请用 requests）
+    func connectTls(host: string, port: int) {
+        self.sock.connectTls(host, port);
         return self;
     }
 

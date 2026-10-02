@@ -28,6 +28,11 @@ Value lumyr_socket_bind(Value v, const char* host, int port);
 Value lumyr_socket_listen(Value v, int backlog);
 // accept：TCP/Unix 流服务端接受连接 → 新 socket（阻塞）；失败返回 null
 Value lumyr_socket_accept(Value v);
+// G4：在已 listen 的服务端套接字启用 TLS（PEM 证书链 + 私钥路径）。
+// 启用后 accept（含 RR 投递）出的连接自动完成 TLS 握手，send/recv 走记录层。
+Value lumyr_socket_enable_tls(Value v, const char* certPath, const char* keyPath);
+// G4：客户端 TLS——先 TCP 连接再 TLS 握手（不校验证书，用于自签/内网测试）
+Value lumyr_socket_connect_tls(Value v, const char* host, int port);
 // send：已连接套接字发送（TCP/Unix 流，或 UDP 已 connect）→ 实际发送字节数
 Value lumyr_socket_send(Value v, const char* data, int len, int flags);
 // recv：已连接套接字接收 → 字符串（asBytes=0）或 bytes（asBytes=1，二进制安全含 NUL）

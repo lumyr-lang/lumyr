@@ -498,6 +498,11 @@ typedef struct {
     uint8_t stack_alloc;   // 0=堆分配，1=编译通道栈分配
     int recv_timeout_ms;   // 协程模式 recv 超时（毫秒，0=不限；setOption recvTimeout 写入，走 reactor 定时器）
     int send_timeout_ms;   // 协程模式 send 超时（毫秒，0=不限；setOption sendTimeout 写入，走 reactor 定时器）
+    // G4 TLS（Transport Layer Security；lm_ssl_* 类型，void* 避免本头引 OpenSSL）：
+    //   listener 持 tlsServerCtx（enableTls 建立）；accept 出的连接持 tlsSession。
+    //   非 TLS 套接字两者恒为 NULL，读写走裸 fd。
+    void* tls_server_ctx;  // lm_ssl_server_ctx_t*（仅 listener；close 时释放）
+    void* tls_session;     // lm_ssl_session_t*（仅已握手连接；close 时释放）
 } SocketObj;
 
 #endif //LUMYR_VALUE_TYPE_H

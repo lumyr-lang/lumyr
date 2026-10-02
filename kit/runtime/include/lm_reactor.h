@@ -132,6 +132,7 @@ const lm_event_actions_t* lm_reactor_backend(void);
 typedef struct lm_inbound_s {
     int fd;
     int kind;                       /* SocketObj kind（SOCK_KIND_*） */
+    void* tls_ctx;                  /* G4：lm_ssl_server_ctx_t*（listener 借用指针，非 NULL 时 worker 握手） */
     struct sockaddr_storage addr;
     socklen_t addrlen;
     struct lm_inbound_s* next;      /* 队列链 / freelist 链（C 内部用） */
@@ -307,7 +308,7 @@ lm_reactor_t* lm_reactor_by_idx_retained(int idx);
  * max_conn>0 时在入队锁内做权威容量判定并占 reservation（保证突发受理
  * 也不会越过 per-worker 上限）；<=0 不按连接数限流（仅队列深度安全网）。
  * 入队成功且 owner receiver 已在等待时，内部经 lm_scheduler_wakeup 唤醒。 */
-int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind,
+int lm_reactor_submit_fd(lm_reactor_t* r, int fd, int kind, void* tls_ctx,
                          const struct sockaddr* addr, socklen_t addrlen,
                          int max_conn);
 

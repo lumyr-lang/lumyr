@@ -107,6 +107,36 @@ else ifeq ($(OS_NAME),windows)
     GMP_LIB_DIR := $(CURDIR)/prebuilt/windows
 endif
 LDLIBS += -lgmp
+
+# ========== G4 TLS 传输层安全（OpenSSL 动态链接；缺失则 nossl 空实现降级） ==========
+# lm_ssl.c 恒编译（内部 #ifdef LM_HAVE_OPENSSL 双后端）；仅在检测到 OpenSSL
+# 开发头时追加 -DLM_HAVE_OPENSSL 与链接参数，无库平台零成本降级（enableTls
+# 调用报“未启用 TLS 构建”双语错）。
+# 用独立 SSL_CFLAGS/SSL_LDFLAGS 而非追加 CFLAGS/LDFLAGS：后者可被命令行覆盖
+# （如 ASAN 构建 `make CFLAGS=... LDFLAGS=...`），独立变量始终进编译/链接规则。
+SSL_CFLAGS :=
+SSL_LDFLAGS :=
+ifeq ($(OS_NAME),macos)
+    # Homebrew OpenSSL 3（系统自带 LibreSSL 不含可用开发头；brew install openssl@3）
+    OPENSSL_BREW := $(firstword $(wildcard /usr/local/opt/openssl@3 /opt/homebrew/opt/openssl@3))
+    ifneq ($(OPENSSL_BREW),)
+        SSL_CFLAGS += -I$(OPENSSL_BREW)/include -DLM_HAVE_OPENSSL
+        SSL_LDFLAGS += -L$(OPENSSL_BREW)/lib
+        LDLIBS += -lssl -lcrypto
+    else
+        $(warning OpenSSL not found: TLS server disabled (run "brew install openssl@3" to enable))
+    endif
+else ifeq ($(OS_NAME),linux)
+    # 系统 OpenSSL（apt install libssl-dev），走默认搜索路径
+    ifneq ($(wildcard /usr/include/openssl/ssl.h /usr/local/include/openssl/ssl.h),)
+        SSL_CFLAGS += -DLM_HAVE_OPENSSL
+        LDLIBS += -lssl -lcrypto
+    else
+        $(warning OpenSSL dev headers not found: TLS server disabled (apt install libssl-dev))
+    endif
+endif
+# Windows/mingw：本期不接入（nossl 空实现）
+
 # ========== Runtime 静态库源文件 ==========
 # lm_runtime.c 已 include 了 gc_runtime.c / lm_string.c / lm_array.c / lm_math.c / lm_io.c
 # 这些文件不再单独编译，避免重复定义
@@ -116,6 +146,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_type.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_map.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_thread.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_lock.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_ssl.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_tls.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_http.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_json.c
@@ -289,7 +320,7 @@ $(LEX_GEN): $(LEX_SRC) $(YACC_GEN_H)
 # ========== 通用 C 编译规则（编译同时生成 .d 头依赖） ==========
 # 覆盖 make 内置不追踪头文件的 %.o: %.c 隐式规则；% 匹配任意源码/生成目录
 %.o: %.c
-	$(CC) $(CFLAGS) $(DEPFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(SSL_CFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 # 汇编源（.S 经 C 预处理器处理，-DLM_CTX_UCONTEXT 等开关经 CFLAGS 传入）
 %.o: %.S
@@ -305,7 +336,7 @@ src/main.o: src/main.c
 	$(CC) $(CFLAGS) $(DEPFLAGS) \
 	  -DLUMYR_GEN_INC='"$(GEN_INC)"' \
 	  -DLUMYR_GEN_LIB='"$(GEN_LIB)"' \
-	  -DLUMYR_GEN_LDLIBS='"$(LDLIBS)"' \
+	  -DLUMYR_GEN_LDLIBS='"$(SSL_LDFLAGS) $(LDLIBS)"' \
 	  -c -o $@ $<
 
 # ========== import.o 特殊编译规则（注入框架路径） ==========
@@ -318,7 +349,7 @@ src/parse/import.o: src/parse/import.c src/parse/import.h
 # ========== 编译器本体链接 ==========
 $(BIN_LOCAL): $(OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SSL_LDFLAGS) $(OBJS) -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
 	@echo "    Built: $@"
 ifeq ($(OS_NAME),macos)
 	@# GMP 随包分发（LGPL）：拷入 bin/ 并改为 @loader_path 定位，用户可替换
@@ -348,7 +379,7 @@ endif
 TEST_STACKFRAME := $(TEST_DIR)/stackframe_test$(EXE_EXT)
 
 $(TEST_STACKFRAME): $(OBJS) $(RUNTIME_LIB) tests/stackframe_test.c
-	$(CC) $(CFLAGS) $(LDFLAGS) $(filter-out src/main.o,$(OBJS)) tests/stackframe_test.c -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SSL_LDFLAGS) $(filter-out src/main.o,$(OBJS)) tests/stackframe_test.c -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
 
 .PHONY: test
 test: $(TEST_STACKFRAME)
