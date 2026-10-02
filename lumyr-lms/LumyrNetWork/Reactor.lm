@@ -131,8 +131,13 @@ public class Coroutine {
     }
 
     // Task 6：显式栈档构造（cls 1=SMALL 16KiB / 2=NORMAL 128KiB）。
-    // 浅栈路径（纯转发 IO 协程）走 SMALL 档，深 VM 帧路径维持 NORMAL。
     // 默认行为不变（不传 cls 走 NORMAL）。
+    // 重要（T6 高水位实测，详见
+    // .trae/specs/concurrency-hardening/multi-worker-guide.md 第 3 节）：
+    // VM 协程实测栈深 47-53KB（trampoline + VM 调用链），即使是纯转发 IO
+    // 的 lumin 协程也必须用 NORMAL；对 lumin 函数传 cls=1 必触发 guard page
+    // 崩溃。SMALL 档当前仅适用于不经 VM 帧的 C 层浅栈协程（私有机制），
+    // 应用代码请勿对 lumin 函数使用 cls=1。
     func Coroutine(f, arg, cls: int) {
         self.impl = __private_system__co_spawn_class(f, arg, cls);
     }

@@ -28,6 +28,11 @@
 //   - run 退出后清理：destroy accept loop 协程 + 所有挂起的 handler 协程
 //     （lm_co_destroy 对 DEAD/SUSPENDED 状态安全）。
 //
+// 多 worker 编程指南（共享状态线程安全规则 / dispatch 选型 / 栈档 /
+// connCapacity 与 nofile，当前位于 .trae/specs/concurrency-hardening/，
+// 语言系统完工后回迁 docs/）：
+// .trae/specs/concurrency-hardening/multi-worker-guide.md
+//
 // 配置键（可被构造参数覆盖，构造参数优先级高于配置文件）：
 //   host         string  默认 "0.0.0.0"
 //   port         int     默认 8080
@@ -1018,7 +1023,8 @@ public class ServiceApplication extends Application {
     }
 
     // ---- Task 7：connCapacity 自动对齐 fd rlimit ----
-    // 常量（公式见 docs/concurrency-model-research.md §10.2）：
+    // 常量（公式见
+    // .trae/specs/concurrency-hardening/concurrency-model-research.md §10.2）：
     //   65536 自动对齐上限（=历史默认，自动对齐只往下收，不放大预分配）
     //   256   fd 安全余量（stdio/listen/kqueue/self-pipe/日志文件/出站 fd）
     //   1024  探测失败/平台不支持时的保守回退值

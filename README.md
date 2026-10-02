@@ -99,18 +99,6 @@ python regress_dual.py   # Windows (recommended, reliable subprocess output capt
 regress_dual.bat         # Windows (legacy, may have output buffering issues)
 ```
 
-## Language Specification
-
-See [docs/LANGUAGE_SPEC.md](docs/LANGUAGE_SPEC.md) for the complete language specification, including:
-- Data types and variables
-- Operators and expressions
-- Control flow (if/while/for/for-each/do-while/switch/match)
-- Functions (default params, const fn, macros, annotations, closures)
-- Exception handling (try/catch/finally/throw)
-- Null safety (?. and ??)
-- Built-in functions (string, array, map, math, IO, JSON, regex, time, GC)
-- Module system and threading
-
 ## License
 
 Licensed under the **Apache License, Version 2.0**.
