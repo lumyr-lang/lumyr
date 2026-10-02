@@ -641,6 +641,12 @@ typedef enum {
     BUILTIN_LM_DESERIALIZE,
     BUILTIN_LM_BUILD_STREAM,
     BUILTIN_LM_CHECK_HEADER,
+    /* ===== G1：信号优雅退出（私有机制内置，Reactor.lm/ServiceApplication 封装） =====
+     * 信号表 + self-pipe：处理器仅写管道，读端挂 reactor 事件循环，
+     * 触发时 reactor 线程 spawn 协程跑 lm 回调（参数为信号名字符串）。 */
+    BUILTIN_SIGNAL_WATCH,       // __private_system__signal_watch(r, name, cb)：注册信号 + 首次挂管道
+    BUILTIN_SIGNAL_RAISE,       // __private_system__signal_raise(name)：编程式投递信号（测试/自触发）
+    BUILTIN_SIGNAL_RESTORE,     // __private_system__signal_restore()：全部恢复默认 + 关管道
     BUILTIN_COUNT
 } BuiltinId;
 

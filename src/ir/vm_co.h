@@ -48,6 +48,19 @@ lm_co_t* vm_co_spawn_class(Value func, Value arg, int stack_class);
  * 失败 LM_TIMER_INVALID_ID（0）。 */
 lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb);
 
+/* ===== G1：信号优雅退出（信号表 + self-pipe，回调协程派发） =====
+ * 信号触发时 reactor 线程 drain 内 spawn 协程跑 cb（参数为信号名字符串），
+ * 投递回 install 时的 scheduler（与 addTimer 同路径）。 */
+/* vm_signal_install(r, name, cb)：注册信号 + 首次挂管道读端到 r。
+ * 返回 0 成功；-1 参数错/未知信号名；-2 attach/watch 失败。 */
+int vm_signal_install(lm_reactor_t* r, const char* name, Value cb);
+/* vm_signal_restore()：全部信号恢复默认 + 关管道 + 释放 scheduler 引用（幂等）。
+ * 须在 reactor 事件循环退出后调用（.lm 层 onStop 收尾保证）。 */
+void vm_signal_restore(void);
+/* vm_signal_raise(name)：编程式投递信号（raise(3)，测试/自触发用）。
+ * 返回 0 成功；-1 未知信号名。 */
+int vm_signal_raise(const char* name);
+
 #ifdef __cplusplus
 }
 #endif

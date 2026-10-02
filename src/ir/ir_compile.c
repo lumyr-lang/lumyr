@@ -318,6 +318,11 @@ int builtin_id_by_name(const char* name) {
         {"__private_system__reactor_recv_inbound", BUILTIN_REACTOR_RECV_INBOUND},
         {"__private_system__reactor_inbound_cancel", BUILTIN_REACTOR_INBOUND_CANCEL},
         {"__private_system__socket_accept_rr", BUILTIN_SOCKET_ACCEPT_RR},
+        /* G1：信号优雅退出（私有机制内置，Reactor.lm watchSignal/restoreSignals/
+         * signalRaise 封装） */
+        {"__private_system__signal_watch", BUILTIN_SIGNAL_WATCH},
+        {"__private_system__signal_raise", BUILTIN_SIGNAL_RAISE},
+        {"__private_system__signal_restore", BUILTIN_SIGNAL_RESTORE},
         {"spawn", BUILTIN_CO_SPAWN},
         {"__private_system__co_spawn_class", BUILTIN_CO_SPAWN_CLASS},
         {"resume", BUILTIN_CO_RESUME},

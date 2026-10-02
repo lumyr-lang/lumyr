@@ -1,0 +1,146 @@
+// ============================================================
+// 信号优雅退出端到端测试（G1：信号表 + self-pipe → reactor 协程回调）
+//
+// T1 参数校验：未知信号名 watch/raise 抛错（无服务）
+// T2 默认 TERM 优雅停机：raise("TERM") → onSignal 默认映射 →
+//    stop 优雅停机（running=false + join 正常 + 端口拒绝新连接）
+// T3 onSignal 钩子拦截：返回 true 抑制默认停机（TERM/HUP 仅记录，
+//    服务存活）；手动 stop 收尾
+// T4 多 worker TERM 优雅停机：workers=2（信号宿主 = 主线程 worker），
+//    raise("TERM") → 全部 worker 停机 join
+//
+// 自验证：startAsync 后台启动 → raw ClientSocket echo 断言 →
+//    signalRaise（与外部 kill 同路径）→ stop/join。
+// ============================================================
+
+import <App/ServiceApplication>;
+import <NetWork/Reactor>;
+import <NetWork/Socket>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 回显连接处理器：收一行回一行（ServiceHandler 契约）
+class EchoHandler implements ServiceHandler {
+    func serve(conn) {
+        data = conn.recv(4096);
+        if (data != "" && data != null) {
+            conn.send("ECHO:" + data);
+        }
+        conn.close();
+    }
+}
+
+// echo 一轮（发 PING 收 ECHO:PING）
+func ping(port: int): string {
+    cli = ClientSocket("127.0.0.1", port);
+    cli.setOption("recvTimeout", 3000);
+    cli.send("PING");
+    resp = cli.recv(4096);
+    cli.close();
+    return resp;
+}
+
+// 端口是否拒绝新连接（停机后 listen socket 已关）
+func refused(port: int): bool {
+    try {
+        c = ClientSocket("127.0.0.1", port);
+        c.close();
+        return false;
+    } catch (e) {
+        return true;
+    }
+}
+
+// onSignal 拦截型应用：记录信号名并抑制默认行为
+class HookApp extends ServiceApplication {
+    got: any;   // 记录 "HOOK:<NAME>"
+
+    func HookApp(h: string, p: int) {
+        super(h, p);
+        self.got = [];
+    }
+
+    func onSignal(name: string): bool {
+        self.got.add("HOOK:" + name);
+        return true;
+    }
+}
+
+// ------------------------------------------------------------
+// T1: 参数校验（未知信号名，无服务）
+// ------------------------------------------------------------
+print("[T1] 未知信号名校验 / unknown signal name validation");
+threw = false;
+try { signalRaise("NOPE"); } catch (e) { threw = true; }
+check(threw, "T1 raise 未知信号名应抛错");
+r = ReactorInstance(64);
+threw = false;
+try { r.watchSignal("KILL", func(n) { x = 1; }); } catch (e) { threw = true; }
+check(threw, "T1 watch 未知信号名应抛错");
+r.destroy();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T2: 默认 TERM 优雅停机（单 worker）
+// ------------------------------------------------------------
+print("[T2] 默认 TERM 优雅停机 / default TERM graceful stop");
+port = 18118;
+app = ServiceApplication("127.0.0.1", port);
+app.setHandler(EchoHandler());
+app.startAsync();
+sleep(300);
+resp = ping(port);
+check(resp == "ECHO:PING", "T2 停机前 echo 应正常，实际: [" + resp + "]");
+// 与外部 kill -TERM 完全同路径：处理器 → 管道 → reactor 回调 → 默认 stop
+signalRaise("TERM");
+sleep(500);
+check(app.running == false, "T2 TERM 后应已停机（running=false）");
+app.join();   // 优雅退出：join 无异常
+check(refused(port), "T2 停机后端口应拒绝新连接");
+print("  PASS");
+
+// ------------------------------------------------------------
+// T3: onSignal 钩子拦截（抑制默认停机）
+// ------------------------------------------------------------
+print("[T3] onSignal 钩子拦截 / onSignal hook interception");
+port = 18118;
+hookApp = HookApp("127.0.0.1", port);
+hookApp.setHandler(EchoHandler());
+hookApp.startAsync();
+sleep(300);
+check(ping(port) == "ECHO:PING", "T3 停机前 echo 应正常");
+signalRaise("TERM");
+sleep(400);
+check(hookApp.running, "T3 钩子拦截后服务应存活（不默认停机）");
+signalRaise("HUP");
+sleep(400);
+check(hookApp.running, "T3 HUP 后服务应存活");
+check(hookApp.got.size() == 2, "T3 应记录 2 次信号，实际: " + hookApp.got.size());
+check(hookApp.got[0] == "HOOK:TERM", "T3 第 1 次应为 TERM，实际: " + hookApp.got[0]);
+check(hookApp.got[1] == "HOOK:HUP", "T3 第 2 次应为 HUP，实际: " + hookApp.got[1]);
+check(ping(port) == "ECHO:PING", "T3 拦截期间 echo 应持续正常");
+hookApp.stop();
+hookApp.join();
+print("  PASS");
+
+// ------------------------------------------------------------
+// T4: 多 worker TERM 优雅停机（宿主 = 主线程 worker）
+// ------------------------------------------------------------
+print("[T4] 多 worker TERM 优雅停机 / multi-worker TERM graceful stop");
+port = 18119;
+mApp = ServiceApplication("127.0.0.1", port);
+mApp.setHandler(EchoHandler());
+mApp.setWorkers(2);
+mApp.startAsync();
+sleep(400);
+check(ping(port) == "ECHO:PING", "T4 多 worker echo 应正常");
+signalRaise("TERM");
+sleep(600);
+check(mApp.running == false, "T4 TERM 后应已停机（running=false）");
+mApp.join();   // 全部 worker join 无异常（跨 worker stop 生效）
+check(refused(port), "T4 停机后端口应拒绝新连接");
+print("  PASS");
+
+print("signal_graceful_test ALL PASS");

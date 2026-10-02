@@ -150,6 +150,9 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_socket.c
 # 单 reactor 线程跑所有协程（Phase 2 接入），Phase 6 替换 ServiceApplication 的 thread-per-conn
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_reactor.c
 
+# G1：进程信号优雅退出（信号表 + self-pipe，读端挂 reactor 事件循环）
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_signal.c
+
 # 有栈协程：切换层 lm_coro_ctx.h（Phase 8.1 起默认 fcontext 汇编切换，
 # -DLM_CTX_UCONTEXT 回退 ucontext），让 native 阻塞调用在协程内 yield，
 # reactor 调度回来 resume。mmap + 末页 guard page 防爆栈。

@@ -4,6 +4,7 @@
 //   __private_system__reactor_new()/run()/stop()/addTimer()/delTimer()
 //   /__private_system__destroy_reactor()
 //   /__private_system__set_socket_reactor() / spawn()/resume()/coYield()/current()/isDead()/destroy()
+//   /__private_system__signal_watch()/__private_system__signal_raise()/__private_system__signal_restore()（G1 信号优雅退出）
 // 注：协程让出用 coYield() 而非 yield（lm 的 yield 是 generator 语句关键字，仅限 gen func）
 // 注：reactor 创建/销毁/挂接已按私有机制内置约定更名 __private_system__reactor_new、
 //     __private_system__destroy_reactor、__private_system__set_socket_reactor，
@@ -108,6 +109,15 @@ public class ReactorInstance implements ReactorInterface {
         __private_system__reactor_inbound_cancel(self.impl);
     }
 
+    // ===== G1：信号优雅退出 =====
+    // watchSignal(name, cb)：监视进程信号（"TERM"/"INT"/"HUP"），触发时
+    // cb(信号名) 在本 reactor owner 线程的协程内执行（事件循环线程）。
+    // 进程内仅一个 reactor 可消费信号（首次 watch 绑定）；必须在本 reactor
+    // owner 线程调用（进入事件循环前）。
+    func watchSignal(name: string, cb) {
+        __private_system__signal_watch(self.impl, name, cb);
+    }
+
     func destroy() {
         if (self.impl != null) {
             __private_system__destroy_reactor(self.impl);
@@ -177,4 +187,18 @@ public func clearReactor() {
 // 全局函数：已注册 worker reactor 数（T5 acceptor 启动屏障用）。
 public func reactorRegistryCount(): int {
     return __private_system__reactor_registry_count();
+}
+
+// ===== G1：信号优雅退出（进程级全局函数） =====
+
+// 全局函数：编程式投递进程信号（raise(3)，与外部 kill 走完全相同的
+// 处理器→管道→回调路径）。测试/自触发用；name ∈ {"TERM","INT","HUP"}。
+public func signalRaise(name: string) {
+    __private_system__signal_raise(name);
+}
+
+// 全局函数：还原全部信号处理为默认（SIG_DFL）+ 关闭信号管道。
+// 应用 onStop 收尾时调用；必须在信号宿主 reactor 事件循环退出后调用。
+public func restoreSignals() {
+    __private_system__signal_restore();
 }

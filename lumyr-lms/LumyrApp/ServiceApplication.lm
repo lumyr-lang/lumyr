@@ -493,6 +493,8 @@ class ServiceWorker {
     longSchedCount: long;
     stopRequested: bool;
     stopIssued: bool;       // reactor.stop 单次发放（外部 stop 与收尾路径可能重入）
+    signalHost: bool;       // G1：信号宿主 worker（多线程模式主线程 worker），
+                            // 进入事件循环前安装进程信号处理器
     tid: int;
     error: any;
 
@@ -517,6 +519,7 @@ class ServiceWorker {
         self.longSchedCount = 0;
         self.stopRequested = false;
         self.stopIssued = false;
+        self.signalHost = false;
         self.tid = 0;
         self.error = null;
     }
@@ -563,6 +566,9 @@ class ServiceWorker {
         setScheduler(self.scheduler);
         // stop 先于 run 到达（reactor 建立前）：立即停，不进事件循环
         if (self.stopRequested) { self.reactorInst.stop(); }
+        // G1：信号宿主 worker（主线程 worker）在进入事件循环前安装信号
+        // 处理器——此刻本线程 scheduler TLS 已就位，回调协程可投递回本 reactor
+        if (self.signalHost) { app.installSignalHandlers(self.reactorInst); }
         if (app.dispatchMode() == "rr") {
             self.serveRr();
         } else {
@@ -901,6 +907,9 @@ public class ServiceApplication extends Application {
     acceptBackoffMaxVal: int;
     acceptRestartLimitVal: int;
     acceptRestartWindowVal: int;
+    // G1：信号优雅退出（信号表 + self-pipe，回调协程派发）
+    signalWatched: bool;   // 信号处理器是否已安装（onStop 还原）
+    signalHooks: any;      // 回调闭包持有数组（GC 根：C 侧表仅存值拷贝）
 
     func ServiceApplication() {
         super();
@@ -973,6 +982,8 @@ public class ServiceApplication extends Application {
         self.acceptBackoffMaxVal = 0;
         self.acceptRestartLimitVal = 0;
         self.acceptRestartWindowVal = 0;
+        self.signalWatched = false;
+        self.signalHooks = [];
     }
 
     // ---- 生效配置（构造参数优先，其次配置文件，最后内置默认）----
@@ -1277,6 +1288,49 @@ public class ServiceApplication extends Application {
 
     // ---- 生命周期钩子 ----
 
+    // ---- G1：信号优雅退出 ----
+    // 信号表 + self-pipe：SIGTERM/SIGINT/SIGHUP 处理器仅写管道（async-signal-
+    // safe），读端挂信号宿主 reactor 事件循环，触发时回调在宿主线程协程内执行。
+    // 默认映射：TERM/INT → 优雅停机（stop：停受理 + 排空在役连接 + join）；
+    // HUP 仅通知（重载等语义由子类重写 onSignal 实现）。
+
+    // 信号钩子：收到已监视信号时调用（宿主 reactor 线程协程内）。
+    // 返回 true 表示已处理（抑制默认行为）；false 走默认映射。
+    func onSignal(name: string): bool {
+        return false;
+    }
+
+    // 安装信号处理器（幂等）。须在信号宿主 reactor 的 owner 线程、进入事件
+    // 循环前调用（单线程模式 = 主线程 reactor；多线程模式 = 主线程 worker）。
+    // 闭包由 signalHooks 数组持有（GC 根），C 侧表仅存值拷贝。
+    func installSignalHandlers(r) {
+        if (self.signalWatched) { return; }
+        self.signalWatched = true;
+        names = ["TERM", "INT", "HUP"];
+        for name in names {
+            cb = func(n) { self.onSignalDispatch(n); };
+            self.signalHooks.add(cb);
+            r.watchSignal(name, cb);
+        }
+    }
+
+    // 信号派发（宿主 reactor 线程协程内）：先走 onSignal 钩子（异常记 error
+    // 日志，不中断停机流程），未处理且为 TERM/INT 时默认优雅停机。
+    // stop 跨线程安全（reactor.stop 走 stop_flag + self-pipe），宿主线程内
+    // 调用同样成立：置位后事件循环下一轮顶部退出。
+    func onSignalDispatch(name: string) {
+        handled = false;
+        try {
+            handled = self.onSignal(name);
+        } catch (e) {
+            print("[lumyr-app][error] onSignal 钩子异常（" + name + "）/ onSignal hook error (" + name + ")");
+        }
+        if (handled) { return; }
+        if (name == "TERM" || name == "INT") {
+            self.stop();
+        }
+    }
+
     // onStart：创建 reactor + setReactor（socket API 协程化的全局开关）
     //         + Phase 7.2：创建 scheduler 绑定 reactor，置当前线程 TLS + drain 钩子。
     //         scheduler 使 spawn 后的协程自动入就绪队列，由 reactor 主循环每轮
@@ -1293,8 +1347,16 @@ public class ServiceApplication extends Application {
         setScheduler(self.scheduler);
     }
 
-    // onStop：清 scheduler（TLS + drain 钩子）+ destroy + clearReactor + reactor.destroy
+    // onStop：还原信号处理（G1：须在 reactor 事件循环退出后）+ 清 scheduler
+    //（TLS + drain 钩子）+ destroy + clearReactor + reactor.destroy
     func onStop() {
+        // G1：信号还原为默认（SIG_DFL）+ 关信号管道——单/多线程模式收尾
+        // 均在主线程且宿主 reactor 事件循环已退出（start 生命周期保证）
+        if (self.signalWatched) {
+            restoreSignals();
+            self.signalWatched = false;
+            self.signalHooks = [];
+        }
         // 多线程模式：worker 各自已拆 reactor/scheduler；workerList 引用保留
         // （run 结束后可读取各 worker 的 acceptTotal 分布统计）
         if (self.workerList != null) { return; }
@@ -1331,6 +1393,8 @@ public class ServiceApplication extends Application {
         // Phase 8.2：accept loop 钉住本线程（同 ServiceWorker 处说明）
         coSetPinned(self.acceptCo.impl);
         self.acceptCo.resume();  // 启动协程跑到第一个 yield（accept 等读事件）
+        // G1：安装信号处理器（主线程 = 信号宿主；TERM/INT 默认优雅停机）
+        self.installSignalHandlers(self.reactor);
         // 进入 reactor 事件循环（阻塞至 stop）
         self.reactor.run();
         // reactor 退出后清理：accept 协程 + 挂起 handler 协程 + listen socket
@@ -1358,6 +1422,9 @@ public class ServiceApplication extends Application {
             i = i + 1;
         }
         self.workerList = workers;
+        // G1：主线程 worker 为信号宿主（回调协程在主线程事件循环跑，
+        // stop 可跨线程停全部 worker）
+        workers[n - 1].signalHost = true;
         // 先启动子 worker 线程（前 n-1 个）
         i = 0;
         while (i < n - 1) {

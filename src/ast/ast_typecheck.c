@@ -1066,6 +1066,9 @@ static const BuiltinSig g_builtin_sigs[] = {
     {"__private_system__compute_pool_shrink", 1, 1},
     {"__private_system__sched_stats", 0, 0},
     {"__private_system__fd_limit", 0, 0},   /* fd 软上限查询（App 服务层封装） */
+    {"__private_system__signal_watch", 3, 3},   /* G1：信号注册 + 首次挂管道（Reactor.lm 封装） */
+    {"__private_system__signal_raise", 1, 1},   /* G1：编程式投递信号（测试/自触发） */
+    {"__private_system__signal_restore", 0, 0}, /* G1：全部恢复默认 + 关管道 */
     {"coSleep", 1, 1},   /* 协程友好休眠（App accept 退避/监督用） */
     {"readAll", 1, 1}, {"readLines", 1, 3}, {"readLine", 2, 2},
     {"writeAll", 2, 2}, {"writeLine", 3, 3}, {"insertLine", 3, 3}, {"writeLines", 2, 2},

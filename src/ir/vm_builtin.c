@@ -4119,6 +4119,47 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_make_int(lumyr_socket_accept_rr(argv[0], n, maxConn));
         return 1;
     }
+    /* ===== G1：信号优雅退出（私有机制内置，Reactor.lm/ServiceApplication 封装） ===== */
+    case BUILTIN_SIGNAL_WATCH: {
+        /* __private_system__signal_watch(r, name, cb)：注册信号处理 +
+         * 首次把信号管道读端挂入 r 的事件循环。cb 为 lm 函数，信号触发时
+         * 在 r 的 owner 线程 spawn 协程调用（参数为信号名字符串）。 */
+        if (argc < 3 || argv[0].type != VAL_STRUCT_PTR
+            || argv[1].type != VAL_STRING
+            || argv[2].type != VAL_FUNC || !argv[2].v.func.func_obj) {
+            runtime_error("signalWatch(r, name, cb) 参数错误 / signalWatch: bad args");
+        }
+        int rc = vm_signal_install((lm_reactor_t*)argv[0].v.struct_ptr,
+                                   lumyr_str_cstr(&argv[1]), argv[2]);
+        if (rc == -1) {
+            runtime_error("signalWatch 未知信号名（支持 TERM/INT/HUP）/ signalWatch: unknown signal name");
+        }
+        if (rc != 0) {
+            runtime_error("signalWatch 注册失败（管道挂载或 sigaction 失败）/ signalWatch: register failed");
+        }
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SIGNAL_RAISE: {
+        /* __private_system__signal_raise(name)：编程式投递信号（raise(3)），
+         * 走与外部 kill 完全相同的处理器→管道→回调路径（测试/自触发用）。 */
+        if (argc < 1 || argv[0].type != VAL_STRING) {
+            runtime_error("signalRaise(name) 参数错误 / signalRaise: bad args");
+        }
+        int rc = vm_signal_raise(lumyr_str_cstr(&argv[0]));
+        if (rc != 0) {
+            runtime_error("signalRaise 未知信号名 / signalRaise: unknown signal name");
+        }
+        *out = val_none();
+        return 1;
+    }
+    case BUILTIN_SIGNAL_RESTORE: {
+        /* __private_system__signal_restore()：全部信号恢复默认 + 关管道 +
+         * 释放 scheduler 引用。须在 reactor 事件循环退出后调用。 */
+        vm_signal_restore();
+        *out = val_none();
+        return 1;
+    }
     case BUILTIN_CO_SPAWN: {
         if(argc < 1 || argv[0].type != VAL_FUNC || !argv[0].v.func.func_obj) {
             runtime_error("spawn(f, [arg]) 首参须为函数 / spawn: first arg must be function");
@@ -4921,6 +4962,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_REACTOR_RECV_INBOUND: return "__private_system__reactor_recv_inbound";
     case BUILTIN_REACTOR_INBOUND_CANCEL: return "__private_system__reactor_inbound_cancel";
     case BUILTIN_SOCKET_ACCEPT_RR: return "__private_system__socket_accept_rr";
+    case BUILTIN_SIGNAL_WATCH: return "__private_system__signal_watch";
+    case BUILTIN_SIGNAL_RAISE: return "__private_system__signal_raise";
+    case BUILTIN_SIGNAL_RESTORE: return "__private_system__signal_restore";
     case BUILTIN_CO_SPAWN: return "spawn";
     case BUILTIN_CO_SPAWN_CLASS: return "__private_system__co_spawn_class";
     case BUILTIN_CO_RESUME: return "resume";

@@ -15,6 +15,7 @@
 #include "vm_co.h"
 #include "lm_co.h"          /* lm_co_t, lm_co_spawn, lm_co_set_vm_hooks */
 #include "lm_reactor.h"     /* lm_reactor_t, lm_reactor_add_timer */
+#include "lm_signal.h"      /* G1：信号表 + self-pipe（lm_signal_watch/attach/...） */
 #include "lm_scheduler.h"   /* Phase 8.6 修复：timer 回调投递回 reactor（get_current/wakeup） */
 #include "stack_manager.h"  /* g_stack_mgr */
 #include "lumyr_value.h"    /* g_err_jmp, val_none, lumyr_make_string */
@@ -434,4 +435,85 @@ lm_timer_id_t vm_co_add_timer(lm_reactor_t* r, uint64_t ms, Value cb) {
         free(tc); return LM_TIMER_INVALID_ID;
     }
     return id;
+}
+
+/* ============================================================
+ * G1：信号优雅退出（信号表 + self-pipe，回调协程派发）
+ * 信号处理器仅写管道（lm_signal.c）；reactor 线程 drain 可读字节时
+ * vm_signal_dispatch 逐信号 spawn 协程跑 lm 回调（参数为信号名字符串），
+ * 投递回 install 时的 scheduler（与 vm_co_timer_cb 同路径）。
+ * 线程约定：install / dispatch / restore 全部发生在信号宿主 reactor 的
+ * owner 线程（.lm 层 installSignalHandlers/onStop 生命周期保证），
+ * entries 表无锁。
+ * ============================================================ */
+typedef struct {
+    Value func;               /* lm 回调（VAL_FUNC）；闭包由 .lm 侧 signalHooks
+                                 数组持有（GC 根），此处仅为派发用值拷贝 */
+    lm_scheduler_t* sched;    /* install 时捕获（retain），回调协程投递目标 */
+    int watched;              /* 已注册（restore 还原依据） */
+} SignalEntry;
+
+static SignalEntry g_signal_entries[LM_SIGNAL_TABLE_SIZE];
+static int g_signal_attached = 0;   /* 进程内单消费者登记（attach 一次） */
+
+/* 信号派发（reactor 线程 drain 内）：spawn 协程跑回调，投递回 scheduler */
+static void vm_signal_dispatch(int signo, void* data) {
+    (void)data;
+    if (signo <= 0 || signo >= LM_SIGNAL_TABLE_SIZE) return;
+    SignalEntry* e = &g_signal_entries[signo];
+    const char* name = lm_signal_name(signo);
+    if (!e->watched || !name || e->func.type != VAL_FUNC) return;
+    Value arg = lumyr_make_string(name);
+    lm_co_t* co = vm_co_spawn(e->func, arg);
+    if (!co) return;
+    if (e->sched) {
+        /* 投递回 reactor：mutex 定向队列 + wakeup，drain_ready 在 reactor
+         * 线程 resume（与 timer 回调同路径） */
+        lm_scheduler_wakeup(e->sched, co);
+    } else {
+        /* 无 scheduler（极早期/纯 C 场景）：同步语义兜底 */
+        lm_co_resume(co);
+        if (lm_co_is_dead(co)) lm_co_destroy(co);
+    }
+}
+
+int vm_signal_install(lm_reactor_t* r, const char* name, Value cb) {
+    if (!r || !name || cb.type != VAL_FUNC || !cb.v.func.func_obj) return -1;
+    int signo = lm_signal_signo(name);
+    if (signo <= 0) return -1;
+    /* 首次 watch：管道读端挂入本 reactor 事件循环（单消费者，
+     * 必须在本 reactor owner 线程调用） */
+    if (!g_signal_attached) {
+        if (lm_signal_attach(r, vm_signal_dispatch, NULL) != 0) return -2;
+        g_signal_attached = 1;
+    }
+    SignalEntry* e = &g_signal_entries[signo];
+    e->func = cb;
+    if (!e->sched) {
+        e->sched = lm_scheduler_get_current();   /* install 在 owner 线程，TLS 在位 */
+        lm_scheduler_retain(e->sched);
+    }
+    if (lm_signal_watch(signo) != 0) return -2;
+    e->watched = 1;
+    return 0;
+}
+
+void vm_signal_restore(void) {
+    lm_signal_shutdown();   /* 恢复 SIG_DFL + 关管道 + 清消费登记 */
+    for (int s = 0; s < LM_SIGNAL_TABLE_SIZE; s++) {
+        SignalEntry* e = &g_signal_entries[s];
+        if (e->sched) {
+            lm_scheduler_release(e->sched);
+            e->sched = NULL;
+        }
+        e->func = val_none();
+        e->watched = 0;
+    }
+    g_signal_attached = 0;
+}
+
+int vm_signal_raise(const char* name) {
+    int signo = lm_signal_signo(name);
+    if (signo <= 0) return -1;
+    return raise(signo);
 }
