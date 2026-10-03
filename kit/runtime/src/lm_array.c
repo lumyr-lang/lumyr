@@ -73,6 +73,57 @@ Value lumyr_array_add(Value* arr, Value val)
     return *arr;
 }
 
+// addBytes(arr, seq, start, count)：C 层批量追加（根因修复：
+// 大报文（HTTP 收包 / WS 分片重组 / keep-alive 拷贝）此前在 .lm 层
+// 逐字节 arr.add(x)，4MiB 要阻塞 worker 十余秒；此处一次扩容、
+// 在 C 层完成整段拷贝，语义与逐元素 add 完全一致）
+Value lumyr_array_add_bytes(Value* arr, Value seq, int start, int count)
+{
+    if(arr->type != VAL_ARRAY) runtime_error("addBytes() 第一个参数必须是数组");
+    int slen = 0;
+    if(seq.type == VAL_BYTES) {
+        BytesObj* b = (BytesObj*)seq.v.bytes_obj;
+        slen = b ? b->len : 0;
+    } else if(seq.type == VAL_ARRAY) {
+        slen = seq.v.array->len;
+    } else {
+        runtime_error("addBytes() 第二个参数必须是 bytes 或数组 / seq must be bytes or array");
+    }
+    if(start < 0) start = 0;
+    if(start > slen) start = slen;
+    if(count < 0 || start + count > slen) count = slen - start;
+    if(count <= 0) return *arr;
+
+    int n = arr->v.array->len;
+    lumyr_enter_write(&arr->v.array->write_flag);
+    if(n + count > arr->v.array->cap) {
+        int newcap = arr->v.array->cap == 0 ? 4 : arr->v.array->cap;
+        while(newcap < n + count) newcap *= 2;   /* 与单元素 add 相同的倍增策略 */
+        arr->v.array->items = (Value*)gc_realloc(arr->v.array->items, sizeof(Value) * newcap);
+        arr->v.array->cap = newcap;
+    }
+    if(seq.type == VAL_BYTES) {
+        BytesObj* b = (BytesObj*)seq.v.bytes_obj;
+        const uint8_t* p = b->data + start;
+        for(int i = 0; i < count; i++) {
+            Value v = lumyr_make_int((int)p[i]);
+            gc_write_barrier(v);
+            gc_remembered_set_check(*arr, v);
+            arr->v.array->items[n + i] = v;
+        }
+    } else {
+        for(int i = 0; i < count; i++) {
+            Value v = seq.v.array->items[start + i];
+            gc_write_barrier(v);
+            gc_remembered_set_check(*arr, v);
+            arr->v.array->items[n + i] = v;
+        }
+    }
+    arr->v.array->len = n + count;
+    lumyr_leave_write(&arr->v.array->write_flag);
+    return *arr;
+}
+
 // insert(arr, idx, val)：原地插入（idx 允许 0..n），返回数组本身
 Value lumyr_insert(Value* arr, Value idx, Value val)
 {

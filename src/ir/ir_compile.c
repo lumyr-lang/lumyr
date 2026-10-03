@@ -140,6 +140,9 @@ int builtin_id_by_name(const char* name) {
         {"remove", BUILTIN_ARRAY_REMOVE},
         {"clear", BUILTIN_ARRAY_CLEAR},
         {"addAll", BUILTIN_ARRAY_ADDALL},
+        {"addBytes", BUILTIN_ARRAY_ADD_BYTES},
+        {"bytesConcat", BUILTIN_BYTES_CONCAT},
+        {"bytesSlice", BUILTIN_BYTES_SLICE},
         {"set", BUILTIN_SET},
         {"get", BUILTIN_GET},
         /* HTTP 命名空间（yacc 将 requests.get/post/... 转为此内部名，

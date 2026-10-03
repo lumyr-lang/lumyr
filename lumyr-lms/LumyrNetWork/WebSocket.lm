@@ -143,21 +143,22 @@ public class WebSocketConn {
     //   先消费升级请求残留的缓冲字节（connBuf，pipelining 首批帧可能已到），
     //   再循环 recv → wsParserFeed 流式解析 → 事件分派。
     //   协议错误（掩码缺失/RSV 非 0/控制帧分片等）→ 抛错 → 外层兜 1002 close。
-    func run(handler, connBuf: array) {
+    func run(handler, connBuf) {
         isFunc = (type(handler) == "func");
         parser = wsParserCreate(1);   // 服务端角色：入向帧必须带掩码
         closeCode = 1000;
         closeReason = "";
-        // 分片重组状态（跨帧持有）：fragOp=-1 无分片；否则为消息首帧 opcode
+        // 分片重组状态（跨帧持有）：fragOp=-1 无分片；否则为消息首帧 opcode。
+        // fragArr 为已收 payload 拼出的 bytes（不可变，追加即重新拼接）
         fragOp = -1;
-        fragArr = [];
+        fragArr = bytes();
         try {
             // 升级后进入长连接：读取不挂超时（心跳由 ping/pong 驱动）
             try { self.sock.setOption("recvTimeout", 0); } catch (e) { x = 1; }
             if (!isFunc) { handler.onOpen(self); }
             // 先喂升级请求缓冲区残留（客户端可能在收到 101 前已发帧）
             if (connBuf.len > 0) {
-                resid = wsParserFeed(parser, bytes(connBuf));
+                resid = wsParserFeed(parser, connBuf);
                 for ev in resid {
                     r = self.dispatchEvent(handler, isFunc, ev, fragOp, fragArr);
                     fragOp = r[0]; fragArr = r[1];
@@ -191,7 +192,7 @@ public class WebSocketConn {
 
     // 单条帧事件分派。返回 [fragOp, fragArr, closeCode, closeReason]：
     //   closeCode >= 0 表示收到 close 帧或已主动关闭，调用方应退出循环
-    private func dispatchEvent(handler, isFunc, ev, fragOp: int, fragArr: array): array {
+    private func dispatchEvent(handler, isFunc, ev, fragOp: int, fragArr): array {
         op = ev["opcode"];
         fin = ev["fin"];
         payload = ev["payload"];
@@ -203,10 +204,8 @@ public class WebSocketConn {
             if (payload.len >= 2) {
                 code = payload[0] * 256 + payload[1];
                 if (payload.len > 2) {
-                    sub = [];
-                    i = 2;
-                    while (i < payload.len) { sub.add(payload[i]); i = i + 1; }
-                    reason = bytes(sub).decode();
+                    // C 层切片后 decode（避免逐字节装箱）
+                    reason = bytesSlice(payload, 2, -1).decode();
                 }
             }
             // 回 close 帧（若未发过）再退出
@@ -230,26 +229,24 @@ public class WebSocketConn {
                 self.deliver(handler, isFunc, op, payload);
                 return [fragOp, fragArr, -1, ""];
             }
-            // 分片首帧：攒入 fragArr
-            i = 0;
-            while (i < payload.len) { fragArr.add(payload[i]); i = i + 1; }
+            // 分片首帧：直接持有首块 bytes（引用，不拷贝）
+            fragArr = payload;
             if (fragArr.len > self.maxMessageBytes) {
                 self.close(1009, "message too big");
-                return [-1, [], 1009, "message too big"];
+                return [-1, bytes(), 1009, "message too big"];
             }
             return [op, fragArr, -1, ""];
         }
-        // op == OP_CONT（续帧）
-        i = 0;
-        while (i < payload.len) { fragArr.add(payload[i]); i = i + 1; }
+        // op == OP_CONT（续帧）：已收块与新块 C 层一次拼接
+        fragArr = bytesConcat([fragArr, payload]);
         if (fragArr.len > self.maxMessageBytes) {
             self.close(1009, "message too big");
-            return [-1, [], 1009, "message too big"];
+            return [-1, bytes(), 1009, "message too big"];
         }
         if (fin) {
-            whole = bytes(fragArr);
-            self.deliver(handler, isFunc, fragOp, whole);
-            return [-1, [], -1, ""];
+            // fragArr 已是完整消息 bytes，直接交付
+            self.deliver(handler, isFunc, fragOp, fragArr);
+            return [-1, bytes(), -1, ""];
         }
         return [fragOp, fragArr, -1, ""];
     }

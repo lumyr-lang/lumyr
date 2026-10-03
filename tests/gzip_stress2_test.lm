@@ -1,0 +1,164 @@
+// gzip_stress2_test.lm —— G6/G7 gzip 压测三期：大文件流式 + 句柄表扩容
+//
+// LF3 4MiB 文本流式压缩：4 线程 × 2 轮，每轮 create 后分 64 块 64KiB
+//     增量 write（NO_FLUSH）→ finish → gunzip → 与原文逐字符比对
+// E2  句柄表动态扩容：并发持有 1100 个流（旧静态上限 1024），全部创建
+//     成功；首/中/尾抽样完整往返；全部释放后新句柄可正常复用
+//
+// 运行：./bin/lumyr tests/gzip_stress2_test.lm
+
+import <Thread/Thread>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// 构造精确长度的可压缩文本（倍增后切片，毫秒级）
+func makeText(n: int): string {
+    seed = "lumin-gzip-large-0123456789-ABCDEFGHIJKLMNOP-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+// 收集若干 bytes 输出为单个 bytes（压缩后体积小，逐字节收集无压力）
+func collectBytes(parts: array): bytes {
+    out = [];
+    i = 0;
+    while (i < parts.len) {
+        p = parts[i];
+        j = 0;
+        while (j < p.len) { out.add(p[j]); j = j + 1; }
+        i = i + 1;
+    }
+    return bytes(out);
+}
+
+// ============================================================
+// LF3：4MiB 流式压缩多线程
+// ============================================================
+big4m = makeText(4194304);
+chunkSize = 65536;
+
+class LargeStreamWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func LargeStreamWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            h = gzipStreamCreate(6);
+            if (h < 0) { bad = bad + 1; r = r + 1; continue; }
+            parts = [];
+            pos = 0;
+            while (pos < big4m.len) {
+                end = pos + chunkSize;
+                if (end > big4m.len) { end = big4m.len; }
+                piece = big4m.slice(pos, end);
+                parts.add(gzipStreamWrite(h, piece, false));
+                pos = end;
+            }
+            parts.add(gzipStreamFinish(h));
+            packed = collectBytes(parts);
+            back = gzipDecompress(packed);
+            if (back.len != big4m.len || back.decode() != big4m) {
+                bad = bad + 1;
+            }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+func phaseLF3(workers: int, rounds: int) {
+    print("[LF3] 4MiB 流式压缩多线程 / 4MiB streaming threads: " + workers + " × " + rounds);
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("gzbig-" + i, LargeStreamWorker(i, rounds)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    total = workers * rounds;
+    print("  4MiB 往返 " + total + " 次，bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, "LF3: 4MiB 流式往返不一致 bad=" + bad);
+    print("  LF3 PASS");
+}
+
+// ============================================================
+// E2：句柄表扩容（>1024 并发存活句柄）
+// ============================================================
+func phaseE2(total: int) {
+    print("[E2] 句柄表扩容 / handle table expansion: " + total + " concurrent（旧上限 1024）");
+    handles = [];
+    t0 = timestamp_ms();
+    i = 0;
+    while (i < total) {
+        h = gzipStreamCreate(6);
+        if (h < 0) {
+            throw "E2: 第 " + i + " 个句柄创建失败 / create failed（扩容未生效）";
+        }
+        handles.add(h);
+        i = i + 1;
+    }
+    t1 = timestamp_ms();
+    print("  " + total + " 个并发句柄创建成功，耗时 " + (t1 - t0) + " ms");
+
+    // 首/中/尾抽样完整往返
+    probeIdx = [0, total / 2, total - 1];
+    bad = 0;
+    k = 0;
+    while (k < probeIdx.len) {
+        idx = probeIdx[k];
+        h = handles[idx];
+        msg = "e2-probe-" + idx + "-" + idx + "-tail";
+        o1 = gzipStreamWrite(h, msg, false);
+        o2 = gzipStreamFinish(h);
+        back = gzipDecompress(collectBytes([o1, o2]));
+        if (back.decode() != msg) { bad = bad + 1; }
+        handles[idx] = -1;
+        k = k + 1;
+    }
+    check(bad == 0, "E2: 抽样往返不一致 bad=" + bad);
+
+    // 其余空 finish（合法空 gzip 流），释放全部槽位
+    drained = 0;
+    i = 0;
+    while (i < handles.len) {
+        if (handles[i] >= 0) {
+            gzipStreamFinish(handles[i]);
+            drained = drained + 1;
+        }
+        i = i + 1;
+    }
+    print("  抽样往返 bad=" + bad + "，空 finish 释放 " + drained + " 个");
+
+    // 释放后再创建：槽位回收复用，往返仍正确
+    h2 = gzipStreamCreate(6);
+    check(h2 >= 0, "E2: 回收后创建失败 / reuse create failed");
+    msg2 = "after-drain-reuse-check";
+    o1 = gzipStreamWrite(h2, msg2, false);
+    o2 = gzipStreamFinish(h2);
+    back = gzipDecompress(collectBytes([o1, o2]));
+    check(back.decode() == msg2, "E2: 回收复用往返不一致 / reuse roundtrip mismatch");
+    print("  回收后复用往返正常 / reuse after drain ok");
+    print("  E2 PASS");
+}
+
+func main() {
+    print("=== gzip 压测三期 / gzip stress phase 3 ===");
+    phaseE2(1100);
+    phaseLF3(4, 2);
+    print("=== ALL PASS / 三期全部通过 ===");
+    return true;
+}
+
+main();

@@ -2299,6 +2299,36 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         *out = lumyr_array_addall(&recv, argv[1]); /* 数组追加/字典合并，原地返回 self */
         return 1;
     }
+    case BUILTIN_ARRAY_ADD_BYTES: {
+        /* addBytes(arr, seq [, start [, count]])：C 层整段批量追加。
+         * 大报文热路径（HTTP 收包、WS 分片重组、keep-alive 残留拷贝）
+         * 不再走 .lm 层逐字节循环；方法式 recv=arr，argc 1..3 */
+        if(recv.type != VAL_ARRAY) return bi_type_err("addBytes", recv);
+        if(!bi_need_args("addBytes", argc, 1)) return 0;
+        int start = 0;
+        int count = -1;
+        if(argc >= 2 && argv[2].type != VAL_NONE) start = (int)bi_num_i64(argv[2]);
+        if(argc >= 3 && argv[3].type != VAL_NONE) count = (int)bi_num_i64(argv[3]);
+        *out = lumyr_array_add_bytes(&recv, argv[1], start, count);
+        return 1;
+    }
+    case BUILTIN_BYTES_CONCAT: {
+        /* bytesConcat(parts)：bytes 块数组 → 单个 bytes（大报文组装，零装箱）。
+         * 全局形式 parts 在 argv[0] 并镜像到 recv；方法形式 recv 即数组，两者都用 recv */
+        *out = lumyr_bytes_concat(recv);
+        return 1;
+    }
+    case BUILTIN_BYTES_SLICE: {
+        /* bytesSlice(b, start [, count])：bytes 切片复制，count 缺省/-1 到末尾。
+         * 全局 argv[0]=b 镜像 recv、argv[1]=start、argv[2]=count；
+         * 方法 recv=b、argv[1]=start、argv[2]=count——显式参数同槽 */
+        int off = (int)bi_num_i64(argv[1]);
+        int cnt = -1;
+        int haveCnt = is_method ? (argc >= 2) : (argc >= 3);
+        if(haveCnt && argv[2].type != VAL_NONE) cnt = (int)bi_num_i64(argv[2]);
+        *out = lumyr_bytes_slice(recv, off, cnt);
+        return 1;
+    }
     case BUILTIN_GET: {
         if(recv.type == VAL_ARRAY) {
             if(!bi_need_args("get", argc, 1)) return 0;
@@ -4745,6 +4775,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                           lumyr_make_int(s->lifo_slot ? 1 : 0));
             lumyr_array_add(&rows, row);
         }
+        /* 释放注册表快照引用（snapshot 内 retain，遍历完配对 release；
+         * 防止 metrics 读取与 worker scheduler 销毁并发时 UAF）。 */
+        for (int si = 0; si < n; si++) {
+            lm_scheduler_release(snap[si]);
+        }
         lumyr_map_set(&m, lumyr_make_string("scheds"), rows);
         /* Task 6：栈高水位两档（SMALL/NORMAL）快照。 */
         const uint64_t* shwBounds = lm_sched_stats_stack_hw_bounds();
@@ -5027,6 +5062,9 @@ const char* builtin_id_name(int id) {
     case BUILTIN_GET: return "get";
     case BUILTIN_SET: return "set";
     case BUILTIN_ARRAY_ADDALL: return "addAll";
+    case BUILTIN_ARRAY_ADD_BYTES: return "addBytes";
+    case BUILTIN_BYTES_CONCAT: return "bytesConcat";
+    case BUILTIN_BYTES_SLICE: return "bytesSlice";
     case BUILTIN_SKIP: return "skip";
     case BUILTIN_TAKE: return "take";
     case BUILTIN_ENUMERATE: return "enumerate";

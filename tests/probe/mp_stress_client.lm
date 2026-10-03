@@ -1,0 +1,343 @@
+// mp_stress_client.lm —— 压测三期多进程压测客户端（单进程全套）
+//
+// 由 run_mp_stress.sh 同时启动 4 个本进程，对同一 mp_stress_server 施压：
+//   MP1  4 线程 × 100 轮 WS 小帧 echo（跨 OS 进程真并行）
+//   MP2  4 线程 × 5  轮 HTTP gzip 2MiB 下载（解 chunked+gunzip 比对，LF4）
+//   LF5  4 线程 × 3  轮 HTTP POST 1MiB body 原样回送
+//   LF6  2 线程 × 3  轮 HTTP 2MiB 文件下载（readFile 链路，明文 Content-Length）
+//
+// 任一不一致以未捕获错误退出（rc != 0）。
+// 运行：./bin/lumyr tests/probe/mp_stress_client.lm
+
+import <NetWork/Socket>;
+import <Thread/Thread>;
+
+PORT = 19430;
+crlf = "" + '\r' + '\n';
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+func makeText(n: int): string {
+    seed = "mp-stress-file-content-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+big2m = makeText(2097152);
+post1m = makeText(1048576);
+
+// ============================================================
+// HTTP 通用（字符串模式，明文请求/响应；body 为 ASCII 可打印）
+// ============================================================
+
+// 完整读取直到对端关闭（Connection: close 路径），返回完整响应字符串
+func httpReadAll(sock): string {
+    resp = "";
+    while (true) {
+        part = sock.recv(65536);
+        if (part.len == 0) { break; }
+        resp = resp + part;
+    }
+    return resp;
+}
+
+func splitHeadBody(resp: string): array {
+    sep = resp.indexOf(crlf + crlf);
+    check(sep >= 0, "HTTP 响应缺少头体分隔 / missing header terminator");
+    return [resp.slice(0, sep), resp.slice(sep + 4)];
+}
+
+// ============================================================
+// MP2/LF4：HTTP gzip 2MiB（bytes 路径收集压缩报文）
+// ============================================================
+func httpGetGzip(path: string): array {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", PORT);
+    sock.setOption("recvTimeout", 30000);
+    req = "GET " + path + " HTTP/1.1" + crlf + "Host: mp" + crlf
+        + "Accept-Encoding: gzip" + crlf + "Connection: close" + crlf + crlf;
+    sock.send(req);
+    all = [];
+    while (true) {
+        chunk = sock.recv(65536, 0, 1);
+        if (chunk.len == 0) { break; }
+        j = 0;
+        while (j < chunk.len) { all.add(chunk[j]); j = j + 1; }
+    }
+    sock.close();
+    sep = -1;
+    k = 0;
+    while (k + 3 < all.len) {
+        if (all[k] == 13 && all[k + 1] == 10 && all[k + 2] == 13 && all[k + 3] == 10) {
+            sep = k;
+            break;
+        }
+        k = k + 1;
+    }
+    check(sep >= 0, "gzip 响应缺少分隔 / missing sep");
+    headArr = [];
+    i = 0;
+    while (i < sep) { headArr.add(all[i]); i = i + 1; }
+    bodyArr = [];
+    i = sep + 4;
+    while (i < all.len) { bodyArr.add(all[i]); i = i + 1; }
+    return [bytes(headArr).decode(), bytes(bodyArr)];
+}
+
+// bytes 版 dechunk（gzip 是二进制）
+func dechunkBytes(body): bytes {
+    out = [];
+    pos = 0;
+    while (true) {
+        le = -1;
+        k = pos;
+        while (k + 1 < body.len) {
+            if (body[k] == 13 && body[k + 1] == 10) { le = k; break; }
+            k = k + 1;
+        }
+        check(le >= 0, "dechunkBytes: 缺少长度行 / missing chunk-size CRLF");
+        n = 0;
+        i = pos;
+        while (i < le) {
+            c = body[i];
+            if (c >= 48 && c <= 57) { n = n * 16 + (c - 48); }
+            else if (c >= 97 && c <= 102) { n = n * 16 + (c - 87); }
+            else if (c >= 65 && c <= 70) { n = n * 16 + (c - 55); }
+            i = i + 1;
+        }
+        pos = le + 2;
+        if (n == 0) { break; }
+        i = pos;
+        while (i < pos + n) { out.add(body[i]); i = i + 1; }
+        pos = pos + n + 2;
+    }
+    return bytes(out);
+}
+
+class GzipWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func GzipWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            resp = httpGetGzip("/gztxt");
+            head = resp[0];
+            body = resp[1];
+            low = head.lower();
+            if (!low.contains("content-encoding: gzip")) { bad = bad + 1; r = r + 1; continue; }
+            if (body.len < 2 || body[0] != 0x1f || body[1] != 0x8b) { bad = bad + 1; r = r + 1; continue; }
+            // 大响应走全量压缩 + Content-Length；流式路由才是 chunked，兼容两种
+            gz = body;
+            if (low.contains("transfer-encoding: chunked")) { gz = dechunkBytes(body); }
+            plain = gzipDecompress(gz);
+            if (plain.decode() != big2m) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// LF5：POST 1MiB body 明文回送（不带 Accept-Encoding）
+// ============================================================
+class PostWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func PostWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = TcpSocket();
+            sock.connect("127.0.0.1", PORT);
+            sock.setOption("recvTimeout", 30000);
+            req = "POST /echo HTTP/1.1" + crlf + "Host: mp" + crlf
+                + "Content-Type: text/plain" + crlf
+                + "Content-Length: " + post1m.len + crlf
+                + "Connection: close" + crlf + crlf;
+            sock.send(req);
+            sock.send(post1m);
+            resp = httpReadAll(sock);
+            sock.close();
+            hb = splitHeadBody(resp);
+            head = hb[0];
+            body = hb[1];
+            if (!head.contains("200") || body != post1m) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// LF6：2MiB 文件下载（明文 Content-Length）
+// ============================================================
+class FileWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func FileWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = TcpSocket();
+            sock.connect("127.0.0.1", PORT);
+            sock.setOption("recvTimeout", 30000);
+            req = "GET /file HTTP/1.1" + crlf + "Host: mp" + crlf
+                + "Connection: close" + crlf + crlf;
+            sock.send(req);
+            resp = httpReadAll(sock);
+            sock.close();
+            hb = splitHeadBody(resp);
+            head = hb[0];
+            body = hb[1];
+            if (!head.contains("200") || body != big2m) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// MP1：WS 小帧 echo（mask=0 两次发送，≤125 字节）
+// ============================================================
+func wsConnect(path: string) {
+    cli = ClientSocket("127.0.0.1", PORT);
+    key = "dGhlIHNhbXBsZSBub25jZQ==";
+    req = "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    cli.sock.send(req);
+    head = "";
+    while (true) {
+        d = cli.sock.recv(4096);
+        if (d.len == 0) { break; }
+        head = head + d;
+        if (head.contains("\r\n\r\n")) { break; }
+    }
+    check(head.contains("101"), "ws handshake fail");
+    return cli;
+}
+
+func readN(cli, n: int, leftover: array) {
+    acc = leftover[0];
+    while (acc.len < n) {
+        p = cli.sock.recv(4096, 0, 1);
+        if (p.len == 0) { return bytes([]); }
+        i = 0;
+        while (i < p.len) { acc.add(p[i]); i = i + 1; }
+    }
+    out = [];
+    i = 0;
+    while (i < n) { out.add(acc[i]); i = i + 1; }
+    rest = [];
+    while (i < acc.len) { rest.add(acc[i]); i = i + 1; }
+    leftover[0] = rest;
+    return bytes(out);
+}
+
+class WsEchoWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func WsEchoWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        cli = wsConnect("/ws");
+        lo = [[]];
+        bad = 0;
+        i = 0;
+        while (i < self.rounds) {
+            msg = "mp-ws-" + self.idx + "-" + i;
+            payload = bytes(msg);
+            hdr = [];
+            hdr.add(129);
+            hdr.add(128 + payload.len);
+            hdr.add(0); hdr.add(0); hdr.add(0); hdr.add(0);
+            cli.sock.send(bytes(hdr));
+            cli.sock.send(payload);
+            h = readN(cli, 2, lo);
+            if (h.len < 2) { bad = bad + 1; i = i + 1; continue; }
+            plen = h[1] & 127;
+            if (plen == 126) {
+                ext = readN(cli, 2, lo);
+                plen = ext[0] * 256 + ext[1];
+            }
+            body = readN(cli, plen, lo);
+            if (body.len != plen || body.decode() != msg) { bad = bad + 1; }
+            i = i + 1;
+        }
+        cli.close();
+        return bad;
+    }
+}
+
+func joinAll(threads: array, label: string) {
+    bad = 0;
+    t0 = timestamp_ms();
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    print(label + " bad=" + bad + " 耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, label + " 存在不一致 / mismatch");
+}
+
+func main() {
+    print("=== mp client start / 多进程客户端启动 ===");
+    t0 = timestamp_ms();
+
+    // MP1：4 线程 × 100 WS echo
+    wsThreads = [];
+    i = 0;
+    while (i < 4) {
+        wsThreads.add(Thread("mp-ws-" + i, WsEchoWorker(i, 100)).start());
+        i = i + 1;
+    }
+    joinAll(wsThreads, "[MP1] WS echo 4×100");
+
+    // MP2/LF4：4 线程 × 5 gzip 2MiB
+    gzThreads = [];
+    i = 0;
+    while (i < 4) {
+        gzThreads.add(Thread("mp-gz-" + i, GzipWorker(i, 5)).start());
+        i = i + 1;
+    }
+    joinAll(gzThreads, "[MP2/LF4] gzip 2MiB 4×5");
+
+    // LF5：4 线程 × 3 POST 1MiB
+    postThreads = [];
+    i = 0;
+    while (i < 4) {
+        postThreads.add(Thread("mp-post-" + i, PostWorker(i, 3)).start());
+        i = i + 1;
+    }
+    joinAll(postThreads, "[LF5] POST 1MiB 4×3");
+
+    // LF6：2 线程 × 3 文件下载 2MiB
+    fileThreads = [];
+    i = 0;
+    while (i < 2) {
+        fileThreads.add(Thread("mp-file-" + i, FileWorker(i, 3)).start());
+        i = i + 1;
+    }
+    joinAll(fileThreads, "[LF6] file 2MiB 2×3");
+
+    t1 = timestamp_ms();
+    print("=== mp client ALL PASS，耗时 " + (t1 - t0) + " ms ===");
+    return true;
+}
+
+main();

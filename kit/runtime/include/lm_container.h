@@ -53,6 +53,10 @@ _Bool lumyr_set_eq(Value a, Value b);
 Value lumyr_bytes_make(int argc, const Value* args);
 // 从原始字节缓冲构造（二进制安全，可含 NUL）：socket recv bytes 路径用
 Value lumyr_bytes_from_buf(const uint8_t* data, int len);
+// bytes 块数组一次拼接为单个 bytes（大报文组装，零逐字节装箱）
+Value lumyr_bytes_concat(Value parts);
+// bytes 切片复制（count<0 到末尾）/ copy a slice of bytes
+Value lumyr_bytes_slice(Value b, int start, int count);
 // 元素类型对应的字节宽度（VAL_INT8/UINT8=1, INT16/UINT16=2, INT32/UINT32/FLOAT=4, INT64/UINT64/DOUBLE=8）
 int lumyr_elem_size(ValueType t);
 // CastKind → ValueType（CAST_INT8→VAL_INT8 等；非数值返回 VAL_UINT8）

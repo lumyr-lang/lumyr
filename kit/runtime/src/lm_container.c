@@ -306,6 +306,54 @@ Value lumyr_bytes_from_buf(const uint8_t* data, int len) {
     return bytes_alloc(data, len);
 }
 
+// bytesConcat(parts)：把 bytes 块数组一次拼为单个 bytes（单次分配 + memcpy）。
+// 大报文收包/WS 分片重组持有「块列表」（每块一个数组元素，而非每字节一个 Value），
+// 组装时走这里，彻底消除每字节 16 字节 Value 装箱与 GC 写屏障成本。
+Value lumyr_bytes_concat(Value parts) {
+    if(parts.type != VAL_ARRAY) runtime_error("bytesConcat() 参数必须是 bytes 数组 / arg must be array of bytes");
+    int n = parts.v.array->len;
+    int total = 0;
+    for(int i = 0; i < n; i++) {
+        Value p = parts.v.array->items[i];
+        if(p.type != VAL_BYTES) runtime_error("bytesConcat() 元素必须全是 bytes / elements must be bytes");
+        BytesObj* b = (BytesObj*)p.v.bytes_obj;
+        total += b ? b->len : 0;
+    }
+    Value r;
+    r.type = VAL_BYTES;
+    r.str_inline = 0;
+    BytesObj* o = (BytesObj*)gc_alloc(sizeof(BytesObj), VAL_BYTES);
+    o->len = total;
+    o->cap = total;
+    o->elem_type = VAL_UINT8;
+    o->stack_alloc = 0;
+    if(total > 0) {
+        o->data = (uint8_t*)gc_alloc((size_t)total, VAL_BYTES);
+        int off = 0;
+        for(int i = 0; i < n; i++) {
+            BytesObj* b = (BytesObj*)parts.v.array->items[i].v.bytes_obj;
+            if(b && b->len > 0) { memcpy(o->data + off, b->data, b->len); off += b->len; }
+        }
+    } else {
+        o->data = NULL;
+    }
+    r.v.bytes_obj = o;
+    return r;
+}
+
+// bytesSlice(b, start, count)：从 bytes 复制一段为新 bytes（count<0 到末尾）。
+// bytes 不可变且无语言内切片，keep-alive 残留切分/请求 body 分离走这里（C 层一次拷贝）。
+Value lumyr_bytes_slice(Value b, int start, int count) {
+    if(b.type != VAL_BYTES) runtime_error("bytesSlice() 第一个参数必须是 bytes / first arg must be bytes");
+    BytesObj* src = (BytesObj*)b.v.bytes_obj;
+    int slen = src ? src->len : 0;
+    if(start < 0) start = 0;
+    if(start > slen) start = slen;
+    if(count < 0 || start + count > slen) count = slen - start;
+    if(count <= 0) return bytes_alloc(NULL, 0);
+    return bytes_alloc(src->data + start, count);
+}
+
 // 元素类型 → 字节宽度
 int lumyr_elem_size(ValueType t) {
     switch(t) {

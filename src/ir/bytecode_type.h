@@ -661,6 +661,11 @@ typedef enum {
     BUILTIN_SIGNAL_WATCH,       // __private_system__signal_watch(r, name, cb)：注册信号 + 首次挂管道
     BUILTIN_SIGNAL_RAISE,       // __private_system__signal_raise(name)：编程式投递信号（测试/自触发）
     BUILTIN_SIGNAL_RESTORE,     // __private_system__signal_restore()：全部恢复默认 + 关管道
+
+    /* ===== 压测三期：大报文 C 层批量追加（枚举追加在末尾，保持既有值稳定） ===== */
+    BUILTIN_ARRAY_ADD_BYTES,    // addBytes(arr, seq, start?, count?)：bytes/数组整段批量追加
+    BUILTIN_BYTES_CONCAT,       // bytesConcat(parts)：bytes 块数组一次拼接
+    BUILTIN_BYTES_SLICE,        // bytesSlice(b, start, count?)：bytes 切片复制
     BUILTIN_COUNT
 } BuiltinId;
 

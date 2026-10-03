@@ -1,0 +1,567 @@
+// websocket_stress3_test.lm —— G7 压测三期：多协程 / 大帧 / 上限边界 / 长跑
+//
+// CO1 服务端协程抢占：40 连接 × 60 轮，handler 每条消息 coYield 两次再 echo
+// CO2 handler 内 spawn 子协程：20 连接 × 40 轮，子协程 yield 后回送
+//     （句柄存 handler 实例字段防 GC，死亡后 destroy 回收）
+// LF1 WS 大帧：1MiB / 4MiB 单帧（127 八字节扩展长度档），md5 比对
+// LF2 WS 分片大消息：4MiB 切成 64KiB 片发送，服务端重组后整帧回送
+// E1  消息上限负向：
+//     E1a 连接级上限 1MiB，分片累积到 1.2MiB → 1009 close
+//     E1b 默认上限 16MiB，分片累积到 17MiB → 1009 close（真实默认边界）
+//     关闭后新连接 echo 必须正常（服务存活）
+// E3  30 秒混合长跑：8 线程交替 WS echo 与 gzip 流式 create/finish
+//     （压槽位循环复用与调度稳定）
+//
+// 运行：./bin/lumyr tests/websocket_stress3_test.lm
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <NetWork/WebSocket>;
+import <Thread/Thread>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// ============================================================
+// 服务端 handler
+// ============================================================
+
+// CO1：每条消息让出两次，制造跨协程切换后再回送
+class YieldEchoHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        coYield();
+        coYield();
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// CO2：子协程函数（spawn 只接受单参数，ws+msg 打包数组传入）
+func coChildFn(arg) {
+    ws = arg[0];
+    msg = arg[1];
+    coYield();   // 挂起后由 reactor 再次调度，验证句柄存活
+    ws.sendText(msg);
+}
+
+// CO2：每条消息 spawn 子协程回送；协程句柄存 handler 实例字段防 GC
+class SpawnEchoHandler implements WebSocketHandler {
+    live: array;
+    func SpawnEchoHandler() { self.live = []; }
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        // 回收已结束的子协程（重建存活列表，C 栈随 destroy 释放）
+        alive = [];
+        i = 0;
+        while (i < self.live.len) {
+            c = self.live[i];
+            if (c.isDead()) { c.destroy(); }
+            else { alive.add(c); }
+            i = i + 1;
+        }
+        self.live = alive;
+        if (type(data) == "string") {
+            co = Coroutine(coChildFn, [ws, data]);
+            self.live.add(co);
+            co.resume();   // 踢到首个挂起点
+        } else {
+            ws.sendBinary(data);
+        }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// LF1/LF2：放大消息上限到 8MiB
+class BigEchoHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { ws.setMaxMessageBytes(8388608); }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// E1a：连接级 1MiB 上限
+class Limit1MiBHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { ws.setMaxMessageBytes(1048576); }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// E1b：默认 16MiB 上限（不调整）
+class DefaultLimitHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// ============================================================
+// 客户端通用工具
+// ============================================================
+func wsConnect(port: int, path: string) {
+    cli = ClientSocket("127.0.0.1", port);
+    key = "dGhlIHNhbXBsZSBub25jZQ==";
+    req = "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    cli.sock.send(req);
+    head = "";
+    while (true) {
+        d = cli.sock.recv(4096);
+        if (d.len == 0) { break; }
+        head = head + d;
+        if (head.contains("\r\n\r\n")) { break; }
+    }
+    check(head.contains("101"), "wsConnect: 握手失败 / handshake failed: " + head.slice(0, 100));
+    return cli;
+}
+
+// 精确读 n 字节（bytes 模式，leftover 槽防过度消费）；仅用于小数据（帧头）
+func readN(cli, n: int, leftover: array) {
+    acc = leftover[0];
+    while (acc.len < n) {
+        p = cli.sock.recv(4096, 0, 1);
+        if (p.len == 0) { return bytes([]); }
+        i = 0;
+        while (i < p.len) { acc.add(p[i]); i = i + 1; }
+    }
+    out = [];
+    i = 0;
+    while (i < n) { out.add(acc[i]); i = i + 1; }
+    rest = [];
+    while (i < acc.len) { rest.add(acc[i]); i = i + 1; }
+    leftover[0] = rest;
+    return bytes(out);
+}
+
+// 大 body 读取：先消费头 leftover（小），再按 OS 语义精确块读（recv 长度
+// 不超过剩余量，天然不会多读），bytes 块收集后 C 层拼接解码，避免逐字节热循环
+func readBigBody(cli, n: int, leftover: array): string {
+    chunks = [];
+    got = 0;
+    acc = leftover[0];
+    if (acc.len > 0) {
+        take = n;
+        if (acc.len < take) { take = acc.len; }
+        pre = [];
+        i = 0;
+        while (i < take) { pre.add(acc[i]); i = i + 1; }
+        chunks.add(bytes(pre));
+        got = take;
+        rest = [];
+        while (i < acc.len) { rest.add(acc[i]); i = i + 1; }
+        leftover[0] = rest;
+    }
+    while (got < n) {
+        want = n - got;
+        if (want > 65536) { want = 65536; }
+        p = cli.sock.recv(want, 0, 1);
+        if (p.len == 0) { break; }
+        chunks.add(p);
+        got = got + p.len;
+    }
+    s = "";
+    i = 0;
+    while (i < chunks.len) { s = s + chunks[i].decode(); i = i + 1; }
+    return s;
+}
+
+// 读一个服务端帧头，返回 [op, payloadLen]（payload 由调用方按长度读）
+func readFrameHead(cli, leftover: array): array {
+    h = readN(cli, 2, leftover);
+    if (h.len < 2) { return [-1, 0]; }
+    op = h[0] & 15;
+    plen = h[1] & 127;
+    if (plen == 126) {
+        ext = readN(cli, 2, leftover);
+        if (ext.len < 2) { return [-1, 0]; }
+        plen = ext[0] * 256 + ext[1];
+    } else if (plen == 127) {
+        ext = readN(cli, 8, leftover);
+        if (ext.len < 8) { return [-1, 0]; }
+        plen = 0;
+        i = 0;
+        while (i < 8) { plen = plen * 256 + ext[i]; i = i + 1; }
+    }
+    return [op, plen];
+}
+
+// 发送一个帧（mask key 全 0：协议合法的异或零掩码；头与 body 两次 send，
+// 避免大 payload 在语言层逐字节构造）
+func sendFrame(cli, payload: string, op: int, fin: bool) {
+    n = payload.len;
+    hdr = [];
+    b0 = op;
+    if (fin) { b0 = b0 + 128; }
+    hdr.add(b0);
+    if (n <= 125) {
+        hdr.add(128 + n);
+    } else if (n <= 65535) {
+        hdr.add(254);   // 0x80(mask) + 126
+        hdr.add((n / 256) % 256);
+        hdr.add(n % 256);
+    } else {
+        hdr.add(255);   // 0x80(mask) + 127
+        // 64 位长度（高 4 字节为 0）
+        hdr.add(0); hdr.add(0); hdr.add(0); hdr.add(0);
+        v = n;
+        hdr.add((v / 16777216) % 256);
+        hdr.add((v / 65536) % 256);
+        hdr.add((v / 256) % 256);
+        hdr.add(v % 256);
+    }
+    hdr.add(0); hdr.add(0); hdr.add(0); hdr.add(0);   // masking key 全 0
+    cli.sock.send(bytes(hdr));
+    if (n > 0) { cli.sock.send(bytes(payload)); }
+}
+
+// 文本小帧 echo（≤125），服务端帧仍需解析
+func echoSmall(cli, msg: string, leftover: array): bool {
+    sendFrame(cli, msg, 1, true);
+    fh = readFrameHead(cli, leftover);
+    if (fh[0] < 0) { return false; }
+    body = readN(cli, fh[1], leftover);
+    return body.len == fh[1] && body.decode() == msg;
+}
+
+// 大文本帧 echo：发送 + 按长度收 body（字符串快路径）
+func echoBig(cli, payload: string, leftover: array): bool {
+    sendFrame(cli, payload, 1, true);
+    fh = readFrameHead(cli, leftover);
+    if (fh[0] != 1) { return false; }
+    if (fh[1] != payload.len) { return false; }
+    body = readBigBody(cli, fh[1], leftover);
+    return body == payload;
+}
+
+// ============================================================
+// CO1：40 连接 × 60 轮，handler 双 yield
+// ============================================================
+func phaseCO1(port: int) {
+    conns = 40;
+    rounds = 60;
+    print("[CO1] 服务端协程抢占 / server-side coYield x2: " + conns + " conns × " + rounds);
+    clis = [];
+    los = [];
+    i = 0;
+    while (i < conns) {
+        c = wsConnect(port, "/ws");
+        clis.add(c);
+        los.add([[]]);
+        i = i + 1;
+    }
+    bad = 0;
+    t0 = timestamp_ms();
+    r = 0;
+    while (r < rounds) {
+        i = 0;
+        while (i < conns) {
+            if (!echoSmall(clis[i], "co1-" + r + "-" + i, los[i])) { bad = bad + 1; }
+            i = i + 1;
+        }
+        r = r + 1;
+    }
+    t1 = timestamp_ms();
+    total = conns * rounds;
+    print("  " + total + " 条，bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, "CO1 bad=" + bad);
+    i = 0;
+    while (i < clis.len) { clis[i].close(); i = i + 1; }
+    sleep(200);
+    print("  CO1 PASS");
+}
+
+// ============================================================
+// CO2：20 连接 × 40 轮，handler spawn 子协程
+// ============================================================
+func phaseCO2(port: int) {
+    conns = 20;
+    rounds = 40;
+    print("[CO2] handler spawn 子协程 / spawned child coroutine: " + conns + " conns × " + rounds);
+    clis = [];
+    los = [];
+    i = 0;
+    while (i < conns) {
+        clis.add(wsConnect(port, "/wsco"));
+        los.add([[]]);
+        i = i + 1;
+    }
+    bad = 0;
+    t0 = timestamp_ms();
+    r = 0;
+    while (r < rounds) {
+        i = 0;
+        while (i < conns) {
+            if (!echoSmall(clis[i], "co2-" + r + "-" + i, los[i])) { bad = bad + 1; }
+            i = i + 1;
+        }
+        r = r + 1;
+    }
+    t1 = timestamp_ms();
+    total = conns * rounds;
+    print("  " + total + " 条，bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, "CO2 bad=" + bad);
+    i = 0;
+    while (i < clis.len) { clis[i].close(); i = i + 1; }
+    sleep(200);
+    print("  CO2 PASS");
+}
+
+// ============================================================
+// LF1：WS 大帧 1MiB / 4MiB（127 八字节长度档）
+// ============================================================
+func makeBig(n: int): string {
+    seed = "0123456789ABCDEF-lumin-large-payload-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+func phaseLF1(port: int, sizes: array, tags: array) {
+    cli = wsConnect(port, "/wsbig");
+    lo = [[]];
+    i = 0;
+    while (i < sizes.len) {
+        n = sizes[i];
+        print("[LF1] WS 大帧 / big frame: " + tags[i] + " (" + n + " bytes)");
+        payload = makeBig(n);
+        expectMd5 = md5(payload);
+        t0 = timestamp_ms();
+        ok = echoBig(cli, payload, lo);
+        t1 = timestamp_ms();
+        check(ok, "LF1 " + tags[i] + " echo 不一致 / mismatch");
+        print("  md5=" + expectMd5 + "，往返耗时 " + (t1 - t0) + " ms");
+        i = i + 1;
+    }
+    cli.close();
+    print("  LF1 PASS");
+}
+
+// ============================================================
+// LF2：4MiB 分片发送（64KiB/片，首片 TEXT fin=0，末片 CONT fin=1）
+// ============================================================
+func phaseLF2(port: int) {
+    n = 4194304;
+    frag = 65536;
+    print("[LF2] WS 分片大消息 / fragmented big message: " + n + " bytes, " + frag + "/frag");
+    payload = makeBig(n);
+    expectMd5 = md5(payload);
+    cli = wsConnect(port, "/wsbig");
+    cli.sock.setOption("recvTimeout", 30000);
+    lo = [[]];
+    t0 = timestamp_ms();
+    pos = 0;
+    first = true;
+    while (pos < n) {
+        end = pos + frag;
+        if (end > n) { end = n; }
+        piece = payload.slice(pos, end);
+        if (first) {
+            sendFrame(cli, piece, 1, false);    // TEXT, fin=0
+            first = false;
+        } else if (end == n) {
+            sendFrame(cli, piece, 0, true);     // CONT, fin=1
+        } else {
+            sendFrame(cli, piece, 0, false);    // CONT, fin=0
+        }
+        pos = end;
+    }
+    fh = readFrameHead(cli, lo);
+    check(fh[0] == 1 && fh[1] == n, "LF2 响应帧异常 / bad response frame: op=" + fh[0] + " len=" + fh[1]);
+    body = readBigBody(cli, fh[1], lo);
+    t1 = timestamp_ms();
+    check(body == payload, "LF2 重组内容不一致 / reassembled body mismatch");
+    print("  md5=" + expectMd5 + "，往返耗时 " + (t1 - t0) + " ms");
+    cli.close();
+    print("  LF2 PASS");
+}
+
+// ============================================================
+// E1：消息上限负向。分片发送后读一帧，期望 close(1009)；
+// 返回 true 拿到 1009，false 表示连接被直接关闭（同样接受）
+// ============================================================
+func expect1009(cli, leftover: array, label: string): bool {
+    fh = readFrameHead(cli, leftover);
+    if (fh[0] < 0) {
+        print("  " + label + "：连接直接关闭 / connection closed（等价拒绝，接受）");
+        return true;
+    }
+    if (fh[0] != 8) {
+        print("  " + label + "：期望 close 帧，实际 op=" + fh[0]);
+        return false;
+    }
+    body = readN(cli, fh[1], leftover);
+    code = -1;
+    if (body.len >= 2) { code = body[0] * 256 + body[1]; }
+    if (code != 1009) {
+        print("  " + label + "：close code=" + code + "，期望 1009");
+        return false;
+    }
+    print("  " + label + "：收到 1009 close / message too big（符合预期）");
+    return true;
+}
+
+func phaseE1a(port: int) {
+    print("[E1a] 连接级上限 1MiB，分片累积 1.2MiB / conn limit 1MiB overflow");
+    cli = wsConnect(port, "/wslim");
+    cli.sock.setOption("recvTimeout", 15000);
+    lo = [[]];
+    sendFrame(cli, makeBig(600000), 1, false);   // 首片 600KB TEXT
+    sendFrame(cli, makeBig(600000), 0, true);    // 续片 600KB CONT（累计 1.2MB）
+    check(expect1009(cli, lo, "E1a"), "E1a 未拒绝超限消息");
+    cli.close();
+    print("  E1a PASS");
+}
+
+func phaseE1b(port: int) {
+    print("[E1b] 默认上限 16MiB，分片累积 17MiB / default limit 16MiB overflow");
+    cli = wsConnect(port, "/wsdef");
+    cli.sock.setOption("recvTimeout", 90000);
+    lo = [[]];
+    t0 = timestamp_ms();
+    sendFrame(cli, makeBig(16777216), 1, false);   // 首片 16MiB（=上限，不触发）
+    sendFrame(cli, makeBig(1048576), 0, true);     // 续片 1MiB（累计 17MiB）
+    check(expect1009(cli, lo, "E1b"), "E1b 未拒绝超限消息");
+    print("  服务端累积判定耗时 " + (timestamp_ms() - t0) + " ms");
+    cli.close();
+    print("  E1b PASS");
+}
+
+// 超限拒绝后服务必须存活
+func phaseAlive(port: int) {
+    print("[ALIVE] 超限风暴后新连接 echo 验证 / server still alive");
+    cli = wsConnect(port, "/wsbig");
+    lo = [[]];
+    bad = 0;
+    i = 0;
+    while (i < 5) {
+        if (!echoSmall(cli, "alive-check-" + i, lo)) { bad = bad + 1; }
+        i = i + 1;
+    }
+    cli.close();
+    check(bad == 0, "ALIVE bad=" + bad);
+    print("  ALIVE PASS");
+}
+
+// ============================================================
+// E3：30 秒混合长跑（8 线程：WS 长连接小 echo + gzip 流式高频往返）
+// ============================================================
+class LongWorker implements Runnable {
+    idx: int;
+    port: int;
+    durationMs: int;
+    func LongWorker(idx: int, port: int, durationMs: int) {
+        self.idx = idx;
+        self.port = port;
+        self.durationMs = durationMs;
+    }
+    func run(): int {
+        cli = wsConnect(self.port, "/ws");
+        cli.sock.setOption("recvTimeout", 30000);
+        lo = [[]];
+        bad = 0;
+        wsCount = 0;
+        gzCount = 0;
+        start = timestamp_ms();
+        tick = 0;
+        while (timestamp_ms() - start < self.durationMs) {
+            if (tick % 2 == 0) {
+                if (!echoSmall(cli, "long-ws-" + self.idx + "-" + wsCount, lo)) { bad = bad + 1; }
+                wsCount = wsCount + 1;
+            } else {
+                // gzip 流式：create → write → finish，高频压槽位回收复用
+                h = gzipStreamCreate(6);
+                if (h < 0) { bad = bad + 1; }
+                else {
+                    p = "long-gzip-" + self.idx + "-" + gzCount + "-0123456789-ABCDEFGHIJ";
+                    o1 = gzipStreamWrite(h, p, false);
+                    o2 = gzipStreamFinish(h);
+                    packed = [];
+                    j = 0;
+                    while (j < o1.len) { packed.add(o1[j]); j = j + 1; }
+                    j = 0;
+                    while (j < o2.len) { packed.add(o2[j]); j = j + 1; }
+                    back = gzipDecompress(bytes(packed));
+                    if (back.decode() != p) { bad = bad + 1; }
+                    gzCount = gzCount + 1;
+                }
+            }
+            tick = tick + 1;
+        }
+        cli.close();
+        print("  worker-" + self.idx + ": ws=" + wsCount + " gz=" + gzCount + " bad=" + bad);
+        return bad;
+    }
+}
+
+func phaseE3(port: int, durationMs: int) {
+    workers = 8;
+    print("[E3] 30 秒混合长跑 / mixed long run: " + workers + " threads × " + durationMs + " ms");
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("long-" + i, LongWorker(i, port, durationMs)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    print("  总耗时 " + (t1 - t0) + " ms，bad=" + bad);
+    check(bad == 0, "E3 bad=" + bad);
+    print("  E3 PASS");
+}
+
+// ============================================================
+// main
+// ============================================================
+func main() {
+    port = 19421;
+    print("=== WebSocket 压测三期 / stress phase 3 ===");
+
+    app = WebApplication("127.0.0.1", port);
+    app.get("/ws", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, YieldEchoHandler()); }
+        r = ServerResponse(400); r.text("WebSocket only"); return r;
+    });
+    app.get("/wsco", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, SpawnEchoHandler()); }
+        r = ServerResponse(400); r.text("WebSocket only"); return r;
+    });
+    app.get("/wsbig", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, BigEchoHandler()); }
+        r = ServerResponse(400); r.text("WebSocket only"); return r;
+    });
+    app.get("/wslim", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, Limit1MiBHandler()); }
+        r = ServerResponse(400); r.text("WebSocket only"); return r;
+    });
+    app.get("/wsdef", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, DefaultLimitHandler()); }
+        r = ServerResponse(400); r.text("WebSocket only"); return r;
+    });
+    app.startAsync();
+    sleep(300);
+
+    phaseCO1(port);
+    phaseCO2(port);
+    phaseLF1(port, [1048576, 4194304], ["1MiB", "4MiB"]);
+    phaseLF2(port);
+    phaseE1a(port);
+    phaseE1b(port);
+    phaseAlive(port);
+    phaseE3(port, 30000);
+
+    app.stop();
+    app.join();
+    print("=== ALL PASS / 三期全部通过 ===");
+    return true;
+}
+
+main();

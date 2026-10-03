@@ -1,0 +1,74 @@
+// mp_stress_server.lm —— 压测三期多进程靶机（常驻，由 run_mp_stress.sh 启停）
+//
+// 路由：
+//   /ws      WebSocket echo（小帧/大帧均回送）
+//   GET /gztxt  2MiB 可压缩文本（GzipFilter：带 Accept-Encoding 时 gzip+chunked）
+//   GET /file   2MiB 文件下载（readFile 一次性读出，Content-Length 明文）
+//   POST /echo  请求体原样回送（不带 Accept-Encoding 即明文，验证大 body 上传）
+//
+// 运行：./bin/lumyr tests/probe/mp_stress_server.lm
+
+import <App/WebApplication>;
+import <App/GzipFilter>;
+import <NetWork/WebSocket>;
+
+PORT = 19430;
+FILE_PATH = "/tmp/mp_lf6_data.bin";
+
+// 规则可预测的 2MiB 文本（客户端按同一公式构造期望）
+func makeText(n: int): string {
+    seed = "mp-stress-file-content-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+big2m = makeText(2097152);
+writeFile(FILE_PATH, big2m);
+
+class MpEchoHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { ws.setMaxMessageBytes(8388608); }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+app = WebApplication("127.0.0.1", PORT);
+app.addFilter(GzipFilter());
+
+app.get("/ws", func(req) {
+    if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, MpEchoHandler()); }
+    r = ServerResponse(400);
+    r.text("WebSocket only");
+    return r;
+});
+
+app.get("/gztxt", func(req) {
+    r = ServerResponse(200);
+    r.text(big2m);
+    return r;
+});
+
+app.get("/file", func(req) {
+    content = readFile(FILE_PATH);
+    r = ServerResponse(200);
+    r.setContentType("text/plain");
+    r.text(content);
+    return r;
+});
+
+app.post("/echo", func(req) {
+    r = ServerResponse(200);
+    r.text(req.bodyString());
+    return r;
+});
+
+app.startAsync();
+print("MP-SERVER-READY port=" + PORT);
+
+// 常驻：由编排脚本 kill；主协程睡眠不影响 worker 线程
+while (true) {
+    sleep(3600000);
+}

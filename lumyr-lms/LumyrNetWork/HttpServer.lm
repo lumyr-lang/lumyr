@@ -246,8 +246,9 @@ public class ServerRequest {
         return DefaultRequestParser().parse(raw);
     }
 
-    // 在字节数组中找 \r\n\r\n（13,10,13,10），返回起始下标，未找到返回 -1
-    private static func findHeaderEnd(buf: array): int {
+    // 在字节缓冲中找 \r\n\r\n（13,10,13,10），返回起始下标，未找到返回 -1。
+    // buf 为 bytes（每块 recv 是 bytes，索引用 []，长度用 .len）
+    private static func findHeaderEnd(buf): int {
         if (buf.len < 4) { return -1; }
         i = 0;
         last = buf.len - 4;
@@ -261,12 +262,9 @@ public class ServerRequest {
     }
 
     // 从 buf[0..headerEnd] 头部字节中提取 Content-Length（无则 0）
-    // 头部恒为 ASCII，decode 安全
-    private static func headerContentLength(buf: array, headerEnd: int): int {
-        harr = [];
-        i = 0;
-        while (i < headerEnd) { harr.add(buf[i]); i = i + 1; }
-        headStr = bytes(harr).decode();
+    // 头部恒为 ASCII，C 层切出后 decode 安全（避免把大 body 也 decode）
+    private static func headerContentLength(buf, headerEnd: int): int {
+        headStr = bytesSlice(buf, 0, headerEnd).decode();
         lines = headStr.split(crlf);
         for line in lines {
             low = line.lower();
@@ -278,14 +276,16 @@ public class ServerRequest {
     }
 
     // 从 socket 读取完整请求并解析（二进制安全）
-    // 全程 recv(len, 0, true) 按 bytes 接收，body 原始字节不丢失（含 NUL）；
+    // 收包持有「bytes 块数组」（每块一个 Value，无逐字节装箱），头部探测在
+    // 已收块上 bytesConcat，最终一次 bytesConcat 交给解析器。
     // 头部完整（双 CRLF）后按 Content-Length 收齐 body；
     // 无 Content-Length 时按「头部结束即无 body」处理（chunked 暂不支持）。
     // 返回解析好的 ServerRequest（body 为 bytes）。
     public static func readFrom(sock): ServerRequest {
-        buf = [];
-        headerEnd = -1;   // buf 中 \r\n\r\n 起始下标，-1 未找到
-        total = -1;       // 完整报文字节数（headerEnd+4+ContentLength），-1 未确定
+        chunks = [];       // 已收 bytes 块（每块一个 Value）
+        got = 0;
+        headerEnd = -1;    // 已收字节中 \r\n\r\n 起始下标，-1 未找到
+        total = -1;        // 完整报文字节数（headerEnd+4+ContentLength），-1 未确定
         maxHdr = ServerRequest.maxHeaderBytes();
         maxBody = ServerRequest.maxBodyBytes();
         chunkSize = ServerRequest.readChunkSizeSlot[0];
@@ -294,33 +294,34 @@ public class ServerRequest {
             chunk = sock.recv(chunkSize, 0, true);
             n = chunk.len;
             if (n == 0) { break; }  // 对端关闭 / EOF
-            i = 0;
-            while (i < n) { buf.add(chunk[i]); i = i + 1; }
+            chunks.add(chunk);
+            got = got + n;
 
             if (headerEnd < 0) {
                 // P1-5：header 未结束前按总量卡上限（防无头尾超大请求）
-                if (buf.len > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
-                headerEnd = ServerRequest.findHeaderEnd(buf);
+                if (got > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
+                headView = bytesConcat(chunks);
+                headerEnd = ServerRequest.findHeaderEnd(headView);
                 if (headerEnd >= 0) {
                     // P1-5：header 总量超上限 → 431
                     if (headerEnd + 4 > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
-                    cl = ServerRequest.headerContentLength(buf, headerEnd);
+                    cl = ServerRequest.headerContentLength(headView, headerEnd);
                     // P1-5：body 超上限（按 Content-Length）→ 413
                     if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
                     total = headerEnd + 4 + cl;
                 }
             }
-            if (total >= 0 && buf.len >= total) { break; }
+            if (total >= 0 && got >= total) { break; }
         }
-        return ServerRequest.parse(bytes(buf));
+        return ServerRequest.parse(bytesConcat(chunks));
     }
 
     // 连接级读缓冲形态（HTTP keep-alive 专用）：connBuf 为调用方持有的
-    // 字节数组，跨请求复用。每请求只消费 headerEnd+4+Content-Length 字节，
-    // 残留字节（pipelining 的下一请求）留在 connBuf 供下次调用；
+    // bytes 缓冲（不可变，重新绑定），跨请求复用。每请求只消费
+    // headerEnd+4+Content-Length 字节，残留（pipelining 的下一请求）切出返回；
     // 残留已含完整请求时不触发 recv 直接解析。
-    // EOF/异常语义与单参形态一致；connBuf 在返回后始终只含未消费字节。
-    public static func readFrom(sock, connBuf: array): ServerRequest {
+    // 返回 [ServerRequest, 残留 bytes]；EOF/异常语义与单参形态一致。
+    public static func readFrom(sock, connBuf): array {
         buf = connBuf;
         maxHdr = ServerRequest.maxHeaderBytes();
         maxBody = ServerRequest.maxBodyBytes();
@@ -339,8 +340,7 @@ public class ServerRequest {
             chunk = sock.recv(chunkSize, 0, true);
             n = chunk.len;
             if (n == 0) { break; }  // 对端关闭 / EOF
-            i = 0;
-            while (i < n) { buf.add(chunk[i]); i = i + 1; }
+            buf = bytesConcat([buf, chunk]);
             if (headerEnd < 0) {
                 // P1-5：header 未结束前按总量卡上限
                 if (buf.len > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
@@ -353,23 +353,13 @@ public class ServerRequest {
                 }
             }
         }
-        // 只消费当前请求字节；残留左移保留在 connBuf（原地 clear + 重放）
+        // 当前请求切出解析；残留（pipelining 下一请求）作为第二个返回值
         consume = buf.len;
         if (total >= 0 && total < consume) { consume = total; }
-        reqArr = [];
-        i = 0;
-        while (i < consume) { reqArr.add(buf[i]); i = i + 1; }
-        if (consume < buf.len) {
-            rest = [];
-            i = consume;
-            while (i < buf.len) { rest.add(buf[i]); i = i + 1; }
-            buf.clear();
-            i = 0;
-            while (i < rest.len) { buf.add(rest[i]); i = i + 1; }
-        } else {
-            buf.clear();
-        }
-        return ServerRequest.parse(bytes(reqArr));
+        reqRaw = bytesSlice(buf, 0, consume);
+        rest = bytes();
+        if (consume < buf.len) { rest = bytesSlice(buf, consume, -1); }
+        return [ServerRequest.parse(reqRaw), rest];
     }
 
     // 查询参数 map（委托 HttpSpec.parseQuery 公共实现）
@@ -819,8 +809,7 @@ public class ServerResponse {
         self.headers.set("Content-Length", "" + self.bodyByteLen());
         hs = self.headString();
         hb = bytes(hs);
-        total = 0;
-        total = total + sock.send(hb);
+        total = sock.send(hb);
         if (self.headMode) { return total; }   // HEAD：头部照常，正文跳过
         t = type(self.body);
         if (t == "file") {
@@ -867,11 +856,8 @@ public class DefaultRequestParser implements RequestParser {
         if (sep >= 0) {
             headerPart = headStr.slice(0, sep);
             if (isBytes) {
-                // body 保留原始 bytes（语言 bytes 无 slice：逐字节收集）
-                arr = [];
-                bi = sep + 4;
-                while (bi < raw.len) { arr.add(raw[bi]); bi = bi + 1; }
-                req.body = bytes(arr);
+                // body 保留原始 bytes（C 层切片一次拷贝，无逐字节装箱）
+                req.body = bytesSlice(raw, sep + 4, -1);
             } else {
                 req.body = headStr.slice(sep + 4, headStr.len);
             }

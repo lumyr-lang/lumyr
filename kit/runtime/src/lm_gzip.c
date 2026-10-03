@@ -173,8 +173,13 @@ int lm_gzip_decompress(const uint8_t* in, size_t inLen,
 
 /* ===== 流式增量压缩：z_stream 句柄表 =====
  * 句柄为表槽位下标 + 代数校验（槽复用时旧句柄自然失效）。
+ * 两级结构：指针数组可倍增 realloc 扩容；槽位结构各自堆分配、
+ * 地址稳定——write/finish 在锁外使用槽位期间，其他线程扩容只搬
+ * 指针数组，不会令已取得的槽位指针悬垂。
  * 表操作全程持锁；单句柄的 deflate 调用不持锁（约定同句柄不并发）。 */
-#define LM_GZIP_MAX_STREAMS 1024
+#define LM_GZIP_INIT_SLOTS 64
+/* 句柄编码 slot*4096 受 int 正数范围约束，500000*4096 < INT_MAX */
+#define LM_GZIP_MAX_SLOTS  500000
 
 typedef struct {
     z_stream strm;
@@ -182,19 +187,29 @@ typedef struct {
     int inUse;
 } LmGzipSlot;
 
-static LmGzipSlot g_gzSlots[LM_GZIP_MAX_STREAMS];
+static LmGzipSlot** g_gzSlots = NULL;   /* 槽位指针数组（可 realloc 扩容）*/
+static int g_gzSlotCap = 0;             /* 指针数组当前容量 */
 static pthread_mutex_t g_gzLock = PTHREAD_MUTEX_INITIALIZER;
 
 /* 句柄编码：slot * 4096 + (gen % 4096)（gen 永不为 0，0 保留为空槽标记） */
 static int gzMakeHandle(int slot, uint32_t gen) { return slot * 4096 + (int)(gen % 4096); }
 
-static LmGzipSlot* gzLookup(int h) {
+/* 锁内查表：调用方必须已持有 g_gzLock，返回地址稳定的堆槽位 */
+static LmGzipSlot* gzLookupLocked(int h) {
     if(h < 0) return NULL;
     int slot = h / 4096;
     uint32_t gen = (uint32_t)(h % 4096);
-    if(slot >= LM_GZIP_MAX_STREAMS) return NULL;
-    LmGzipSlot* s = &g_gzSlots[slot];
-    if(!s->inUse || (s->gen % 4096) != gen) return NULL;
+    if(slot >= g_gzSlotCap) return NULL;
+    LmGzipSlot* s = g_gzSlots[slot];
+    if(!s || !s->inUse || (s->gen % 4096) != gen) return NULL;
+    return s;
+}
+
+/* 锁外查表：临界区内完成指针数组读取与代数校验，取出稳定槽位 */
+static LmGzipSlot* gzLookup(int h) {
+    pthread_mutex_lock(&g_gzLock);
+    LmGzipSlot* s = gzLookupLocked(h);
+    pthread_mutex_unlock(&g_gzLock);
     return s;
 }
 
@@ -213,17 +228,54 @@ int lm_gzip_stream_create(int level, char* errBuf, size_t errLen) {
         return -1;
     }
     pthread_mutex_lock(&g_gzLock);
-    int slot = -1;
-    for(int i = 0; i < LM_GZIP_MAX_STREAMS; i++) {
-        if(!g_gzSlots[i].inUse) { slot = i; break; }
+    /* 优先复用已分配的空闲槽，其次利用数组中尚未分配的 NULL 位，
+       都没有才倍增扩容（容量随历史峰值并发数增长，不收缩）。 */
+    int freeSlot = -1;
+    int nullSlot = -1;
+    for(int i = 0; i < g_gzSlotCap; i++) {
+        LmGzipSlot* it = g_gzSlots[i];
+        if(!it) { if(nullSlot < 0) nullSlot = i; }
+        else if(!it->inUse) { freeSlot = i; break; }
     }
-    if(slot < 0) {
-        pthread_mutex_unlock(&g_gzLock);
-        if(errBuf && errLen)
-            snprintf(errBuf, errLen, "gzip 流句柄数超限 / gzip stream handle table full");
-        return -1;
+    int slot;
+    LmGzipSlot* s = NULL;
+    if(freeSlot >= 0) {
+        slot = freeSlot;
+        s = g_gzSlots[slot];
+    } else {
+        if(nullSlot >= 0) {
+            slot = nullSlot;
+        } else {
+            int newCap = g_gzSlotCap == 0 ? LM_GZIP_INIT_SLOTS : g_gzSlotCap * 2;
+            if(newCap > LM_GZIP_MAX_SLOTS) {
+                pthread_mutex_unlock(&g_gzLock);
+                if(errBuf && errLen)
+                    snprintf(errBuf, errLen, "gzip 流句柄数超限 / gzip stream handle table full");
+                return -1;
+            }
+            LmGzipSlot** nt = (LmGzipSlot**)realloc(g_gzSlots,
+                                                    sizeof(LmGzipSlot*) * (size_t)newCap);
+            if(!nt) {
+                pthread_mutex_unlock(&g_gzLock);
+                if(errBuf && errLen)
+                    snprintf(errBuf, errLen, "gzip 句柄表内存不足 / gzip handle table out of memory");
+                return -1;
+            }
+            memset(nt + g_gzSlotCap, 0,
+                   sizeof(LmGzipSlot*) * (size_t)(newCap - g_gzSlotCap));
+            g_gzSlots = nt;
+            slot = g_gzSlotCap;
+            g_gzSlotCap = newCap;
+        }
+        s = (LmGzipSlot*)malloc(sizeof(LmGzipSlot));
+        if(!s) {   /* 数组位保持 NULL，下次 create 可重试，不污染状态 */
+            pthread_mutex_unlock(&g_gzLock);
+            if(errBuf && errLen)
+                snprintf(errBuf, errLen, "gzip 句柄槽内存不足 / gzip handle slot out of memory");
+            return -1;
+        }
+        g_gzSlots[slot] = s;
     }
-    LmGzipSlot* s = &g_gzSlots[slot];
     memset(&s->strm, 0, sizeof(s->strm));
     int rc = deflateInit2(&s->strm, level, Z_DEFLATED, MAX_WBITS + 16,
                           8, Z_DEFAULT_STRATEGY);
@@ -279,7 +331,7 @@ int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
     if(!out || !outLen) return -1;
     *out = NULL; *outLen = 0;
     pthread_mutex_lock(&g_gzLock);
-    LmGzipSlot* s = gzLookup(h);
+    LmGzipSlot* s = gzLookupLocked(h);
     if(!s) {
         pthread_mutex_unlock(&g_gzLock);
         if(errBuf && errLen)

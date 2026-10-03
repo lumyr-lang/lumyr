@@ -177,7 +177,7 @@ class HttpConnectionHandler {
         self.idleMs = app.keepAliveTimeout();
         self.co = Coroutine(func(h) {
             c = h.conn;
-            connBuf = [];   // 连接级读缓冲（pipelining 残留跨请求保留）
+            connBuf = bytes();   // 连接级读缓冲 bytes（pipelining 残留跨请求保留）
             first = true;   // 首请求标记：首请求读取直接用 requestTimeout
             while (true) {
                 // keep-alive 空闲等首字节：仅非首请求且缓冲已空时进入。
@@ -193,8 +193,8 @@ class HttpConnectionHandler {
                         break;
                     }
                     if (chunk.len == 0) { break; }   // 对端关闭
-                    i = 0;
-                    while (i < chunk.len) { connBuf.add(chunk[i]); i = i + 1; }
+                    // bytes 不可变：把空闲预读块并入连接缓冲（C 层一次拼接）
+                    connBuf = bytesConcat([connBuf, chunk]);
                 }
                 first = false;
                 // 请求读取阶段：requestTimeout（每次 recv 无数据等待上限）
@@ -203,7 +203,10 @@ class HttpConnectionHandler {
                 req = null;
                 failed = false;
                 try {
-                    req = ServerRequest.readFrom(c, connBuf);
+                    // readFrom 返回 [req, 残留 bytes]；残留留作下一请求（pipelining）
+                    rr = ServerRequest.readFrom(c, connBuf);
+                    req = rr[0];
+                    connBuf = rr[1];
                     resp = h.app.dispatchWithFilters(req);
                     // P0-3：分派链尾异常标记检查（dispatchCore catch 写入
                     // req.attributes）→ handler 异常记账落 owner（app/worker
