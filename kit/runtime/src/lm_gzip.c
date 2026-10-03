@@ -198,6 +198,14 @@ static LmGzipSlot* gzLookup(int h) {
     return s;
 }
 
+/* 释放槽位（全局锁内标记空闲）。必须在 deflateEnd 之后调用：
+   槽位一旦空闲，create 即可复用并重建 strm。 */
+static void gzFreeSlot(LmGzipSlot* s) {
+    pthread_mutex_lock(&g_gzLock);
+    s->inUse = 0;
+    pthread_mutex_unlock(&g_gzLock);
+}
+
 int lm_gzip_stream_create(int level, char* errBuf, size_t errLen) {
     if(level != -1 && (level < 0 || level > 9)) {
         if(errBuf && errLen)
@@ -278,14 +286,23 @@ int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
             snprintf(errBuf, errLen, "gzip 流句柄无效 / invalid gzip stream handle");
         return -1;
     }
-    /* 先占位再解锁：销毁语义下不再接受其他线程拿到本句柄 */
-    s->inUse = 0;
+    /* 槽位必须保持 inUse=1 直到 deflateEnd 完成：否则 create 会在
+       本线程仍在 deflate/deflateEnd 时复用同一槽位并 memset strm，
+       造成 zlib 内部状态堆损坏（多线程下必现段错误）。
+       锁只护生命周期，deflate 大循环不持锁，不串行化并发压缩。 */
     pthread_mutex_unlock(&g_gzLock);
 
-    uLong bound = deflateBound(&s->strm, 0) + 32;
-    uint8_t* dst = (uint8_t*)malloc(bound);
+    /* 存量上界：deflatePending 给出 zlib 内部待输出字节；
+       再加 64 字节覆盖 trailer 与最终块界。单次 Z_FINISH 可能排不完
+       （缓冲满返回 Z_OK），循环扩容续排直到 Z_STREAM_END。 */
+    unsigned pendBytes = 0;
+    int pendBits = 0;
+    deflatePending(&s->strm, &pendBytes, &pendBits);
+    size_t cap = (size_t)pendBytes + 64;
+    uint8_t* dst = (uint8_t*)malloc(cap);
     if(!dst) {
         deflateEnd(&s->strm);
+        gzFreeSlot(s);
         if(errBuf && errLen)
             snprintf(errBuf, errLen, "gzip 输出缓冲内存不足 / gzip out of memory");
         return -1;
@@ -293,16 +310,39 @@ int lm_gzip_stream_finish(int h, uint8_t** out, size_t* outLen,
     s->strm.next_in = NULL;
     s->strm.avail_in = 0;
     s->strm.next_out = dst;
-    s->strm.avail_out = (uInt)bound;
-    int rc = deflate(&s->strm, Z_FINISH);
-    if(rc != Z_STREAM_END) {
-        gzipDescribe(errBuf, errLen, "gzip 流收尾失败 / deflate finish failed", rc, s->strm.msg);
-        deflateEnd(&s->strm);
-        free(dst);
-        return -1;
+    s->strm.avail_out = (uInt)cap;
+    int rc;
+    for(;;) {
+        rc = deflate(&s->strm, Z_FINISH);
+        if(rc == Z_STREAM_END) break;
+        if(rc != Z_OK || s->strm.avail_out > 0) {
+            /* Z_OK 且仍有空位 = 无进展（异常）；其余为真错误 */
+            gzipDescribe(errBuf, errLen, "gzip 流收尾失败 / deflate finish failed", rc, s->strm.msg);
+            deflateEnd(&s->strm);
+            gzFreeSlot(s);
+            free(dst);
+            return -1;
+        }
+        /* 缓冲满：原地翻倍续排 / buffer full: double and continue */
+        size_t used = cap;
+        size_t ncap = cap * 2;
+        uint8_t* ndst = (uint8_t*)realloc(dst, ncap);
+        if(!ndst) {
+            deflateEnd(&s->strm);
+            gzFreeSlot(s);
+            free(dst);
+            if(errBuf && errLen)
+                snprintf(errBuf, errLen, "gzip 输出缓冲内存不足 / gzip out of memory");
+            return -1;
+        }
+        dst = ndst;
+        s->strm.next_out = dst + used;
+        s->strm.avail_out = (uInt)(ncap - used);
+        cap = ncap;
     }
     *outLen = (size_t)((uint8_t*)s->strm.next_out - dst);
     deflateEnd(&s->strm);
+    gzFreeSlot(s);
     *out = dst;
     return 0;
 }

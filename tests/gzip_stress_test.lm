@@ -1,0 +1,404 @@
+// gzip_stress_test.lm —— G6/G7 gzip 多线程并发压测
+//
+// G1  builtin 级多线程流式压缩：W 线程 × R 轮，每线程独立 z_stream 句柄，
+//     混合块大小（含 0xFF 二进制块）增量写入，finish 后 gunzip 往返校验
+// G2  HTTP 级多线程并发：W 线程同时反复请求压缩路由（GzipFilter 流式路径），
+//     解 chunked + gunzip 后逐字节比对原文
+//
+// 断言：所有线程往返一致、无句柄串扰、无 HTTP 响应错误
+// 运行：./bin/lumyr tests/gzip_stress_test.lm
+
+import <App/WebApplication>;
+import <App/GzipFilter>;
+import <NetWork/Socket>;
+import <NetWork/WebSocket>;
+import <Thread/Thread>;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+crlf = "" + '\r' + '\n';
+
+// ---- 共享原文（可压缩文本 + 高熵二进制）----
+bigText = "";
+i = 0;
+while (i < 400) { bigText = bigText + "lumin-gzip-stress-0123456789-"; i = i + 1; }
+
+binArr = [];
+i = 0;
+v = 13;
+while (i < 2000) {
+    v = (v * 1103515245 + 12345) % 256;
+    binArr.add(v);
+    i = i + 1;
+}
+binData = bytes(binArr);
+
+// ============================================================
+// G1：builtin 级多线程流式压缩
+// ============================================================
+class GzStreamWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func GzStreamWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            // 三块增量：文本 + 二进制 + 无；内容带线程/轮次号区分
+            p1 = "T" + self.idx + "-R" + r + "-" + bigText;
+            h = gzipStreamCreate(6);
+            out = [];
+            o1 = gzipStreamWrite(h, p1, false);
+            i = 0;
+            while (i < o1.len) { out.add(o1[i]); i = i + 1; }
+            o2 = gzipStreamWrite(h, binData, false);
+            i = 0;
+            while (i < o2.len) { out.add(o2[i]); i = i + 1; }
+            o3 = gzipStreamFinish(h);
+            i = 0;
+            while (i < o3.len) { out.add(o3[i]); i = i + 1; }
+            packed = bytes(out);
+            // 往返：gunzip 后应为 p1 字节 + binData 字节（逐字节比对，不 decode）
+            back = gzipDecompress(packed);
+            p1b = bytes(p1);
+            expect = p1b.len + binData.len;
+            if (back.len != expect) { bad = bad + 1; }
+            else {
+                k = 0;
+                while (k < p1b.len) {
+                    if (back[k] != p1b[k]) { bad = bad + 1; break; }
+                    k = k + 1;
+                }
+                k = 0;
+                while (k < binData.len) {
+                    if (back[p1b.len + k] != binData[k]) { bad = bad + 1; break; }
+                    k = k + 1;
+                }
+            }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+func phaseG1(workers: int, rounds: int) {
+    print("[G1] builtin 流式多线程 / stream builtin threads: " + workers + " × " + rounds);
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("gz-" + i, GzStreamWorker(i, rounds)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    total = workers * rounds;
+    print("  往返 " + total + " 次，bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, "G1: 流式压缩往返不一致 bad=" + bad);
+    print("  G1 PASS");
+}
+
+// ============================================================
+// G2：HTTP 级多线程并发压缩请求
+// ============================================================
+
+// 解 chunked：body bytes → 明文 bytes
+func dechunk(body): bytes {
+    out = [];
+    pos = 0;
+    while (true) {
+        le = -1;
+        k = pos;
+        while (k + 1 < body.len) {
+            if (body[k] == 13 && body[k + 1] == 10) { le = k; break; }
+            k = k + 1;
+        }
+        check(le >= 0, "dechunk: 缺少长度行终止 / missing chunk-size CRLF");
+        n = 0;
+        i = pos;
+        while (i < le) {
+            c = body[i];
+            if (c >= 48 && c <= 57) { n = n * 16 + (c - 48); }
+            else if (c >= 97 && c <= 102) { n = n * 16 + (c - 87); }
+            else if (c >= 65 && c <= 70) { n = n * 16 + (c - 55); }
+            i = i + 1;
+        }
+        pos = le + 2;
+        if (n == 0) { break; }
+        i = pos;
+        while (i < pos + n) { out.add(body[i]); i = i + 1; }
+        pos = pos + n + 2;
+    }
+    return bytes(out);
+}
+
+// 原始 HTTP GET（Accept-Encoding: gzip），返回 [head, bodyBytes]
+func httpGetGzip(port: int, path: string): array {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", port);
+    sock.setOption("recvTimeout", 5000);
+    req = "GET " + path + " HTTP/1.1" + crlf + "Host: g" + crlf
+        + "Accept-Encoding: gzip" + crlf + "Connection: close" + crlf + crlf;
+    sock.send(req);
+    all = [];
+    while (true) {
+        chunk = sock.recv(8192, 0, 1);
+        if (chunk.len == 0) { break; }
+        j = 0;
+        while (j < chunk.len) { all.add(chunk[j]); j = j + 1; }
+    }
+    sock.close();
+    sep = -1;
+    k = 0;
+    while (k + 3 < all.len) {
+        if (all[k] == 13 && all[k + 1] == 10 && all[k + 2] == 13 && all[k + 3] == 10) {
+            sep = k;
+            break;
+        }
+        k = k + 1;
+    }
+    if (sep < 0) { return ["", bytes([])]; }
+    headArr = [];
+    i = 0;
+    while (i < sep) { headArr.add(all[i]); i = i + 1; }
+    bodyArr = [];
+    i = sep + 4;
+    while (i < all.len) { bodyArr.add(all[i]); i = i + 1; }
+    return [bytes(headArr).decode(), bytes(bodyArr)];
+}
+
+class HttpGzWorker implements Runnable {
+    idx: int;
+    port: int;
+    rounds: int;
+    func HttpGzWorker(idx: int, port: int, rounds: int) {
+        self.idx = idx;
+        self.port = port;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            resp = httpGetGzip(self.port, "/text");
+            head = resp[0];
+            body = resp[1];
+            if (!head.lower().contains("content-encoding: gzip")) { bad = bad + 1; r = r + 1; continue; }
+            if (body.len < 2 || body[0] != 0x1f || body[1] != 0x8b) { bad = bad + 1; r = r + 1; continue; }
+            plain = gzipDecompress(body);
+            if (plain.decode() != bigText) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+func phaseG2(port: int, workers: int, rounds: int) {
+    print("[G2] HTTP 并发压缩请求 / concurrent gzip requests: " + workers + " × " + rounds);
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("http-gz-" + i, HttpGzWorker(i, port, rounds)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    total = workers * rounds;
+    rate = total * 1000 / (t1 - t0 + 1);
+    print("  请求 " + total + " 次，bad=" + bad + "，耗时 " + (t1 - t0) + " ms，约 " + rate + " req/s");
+    check(bad == 0, "G2: HTTP 压缩响应不一致 bad=" + bad);
+    print("  G2 PASS");
+}
+
+// ============================================================
+// G3：流式路由并发（GzipChunkWriter 路径，chunked + SYNC_FLUSH）
+// ============================================================
+class StreamWorker implements Runnable {
+    idx: int;
+    port: int;
+    rounds: int;
+    func StreamWorker(idx: int, port: int, rounds: int) {
+        self.idx = idx;
+        self.port = port;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            resp = httpGetGzip(self.port, "/stream");
+            head = resp[0];
+            body = resp[1];
+            low = head.lower();
+            if (!low.contains("content-encoding: gzip")) { bad = bad + 1; r = r + 1; continue; }
+            if (!low.contains("transfer-encoding: chunked")) { bad = bad + 1; r = r + 1; continue; }
+            // 解 chunked → gunzip → 应等于流式原文
+            plain = gzipDecompress(dechunk(body));
+            if (plain.decode() != "stream-A-stream-B") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+func phaseG3(port: int, workers: int, rounds: int) {
+    print("[G3] 流式路由并发 / stream route concurrent: " + workers + " × " + rounds);
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("stream-" + i, StreamWorker(i, port, rounds)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < threads.len) { bad = bad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    total = workers * rounds;
+    rate = total * 1000 / (t1 - t0 + 1);
+    print("  请求 " + total + " 次，bad=" + bad + "，耗时 " + (t1 - t0) + " ms，约 " + rate + " req/s");
+    check(bad == 0, "G3: 流式压缩响应不一致 bad=" + bad);
+    print("  G3 PASS");
+}
+
+// ============================================================
+// G4：WS 长连接驻留 + HTTP gzip 短连接混合负载
+// ============================================================
+mixSt = { "wsBad": 0, "httpBad": 0, "wsDone": 0 };
+
+class WsHoldWorker implements Runnable {
+    port: int;
+    msgs: int;
+    func WsHoldWorker(port: int, msgs: int) {
+        self.port = port;
+        self.msgs = msgs;
+    }
+    func run(): int {
+        // WS 长连接：握手后驻留，周期性发文本帧
+        cli = ClientSocket("127.0.0.1", self.port);
+        cli.sock.send("GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+        head = "";
+        while (true) {
+            d = cli.sock.recv(4096);
+            if (d.len == 0) { break; }
+            head = head + d;
+            if (head.contains("\r\n\r\n")) { break; }
+        }
+        if (!head.contains("101")) { return 1; }
+        bad = 0;
+        i = 0;
+        while (i < self.msgs) {
+            msg = "hold-" + i;
+            payload = bytes(msg);
+            mask = [1, 2, 3, 4];
+            raw = [];
+            raw.add(0x81);
+            raw.add(128 + payload.len);
+            raw.add(mask[0]); raw.add(mask[1]); raw.add(mask[2]); raw.add(mask[3]);
+            k = 0;
+            while (k < payload.len) { raw.add(payload[k] ^ mask[k % 4]); k = k + 1; }
+            cli.sock.send(bytes(raw));
+            p = cli.sock.recv(4096, 0, 1);
+            if (p.len < 2) { bad = bad + 1; break; }
+            plen = p[1] & 127;
+            if (plen + 2 > p.len) { bad = bad + 1; break; }
+            body = [];
+            k = 0;
+            while (k < plen) { body.add(p[2 + k]); k = k + 1; }
+            if (bytes(body).decode() != msg) { bad = bad + 1; }
+            i = i + 1;
+        }
+        cli.close();
+        return bad;
+    }
+}
+
+func phaseG4(wsPort: int, httpPort: int) {
+    print("[G4] WS+HTTP 混合负载 / mixed load");
+    threads = [];
+    // 2 条 WS 长连接，各驻留发 50 条
+    threads.add(Thread("ws-hold-0", WsHoldWorker(wsPort, 50)).start());
+    threads.add(Thread("ws-hold-1", WsHoldWorker(wsPort, 50)).start());
+    // 6 条 HTTP gzip 短连接，各 20 次
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < 6) {
+        threads.add(Thread("http-mix-" + i, HttpGzWorker(i, httpPort, 20)).start());
+        i = i + 1;
+    }
+    wsBad = threads[0].join() + threads[1].join();
+    httpBad = 0;
+    i = 2;
+    while (i < threads.len) { httpBad = httpBad + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    print("  WS bad=" + wsBad + " HTTP bad=" + httpBad + "，耗时 " + (t1 - t0) + " ms");
+    check(wsBad == 0, "G4: WS 长连接不一致 bad=" + wsBad);
+    check(httpBad == 0, "G4: HTTP 压缩不一致 bad=" + httpBad);
+    print("  G4 PASS");
+}
+
+// ---- main ----
+// WS echo handler（G4 混合负载用）
+class WsEchoHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+func main() {
+    port = 19411;
+    print("=== gzip 并发压测 / gzip concurrent stress ===");
+
+    app = WebApplication("127.0.0.1", port);
+    app.addFilter(GzipFilter());
+    app.get("/text", func(req) {
+        r = ServerResponse(200);
+        r.text(bigText);
+        return r;
+    });
+    // G3：流式路由（GzipChunkWriter 路径）
+    app.get("/stream", func(req) {
+        r = ServerResponse(200);
+        r.setContentType("text/plain");
+        r.streamBody(func(w) {
+            w.send("stream-A-");
+            w.send("stream-B");
+        });
+        return r;
+    });
+    // G4：WS 长连接与 HTTP gzip 同一应用混合
+    app.get("/ws", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, WsEchoHandler()); }
+        r = ServerResponse(400);
+        r.text("WebSocket only");
+        return r;
+    });
+    app.startAsync();
+    sleep(300);
+
+    phaseG1(8, 50);       // 8 线程 × 50 轮流式压缩
+    phaseG2(port, 8, 30); // 8 线程 × 30 次 HTTP 压缩请求
+    phaseG3(port, 6, 20); // 6 线程 × 20 次流式路由
+    phaseG4(port, port);  // 2 WS 长连接 × 50 条 + 6 HTTP × 20 次
+
+    app.stop();
+    app.join();
+
+    print("=== ALL PASS / 全部通过 ===");
+    return true;
+}
+
+main();

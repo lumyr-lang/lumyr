@@ -1,0 +1,291 @@
+// websocket_stress_test.lm —— G7 WebSocket 压测
+//
+// P1  连接爆发：N 条 WebSocket 连接同时建立（握手成功率）
+// P2  单连接吞吐：1 条连接连续 echo M 条消息（RTT 吞吐）
+// P3  并发吞吐：K 条连接并发 echo（每连接协程驻留，总吞吐）
+// P4  多协程并发：同进程内多客户端协程同时压测（模拟真实并发场景）
+//
+// 断言：全部连接建立成功、echo 逐条一致、无协议错误
+// 运行：./bin/lumyr tests/websocket_stress_test.lm
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <NetWork/WebSocket>;
+import <Thread/Thread>;
+
+// ---- 全局统计 ----
+st = {
+    "connOk": 0, "connFail": 0,
+    "echoOk": 0, "echoBad": 0,
+    "closeOk": 0
+};
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// ---- 服务端：echo 处理器 ----
+class StressHandler implements WebSocketHandler {
+    func onOpen(ws: WebSocketConn) { }
+    func onMessage(ws: WebSocketConn, data: any) {
+        if (type(data) == "string") { ws.sendText(data); }
+        else { ws.sendBinary(data); }
+    }
+    func onClose(ws: WebSocketConn, code: int, reason: string) { }
+}
+
+// ---- 客户端工具：建立 WebSocket 连接 ----
+func wsConnect(port: int, path: string) {
+    cli = ClientSocket("127.0.0.1", port);
+    key = "dGhlIHNhbXBsZSBub25jZQ==";   // RFC 6455 示例 key
+    req = "GET " + path + " HTTP/1.1\r\n"
+        + "Host: 127.0.0.1\r\n"
+        + "Upgrade: websocket\r\n"
+        + "Connection: Upgrade\r\n"
+        + "Sec-WebSocket-Key: " + key + "\r\n"
+        + "Sec-WebSocket-Version: 13\r\n\r\n";
+    cli.sock.send(req);
+    // 读 101 响应头
+    head = "";
+    while (true) {
+        d = cli.sock.recv(4096);
+        if (d.len == 0) { break; }
+        head = head + d;
+        if (head.contains("\r\n\r\n")) { break; }
+    }
+    check(head.contains("101"), "wsConnect: 握手失败 / handshake failed: " + head.slice(0, 100));
+    return cli;
+}
+
+// 精确读 n 字节（bytes 模式，leftover 槽防过度消费）
+func readN(cli, n: int, leftover: array) {
+    acc = leftover[0];
+    while (acc.len < n) {
+        p = cli.sock.recv(4096, 0, 1);
+        if (p.len == 0) { return bytes([]); }
+        i = 0;
+        while (i < p.len) { acc.add(p[i]); i = i + 1; }
+    }
+    out = [];
+    i = 0;
+    while (i < n) { out.add(acc[i]); i = i + 1; }
+    rest = [];
+    while (i < acc.len) { rest.add(acc[i]); i = i + 1; }
+    leftover[0] = rest;
+    return bytes(out);
+}
+
+// ---- 客户端工具：发送文本帧并收 echo ----
+// leftover: 每连接一个 [[]] 槽，跨调用持有
+func wsEcho(cli, msg: string, leftover: array): bool {
+    // 构造 masked text frame
+    payload = bytes(msg);
+    mask = [1, 2, 3, 4];
+    raw = [];
+    if (payload.len <= 125) {
+        raw.add(0x81);   // FIN=1 opcode=1
+        raw.add(0x80 + payload.len);
+    } else {
+        raw.add(0x81);
+        raw.add(0xFE);
+        raw.add((payload.len / 256) % 256);
+        raw.add(payload.len % 256);
+    }
+    raw.add(mask[0]); raw.add(mask[1]); raw.add(mask[2]); raw.add(mask[3]);
+    i = 0;
+    while (i < payload.len) { raw.add(payload[i] ^ mask[i % 4]); i = i + 1; }
+    cli.sock.send(bytes(raw));
+    // 收响应帧头（2 字节，bytes 模式）
+    h = readN(cli, 2, leftover);
+    if (h.len < 2) { return false; }
+    op = h[0] & 15;
+    plen = h[1] & 127;
+    if (plen == 126) {
+        ext = readN(cli, 2, leftover);
+        if (ext.len < 2) { return false; }
+        plen = ext[0] * 256 + ext[1];
+    } else if (plen == 127) {
+        ext = readN(cli, 8, leftover);
+        if (ext.len < 8) { return false; }
+        plen = 0;
+        i = 0;
+        while (i < 8) { plen = plen * 256 + ext[i]; i = i + 1; }
+    }
+    if (plen == 0) { return true; }
+    body = readN(cli, plen, leftover);
+    if (body.len < plen) { return false; }
+    return body.decode() == msg;
+}
+
+// ---- P1 连接爆发 ----
+func phase1(port: int, total: int) {
+    print("[P1] 连接爆发 / connection burst: " + total + " connections");
+    clis = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < total) {
+        try {
+            c = wsConnect(port, "/ws");
+            clis.add(c);
+            st["connOk"] = st["connOk"] + 1;
+        } catch (e) {
+            st["connFail"] = st["connFail"] + 1;
+        }
+        i = i + 1;
+        if (i % 200 == 0) { print("  已建立 " + i + " / established"); }
+    }
+    t1 = timestamp_ms();
+    print("  建立 " + st["connOk"] + "/" + total + " 成功，耗时 " + (t1 - t0) + " ms");
+    check(st["connFail"] == 0, "P1: 有连接建立失败");
+    // 统一关闭
+    i = 0;
+    while (i < clis.len()) { clis[i].close(); i = i + 1; }
+    clis = [];
+    sleep(300);
+    print("  P1 PASS");
+}
+
+// ---- P2 单连接吞吐 ----
+func phase2(port: int, rounds: int) {
+    print("[P2] 单连接吞吐 / single-conn throughput: " + rounds + " rounds");
+    cli = wsConnect(port, "/ws");
+    leftover = [[]];
+    msg = "websocket-stress-payload-0123456789";
+    i = 0;
+    ok = 0;
+    t0 = timestamp_ms();
+    while (i < rounds) {
+        if (wsEcho(cli, msg + "-" + i, leftover)) { ok = ok + 1; }
+        else { st["echoBad"] = st["echoBad"] + 1; }
+        i = i + 1;
+        if (i % 500 == 0) { print("  已跑 " + i + " / done"); }
+    }
+    t1 = timestamp_ms();
+    st["echoOk"] = st["echoOk"] + ok;
+    rate = rounds * 1000 / (t1 - t0 + 1);
+    print("  echo " + ok + "/" + rounds + " 成功，耗时 " + (t1 - t0) + " ms，约 " + rate + " msg/s");
+    check(ok == rounds, "P2: echo 不一致");
+    cli.close();
+    sleep(100);
+    print("  P2 PASS");
+}
+
+// ---- P3 并发吞吐（多连接并行 echo）----
+func phase3(port: int, conns: int, roundsPerConn: int) {
+    print("[P3] 并发吞吐 / concurrent throughput: " + conns + " conns × " + roundsPerConn + " rounds");
+    // 先建立全部连接
+    clis = [];
+    leftovers = [];
+    i = 0;
+    while (i < conns) {
+        clis.add(wsConnect(port, "/ws"));
+        leftovers.add([[]]);
+        i = i + 1;
+    }
+    msg = "concurrent-payload-abcdefgh";
+    t0 = timestamp_ms();
+    // 逐轮：每轮所有连接各发一条，收一条（简化版并发，避免协程调度复杂度）
+    r = 0;
+    totalOk = 0;
+    while (r < roundsPerConn) {
+        i = 0;
+        while (i < clis.len()) {
+            if (wsEcho(clis[i], msg + "-" + r + "-" + i, leftovers[i])) { totalOk = totalOk + 1; }
+            else { st["echoBad"] = st["echoBad"] + 1; }
+            i = i + 1;
+        }
+        r = r + 1;
+        if (r % 20 == 0) { print("  轮次 " + r + "/" + roundsPerConn); }
+    }
+    t1 = timestamp_ms();
+    st["echoOk"] = st["echoOk"] + totalOk;
+    totalMsg = conns * roundsPerConn;
+    rate = totalMsg * 1000 / (t1 - t0 + 1);
+    print("  总消息 " + totalOk + "/" + totalMsg + " 成功，耗时 " + (t1 - t0) + " ms，约 " + rate + " msg/s");
+    check(totalOk == totalMsg, "P3: 并发 echo 不一致");
+    i = 0;
+    while (i < clis.len()) { clis[i].close(); i = i + 1; }
+    clis = [];
+    sleep(300);
+    print("  P3 PASS");
+}
+
+// ---- P4 多线程并发（真并行客户端线程）----
+class WsWorker implements Runnable {
+    idx: int;
+    port: int;
+    rounds: int;
+    func WsWorker(idx: int, port: int, rounds: int) {
+        self.idx = idx;
+        self.port = port;
+        self.rounds = rounds;
+    }
+    func run() {
+        cli = wsConnect(self.port, "/ws");
+        leftover = [[]];
+        msg = "thread-worker-" + self.idx;
+        ok = 0;
+        i = 0;
+        while (i < self.rounds) {
+            if (wsEcho(cli, msg + "-" + i, leftover)) { ok = ok + 1; }
+            i = i + 1;
+        }
+        cli.close();
+        return ok;
+    }
+}
+
+func phase4(port: int, workers: int, rounds: int) {
+    print("[P4] 多线程并发 / multi-thread stress: " + workers + " workers × " + rounds + " rounds");
+    threads = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < workers) {
+        threads.add(Thread("ws-worker-" + i, WsWorker(i, port, rounds)).start());
+        i = i + 1;
+    }
+    totalOk = 0;
+    i = 0;
+    while (i < threads.len) { totalOk = totalOk + threads[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    st["echoOk"] = st["echoOk"] + totalOk;
+    totalMsg = workers * rounds;
+    rate = totalMsg * 1000 / (t1 - t0 + 1);
+    print("  总消息 " + totalOk + "/" + totalMsg + " 成功，耗时 " + (t1 - t0) + " ms，约 " + rate + " msg/s");
+    check(totalOk == totalMsg, "P4: 多线程并发 echo 不一致");
+    print("  P4 PASS");
+}
+
+// ---- main ----
+func main() {
+    port = 19410;
+    print("=== WebSocket 压测 / WebSocket stress test ===");
+
+    app = WebApplication("127.0.0.1", port);
+    app.get("/ws", func(req) {
+        if (WebSocket.isUpgrade(req)) { return WebSocket.accept(req, StressHandler()); }
+        r = ServerResponse(400);
+        r.text("WebSocket only");
+        return r;
+    });
+    app.startAsync();
+    sleep(300);
+
+    phase1(port, 500);       // 500 连接爆发
+    phase2(port, 2000);      // 单连接 2000 条
+    phase3(port, 20, 100);   // 20 连接 × 100 轮
+    phase4(port, 4, 500);    // 4 协程 × 500 轮
+
+    app.stop();
+    app.join();
+
+    print("=== 统计 / stats ===");
+    print("  connOk: " + st["connOk"] + " connFail: " + st["connFail"]);
+    print("  echoOk: " + st["echoOk"] + " echoBad: " + st["echoBad"]);
+    check(st["connFail"] == 0, "存在连接失败");
+    check(st["echoBad"] == 0, "存在 echo 错误");
+    print("=== ALL PASS / 全部通过 ===");
+    return true;
+}
+
+main();
