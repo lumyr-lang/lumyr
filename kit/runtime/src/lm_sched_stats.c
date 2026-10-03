@@ -242,6 +242,11 @@ static void trace_print_once(trace_util_t* utils, int* util_n) {
                                                      memory_order_relaxed),
             util_pct);
     }
+    /* 释放快照引用（与 lm_scheduler_registry_snapshot 内的 retain 配对，
+     * 防 trace 线程遍历期间 worker 线程销毁 scheduler 造成 UAF）。 */
+    for (int i = 0; i < n; i++) {
+        lm_scheduler_release(snap[i]);
+    }
 }
 
 static void* trace_thread_main(void* arg) {

@@ -173,6 +173,11 @@ static int sysmon_scan_once(uint64_t now_ns) {
                 (now_ns - tick_ns) / 1000000.0);
         }
     }
+    /* 释放快照引用（snapshot 对每个 sched retain 过，配对 release；
+     * 遍历期间 owner 销毁也不会悬空，引用归零延迟到此处才 free）。 */
+    for (int i = 0; i < n; i++) {
+        lm_scheduler_release(snap[i]);
+    }
     return found_timeout;
 }
 

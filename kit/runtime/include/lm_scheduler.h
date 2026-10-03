@@ -225,9 +225,9 @@ long lm_scheduler_overflow_len(void);
 /* 已注册 scheduler 数（注册表快照）。 */
 int lm_scheduler_registry_count(void);
 
-/* Phase 8.5 D：sysmon 用——拷贝注册表快照到 out（最多 max 个）。
- * 返回实际拷贝数。持 g_scheds_mutex 拷贝，sysmon 遍历期间 scheduler 可能
- * 被注销（置 NULL 槽位），调用方需判空跳过。 */
+/* 持锁拷贝注册表指针快照。快照内每个指针已 retain 一个引用计数，
+ * 调用方遍历结束后必须对 [0, n) 逐个 lm_scheduler_release（防遍历期间
+ * owner destroy 导致 use-after-free）。返回快照元素数。 */
 int lm_scheduler_registry_snapshot(lm_scheduler_t** out, int max);
 
 #ifdef __cplusplus

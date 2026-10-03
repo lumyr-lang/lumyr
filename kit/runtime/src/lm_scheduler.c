@@ -85,13 +85,24 @@ int lm_scheduler_registry_count(void) {
     return n;
 }
 
-/* Phase 8.5 D：sysmon 带外扫描用——持锁拷贝注册表指针快照。 */
+/* Phase 8.5 D：sysmon 带外扫描用——持锁拷贝注册表指针快照。
+ * 语义：快照内每个指针都在注册表临界区内 retain 一次（引用计数），
+ * 调用方遍历完后必须逐个 lm_scheduler_release。这样即使 owner 在快照
+ * 解锁后立刻 destroy（注册表摘槽 + release 归零 free），遍历方仍持有
+ * 有效引用，彻底消除快照指针的 use-after-free。 */
 int lm_scheduler_registry_snapshot(lm_scheduler_t** out, int max) {
     if (!out || max <= 0) return 0;
     pthread_mutex_lock(&g_scheds_mutex);
     int n = 0;
     for (int i = 0; i < g_scheds_n && n < max; i++) {
-        if (g_scheds[i]) out[n++] = g_scheds[i];
+        lm_scheduler_t* s = g_scheds[i];
+        if (s) {
+            /* 与 sched_registry_remove 同在 g_scheds_mutex 临界区内序列化：
+             * 要么摘槽先发生（此处看不到），要么 retain 先发生（owner 释放
+             * owner 引用后结构仍存活，等本快照 release）。 */
+            lm_scheduler_retain(s);
+            out[n++] = s;
+        }
     }
     pthread_mutex_unlock(&g_scheds_mutex);
     return n;
