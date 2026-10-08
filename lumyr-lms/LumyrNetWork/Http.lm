@@ -145,6 +145,12 @@ public class HttpResponse<T> implements ResponseInterface {
 
 // HTTP 标头集合：大小写不敏感名值管理（内部统一小写键存储；
 // HTTP 标头名大小写不敏感，内置 requests 响应标头同样按小写规范化）
+//
+// 多值语义（RFC 7230/6265）：
+//   set(name, v) 覆盖为单值；add(name, v) 追加一个值。
+//   items 键值为 string（单值）或 array（多值，按追加序）。
+//   响应写出时每个值独占一行（Set-Cookie 等禁止逗号合并的字段必须如此）；
+//   get 取首个值，getAll 取全部；toMap 为兼容单值消费方把多值逗号合并。
 public class Headers {
     items: map;
 
@@ -152,17 +158,23 @@ public class Headers {
         self.items = {};
     }
 
-    // 设置（覆盖同名标头）
+    // 设置（覆盖同名标头为单值）
     func set(name: string, value: string) {
         self.items[name.lower()] = value;
         return self;
     }
 
-    // 追加（同名按 RFC 7230 列表语义逗号合并）
+    // 追加一个值（同名多值各自独立成行；不再逗号合并——
+    // Set-Cookie 按 RFC 6265 禁止合并，其余字段多行也合法）
     func add(name: string, value: string) {
         k = name.lower();
         if (self.items.has(k)) {
-            self.items[k] = self.items[k] + ", " + value;
+            old = self.items[k];
+            if (type(old) == "array") {
+                old.add(value);
+            } else {
+                self.items[k] = [old, value];
+            }
         } else {
             self.items[k] = value;
         }
@@ -173,10 +185,24 @@ public class Headers {
         return self.items.has(name.lower());
     }
 
+    // 取首个值（单值消费语义：请求头读取、Content-Type 等）
     func get(name: string): string {
         k = name.lower();
-        if (self.items.has(k)) { return self.items[k]; }
+        if (self.items.has(k)) {
+            v = self.items[k];
+            if (type(v) == "array") { return v[0]; }
+            return v;
+        }
         return "";
+    }
+
+    // 取全部值（始终返回数组；无此键返回空数组）
+    func getAll(name: string): array {
+        k = name.lower();
+        if (self.items.has(k) == false) { return []; }
+        v = self.items[k];
+        if (type(v) == "array") { return v; }
+        return [v];
     }
 
     func remove(name: string) {
@@ -196,9 +222,41 @@ public class Headers {
         return self.items.len;
     }
 
-    // 转出普通 map（可直接作为 requests config 的 headers 使用）
+    // 展开为 [name, value] 对数组（多值各占一对），供响应逐行序列化
+    func lines(): array {
+        out = [];
+        for k in self.items.keys() {
+            v = self.items[k];
+            if (type(v) == "array") {
+                for one in v { out.add([k, one]); }
+            } else {
+                out.add([k, v]);
+            }
+        }
+        return out;
+    }
+
+    // 转出普通单值 map（多值按 RFC 7230 列表语义逗号合并）；
+    // 注意：Set-Cookie 多值经此通道会被合并，响应序列化必须走 lines()，
+    // 本方法仅供 requests config 等单值消费方使用
     func toMap(): map {
-        return self.items;
+        out = {};
+        for k in self.items.keys() {
+            v = self.items[k];
+            if (type(v) == "array") {
+                joined = "";
+                i = 0;
+                while (i < v.len) {
+                    if (i > 0) { joined = joined + ", "; }
+                    joined = joined + v[i];
+                    i = i + 1;
+                }
+                out[k] = joined;
+            } else {
+                out[k] = v;
+            }
+        }
+        return out;
     }
 }
 

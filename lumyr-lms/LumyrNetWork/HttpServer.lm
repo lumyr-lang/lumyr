@@ -753,15 +753,14 @@ public class ServerResponse {
     }
 
     // 响应头部（状态行 + 标头 + 空行）的字符串形式
+    // 多值标头逐值独占一行（Set-Cookie 禁止逗号合并，见 Headers.lines）
     private func headString(): string {
         s = "HTTP/1.1 " + self.status + " " + HttpSpec.statusText(self.status) + crlf;
-        hdrMap = self.headers.toMap();
-        keys = hdrMap.keys();
-        ki = 0;
-        while (ki < keys.len) {
-            k = keys[ki];
-            s = s + k + ": " + hdrMap[k] + crlf;
-            ki = ki + 1;
+        pairs = self.headers.lines();
+        pi = 0;
+        while (pi < pairs.len) {
+            s = s + pairs[pi][0] + ": " + pairs[pi][1] + crlf;
+            pi = pi + 1;
         }
         return s + crlf;
     }

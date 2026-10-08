@@ -1,0 +1,826 @@
+// http_stress5_test.lm —— HTTP 压测五期：协议语义/状态码边界/连接生命周期
+//
+// 四期已覆盖：方法矩阵、网页/query/表单/JSON、文件上传下载/chunked/落盘、
+// keep-alive/pipelining、431/413/405/慢速 client。五期补四期未触达的框架路径：
+//
+// N1  404 风暴：8 × 40 GET 随机不存在路径，状态码 + body 回显路径校验
+// N2  模式路由：:id/:oid 段与 *rest 通配混合，8 × 40 回显校验
+// N3  handler 异常：8 × 30 高并发 throw → 500 错误分派路径
+// N4  重定向：301/302 + Location，客户端手工跟随一跳校验
+// N5  静态文件 HEAD：正文为空但 Content-Length 反映真实文件大小
+// N6  HTTP/1.0 语义：默认 close；Connection: keep-alive 显式升级并复用连接
+// N7  OPTIONS：通用 route 注册 → 204 无正文
+// N8  Cookie/多响应头：Cookie 请求回显 + 双 Set-Cookie + 重复自定义头
+// N9  multipart/form-data：2 字段 + 64KiB 文件，字段值与文件 md5 回传，4 × 5
+// N10 无 Content-Length 零长 POST
+// N11 请求读取超时：建连后不发数据 → 408（requestTimeout=800ms）
+// N12 keep-alive 空闲超时：空闲超过 800ms → 服务端静默关闭
+// N13 短连接风暴：16 × 20，每轮全新连接单请求即关（accept/close 高周转）
+// N14 共享 map 计数：每 worker 独立 key 高频自增，请求后精确核对总数
+// N15 混合长跑：8 线程 × 10s，随机混合各路由、close/keep-alive 交替
+//
+// 运行：./bin/lumyr tests/http_stress5_test.lm
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <IO/Files>;
+import <Thread/Thread>;
+
+PORT = 19460;
+SITE_DIR = "/tmp/http_s5_site";
+crlf = "" + '\r' + '\n';
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+func makeText(n: int): string {
+    seed = "http-stress5-content-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+pageHtml = "<html><head><title>s5</title></head><body>LUMIN-S5-PAGE-MARKER-0123456789</body></html>";
+
+// ============================================================
+// 应用与路由
+// ============================================================
+app = WebApplication("127.0.0.1", PORT);
+app.setRequestTimeout(800);     // N11：请求首字节/读取阶段超时 → 408
+app.setKeepAliveTimeout(800);   // N12：keep-alive 空闲超时静默关闭
+app.serveStatic("/site", SITE_DIR);
+
+// N2：模式路由（:name 逐段、*name 收剩余多段）
+app.get("/user/:id/order/:oid", func(req) {
+    r = ServerResponse(200);
+    r.text("u=" + req.param("id") + ",o=" + req.param("oid"));
+    return r;
+});
+app.get("/files/*rest", func(req) {
+    r = ServerResponse(200);
+    r.text("rest=" + req.param("rest"));
+    return r;
+});
+
+// N3：handler 抛错 → 默认 500 分派
+app.get("/boom", func(req) {
+    throw "boom-expected / 预期内测试异常";
+});
+
+// N4：重定向
+app.get("/go", func(req) {
+    return ServerResponse(200).found("/target");
+});
+app.get("/go301", func(req) {
+    return ServerResponse(200).movedPermanently("/target");
+});
+app.get("/target", func(req) {
+    r = ServerResponse(200);
+    r.text("TARGET-OK");
+    return r;
+});
+
+// N7：OPTIONS 经通用 route 注册 → 204
+app.route("OPTIONS", "/opts", func(req) {
+    r = ServerResponse(204);
+    r.setHeader("Allow", "GET, POST, OPTIONS");
+    r.noContent();
+    return r;
+});
+
+// N8：Cookie 回显 + 双 Set-Cookie + 重复自定义头
+app.get("/ck", func(req) {
+    r = ServerResponse(200);
+    r.text("tok=" + req.cookie("tok") + ";uid=" + req.cookie("uid"));
+    r.setCookie(Cookie("sid", "s5-sid").setPath("/").setHttpOnly(true));
+    r.setCookie(Cookie("ref", "n8").setPath("/"));
+    r.addHeader("X-Multi", "v1");
+    r.addHeader("X-Multi", "v2");
+    return r;
+});
+
+// N9：multipart/form-data 字段 + 文件 md5
+app.post("/mpart", func(req) {
+    f = req.multipart();
+    a = f.getString("a");
+    b = f.getString("b");
+    part = f.get("up");
+    r = ServerResponse(200);
+    if (part == null || !part.isFile()) {
+        r.text("ERR:no-file");
+        return r;
+    }
+    r.text("a=" + a + "|b=" + b + "|size=" + part.size() + "|md5=" + md5(part.text()));
+    return r;
+});
+
+// N10：无 Content-Length 零长 POST（头部结束即无 body）
+app.post("/empty", func(req) {
+    r = ServerResponse(200);
+    r.text("empty-ok");
+    return r;
+});
+
+// N14：共享 map 计数（每 worker 独立 key，单 key 仅单线程写，跨 key 并发压读写锁）
+hitMap = {};
+app.get("/hit", func(req) {
+    id = req.header("X-Worker");
+    v = hitMap[id];
+    if (v == null) { v = 0; }
+    hitMap[id] = v + 1;
+    r = ServerResponse(200);
+    r.text("hit");
+    return r;
+});
+app.get("/count", func(req) {
+    id = req.param("id");
+    v = hitMap[id];
+    if (v == null) { v = 0; }
+    r = ServerResponse(200);
+    r.text("" + v);
+    return r;
+});
+
+app.get("/ping", func(req) {
+    r = ServerResponse(200);
+    r.text("pong");
+    return r;
+});
+
+// N15：JSON 回显
+app.post("/jecho", func(req) {
+    r = ServerResponse(200);
+    if (req.isJson() == false) {
+        r = ServerResponse(415);
+        r.text("Unsupported Media Type / 仅支持 application/json");
+        return r;
+    }
+    r.text(req.bodyString());
+    return r;
+});
+
+app.startAsync();
+
+// ============================================================
+// 客户端通用工具（字符串模式；body 均为 ASCII 可打印）
+// ============================================================
+func newSock() {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", PORT);
+    sock.setOption("recvTimeout", 30000);
+    return sock;
+}
+
+// 发送 HTTP/1.1 请求：头与 body 分两次 send
+func sendReq(sock, method: string, path: string, extraHeads: string, body: string, ka: bool) {
+    h = method + " " + path + " HTTP/1.1" + crlf + "Host: s5" + crlf;
+    if (ka) { h = h + "Connection: keep-alive" + crlf; }
+    else { h = h + "Connection: close" + crlf; }
+    if (extraHeads.len > 0) { h = h + extraHeads; }
+    if (body.len > 0) { h = h + "Content-Length: " + body.len + crlf; }
+    h = h + crlf;
+    sock.send(h);
+    if (body.len > 0) { sock.send(body); }
+}
+
+// 发送原始请求行形态（HTTP/1.0 / 无 CL 等自定义报文）
+func sendRaw(sock, rawHead: string, body: string) {
+    sock.send(rawHead);
+    if (body.len > 0) { sock.send(body); }
+}
+
+// 读完整响应直到对端关闭（Connection: close 路径）
+func readRespClose(sock): array {
+    resp = "";
+    while (true) {
+        part = sock.recv(65536);
+        if (part.len == 0) { break; }
+        resp = resp + part;
+    }
+    sep = resp.indexOf(crlf + crlf);
+    if (sep < 0) { return [0, "", ""]; }
+    head = resp.slice(0, sep);
+    st = 0;
+    if (head.len >= 12) { st = (int)head.slice(9, 12); }
+    return [st, head, resp.slice(sep + 4)];
+}
+
+// ---- keep-alive 持久连接读取（leftover 槽防过度消费）----
+func readHeaderKA(sock, lo): string {
+    acc = lo[0];
+    while (true) {
+        sep = acc.indexOf(crlf + crlf);
+        if (sep >= 0) {
+            lo[0] = acc.slice(sep + 4);
+            return acc.slice(0, sep);
+        }
+        part = sock.recv(65536);
+        if (part.len == 0) { return ""; }
+        acc = acc + part;
+    }
+}
+
+func contentLengthOf(head: string): int {
+    for line in head.split(crlf) {
+        low = line.lower();
+        if (low.startsWith("content-length:")) {
+            return (int)line.slice(15, line.len).trim();
+        }
+    }
+    return -1;
+}
+
+func headerValueOf(head: string, name: string): string {
+    prefix = name.lower() + ":";
+    for line in head.split(crlf) {
+        low = line.lower();
+        if (low.startsWith(prefix)) { return line.slice(prefix.len, line.len).trim(); }
+    }
+    return "";
+}
+
+func readBodyN(sock, n: int, lo): string {
+    acc = lo[0];
+    while (acc.len < n) {
+        part = sock.recv(65536);
+        if (part.len == 0) { break; }
+        acc = acc + part;
+    }
+    body = acc.slice(0, n);
+    lo[0] = acc.slice(n);
+    return body;
+}
+
+// 持久连接上读一个完整响应，返回 [status, head, body]（不支持 chunked，五期无此场景）
+func readRespKA(sock, lo): array {
+    head = readHeaderKA(sock, lo);
+    if (head.len < 12) { return [0, "", ""]; }
+    st = (int)head.slice(9, 12);
+    n = contentLengthOf(head);
+    if (n <= 0) { return [st, head, ""]; }
+    return [st, head, readBodyN(sock, n, lo)];
+}
+
+// 多线程编排：threads 个 Worker 各跑，汇总 bad
+func runWorkers(label: string, threads: int, mkWorker) {
+    ts = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < threads) {
+        ts.add(Thread(label + "-" + i, mkWorker(i)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < ts.len) { bad = bad + ts[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    print("  bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, label + " bad=" + bad);
+    print("  " + label + " PASS");
+}
+
+// ============================================================
+// N1：404 风暴
+// ============================================================
+class N1Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N1Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            path = "/missing/n1-" + self.idx + "-" + r;
+            sock = newSock();
+            sendReq(sock, "GET", path, "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            // 默认 404 body 为 "Not Found: GET <path>"
+            if (resp[0] != 404 || !resp[2].contains(path)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N2：模式路由（:name 段与 *name 通配）
+// ============================================================
+class N2Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N2Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            uid = self.idx * 1000 + r;
+            sock = newSock();
+            sendReq(sock, "GET", "/user/" + uid + "/order/ord" + r, "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2] != "u=" + uid + ",o=ord" + r) { bad = bad + 1; }
+
+            // *rest 收多段（段数随轮次变化）
+            rest = "a" + self.idx + "/b" + r + "/c" + (r % 5);
+            sock = newSock();
+            sendReq(sock, "GET", "/files/" + rest, "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2] != "rest=" + rest) { bad = bad + 1; }
+
+            // 段数不匹配：:id/:oid 只给一段 → 404
+            sock = newSock();
+            sendReq(sock, "GET", "/user/" + uid, "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 404) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N3：handler 异常 → 500
+// ============================================================
+class N3Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N3Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/boom", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 500 || resp[2] != "Internal Server Error") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N4：重定向跟随
+// ============================================================
+class N4Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N4Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            // 302 与 301 交替
+            path = "/go";
+            expectCode = 302;
+            if (r % 2 == 0) { path = "/go301"; expectCode = 301; }
+            sock = newSock();
+            sendReq(sock, "GET", path, "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            loc = headerValueOf(resp[1], "location");
+            if (resp[0] != expectCode || loc != "/target") { bad = bad + 1; r = r + 1; continue; }
+
+            // 手工跟随一跳
+            sock = newSock();
+            sendReq(sock, "GET", loc, "", "", false);
+            resp2 = readRespClose(sock);
+            sock.close();
+            if (resp2[0] != 200 || resp2[2] != "TARGET-OK") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N5：静态文件 HEAD（正文空，Content-Length 为真实文件大小）
+// ============================================================
+class N5Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N5Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "HEAD", "/site/index.html", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2].len != 0
+                || contentLengthOf(resp[1]) != pageHtml.len) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N6：HTTP/1.0 语义（默认 close；keep-alive 显式升级 + 连接复用）
+// ============================================================
+class N6Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N6Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            // 1.0 不带 Connection → 默认 close
+            sock = newSock();
+            sock.send("GET /ping HTTP/1.0" + crlf + "Host: s5" + crlf + crlf);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2] != "pong"
+                || headerValueOf(resp[1], "connection") != "close") { bad = bad + 1; }
+
+            // 1.0 + Connection: keep-alive → 升级复用：同连接连发两个请求
+            sock = newSock();
+            lo = [""];
+            sock.send("GET /ping HTTP/1.0" + crlf + "Host: s5" + crlf
+                      + "Connection: keep-alive" + crlf + crlf);
+            resp1 = readRespKA(sock, lo);
+            sock.send("GET /ping HTTP/1.0" + crlf + "Host: s5" + crlf
+                      + "Connection: keep-alive" + crlf + crlf);
+            resp2 = readRespKA(sock, lo);
+            sock.close();
+            if (resp1[0] != 200 || resp1[2] != "pong"
+                || headerValueOf(resp1[1], "connection") != "keep-alive") { bad = bad + 1; }
+            if (resp2[0] != 200 || resp2[2] != "pong") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N7：OPTIONS 204
+// ============================================================
+class N7Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N7Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "OPTIONS", "/opts", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 204 || resp[2].len != 0
+                || headerValueOf(resp[1], "allow") != "GET, POST, OPTIONS") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N8：Cookie 回显 / Set-Cookie / 重复响应头
+// ============================================================
+class N8Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N8Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/ck", "Cookie: tok=tk" + self.idx + "; uid=u" + r + crlf, "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            head = resp[1].lower();
+            if (resp[0] != 200
+                || resp[2] != "tok=tk" + self.idx + ";uid=u" + r
+                || !head.contains("set-cookie: sid=s5-sid; path=/; httponly")
+                || !head.contains("set-cookie: ref=n8; path=/")
+                || !head.contains("x-multi: v1")
+                || !head.contains("x-multi: v2")) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N9：multipart/form-data 字段 + 文件
+// ============================================================
+mpBoundary = "----s5mp19460";
+mpPayload = makeText(65536);
+mpPayloadMd5 = md5(mpPayload);
+
+class N9Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N9Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        q = "" + '"';   // 真实双引号字符（源码双引号定界字符串，不支持转义）
+        while (r < self.rounds) {
+            va = "av" + self.idx + "-" + r;
+            vb = "bv";
+            body = "--" + mpBoundary + crlf
+                 + "Content-Disposition: form-data; name=" + q + "a" + q + crlf + crlf
+                 + va + crlf
+                 + "--" + mpBoundary + crlf
+                 + "Content-Disposition: form-data; name=" + q + "b" + q + crlf + crlf
+                 + vb + crlf
+                 + "--" + mpBoundary + crlf
+                 + "Content-Disposition: form-data; name=" + q + "up" + q
+                 + "; filename=" + q + "x.bin" + q + crlf
+                 + "Content-Type: application/octet-stream" + crlf + crlf
+                 + mpPayload + crlf
+                 + "--" + mpBoundary + "--" + crlf;
+            sock = newSock();
+            sendReq(sock, "POST", "/mpart",
+                    "Content-Type: multipart/form-data; boundary=" + mpBoundary + crlf,
+                    body, false);
+            resp = readRespClose(sock);
+            sock.close();
+            expect = "a=" + va + "|b=" + vb + "|size=" + mpPayload.len + "|md5=" + mpPayloadMd5;
+            if (resp[0] != 200 || resp[2] != expect) {
+                bad = bad + 1;
+                if (bad == 1) { print("  [N9 t" + self.idx + " r" + r + "] got=" + resp[2] + "\n"); }
+            }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N13：短连接风暴（全新连接高周转）
+// ============================================================
+class N13Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N13Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/ping", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2] != "pong") { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N14：共享 map 每 worker 独立 key 自增 + 精确核对
+// ============================================================
+class N14Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func N14Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        wid = "n14-" + self.idx;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/hit", "X-Worker: " + wid + crlf, "", true);
+            lo = [""];
+            resp = readRespKA(sock, lo);
+            if (resp[0] != 200 || resp[2] != "hit") { bad = bad + 1; }
+            // 每 5 轮复用同一 keep-alive 连接，其余 close：连接模式交替
+            if (r % 5 == 4) {
+                sock.send("GET /count?id=" + wid + " HTTP/1.1" + crlf + "Host: s5" + crlf
+                          + "Connection: close" + crlf + crlf);
+                resp2 = readRespClose(sock);
+                if (resp2[0] != 200 || (int)resp2[2] != r + 1) { bad = bad + 1; }
+            }
+            sock.close();
+            r = r + 1;
+        }
+        // 终核：总数必须精确等于 rounds（服务端 map 跨 key 并发写不丢不重）
+        sock = newSock();
+        sendReq(sock, "GET", "/count?id=" + wid, "", "", false);
+        resp = readRespClose(sock);
+        sock.close();
+        if (resp[0] != 200 || (int)resp[2] != self.rounds) {
+            bad = bad + 1;
+            print("  [N14 t" + self.idx + "] 终核期望 " + self.rounds + " 实得 " + resp[2] + "\n");
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// N15：混合长跑（随机路由 + close/keep-alive 交替）
+// ============================================================
+class N15Worker implements Runnable {
+    idx: int;
+    seconds: int;
+    func N15Worker(idx: int, seconds: int) {
+        self.idx = idx;
+        self.seconds = seconds;
+    }
+    func run(): int {
+        bad = 0;
+        ops = 0;
+        deadline = timestamp_ms() + self.seconds * 1000;
+        seed = self.idx * 7 + 1;
+        while (timestamp_ms() < deadline) {
+            // 线性同余生成 0..6 操作码（线程局部种子，无共享随机状态）
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            op = (seed / 65536) % 7;
+            sock = newSock();
+            if (op == 0) {
+                // ping close
+                sendReq(sock, "GET", "/ping", "", "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 200 || resp[2] != "pong") { bad = bad + 1; }
+            } else if (op == 1) {
+                // JSON 回显 keep-alive 两连
+                sendReq(sock, "POST", "/jecho", "Content-Type: application/json" + crlf,
+                        "{\"k\":" + ops + "}", true);
+                lo = [""];
+                resp = readRespKA(sock, lo);
+                if (resp[0] != 200 || !resp[2].contains("" + ops)) { bad = bad + 1; }
+                sendReq(sock, "GET", "/ping", "", "", false);
+                resp2 = readRespClose(sock);
+                if (resp2[0] != 200 || resp2[2] != "pong") { bad = bad + 1; }
+            } else if (op == 2) {
+                // cookie
+                sendReq(sock, "GET", "/ck", "Cookie: tok=m" + self.idx + "; uid=x" + crlf, "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 200 || resp[2] != "tok=m" + self.idx + ";uid=x") { bad = bad + 1; }
+            } else if (op == 3) {
+                // 404
+                sendReq(sock, "GET", "/nope/mix-" + ops, "", "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 404) { bad = bad + 1; }
+            } else if (op == 4) {
+                // 模式路由
+                sendReq(sock, "GET", "/user/" + (ops % 100) + "/order/z", "", "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 200 || !resp[2].startsWith("u=")) { bad = bad + 1; }
+            } else if (op == 5) {
+                // 异常路径
+                sendReq(sock, "GET", "/boom", "", "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 500) { bad = bad + 1; }
+            } else {
+                // 重定向跟随
+                sendReq(sock, "GET", "/go", "", "", false);
+                resp = readRespClose(sock);
+                if (resp[0] != 302 || headerValueOf(resp[1], "location") != "/target") { bad = bad + 1; }
+            }
+            sock.close();
+            ops = ops + 1;
+        }
+        print("  [N15] 线程 " + self.idx + " ops=" + ops + " bad=" + bad + "\n");
+        return bad;
+    }
+}
+
+// ============================================================
+// main：顺序执行全部场景
+// ============================================================
+func main() {
+    print("=== HTTP 压测五期 / http stress phase 5 ===");
+
+    Files.createDir(SITE_DIR);
+    writeFile(SITE_DIR + "/index.html", pageHtml);
+    sleep(100);
+
+    print("[N1] 404 风暴 / not-found storm: 8 × 40");
+    runWorkers("N1", 8, func(i) { return N1Worker(i, 40); });
+
+    print("[N2] 模式路由 :param/*star / pattern routes: 8 × 40");
+    runWorkers("N2", 8, func(i) { return N2Worker(i, 40); });
+
+    print("[N3] handler 异常 → 500 / handler error: 8 × 30");
+    runWorkers("N3", 8, func(i) { return N3Worker(i, 30); });
+
+    print("[N4] 重定向 301/302 跟随 / redirect: 6 × 30");
+    runWorkers("N4", 6, func(i) { return N4Worker(i, 30); });
+
+    print("[N5] 静态文件 HEAD / static HEAD: 6 × 30");
+    runWorkers("N5", 6, func(i) { return N5Worker(i, 30); });
+
+    print("[N6] HTTP/1.0 语义（close + keep-alive 升级）/ HTTP/1.0: 6 × 20");
+    runWorkers("N6", 6, func(i) { return N6Worker(i, 20); });
+
+    print("[N7] OPTIONS 204: 6 × 30");
+    runWorkers("N7", 6, func(i) { return N7Worker(i, 30); });
+
+    print("[N8] Cookie/多响应头 / cookies+headers: 6 × 30");
+    runWorkers("N8", 6, func(i) { return N8Worker(i, 30); });
+
+    print("[N9] multipart 字段+64KiB 文件 / multipart upload: 4 × 5");
+    runWorkers("N9", 4, func(i) { return N9Worker(i, 5); });
+
+    print("[N10] 无 Content-Length 零长 POST / empty POST");
+    sock = newSock();
+    sendRaw(sock, "POST /empty HTTP/1.1" + crlf + "Host: s5" + crlf
+                 + "Connection: close" + crlf + crlf, "");
+    resp = readRespClose(sock);
+    sock.close();
+    check(resp[0] == 200 && resp[2] == "empty-ok", "N10: 期望 200/empty-ok，实际 " + resp[0]);
+    print("  N10 PASS");
+
+    print("[N11] 请求读取超时 → 408 / request timeout（不发数据等 800ms）");
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", PORT);
+    sock.setOption("recvTimeout", 5000);
+    // 建连后不发送任何字节：服务端 recv 超时回 408 并关闭
+    n11ok = false;
+    try {
+        resp = readRespClose(sock);
+        if (resp[0] == 408) { n11ok = true; }
+    } catch (e) {
+        n11ok = false;
+    }
+    try { sock.close(); } catch (e2) { }
+    check(n11ok, "N11: 期望 408，未收到");
+    print("  N11 PASS");
+
+    print("[N12] keep-alive 空闲超时静默关闭 / idle timeout（空闲 1200ms）");
+    sock = newSock();
+    sendReq(sock, "GET", "/ping", "", "", true);
+    lo = [""];
+    resp = readRespKA(sock, lo);
+    check(resp[0] == 200 && resp[2] == "pong", "N12: 首请求失败");
+    sleep(1200);   // 超过 keepAliveTimeout(800ms)
+    // 空闲超时后连接应已被服务端静默关闭：再 recv 得 EOF，或 send 触发 broken pipe
+    n12closed = false;
+    try {
+        chunk = sock.recv(64, 0, true);
+        if (chunk.len == 0) { n12closed = true; }
+    } catch (e3) {
+        n12closed = true;   // 对端已关：recv/send 报错均符合预期
+    }
+    if (!n12closed) {
+        try {
+            sock.send("GET /ping HTTP/1.1" + crlf + "Host: s5" + crlf + crlf);
+            part = sock.recv(64, 0, true);
+            if (part.len == 0) { n12closed = true; }
+        } catch (e4) { n12closed = true; }
+    }
+    try { sock.close(); } catch (e5) { }
+    check(n12closed, "N12: 空闲超时后连接仍存活");
+    print("  N12 PASS");
+
+    print("[N13] 短连接风暴 / connection churn: 16 × 20");
+    runWorkers("N13", 16, func(i) { return N13Worker(i, 20); });
+
+    print("[N14] 共享 map 计数精确核对 / shared counter: 8 × 60");
+    runWorkers("N14", 8, func(i) { return N14Worker(i, 60); });
+
+    print("[N15] 混合长跑 / mixed long run: 8 线程 × 10s");
+    runWorkers("N15", 8, func(i) { return N15Worker(i, 10); });
+
+    app.stop();
+    print("=== ALL PASS / 五期全部通过 ===");
+    return true;
+}
+
+main();
