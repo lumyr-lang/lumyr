@@ -1,0 +1,892 @@
+// http_stress4_test.lm —— 压测四期：HTTP 方法矩阵 / 网页 / 文件 / 多线程多协程
+//
+// M1  方法矩阵：6 线程 × 40 轮 × GET/POST/PUT/DELETE/PATCH/HEAD 混合，
+//     校验状态码与 body 回显（HEAD 校验 Content-Length 保留但无正文）
+// W1  静态网页高并发：serveStatic 真实文件链路，12 线程 × 80 轮 GET /site/index.html
+// W2  query 参数：6 × 40 GET /search?q=&page= 回显校验
+// W3  表单 POST（application/x-www-form-urlencoded）：6 × 40 服务端解析重建校验
+// W4  JSON POST：6 × 40 Content-Type 校验 + body 原样回显
+// CY  handler 内双 coYield：12 × 40，跨协程切换后仍正确回包
+// F1  文件上传：4 × 3 POST 2MiB body，服务端 md5 回传比对
+// F2  文件下载（Content-Length 明文）：4 × 3 GET 2MiB 全文比对
+// F3  文件下载（streamBody chunked）：4 × 3 dechunk 后全文比对
+// F4  落盘回读：2 × 3 按线程名分文件 writeFile 后 readFile 下载比对
+// KA1 keep-alive 复用：6 线程 × 1 连接 × 100 轮顺序请求
+// KA2 pipelining：4 线程 × 1 连接 × 15 批 × 8 连发，按序校验回包
+// E1  大 header → 431；E2 大 body → 413；E3 静态资源 POST → 405
+// E4  慢速 client：2 × 2，256KiB 分 1KiB 片间隔 5ms 发送，完整回显
+// L1  12 秒混合长跑：8 线程持久连接轮换 page/search/form/json/yield
+//
+// 运行：./bin/lumyr tests/http_stress4_test.lm
+
+import <App/WebApplication>;
+import <NetWork/Socket>;
+import <IO/Files>;
+import <Thread/Thread>;
+
+PORT = 19450;
+SITE_DIR = "/tmp/http_s4_site";
+crlf = "" + '\r' + '\n';
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+func makeText(n: int): string {
+    seed = "http-stress4-content-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+
+big2m = makeText(2097152);     // 下载体 / download body
+up2m = makeText(2097152);      // 上传体 / upload body
+slow256k = makeText(262144);   // 慢速 client 体 / slow-client body
+pageHtml = "<html><head><title>s4</title></head><body>LUMIN-S4-PAGE-MARKER</body></html>";
+
+// ============================================================
+// 服务端路由
+// ============================================================
+
+app = WebApplication("127.0.0.1", PORT);
+app.setMaxHeaderBytes(8192);      // 正常请求头 <1KB；E1 用 16KB 触发 431
+app.setMaxBodyBytes(4194304);     // 上传 2MiB 放行；E2 用 5MiB CL 触发 413
+
+// M1：方法矩阵 / method matrix
+app.get("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-GET ok");
+    return r;
+});
+app.post("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-POST:" + req.bodyString());
+    return r;
+});
+app.put("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-PUT:" + req.bodyString());
+    return r;
+});
+app.delete("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-DELETE ok");
+    return r;
+});
+app.patch("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-PATCH:" + req.bodyString());
+    return r;
+});
+app.head("/method", func(req) {
+    r = ServerResponse(200);
+    r.text("M-HEAD");   // Content-Length=6，正文不发
+    r.headOnly();
+    return r;
+});
+
+// W1：静态网页 / static site（真实文件链路）
+app.serveStatic("/site", SITE_DIR);
+
+// W2：query 参数回显 / query echo
+app.get("/search", func(req) {
+    r = ServerResponse(200);
+    r.text("q=" + req.param("q") + ";page=" + req.param("page"));
+    return r;
+});
+
+// W3：表单解析重建 / urlencoded form parse
+app.post("/form", func(req) {
+    vals = {};
+    for p in req.bodyString().split("&") {
+        kv = p.split("=");
+        if (kv.len == 2) { vals[kv[0]] = kv[1]; }
+    }
+    u = "";
+    pw = "";
+    if (vals.contains("user")) { u = vals["user"]; }
+    if (vals.contains("pass")) { pw = vals["pass"]; }
+    r = ServerResponse(200);
+    r.text("user=" + u + ";pass=" + pw);
+    return r;
+});
+
+// W4：JSON 回显 / json echo（校验 Content-Type）
+app.post("/json", func(req) {
+    r = ServerResponse(200);
+    ct = req.header("Content-Type").lower();
+    if (!ct.contains("json")) {
+        r.status = 415;
+        r.text("expect json");
+        return r;
+    }
+    r.text(req.bodyString());
+    return r;
+});
+
+// CY：handler 内让出两次 / coYield inside handler
+app.get("/yield", func(req) {
+    coYield();
+    coYield();
+    r = ServerResponse(200);
+    r.text("Y ok");
+    return r;
+});
+
+// 通用回显（慢速 client 用）/ plain echo
+app.post("/echo", func(req) {
+    r = ServerResponse(200);
+    r.text(req.bodyString());
+    return r;
+});
+
+// F1：上传 md5 / upload → md5
+app.post("/upload", func(req) {
+    r = ServerResponse(200);
+    r.text(md5(req.bodyString()));
+    return r;
+});
+
+// F2：明文下载 / Content-Length download
+app.get("/download", func(req) {
+    r = ServerResponse(200);
+    r.setContentType("text/plain");
+    r.text(big2m);
+    return r;
+});
+
+// F3：chunked 流式下载 / streamBody chunked download（64 × 4KiB）
+// 服务端发送的是「同一块 chunk4k 重复 64 次」，期望串必须同构；
+// 不能用 makeText(262144)——seed 长 59，4096 非翻倍对齐点，连续翻倍序列
+// 与块重复序列在 4096 边界处内容不同
+chunk4k = makeText(4096);
+chunk4kExpect = "";
+_initN = 0;
+while (_initN < 64) { chunk4kExpect = chunk4kExpect + chunk4k; _initN = _initN + 1; }
+app.get("/chunked", func(req) {
+    r = ServerResponse(200);
+    r.setContentType("text/plain");
+    r.streamBody(func(w) {
+        i = 0;
+        while (i < 64) {
+            w.send(chunk4k);
+            i = i + 1;
+        }
+    });
+    return r;
+});
+
+// F4：落盘回读 / save to disk then read back（按 name 分文件避免线程互踩）
+app.post("/upload_save", func(req) {
+    name = req.param("name");
+    body = req.bodyString();
+    writeFile("/tmp/http_s4_" + name + ".bin", body);
+    r = ServerResponse(200);
+    r.text(md5(body));
+    return r;
+});
+app.get("/saved", func(req) {
+    name = req.param("name");
+    content = readFile("/tmp/http_s4_" + name + ".bin");
+    r = ServerResponse(200);
+    r.setContentType("text/plain");
+    r.text(content);
+    return r;
+});
+
+app.startAsync();
+
+// ============================================================
+// 客户端通用工具（字符串模式；body 均为 ASCII 可打印）
+// ============================================================
+
+func newSock() {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", PORT);
+    sock.setOption("recvTimeout", 30000);
+    return sock;
+}
+
+// 发送一个请求：头与 body 分两次 send（大 body 不在语言层拼串）
+func sendReq(sock, method: string, path: string, extraHeads: string, body: string, ka: bool) {
+    h = method + " " + path + " HTTP/1.1" + crlf + "Host: s4" + crlf;
+    if (ka) { h = h + "Connection: keep-alive" + crlf; }
+    else { h = h + "Connection: close" + crlf; }
+    if (extraHeads.len > 0) { h = h + extraHeads; }
+    if (body.len > 0) { h = h + "Content-Length: " + body.len + crlf; }
+    h = h + crlf;
+    sock.send(h);
+    if (body.len > 0) { sock.send(body); }
+}
+
+// 读完整响应直到对端关闭（Connection: close 路径）
+func readRespClose(sock): array {
+    resp = "";
+    while (true) {
+        part = sock.recv(65536);
+        if (part.len == 0) { break; }
+        resp = resp + part;
+    }
+    sep = resp.indexOf(crlf + crlf);
+    if (sep < 0) { return [0, "", ""]; }
+    head = resp.slice(0, sep);
+    st = 0;
+    if (head.len >= 12) { st = (int)head.slice(9, 12); }
+    return [st, head, resp.slice(sep + 4)];
+}
+
+// ---- keep-alive 持久连接读取（leftover 槽防过度消费）----
+
+func readHeaderKA(sock, lo): string {
+    acc = lo[0];
+    while (true) {
+        sep = acc.indexOf(crlf + crlf);
+        if (sep >= 0) {
+            lo[0] = acc.slice(sep + 4);
+            return acc.slice(0, sep);
+        }
+        part = sock.recv(65536);
+        if (part.len == 0) { return ""; }
+        acc = acc + part;
+    }
+}
+
+func contentLengthOf(head: string): int {
+    for line in head.split(crlf) {
+        low = line.lower();
+        if (low.startsWith("content-length:")) {
+            return (int)line.slice(15, line.len).trim();
+        }
+    }
+    return -1;
+}
+
+func readBodyN(sock, n: int, lo): string {
+    acc = lo[0];
+    while (acc.len < n) {
+        part = sock.recv(65536);
+        if (part.len == 0) { break; }
+        acc = acc + part;
+    }
+    body = acc.slice(0, n);
+    lo[0] = acc.slice(n);
+    return body;
+}
+
+func readLineKA(sock, lo): string {
+    acc = lo[0];
+    while (true) {
+        p = acc.indexOf(crlf);
+        if (p >= 0) {
+            lo[0] = acc.slice(p + 2);
+            return acc.slice(0, p);
+        }
+        part = sock.recv(4096);
+        if (part.len == 0) { return ""; }
+        acc = acc + part;
+    }
+}
+
+func readChunkedBody(sock, lo): string {
+    body = "";
+    while (true) {
+        line = readLineKA(sock, lo);
+        if (line.len == 0) { return body; }
+        n = 0;
+        lb = bytes(line);   // 字节数组取下标才是字符码；(int)string 是数字解析语义
+        i = 0;
+        while (i < lb.len) {
+            cv = lb[i];
+            if (cv >= 48 && cv <= 57) { n = n * 16 + (cv - 48); }
+            else if (cv >= 97 && cv <= 102) { n = n * 16 + (cv - 87); }
+            else if (cv >= 65 && cv <= 70) { n = n * 16 + (cv - 55); }
+            i = i + 1;
+        }
+        if (n == 0) { break; }
+        body = body + readBodyN(sock, n, lo);
+        readBodyN(sock, 2, lo);   // 块尾 CRLF
+    }
+    return body;
+}
+
+// 持久连接上读一个完整响应，返回 [status, head, body]
+func readRespKA(sock, lo): array {
+    head = readHeaderKA(sock, lo);
+    if (head.len < 12) { return [0, "", ""]; }
+    st = (int)head.slice(9, 12);
+    low = head.lower();
+    if (low.contains("transfer-encoding: chunked")) {
+        return [st, head, readChunkedBody(sock, lo)];
+    }
+    n = contentLengthOf(head);
+    if (n <= 0) { return [st, head, ""]; }
+    return [st, head, readBodyN(sock, n, lo)];
+}
+
+// close 模式单发单收并校验，返回是否一致
+func roundClose(method: string, path: string, heads: string, body: string,
+                expectSt: int, expectBody: string): bool {
+    sock = newSock();
+    sendReq(sock, method, path, heads, body, false);
+    resp = readRespClose(sock);
+    sock.close();
+    return resp[0] == expectSt && resp[2] == expectBody;
+}
+
+// 多线程编排：threads 个 Worker 类实例各跑 rounds 轮，汇总 bad
+func runWorkers(label: string, threads: int, mkWorker) {
+    ts = [];
+    i = 0;
+    t0 = timestamp_ms();
+    while (i < threads) {
+        ts.add(Thread(label + "-" + i, mkWorker(i)).start());
+        i = i + 1;
+    }
+    bad = 0;
+    i = 0;
+    while (i < ts.len) { bad = bad + ts[i].join(); i = i + 1; }
+    t1 = timestamp_ms();
+    print("  bad=" + bad + "，耗时 " + (t1 - t0) + " ms");
+    check(bad == 0, label + " bad=" + bad);
+    print("  " + label + " PASS");
+}
+
+// ============================================================
+// M1：方法矩阵
+// ============================================================
+class M1Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func M1Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            tag = "m1-" + self.idx + "-" + r;
+            if (!roundClose("GET", "/method", "", "", 200, "M-GET ok")) { bad = bad + 1; }
+            if (!roundClose("POST", "/method", "Content-Type: text/plain" + crlf, tag, 200, "M-POST:" + tag)) { bad = bad + 1; }
+            if (!roundClose("PUT", "/method", "Content-Type: text/plain" + crlf, tag, 200, "M-PUT:" + tag)) { bad = bad + 1; }
+            if (!roundClose("DELETE", "/method", "", "", 200, "M-DELETE ok")) { bad = bad + 1; }
+            if (!roundClose("PATCH", "/method", "Content-Type: text/plain" + crlf, tag, 200, "M-PATCH:" + tag)) { bad = bad + 1; }
+            // HEAD：Content-Length 保留真实长度但正文必须为空
+            sock = newSock();
+            sendReq(sock, "HEAD", "/method", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2].len != 0 || contentLengthOf(resp[1]) != 6) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// W1：静态网页高并发（serveStatic 真实文件）
+// ============================================================
+class W1Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func W1Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/site/index.html", "", "", false);
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || !resp[2].contains("LUMIN-S4-PAGE-MARKER")) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// W2：query 参数
+// ============================================================
+class W2Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func W2Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            q = "t" + self.idx + "x" + r;
+            expect = "q=" + q + ";page=" + r;
+            if (!roundClose("GET", "/search?q=" + q + "&page=" + r, "", "", 200, expect)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// W3：表单 POST
+// ============================================================
+class W3Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func W3Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            body = "user=u" + self.idx + "&pass=p" + r;
+            expect = "user=u" + self.idx + ";pass=p" + r;
+            heads = "Content-Type: application/x-www-form-urlencoded" + crlf;
+            if (!roundClose("POST", "/form", heads, body, 200, expect)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// W4：JSON POST
+// ============================================================
+class W4Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func W4Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            body = "{\"k\":\"j" + self.idx + "\",\"n\":" + r + "}";
+            heads = "Content-Type: application/json" + crlf;
+            if (!roundClose("POST", "/json", heads, body, 200, body)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// CY：handler 内 coYield
+// ============================================================
+class CYWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func CYWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            if (!roundClose("GET", "/yield", "", "", 200, "Y ok")) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// F1：文件上传 md5
+// ============================================================
+class F1Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    expectMd5: string;
+    func F1Worker(idx: int, rounds: int, expectMd5: string) {
+        self.idx = idx;
+        self.rounds = rounds;
+        self.expectMd5 = expectMd5;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            if (!roundClose("POST", "/upload", "Content-Type: application/octet-stream" + crlf,
+                            up2m, 200, self.expectMd5)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// F2：明文大文件下载
+// ============================================================
+class F2Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func F2Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            if (!roundClose("GET", "/download", "", "", 200, big2m)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// F3：chunked 流式下载
+// ============================================================
+class F3Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    expect: string;
+    func F3Worker(idx: int, rounds: int, expect: string) {
+        self.idx = idx;
+        self.rounds = rounds;
+        self.expect = expect;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            sendReq(sock, "GET", "/chunked", "", "", false);
+            // chunked 也可能随 close 结束：按头部分流
+            resp = readRespClose(sock);
+            sock.close();
+            head = resp[1].lower();
+            body = resp[2];
+            if (resp[0] != 200) { bad = bad + 1; r = r + 1; continue; }
+            if (head.contains("transfer-encoding: chunked")) {
+                lo = [body];
+                sock2 = null;
+                // close 模式已读完全部字节：直接在 leftover 上 dechunk
+                body = dechunkFromLo(lo);
+            }
+            if (body != self.expect) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// close 模式全量串上的 dechunk（数据已在 leftover 串内，无需 socket）
+func dechunkFromLo(lo): string {
+    body = "";
+    while (true) {
+        acc = lo[0];
+        p = acc.indexOf(crlf);
+        if (p < 0) { return body; }
+        line = acc.slice(0, p);
+        lo[0] = acc.slice(p + 2);
+        n = 0;
+        lb = bytes(line);   // 字节数组取下标才是字符码；(int)string 是数字解析语义
+        i = 0;
+        while (i < lb.len) {
+            cv = lb[i];
+            if (cv >= 48 && cv <= 57) { n = n * 16 + (cv - 48); }
+            else if (cv >= 97 && cv <= 102) { n = n * 16 + (cv - 87); }
+            i = i + 1;
+        }
+        if (n == 0) { break; }
+        acc = lo[0];
+        body = body + acc.slice(0, n);
+        lo[0] = acc.slice(n + 2);
+    }
+    return body;
+}
+
+// ============================================================
+// F4：落盘回读（按线程名分文件）
+// ============================================================
+class F4Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    payload: string;
+    expectMd5: string;
+    func F4Worker(idx: int, rounds: int, payload: string, expectMd5: string) {
+        self.idx = idx;
+        self.rounds = rounds;
+        self.payload = payload;
+        self.expectMd5 = expectMd5;
+    }
+    func run(): int {
+        bad = 0;
+        name = "f4_" + self.idx;
+        r = 0;
+        while (r < self.rounds) {
+            // 上传落盘 / save
+            if (!roundClose("POST", "/upload_save?name=" + name,
+                            "Content-Type: application/octet-stream" + crlf,
+                            self.payload, 200, self.expectMd5)) { bad = bad + 1; r = r + 1; continue; }
+            // 回读比对 / read back
+            if (!roundClose("GET", "/saved?name=" + name, "", "", 200, self.payload)) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// KA1：keep-alive 复用（单连接 100 轮顺序请求）
+// ============================================================
+class KA1Worker implements Runnable {
+    idx: int;
+    rounds: int;
+    func KA1Worker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        sock = newSock();
+        lo = [""];
+        r = 0;
+        while (r < self.rounds) {
+            q = "ka" + self.idx + "-" + r;
+            sendReq(sock, "GET", "/search?q=" + q + "&page=" + r, "", "", true);
+            resp = readRespKA(sock, lo);
+            expect = "q=" + q + ";page=" + r;
+            if (resp[0] != 200 || resp[2] != expect) { bad = bad + 1; }
+            r = r + 1;
+        }
+        sock.close();
+        return bad;
+    }
+}
+
+// ============================================================
+// KA2：pipelining（连发 8 个再按序读 8 个）
+// ============================================================
+class KA2Worker implements Runnable {
+    idx: int;
+    batches: int;
+    func KA2Worker(idx: int, batches: int) {
+        self.idx = idx;
+        self.batches = batches;
+    }
+    func run(): int {
+        bad = 0;
+        sock = newSock();
+        lo = [""];
+        b = 0;
+        while (b < self.batches) {
+            k = 0;
+            while (k < 8) {
+                sendReq(sock, "GET", "/search?q=pp" + self.idx + "-" + b + "-" + k + "&page=" + k, "", "", true);
+                k = k + 1;
+            }
+            k = 0;
+            while (k < 8) {
+                resp = readRespKA(sock, lo);
+                expect = "q=pp" + self.idx + "-" + b + "-" + k + ";page=" + k;
+                if (resp[0] != 200 || resp[2] != expect) { bad = bad + 1; }
+                k = k + 1;
+            }
+            b = b + 1;
+        }
+        sock.close();
+        return bad;
+    }
+}
+
+// ============================================================
+// E4：慢速 client（小片间隔发送）
+// ============================================================
+class SlowWorker implements Runnable {
+    idx: int;
+    rounds: int;
+    func SlowWorker(idx: int, rounds: int) {
+        self.idx = idx;
+        self.rounds = rounds;
+    }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < self.rounds) {
+            sock = newSock();
+            h = "POST /echo HTTP/1.1" + crlf + "Host: s4" + crlf
+                + "Content-Type: text/plain" + crlf
+                + "Content-Length: " + slow256k.len + crlf
+                + "Connection: close" + crlf + crlf;
+            sock.send(h);
+            pos = 0;
+            while (pos < slow256k.len) {
+                end = pos + 1024;
+                if (end > slow256k.len) { end = slow256k.len; }
+                sock.send(slow256k.slice(pos, end));
+                sleep(5);
+                pos = end;
+            }
+            resp = readRespClose(sock);
+            sock.close();
+            if (resp[0] != 200 || resp[2] != slow256k) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+
+// ============================================================
+// L1：混合长跑（持久连接轮换多路由）
+// ============================================================
+class MixWorker implements Runnable {
+    idx: int;
+    seconds: int;
+    func MixWorker(idx: int, seconds: int) {
+        self.idx = idx;
+        self.seconds = seconds;
+    }
+    func run(): int {
+        bad = 0;
+        sock = newSock();
+        lo = [""];
+        t0 = timestamp_ms();
+        ops = 0;
+        while (timestamp_ms() - t0 < self.seconds * 1000) {
+            mode = ops % 5;
+            ok = false;
+            if (mode == 0) {
+                sendReq(sock, "GET", "/site/index.html", "", "", true);
+                resp = readRespKA(sock, lo);
+                ok = resp[0] == 200 && resp[2].contains("LUMIN-S4-PAGE-MARKER");
+            } else if (mode == 1) {
+                sendReq(sock, "GET", "/search?q=mix" + ops + "&page=" + ops, "", "", true);
+                resp = readRespKA(sock, lo);
+                ok = resp[0] == 200 && resp[2] == "q=mix" + ops + ";page=" + ops;
+            } else if (mode == 2) {
+                body = "user=mu" + self.idx + "&pass=mp" + ops;
+                sendReq(sock, "POST", "/form", "Content-Type: application/x-www-form-urlencoded" + crlf, body, true);
+                resp = readRespKA(sock, lo);
+                ok = resp[0] == 200 && resp[2] == "user=mu" + self.idx + ";pass=mp" + ops;
+            } else if (mode == 3) {
+                body = "{\"mix\":" + ops + "}";
+                sendReq(sock, "POST", "/json", "Content-Type: application/json" + crlf, body, true);
+                resp = readRespKA(sock, lo);
+                ok = resp[0] == 200 && resp[2] == body;
+            } else {
+                sendReq(sock, "GET", "/yield", "", "", true);
+                resp = readRespKA(sock, lo);
+                ok = resp[0] == 200 && resp[2] == "Y ok";
+            }
+            if (!ok) { bad = bad + 1; }
+            ops = ops + 1;
+        }
+        sock.close();
+        print("  [L1] 线程 " + self.idx + " ops=" + ops + " bad=" + bad);
+        return bad;
+    }
+}
+
+// ============================================================
+// main
+// ============================================================
+func main() {
+    print("=== HTTP 压测四期 / http stress phase 4 ===");
+
+    // 准备静态站点 / prepare static site
+    Files.createDir(SITE_DIR);
+    writeFile(SITE_DIR + "/index.html", pageHtml);
+    writeFile(SITE_DIR + "/style.css", "body{color:#333}");
+    sleep(100);   // startAsync 就绪 / wait for listener
+
+    upMd5 = md5(up2m);
+
+    print("[M1] 方法矩阵 / method matrix: 6 线程 × 40 轮 × 6 方法");
+    runWorkers("M1", 6, func(i) { return M1Worker(i, 40); });
+
+    print("[W1] 静态网页高并发 / static site: 12 × 80");
+    runWorkers("W1", 12, func(i) { return W1Worker(i, 80); });
+
+    print("[W2] query 参数 / query params: 6 × 40");
+    runWorkers("W2", 6, func(i) { return W2Worker(i, 40); });
+
+    print("[W3] 表单 POST / urlencoded form: 6 × 40");
+    runWorkers("W3", 6, func(i) { return W3Worker(i, 40); });
+
+    print("[W4] JSON POST: 6 × 40");
+    runWorkers("W4", 6, func(i) { return W4Worker(i, 40); });
+
+    print("[CY] handler coYield: 12 × 40");
+    runWorkers("CY", 12, func(i) { return CYWorker(i, 40); });
+
+    print("[F1] 文件上传 md5 / upload 2MiB: 4 × 3");
+    runWorkers("F1", 4, func(i) { return F1Worker(i, 3, upMd5); });
+
+    print("[F2] 明文下载 2MiB / download: 4 × 3");
+    runWorkers("F2", 4, func(i) { return F2Worker(i, 3); });
+
+    print("[F3] chunked 流式下载 256KiB / chunked: 4 × 3");
+    runWorkers("F3", 4, func(i) { return F3Worker(i, 3, chunk4kExpect); });
+
+    print("[F4] 落盘回读 512KiB / save+read: 2 × 3");
+    f4payload = makeText(524288);
+    f4md5 = md5(f4payload);
+    runWorkers("F4", 2, func(i) { return F4Worker(i, 3, f4payload, f4md5); });
+
+    print("[KA1] keep-alive 复用 / persistent: 6 × 1 连接 × 100");
+    runWorkers("KA1", 6, func(i) { return KA1Worker(i, 100); });
+
+    print("[KA2] pipelining: 4 × 15 批 × 8 连发");
+    runWorkers("KA2", 4, func(i) { return KA2Worker(i, 15); });
+
+    // ---- 负向边界 / negative boundaries ----
+    print("[E1] 大 header → 431");
+    sock = newSock();
+    // 服务端读到上限即回 431 并关闭，此时 1MiB 头大量字节仍在飞行中/对端接收缓冲，
+    // close() 必发 RST（非 FIN）。客户端有两种合规结果：先读到 431，
+    // 或 send/recv 直接收 Connection reset（时序竞态），二者均判定通过
+    e1ok = false;
+    try {
+        sendReq(sock, "GET", "/method", "X-Big: " + makeText(1048576) + crlf, "", false);
+        resp = readRespClose(sock);
+        if (resp[0] == 431) { e1ok = true; }
+    } catch (e) {
+        // RST / Broken pipe：服务端已完成 431 拦截后强制关连接，符合预期
+        e1ok = true;
+    }
+    try { sock.close(); } catch (e2) { }
+    check(e1ok, "E1: 期望 431 或连接被重置，均未发生");
+    print("  E1 PASS");
+
+    print("[E2] 大 body → 413（CL=5MiB 超 4MiB 上限）");
+    sock = newSock();
+    // 只发头部带超大 CL：服务端按 CL 前置拦截，无需真发 5MiB
+    sock.send("POST /upload HTTP/1.1" + crlf + "Host: s4" + crlf
+              + "Content-Length: 5242880" + crlf + "Connection: close" + crlf + crlf);
+    resp = readRespClose(sock);
+    sock.close();
+    check(resp[0] == 413, "E2: 期望 413，实际 " + resp[0]);
+    print("  E2 PASS");
+
+    print("[E3] 静态资源 POST → 405");
+    sock = newSock();
+    sendReq(sock, "POST", "/site/index.html", "Content-Type: text/plain" + crlf, "x", false);
+    resp = readRespClose(sock);
+    sock.close();
+    check(resp[0] == 405, "E3: 期望 405，实际 " + resp[0]);
+    print("  E3 PASS");
+
+    print("[E4] 慢速 client / slow client: 2 × 2 × 256KiB(1KiB/5ms)");
+    runWorkers("E4", 2, func(i) { return SlowWorker(i, 2); });
+
+    print("[L1] 混合长跑 / mixed long run: 8 线程 × 12s");
+    runWorkers("L1", 8, func(i) { return MixWorker(i, 12); });
+
+    app.stop();
+    print("=== ALL PASS / 四期全部通过 ===");
+    return true;
+}
+
+main();

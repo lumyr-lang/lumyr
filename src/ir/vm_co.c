@@ -74,8 +74,8 @@ typedef struct {
 
 /* resume 前恢复协程 vm_state 到 _Thread_local。
  * 先保存当前 _Thread_local 到 baseline（调用方状态），再恢复协程状态。
- * Phase 7.4：迁移 resume（migrated=1）时先确保本线程栈池就绪（worker 首次
- * 时 g_stack_mgr 为 NULL）并把搬运的活数据写回，再走统一恢复路径。
+ * 所有 yield 均已保存 mig_copy（见 yield_hook），resume 总是从 mig_copy
+ * 写回栈数据（含跨线程迁移场景：worker 首次 g_stack_mgr 为 NULL 时先建池）。
  * co==NULL：no-op（保留兼容，正常不传 NULL）。 */
 static void vm_co_resume_hook(lm_co_t* co) {
     if(!co) return;
@@ -119,9 +119,10 @@ static void vm_co_resume_hook(lm_co_t* co) {
 /* yield 前保存协程 vm_state + 恢复 baseline。
  * DEAD 时（trampoline 结束后 lm_co_resume 检测 DEAD 调本 hook）只恢复 baseline，
  * 不保存协程状态（协程要销毁，保存无意义）。
- * Phase 7.4：迁移 yield（migrate_sched 非空）时额外把活数据搬入 mig_copy
- * （栈数据物理绑定当前线程，目标线程栈池里没有；顺序：先搬协程数据，再恢复
- * baseline——baseline 恢复会覆盖 sp，搬家必须在它之前）。 */
+ * 根因修复：所有 yield 都把四栈活数据拷入 mig_copy（不仅迁移 yield）。
+ * 旧逻辑仅迁移 yield 拷数据，依赖「yield 点栈平衡无活值」的不变量；
+ * 但 lm_co_await_blocking 可在表达式中间（栈上有活值）从 C 内建直接 yield，
+ * 非迁移路径不拷数据 → 同线程他协程覆写共享栈池 → resume 后 sp 恢复但数据已污染。 */
 static void vm_co_yield_hook(lm_co_t* co) {
     if(!g_stack_mgr || !co) return;
     VMCoState* st = (VMCoState*)co->vm_state;
@@ -132,32 +133,30 @@ static void vm_co_yield_hook(lm_co_t* co) {
         st->err_jmp = g_err_jmp;
         vm_except_save_state(&st->except_state);
         st->current_class = lumyr_get_current_class();
-        if (atomic_load_explicit(&co->migrate_sched, memory_order_acquire)) {
-            st->migrated = 1;
-            for (int i = 0; i < STACK_TYPE_COUNT; i++) {
-                int sp = g_stack_mgr->sp[i];
-                if (sp > 0) {
-                    size_t bytes = (size_t)sp * stack_get_elem_size((StackType)i);
-                    void* buf = realloc(st->mig_copy[i], bytes);
-                    /* 搬家失败 = 栈数据丢失（静默继续会数据损坏），直接终止 */
-                    if (!buf) abort();
-                    memcpy(buf, g_stack_mgr->stacks[i], bytes);
-                    st->mig_copy[i] = buf;
-                    st->mig_size[i] = bytes;
-                } else {
-                    free(st->mig_copy[i]);
-                    st->mig_copy[i] = NULL;
-                    st->mig_size[i] = 0;
-                }
+        /* 所有 yield 都保存四栈活数据（根因修复：见函数头注释）。
+         * 顺序：先搬协程数据，再恢复 baseline——baseline 恢复会覆盖 sp，
+         * 搬家必须在它之前。 */
+        st->migrated = 1;
+        for (int i = 0; i < STACK_TYPE_COUNT; i++) {
+            int sp = g_stack_mgr->sp[i];
+            if (sp > 0) {
+                size_t bytes = (size_t)sp * stack_get_elem_size((StackType)i);
+                void* buf = realloc(st->mig_copy[i], bytes);
+                /* 搬家失败 = 栈数据丢失（静默继续会数据损坏），直接终止 */
+                if (!buf) abort();
+                memcpy(buf, g_stack_mgr->stacks[i], bytes);
+                st->mig_copy[i] = buf;
+                st->mig_size[i] = bytes;
+            } else {
+                free(st->mig_copy[i]);
+                st->mig_copy[i] = NULL;
+                st->mig_size[i] = 0;
             }
         }
         /* Phase 8.2：维护 stealable（机制级迁移安全标志，scheduler 窃取分流依据）。
-         * 本次 yield 做了 mig_copy（compute 迁移路径）→ 栈数据已在堆上，
-         * 任何线程 resume 都可经 mig_copy 恢复 → 可窃取；
-         * 否则栈数据物理留在本线程栈池 → 只能本线程 resume → 不可窃取。
-         * resume hook 消费 mig_copy 后协程重新运行，栈数据回到新线程池，
-         * 下次 yield 时本标志按同一规则重判。 */
-        co->stealable = (st->migrated) ? 1 : 0;   /* _Atomic 字段：裸写即 seq_cst 原子存 */
+         * 所有 yield 均做了 mig_copy → 栈数据已在堆上，
+         * 任何线程 resume 都可经 mig_copy 恢复 → 可窃取。 */
+        co->stealable = 1;   /* _Atomic 字段：裸写即 seq_cst 原子存 */
     }
     /* 恢复 baseline（调用方状态）*/
     for(int i = 0; i < 4; i++) g_stack_mgr->sp[i] = st->baseline_sp[i];

@@ -298,8 +298,6 @@ public class ServerRequest {
             got = got + n;
 
             if (headerEnd < 0) {
-                // P1-5：header 未结束前按总量卡上限（防无头尾超大请求）
-                if (got > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
                 headView = bytesConcat(chunks);
                 headerEnd = ServerRequest.findHeaderEnd(headView);
                 if (headerEnd >= 0) {
@@ -309,6 +307,11 @@ public class ServerRequest {
                     // P1-5：body 超上限（按 Content-Length）→ 413
                     if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
                     total = headerEnd + 4 + cl;
+                } else if (got > maxHdr) {
+                    // P1-5：header 未找到且已收总量超上限 → 431（防无头尾超大请求）
+                    // 须先找 \r\n\r\n 再按总量卡：首块可能远超 maxHdr（readChunkSize 64KB），
+                    // 而真实 header 仅几百字节，先卡总量会误杀大 body 的正常请求
+                    throw "HTTP_HEADER_TOO_LARGE";
                 }
             }
             if (total >= 0 && got >= total) { break; }
@@ -342,14 +345,16 @@ public class ServerRequest {
             if (n == 0) { break; }  // 对端关闭 / EOF
             buf = bytesConcat([buf, chunk]);
             if (headerEnd < 0) {
-                // P1-5：header 未结束前按总量卡上限
-                if (buf.len > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
                 headerEnd = ServerRequest.findHeaderEnd(buf);
                 if (headerEnd >= 0) {
                     if (headerEnd + 4 > maxHdr) { throw "HTTP_HEADER_TOO_LARGE"; }
                     cl = ServerRequest.headerContentLength(buf, headerEnd);
                     if (maxBody > 0 && cl > maxBody) { throw "HTTP_BODY_TOO_LARGE"; }
                     total = headerEnd + 4 + cl;
+                } else if (buf.len > maxHdr) {
+                    // P1-5：header 未找到且已收总量超上限 → 431
+                    // 同单参形态：先找 \r\n\r\n 再按总量卡，避免首块 64KB 误杀大 body 请求
+                    throw "HTTP_HEADER_TOO_LARGE";
                 }
             }
         }
