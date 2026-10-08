@@ -31,4 +31,11 @@ int static_sym_scope_active(void);
 /* 名字是否已在当前作用域层级登记（新建或遮蔽）；用于区分首次定义与重复赋值 */
 int static_sym_level_knows(const char* name);
 
+/* 名字是否绑定在全局层（阶段1收集的顶层函数/变量/extern）：存活且不被
+ * 当前任何函数/块作用域层级新建或遮蔽。lambda 内对全局名赋值是合法遮蔽
+ * （新局部），不得误判为对外层变量的捕获。
+ * Whether the name is bound at global scope (collected top-level names),
+ * i.e. live and not introduced/shadowed by any active function/block level. */
+int static_sym_is_global(const char* name);
+
 #endif

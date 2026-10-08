@@ -160,6 +160,48 @@ static void push_call_result(CallSite* cs, RetSlot ret) {
     }
 }
 
+/* ========== 冷错误路径（noinline） ==========
+ * 这些辅助只在调用失败时进入，但其内嵌的 256/512 字节格式化缓冲若留在
+ * vm_exec_call / vm_exec_call_method_dyn 函数体内，编译器会计入热帧固定
+ * 大小——每个动态方法调用常驻约 1.5KB C 栈。接口/过滤器链每下钻一层
+ * lumin 方法都要压一对热帧，默认 128KiB 协程栈会被中等深度的正常业务链
+ * （多 worker + 数个过滤器 + 文件处理器）吃满而 SIGBUS。下沉到 noinline
+ * 冷函数后，缓冲仅在真正报错的那一帧临时占用。
+ * Cold error paths: hoisting these message buffers out of the hot call
+ * frames keeps ~1.5KiB per dynamic call off the coroutine stack, otherwise
+ * normal deep interface/filter chains overflow the 128KiB default stack. */
+__attribute__((noinline))
+static int vm_call_err_undefined(const char* fname) {
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "VM: 调用未定义函数 %s / call to undefined function %s",
+             fname, fname);
+    runtime_error(buf);
+    return 0;
+}
+
+/* kind：0=内置错误值不支持方法；1=类型无可执行实现；2=类型不支持方法 */
+__attribute__((noinline))
+static int vm_call_err_method(int kind, const char* tns, const char* mname) {
+    char buf[512];
+    const char* t = tns ? tns : "?";
+    if (kind == 0) {
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: 内置错误值不支持方法 .%s / runtime error: builtin error value does not support method .%s",
+                 mname, mname);
+    } else if (kind == 1) {
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: 类型 %s 没有方法 \"%s\" 的可执行实现 / runtime error: type %s has no executable implementation of method \"%s\"",
+                 t, mname, t, mname);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: 类型 %s 不支持方法 .%s / runtime error: type %s does not support method .%s",
+                 t, mname, t, mname);
+    }
+    runtime_error(buf);
+    return 0;
+}
+
 /* ========== 普通函数调用 ========== */
 int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     int cs_idx = in->a;
@@ -168,12 +210,7 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
 
     BytecodeFunc* callee = ir_func_table_lookup(cs->callee);
     if (!callee) {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-                 "VM: 调用未定义函数 %s / call to undefined function %s",
-                 cs->callee, cs->callee);
-        runtime_error(buf);
-        return 0;   /* 不可达 */
+        return vm_call_err_undefined(cs->callee);
     }
 
     /* 逆序弹实参（栈顶是最后一个实参），暂存以便顺序绑定 */
@@ -370,13 +407,8 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
         } else if (strcmp(mname, "getErrno") == 0) {
             outv = lumyr_make_int(recv.v.err.os_errno);   /* 系统 errno 快照（0=无） */
         } else {
-            char buf[512];
-            snprintf(buf, sizeof(buf),
-                     "运行时错误: 内置错误值不支持方法 .%s / runtime error: builtin error value does not support method .%s",
-                     mname, mname);
             free(argv);
-            runtime_error(buf);
-            return 0;   /* 不可达 */
+            return vm_call_err_method(0, NULL, mname);
         }
         free(argv);
         if (cs->keep_result)
@@ -391,13 +423,8 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
         if (!vm_make_bound_method(recv, mname, &fv)) {
             Value tn = lumyr_type(recv);
             const char* tns = lumyr_str_cstr(&tn);
-            char buf[512];
-            snprintf(buf, sizeof(buf),
-                     "运行时错误: 类型 %s 没有方法 \"%s\" 的可执行实现 / runtime error: type %s has no executable implementation of method \"%s\"",
-                     tns ? tns : "?", mname, tns ? tns : "?", mname);
             free(argv);
-            runtime_error(buf);
-            return 0;   /* 不可达 */
+            return vm_call_err_method(1, tns, mname);
         }
         Value outv;
         int status = vm_call_func_value(ctx, fv, argc - 1, &argv[1], &outv);
@@ -448,15 +475,12 @@ int vm_exec_call_method_dyn(VMExecCtx* ctx, const Instruction* in) {
     }
 
     /* 4. 其余：标准类型错误（经 runtime_error 走协作式 throw，try 可捕获） */
-    Value tn = lumyr_type(recv);
-    const char* tns = lumyr_str_cstr(&tn);
-    char buf[512];
-    snprintf(buf, sizeof(buf),
-             "运行时错误: 类型 %s 不支持方法 .%s / runtime error: type %s does not support method .%s",
-             tns ? tns : "?", mname, tns ? tns : "?", mname);
-    free(argv);
-    runtime_error(buf);
-    return 0;   /* 不可达 */
+    {
+        Value tn = lumyr_type(recv);
+        const char* tns = lumyr_str_cstr(&tn);
+        free(argv);
+        return vm_call_err_method(2, tns, mname);
+    }
 }
 
 /* ========== 获取函数值（裸函数名引用） ========== */

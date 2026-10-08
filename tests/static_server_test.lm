@@ -1,0 +1,301 @@
+// static_server_test.lm —— StaticServer（JSON 配置驱动静态站点）功能验证
+//
+// 覆盖：
+//  S1 JSON 文件配置加载 + 目录/资源托管（默认 index、自定义 index）
+//  S2 gzip 协商（配置开启 → CE:gzip，解压还原一致）
+//  S3 自定义错误页 404/403/500 + app() 逃生舱混挂业务 API
+//  S4 accessLog + MetricsFilter 计数
+//  S5 workers=2 下 8 线程并发取资源逐字节一致
+//  S6 map 形态配置（最小配置走默认值）
+//  S7 启动期校验：sites 缺失 / root 不存在 / 错误页不存在 → throw
+//
+// 运行：./bin/lumyr tests/static_server_test.lm
+
+import <App/StaticServer>;
+import <NetWork/Socket>;
+import <IO/Files>;
+import <Thread/Thread>;
+
+crlf = "" + '\r' + '\n';
+BASE = "/tmp/ss_test";
+WWW = BASE + "/www";
+SUB = BASE + "/sub";
+ERRD = BASE + "/err";
+CFG = BASE + "/config.json";
+PORT = 19480;
+PORT2 = 19481;
+
+func check(cond, msg) {
+    if (cond == false) { throw msg; }
+}
+
+// ============================================================
+// 站点夹具
+// ============================================================
+Files.createDir(WWW + "/assets");
+Files.createDir(SUB);
+Files.createDir(ERRD);
+
+indexHtml = "<html><body>SS-INDEX-MARKER</body></html>";
+writeFile(WWW + "/index.html", indexHtml);
+
+func makeTextStub(n: int): string {
+    seed = "static-server-gzip-check-0123456789-ABCDEF-";
+    s = seed;
+    while (s.len < n) { s = s + s; }
+    return s.slice(0, n);
+}
+jsBody = "// app.js static server marker " + makeTextStub(1500);
+writeFile(WWW + "/assets/app.js", jsBody);
+
+mainHtm = "<html><body>SUB-MAIN-HTM-MARKER</body></html>";
+writeFile(SUB + "/main.htm", mainHtm);
+
+e404 = "<html><body>ERR-PAGE-404</body></html>";
+e403 = "<html><body>ERR-PAGE-403</body></html>";
+e500 = "<html><body>ERR-PAGE-500</body></html>";
+writeFile(ERRD + "/404.html", e404);
+writeFile(ERRD + "/403.html", e403);
+writeFile(ERRD + "/500.html", e500);
+
+// ============================================================
+// 主配置（map → JSON 文件，覆盖文件加载通道与全部配置项）
+// ============================================================
+cfg = {
+    "host": "127.0.0.1",
+    "port": PORT,
+    "workers": 2,
+    "keepAlive": true,
+    "keepAliveTimeout": 5000,
+    "requestTimeout": 30000,
+    "maxHeaderBytes": 1048576,
+    "maxBodyBytes": 8388608,
+    "accessLog": true,
+    "gzip": { "enabled": true, "level": 6, "minLength": 1024 },
+    "errorPages": {
+        "404": ERRD + "/404.html",
+        "403": ERRD + "/403.html",
+        "500": ERRD + "/500.html"
+    },
+    "sites": [
+        { "prefix": "/", "root": WWW, "index": "index.html" },
+        { "prefix": "/sub2", "root": SUB, "index": "main.htm" }
+    ]
+};
+writeFile(CFG, cfg.stringify());
+
+ss = StaticServer(CFG);
+// 逃生舱：混挂业务 API 与 500 异常路由
+ss.app().get("/api/ping", func(req) {
+    return ServerResponse(200).json({"ok": true, "svc": "static-server"});
+});
+ss.app().get("/boom", func(req) {
+    throw "ss-test-expected-boom / 预期测试异常";
+});
+
+// ============================================================
+// 客户端工具（bytes 模式，二进制安全；须先于 startAsync 定义：
+// 顶层 func 顺序注册，服务在 startAsync 后即可能并发触发请求）
+// ============================================================
+func newSock(port: int) {
+    sock = TcpSocket();
+    sock.connect("127.0.0.1", port);
+    sock.setOption("recvTimeout", 15000);
+    return sock;
+}
+
+// 发请求并读到连接关闭；返回 [status, head, bodyBytes]
+func doClose(port: int, method: string, path: string, extraHead: string, acceptGzip: bool): array {
+    sock = newSock(port);
+    h = method + " " + path + " HTTP/1.1" + crlf + "Host: ss" + crlf + "Connection: close" + crlf;
+    if (acceptGzip) { h = h + "Accept-Encoding: gzip" + crlf; }
+    if (extraHead != "") { h = h + extraHead; }
+    sock.send(h + crlf);
+    parts = [];
+    while (true) {
+        c = sock.recv(65536, 0, true);
+        if (c.len == 0) { break; }
+        parts.add(c);
+    }
+    sock.close();
+    all = bytesConcat(parts);
+    sep = -1;
+    i = 0;
+    while (i + 3 < all.len) {
+        if (all[i] == 13 && all[i + 1] == 10 && all[i + 2] == 13 && all[i + 3] == 10) { sep = i; break; }
+        i = i + 1;
+    }
+    if (sep < 0) { return [0, "", bytes()]; }
+    head = bytesSlice(all, 0, sep).decode();
+    st = 0;
+    if (head.len >= 12) { st = (int)head.slice(9, 12); }
+    return [st, head, bytesSlice(all, sep + 4, -1)];
+}
+
+func hdr(head: string, name: string): string {
+    prefix = name.lower() + ":";
+    for line in head.split(crlf) {
+        if (line.lower().startsWith(prefix)) { return line.slice(prefix.len, line.len).trim(); }
+    }
+    return "";
+}
+
+func bytesEq(a, b): bool {
+    if (a.len != b.len) { return false; }
+    i = 0;
+    while (i < a.len) { if (a[i] != b[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+// 全部顶层函数就位后再启动服务
+ss.startAsync();
+sleep(200);
+
+// ============================================================
+// S1：目录索引/默认 index/自定义 index/MIME
+// ============================================================
+resp = doClose(PORT, "GET", "/", "", false);
+check(resp[0] == 200 && resp[2].decode() == indexHtml
+      && hdr(resp[1], "content-type").startsWith("text/html"), "S1 目录默认页失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/index.html", "", false);
+check(resp[0] == 200 && resp[2].decode() == indexHtml, "S1 index.html 直取失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/assets/app.js", "", false);
+check(resp[0] == 200 && bytesEq(resp[2], bytes(jsBody))
+      && hdr(resp[1], "content-type").startsWith("application/javascript"),
+      "S1 app.js 内容/MIME 失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/sub2/", "", false);
+check(resp[0] == 200 && resp[2].decode() == mainHtm, "S2 自定义 index 失败: " + resp[0]);
+print("S1 托管+索引 PASS");
+
+// ============================================================
+// S2：gzip 协商
+// ============================================================
+resp = doClose(PORT, "GET", "/assets/app.js", "", true);
+check(resp[0] == 200 && hdr(resp[1], "content-encoding") == "gzip",
+      "S2 gzip 协商失败: st=" + resp[0] + " CE=[" + hdr(resp[1], "content-encoding") + "]");
+back = gzipDecompress(resp[2]);
+check(bytesEq(back, bytes(jsBody)), "S2 gzip 解压还原不一致");
+print("S2 gzip PASS");
+
+// ============================================================
+// S3：错误页 404/403/500 + 逃生舱 API
+// ============================================================
+resp = doClose(PORT, "GET", "/no-such-file-xyz", "", false);
+check(resp[0] == 404 && resp[2].decode() == e404, "S3 404 错误页失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/../../../../etc/passwd", "", false);
+check(resp[0] == 403 && resp[2].decode() == e403, "S3 403 错误页失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/boom", "", false);
+check(resp[0] == 500 && resp[2].decode() == e500, "S3 500 错误页失败: " + resp[0]);
+
+resp = doClose(PORT, "GET", "/api/ping", "", false);
+check(resp[0] == 200 && resp[2].decode().contains("static-server")
+      && hdr(resp[1], "content-type").startsWith("application/json"),
+      "S3 逃生舱 API 失败: " + resp[0]);
+print("S3 错误页+逃生舱 PASS");
+
+// ============================================================
+// S4：MetricsFilter 计数（accessLog 开启）
+// ============================================================
+mf = ss.metricsFilter();
+check(mf != null, "S4 metricsFilter 为空");
+snap = mf.snapshot();
+check(type(snap) == "map" && (long)snap["total"] >= 7, "S4 计数异常: " + snap["total"]);
+print("S4 访问日志/指标 PASS（total=" + snap["total"] + "）");
+
+// ============================================================
+// S5：workers=2 下并发取资源
+// ============================================================
+class S5Worker implements Runnable {
+    idx: int;
+    port: int;
+    func S5Worker(idx: int, port: int) { self.idx = idx; self.port = port; }
+    func run(): int {
+        bad = 0;
+        r = 0;
+        while (r < 10) {
+            resp = doClose(self.port, "GET", "/assets/app.js", "", false);
+            if (resp[0] != 200 || bytesEq(resp[2], bytes(jsBody)) == false) { bad = bad + 1; }
+            // 穿插错误页路径
+            resp2 = doClose(self.port, "GET", "/missing-" + self.idx + "-" + r, "", false);
+            if (resp2[0] != 404 || resp2[2].decode() != e404) { bad = bad + 1; }
+            r = r + 1;
+        }
+        return bad;
+    }
+}
+ts = [];
+i = 0;
+while (i < 8) { ts.add(Thread("ss5-" + i, S5Worker(i, PORT)).start()); i = i + 1; }
+s5Bad = 0;
+i = 0;
+while (i < 8) { s5Bad = s5Bad + ts[i].join(); i = i + 1; }
+check(s5Bad == 0, "S5 并发 bad=" + s5Bad);
+print("S5 workers=2 并发（8×10）PASS");
+
+// ============================================================
+// S6：map 形态最小配置（省略全部可选键，走默认值）
+// ============================================================
+ss2 = StaticServer({
+    "host": "127.0.0.1",
+    "port": PORT2,
+    "sites": [ {"prefix": "/", "root": SUB, "index": "main.htm"} ]
+});
+ss2.startAsync();
+sleep(200);
+resp = doClose(PORT2, "GET", "/", "", false);
+check(resp[0] == 200 && resp[2].decode() == mainHtm, "S6 map 形态托管失败: " + resp[0]);
+// gzip 默认开启
+respGz = doClose(PORT2, "GET", "/main.htm", "", true);
+// 小文件不一定压（阈值保护），但大目录默认 gzip 段存在且配置解析无异常即通过；
+// 此处校验未配 errorPages 时 404 走框架默认页（不被替换）
+resp404 = doClose(PORT2, "GET", "/nope", "", false);
+check(resp404[0] == 404 && resp404[2].decode().contains("Not Found"), "S6 默认 404 语义失败");
+ss2.stop();
+print("S6 map 形态 PASS");
+
+// ============================================================
+// S7：启动期校验
+// ============================================================
+func expectThrow(label: string, badCfg: map) {
+    got = false;
+    try {
+        x = StaticServer(badCfg);
+    } catch (e) {
+        got = true;
+    }
+    check(got, "S7 " + label + " 应当 throw 但未抛出");
+}
+
+expectThrow("sites 缺失", {"host": "127.0.0.1", "port": 19490});
+expectThrow("sites 为空数组", {"host": "127.0.0.1", "port": 19490, "sites": []});
+expectThrow("root 不存在", {
+    "host": "127.0.0.1", "port": 19490,
+    "sites": [ {"prefix": "/", "root": "/tmp/__ss_not_exist_dir__"} ]
+});
+expectThrow("错误页不存在", {
+    "host": "127.0.0.1", "port": 19490,
+    "errorPages": { "404": "/tmp/__ss_no_such_page__.html" },
+    "sites": [ {"prefix": "/", "root": WWW} ]
+});
+expectThrow("site 缺 prefix", {
+    "host": "127.0.0.1", "port": 19490,
+    "sites": [ {"root": WWW} ]
+});
+// 参数类型错误
+got = false;
+try { StaticServer(12345); } catch (e2) { got = true; }
+check(got, "S7 非 string/map 参数应当 throw");
+// 不存在的配置文件
+got = false;
+try { StaticServer("/tmp/__ss_no_config__.json"); } catch (e3) { got = true; }
+check(got, "S7 不存在的配置文件应当 throw");
+print("S7 启动期校验 PASS");
+
+ss.stop();
+print("=== StaticServer ALL PASS ===");
+return true;

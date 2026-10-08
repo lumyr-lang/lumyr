@@ -78,6 +78,24 @@ int static_sym_level_knows(const char* name)
     return 0;
 }
 
+/* 名字是否绑定在全局层：存活且不被任何存活作用域层级新建或遮蔽。
+ * 顶层（scope_stack 为空）put 的名字不记录到任何层级，故遍历栈即可区分
+ * 「全局名」与「某函数/块层局部名」。 */
+int static_sym_is_global(const char* name)
+{
+    if(!static_sym_tree || !name) return 0;
+    SymStaticEntry* entry = (SymStaticEntry*)rbtree_find(static_sym_tree, NS_VARIABLE, NULL, name);
+    if(!entry || entry->deleted) return 0;
+    for(ScopeLevel* lv = scope_stack; lv; lv = lv->next) {
+        for(int i = 0; i < lv->count; i++)
+            if(strcmp(lv->names[i], name) == 0) return 0;
+        for(int i = 0; i < lv->ow_count; i++)
+            if(lv->overwritten[i].entry &&
+               strcmp(lv->overwritten[i].entry->name, name) == 0) return 0;
+    }
+    return 1;
+}
+
 /* 记录当前层级新创建的符号名 */
 static void scope_record_name(const char* name)
 {

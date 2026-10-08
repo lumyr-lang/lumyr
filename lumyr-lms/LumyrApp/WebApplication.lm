@@ -711,14 +711,21 @@ public class WebApplication extends ServiceApplication {
     // 资源存在但方法不支持时应 405 而非 404）；OPTIONS/TRACE/CONNECT 不
     // 注册，走路由默认 404。安全边界与目录/404/405 语义见
     // <App/StaticFiles> 的 StaticFileHandler。prefix 须以 / 开头。
-    func serveStatic(prefix: string, rootDir: string) {
+    // indexName 缺省空串=使用内置默认页 index.html；传入如 "main.htm" 替换。
+    func serveStatic(prefix: string, rootDir: string, indexName: string = "") {
         p = prefix;
         if (!p.startsWith("/")) {
             throw "静态资源前缀必须以 / 开头 / static prefix must start with /";
         }
         while (p.len > 1 && p.endsWith("/")) { p = p.slice(0, p.len - 1); }
         h = StaticFileHandler(rootDir);
-        pat = p + "/*filePath";
+        if (indexName != "") { h.withIndex(indexName); }
+        // 根前缀 "/" 只能拼成 "/*filePath"；若拼成 "//*filePath"，split("/")
+        // 会多出一个空固定段（"/".split("/") 自身也带尾空段，恰好掩盖了目录
+        // 请求），导致根挂载下所有具体文件（/x.html）匹配失败返回 404。
+        // Root prefix must yield "/*filePath", not "//*filePath", otherwise
+        // the extra empty fixed segment 404s every concrete file at root.
+        pat = (p == "/") ? "/*filePath" : p + "/*filePath";
         self.route(HttpMethod.GET, pat, h);
         self.route(HttpMethod.HEAD, pat, h);
         self.route(HttpMethod.POST, pat, h);

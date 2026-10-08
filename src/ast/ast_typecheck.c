@@ -1450,9 +1450,14 @@ int typecheck_expr(AstNode* node)
                 int in_static = static_sym_get(vn, &st);
                 /* 判定：参数 / 已登记本层局部 / 全局 → 本 lambda 局部；
                  * 否则若名字已存在于外层作用域（外层函数局部）→ 捕获（引用语义）；
-                 * 完全未出现 → 本 lambda 新局部。 */
+                 * 完全未出现 → 本 lambda 新局部。
+                 * 全局判定必须用 static_sym_is_global（按作用域层级区分），不能只靠
+                 * static_sym_get 的扁平命中——否则其他模块/顶层的同名函数（如用户在
+                 * main 顶层定义 func hdr，而框架某协程 lambda 内有同名局部 hdr 赋值）
+                 * 会被误当成外层变量捕获，运行时 mkclosure 在 lambda 帧找不到该槽。
+                 * is_global_var 保留以覆盖预定义对象 logging 与顶层变量表。 */
                 assign_capture = !is_lambda_param(vn) && !is_lambda_local(vn) &&
-                                 !is_global_var(vn) && in_static;
+                                 !is_global_var(vn) && !static_sym_is_global(vn) && in_static;
             }
             /* 变量持有函数值时存 VAL_NONE（动态），避免后续引用被误判为函数名引用（AST_FUNCREF） */
             static_sym_put(node->u.assign.varname,

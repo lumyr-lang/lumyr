@@ -1,0 +1,282 @@
+// ============================================================
+// lumyr-StaticServer：JSON 配置驱动的静态站点服务器
+//
+//  静态托管能力的轻量子集——一份 JSON 描述「监听在哪、
+// 哪些 URL 前缀映射到哪些目录、开不开 gzip、错误页与访问日志」，
+// 无需手写 serveStatic/addFilter 样板。不是 nginx 全量复刻：
+// 不含反向代理（proxy_pass）、虚拟主机 server_name、重写规则。
+//
+// 用法（JSON 文件）：
+//   import <App/StaticServer>;
+//   StaticServer("/etc/lumyr/site.json").start();
+//
+// 用法（配置表，便于测试/嵌入式）：
+//   ss = StaticServer({
+//       "port": 9000,
+//       "sites": [ {"prefix": "/", "root": "/var/www"} ]
+//   });
+//   ss.app().get("/api/ping", func(req) { return ServerResponse(200).text("ok"); });
+//   ss.start();
+//
+// 配置 schema（全部键除 sites 外均可省略，省略取括号内默认值）：
+// {
+//   "host": "0.0.0.0",              // 监听地址
+//   "port": 8080,                   // 监听端口
+//   "workers": 1,                   // acceptor worker 线程数
+//   "keepAlive": true,              // HTTP/1.1 持久连接总开关
+//   "keepAliveTimeout": 5000,       // keep-alive 空闲超时（毫秒）
+//   "requestTimeout": 30000,        // 请求读取阶段 recv 超时（毫秒）
+//   "maxHeaderBytes": 1048576,      // 请求头上限（字节）
+//   "maxBodyBytes": 0,              // 请求体上限（字节，0=不限）
+//   "accessLog": false,             // 访问日志（true=每请求一行 print）
+//   "gzip": {                       // gzip 压缩（整段省略=默认开启）
+//     "enabled": true, "level": 6, "minLength": 1024
+//   },
+//   "errorPages": { "404": "/path/404.html", "403": "...", "500": "..." },
+//   "sites": [                      // 必填，至少一个
+//     { "prefix": "/static",        // URL 前缀，必须以 / 开头
+//       "root": "/var/www/assets",  // 本地目录，必须已存在
+//       "index": "index.html" }     // 目录默认页（可省，默认 index.html）
+//   ]
+// }
+//
+// 过滤器洋葱顺序（外→内）：MetricsFilter（记账最终状态）→
+// GzipFilter（压缩最终正文，含错误页）→ ErrorPageFilter（替换错误页正文）。
+//
+// 启动期校验（错误配置直接 throw，不带病启动）：配置必须是 JSON 对象；
+// sites 必填非空；root 必须是已存在目录；错误页文件必须存在；
+// gzip.level 取值 -1/0..9 由 GzipFilter 校验。
+// ============================================================
+
+import <App/WebApplication>;
+import <App/GzipFilter>;
+import <App/HttpMetrics>;
+import <NetWork/HttpServer>;
+import <IO/Files>;
+
+// 错误页过滤器：chain.next 返回后按状态码替换为配置的静态错误页。
+// 位于 gzip 过滤器内层——替换后的错误页 HTML 再由外层统一压缩。
+class ErrorPageFilter implements WebFilter {
+    pages: map;   // 状态码字符串（"404"）→ HTML 文本
+
+    func ErrorPageFilter(pages: map) {
+        self.pages = pages;
+    }
+
+    func doFilter(req: ServerRequest, chain: FilterChain): ServerResponse {
+        resp = chain.next(req);
+        key = "" + resp.status;
+        if (self.pages.contains(key)) {
+            return ServerResponse(resp.status).html(self.pages[key]);
+        }
+        return resp;
+    }
+}
+
+public class StaticServer {
+    cfg: map;                  // 原始配置表
+    web: any;                  // 底层 WebApplication（app() 逃生舱返回）
+    metrics: any;              // MetricsFilter（未启用访问日志时为 null）
+
+    // source：string=JSON 配置文件路径；map=配置表
+    func StaticServer(source) {
+        t = type(source);
+        if (t == "string") {
+            f = file(source);
+            if (f.exists == false) {
+                throw "StaticServer 配置文件不存在 / config not found: " + source;
+            }
+            text = f.readAll();
+            if (text.trim() == "") {
+                throw "StaticServer 配置文件为空 / config is empty: " + source;
+            }
+            parsed = text.json();
+            if (type(parsed) != "map") {
+                throw "StaticServer 配置必须是 JSON 对象 / config must be a JSON object: " + source;
+            }
+            self.cfg = parsed;
+        } else if (t == "map") {
+            self.cfg = source;
+        } else {
+            throw "StaticServer 配置参数必须是文件路径(string)或配置表(map) / "
+                + "config must be a file path (string) or a map";
+        }
+        self.metrics = null;
+        self.build();
+    }
+
+    // ---- 配置读取小工具（键不存在取默认值）----
+    private func str(key: string, dft: string): string {
+        if (self.cfg.contains(key) == false) { return dft; }
+        v = self.cfg[key];
+        if (type(v) == "string") { return v; }
+        return "" + v;
+    }
+
+    private func intVal(key: string, dft: int): int {
+        if (self.cfg.contains(key) == false) { return dft; }
+        return (int)self.cfg[key];
+    }
+
+    private func boolVal(key: string, dft: bool): bool {
+        if (self.cfg.contains(key) == false) { return dft; }
+        v = self.cfg[key];
+        if (type(v) == "bool") { return v; }
+        return v == true;
+    }
+
+    // 按配置构建底层 WebApplication 并完成全部注册
+    private func build() {
+        sites = self.cfg["sites"];
+        if (sites == null || type(sites) != "array" || sites.len == 0) {
+            throw "StaticServer 配置缺少 sites（至少一个静态站点）/ sites must be a non-empty array";
+        }
+
+        self.web = WebApplication(self.str("host", "0.0.0.0"), self.intVal("port", 8080));
+
+        // ---- 服务骨架参数（仅显式配置时覆盖框架默认）----
+        if (self.cfg.contains("workers")) {
+            n = self.intVal("workers", 0);
+            if (n >= 1) { self.web.setWorkers(n); }
+        }
+        if (self.cfg.contains("keepAlive")) { self.web.setKeepAlive(self.boolVal("keepAlive", true)); }
+        if (self.cfg.contains("keepAliveTimeout")) { self.web.setKeepAliveTimeout(self.intVal("keepAliveTimeout", 5000)); }
+        if (self.cfg.contains("requestTimeout")) { self.web.setRequestTimeout(self.intVal("requestTimeout", 30000)); }
+        // 报文上限走 WebApplication 实例配置（启动时统一 apply 到
+        // ServerRequest 静态槽），不在这里越层直调静态方法
+        if (self.cfg.contains("maxHeaderBytes")) { self.web.setMaxHeaderBytes(self.intVal("maxHeaderBytes", 1048576)); }
+        if (self.cfg.contains("maxBodyBytes")) { self.web.setMaxBodyBytes(self.intVal("maxBodyBytes", 0)); }
+
+        // ---- 过滤器（外→内：metrics → gzip → errorPage）----
+        // 访问日志/指标（最外层：记录最终状态码与总耗时）
+        if (self.boolVal("accessLog", false)) {
+            self.metrics = MetricsFilter();
+            self.metrics.setAccessLog(func(line) { print("[access] " + line + "\n"); });
+            self.web.addFilter(self.metrics);
+        }
+
+        // gzip（gzip 段整体省略时按默认开启；显式 enabled=false 关闭）
+        gzEnabled = true;
+        gzLevel = 6;
+        gzMinLen = 1024;
+        if (self.cfg.contains("gzip")) {
+            gz = self.cfg["gzip"];
+            if (type(gz) == "map") {
+                if (gz.contains("enabled")) { gzEnabled = self.boolValNested(gz, "enabled", true); }
+                if (gz.contains("level")) { gzLevel = (int)gz["level"]; }
+                if (gz.contains("minLength")) { gzMinLen = (int)gz["minLength"]; }
+            }
+        }
+        if (gzEnabled) {
+            gf = GzipFilter();
+            gf.setLevel(gzLevel);
+            gf.setMinLength(gzMinLen);
+            self.web.addFilter(gf);
+        }
+
+        // 自定义错误页（启动期读入并校验文件存在）
+        pages = {};
+        if (self.cfg.contains("errorPages")) {
+            ep = self.cfg["errorPages"];
+            if (type(ep) != "map") {
+                throw "StaticServer errorPages 必须是对象 / errorPages must be an object";
+            }
+            for code in ep.keys() {
+                path = ep[code];
+                if (type(path) != "string" || path == "") {
+                    throw "StaticServer 错误页路径必须是非空字符串 / error page path must be a non-empty string: " + code;
+                }
+                if (Files.exists(path) == false) {
+                    throw "StaticServer 错误页文件不存在 / error page not found [" + code + "]: " + path;
+                }
+                pages[code] = file(path).readAll();
+            }
+        }
+        if (pages.len > 0) { self.web.addFilter(ErrorPageFilter(pages)); }
+
+        // ---- 静态站点注册 ----
+        // 最长前缀优先（nginx location 最长前缀语义）：根站点 "/" 必须最后
+        // 注册，否则其通配模式 "/*filePath" 会贪婪截胡 "/sub2/..." 这类更
+        // 具体前缀的请求（被当成根目录下的 sub2 文件而 404）。仅当一个前缀
+        // 是另一个前缀时注册顺序才重要，此时长度严格不同，按长度降序即可，
+        // 同长前缀互不嵌套、顺序无关。
+        // Register the longest prefix first (nginx longest-prefix semantics):
+        // root "/" goes last so its "*filePath" pattern cannot swallow more
+        // specific prefixes such as "/sub2/...".
+        si = 0;
+        while (si < sites.len) {
+            best = si;
+            sj = si + 1;
+            while (sj < sites.len) {
+                if (("" + sites[sj]["prefix"]).len > ("" + sites[best]["prefix"]).len) {
+                    best = sj;
+                }
+                sj = sj + 1;
+            }
+            if (best != si) {
+                tmpSite = sites[si];
+                sites[si] = sites[best];
+                sites[best] = tmpSite;
+            }
+            si = si + 1;
+        }
+        i = 0;
+        while (i < sites.len) {
+            site = sites[i];
+            if (type(site) != "map") {
+                throw "StaticServer sites[" + i + "] 必须是对象 / site entry must be an object";
+            }
+            if (site.contains("prefix") == false || site.contains("root") == false) {
+                throw "StaticServer sites[" + i + "] 缺少 prefix 或 root / prefix and root are required";
+            }
+            prefix = "" + site["prefix"];
+            root = "" + site["root"];
+            if (Files.isDir(root) == false) {
+                throw "StaticServer 静态根目录不存在或不是目录 / root must be an existing directory: " + root;
+            }
+            index = "";
+            if (site.contains("index")) { index = "" + site["index"]; }
+            self.web.serveStatic(prefix, root, index);
+            i = i + 1;
+        }
+    }
+
+    // 嵌套 map 内 bool（gzip.enabled 等）：bool 直取，其余按真值判断
+    private func boolValNested(m: map, key: string, dft: bool): bool {
+        if (m.contains(key) == false) { return dft; }
+        v = m[key];
+        if (type(v) == "bool") { return v; }
+        return v == true;
+    }
+
+    // 底层 WebApplication 逃生舱：start 前可混挂业务 API 路由/自定义过滤器
+    func app() {
+        return self.web;
+    }
+
+    // 指标过滤器（accessLog 开启时非 null；可 snapshot() 取计数）
+    func metricsFilter() {
+        return self.metrics;
+    }
+
+    // ---- 生命周期转发 ----
+    func start() {
+        self.web.start();
+        return self;
+    }
+
+    func startAsync() {
+        self.web.startAsync();
+        return self;
+    }
+
+    func stop() {
+        self.web.stop();
+        return self;
+    }
+
+    func join() {
+        self.web.join();
+        return self;
+    }
+}
