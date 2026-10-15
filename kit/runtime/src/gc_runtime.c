@@ -20,6 +20,7 @@
  */
 #include "gc_runtime.h"
 #include "lumyr_value.h"
+#include "lumyr_typed_maps.h"
 #include "lm_calendar.h"
 #include "lumyr_log.h"
 #include <stdlib.h>
@@ -859,6 +860,47 @@ void gc_mark(Value v)
         }
         break;
     }
+    case VAL_TYPED_MAP: {
+        /* TypedMap：标记容器 + 10 块内部缓冲；仅 PTR 族 K/V 需递归标记 */
+        TypedMap* tm = v.v.typed_map;
+        if (!GC_VALID_PTR(tm)) break;
+        if (!gc_mark_ptr(tm)) break;
+        if (tm->keys) gc_mark_ptr(tm->keys);
+        if (tm->values) gc_mark_ptr(tm->values);
+        if (tm->hashes) gc_mark_ptr(tm->hashes);
+        if (tm->next) gc_mark_ptr(tm->next);
+        if (tm->left) gc_mark_ptr(tm->left);
+        if (tm->right) gc_mark_ptr(tm->right);
+        if (tm->parent) gc_mark_ptr(tm->parent);
+        if (tm->rb_color) gc_mark_ptr(tm->rb_color);
+        if (tm->buckets) gc_mark_ptr(tm->buckets);
+        if (tm->tree) gc_mark_ptr(tm->tree);
+        if (lumyr_etype_stackcls(tm->key_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->keys)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->key_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark(ev);
+            }
+        }
+        if (lumyr_etype_stackcls(tm->value_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->values)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->value_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark(ev);
+            }
+        }
+        break;
+    }
     case VAL_DATE:
     case VAL_DATETIME:
     case VAL_TIME:
@@ -1158,6 +1200,13 @@ void gc_mark_value_to_stack(Value v)
         if (!gc_mark_ptr_to_stack(ta)) break;
         break;
     }
+    case VAL_TYPED_MAP: {
+        /* 堆 TypedMap：容器变灰入栈，内部缓冲/KV 由 gc_mark_one 扫描 */
+        TypedMap* tm = v.v.typed_map;
+        if (!GC_VALID_PTR(tm)) break;
+        if (!gc_mark_ptr_to_stack(tm)) break;
+        break;
+    }
     case VAL_TUPLE: {
         /* tuple：容器变灰入栈，items 内部缓冲区标记黑色，子元素由 gc_mark_one 扫描 */
         TupleObj* o = v.v.tuple_obj;
@@ -1313,6 +1362,45 @@ void gc_mark_one(GCObject* obj)
                 Value ev;
                 memset(&ev, 0, sizeof(ev));
                 ev.type = ta->elem_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack(ev);
+            }
+        }
+        break;
+    }
+    case VAL_TYPED_MAP: {
+        /* TypedMap：10 块内部缓冲标黑；PTR 族 K/V 变灰入栈 */
+        TypedMap* tm = (TypedMap*)obj_to_ptr(obj);
+        if (tm->keys) gc_mark_internal_black(tm->keys);
+        if (tm->values) gc_mark_internal_black(tm->values);
+        if (tm->hashes) gc_mark_internal_black(tm->hashes);
+        if (tm->next) gc_mark_internal_black(tm->next);
+        if (tm->left) gc_mark_internal_black(tm->left);
+        if (tm->right) gc_mark_internal_black(tm->right);
+        if (tm->parent) gc_mark_internal_black(tm->parent);
+        if (tm->rb_color) gc_mark_internal_black(tm->rb_color);
+        if (tm->buckets) gc_mark_internal_black(tm->buckets);
+        if (tm->tree) gc_mark_internal_black(tm->tree);
+        if (lumyr_etype_stackcls(tm->key_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->keys)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->key_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack(ev);
+            }
+        }
+        if (lumyr_etype_stackcls(tm->value_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->values)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->value_type;
                 ev.str_inline = 0;
                 ev.v.s = ep;
                 gc_mark_value_to_stack(ev);
@@ -1523,6 +1611,11 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(ta)) gc_mark_ptr_to_stack(ta);
         break;
     }
+    case VAL_TYPED_MAP: {
+        TypedMap* tm = v.v.typed_map;
+        if (GC_VALID_PTR(tm)) gc_mark_ptr_to_stack(tm);
+        break;
+    }
     case VAL_TUPLE: {
         TupleObj* o = v.v.tuple_obj;
         if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
@@ -1642,6 +1735,44 @@ static void gc_mark_one_minor(GCObject* obj)
                 Value ev;
                 memset(&ev, 0, sizeof(ev));
                 ev.type = ta->elem_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack_minor(ev);
+            }
+        }
+        break;
+    }
+    case VAL_TYPED_MAP: {
+        TypedMap* tm = (TypedMap*)obj_to_ptr(obj);
+        if (tm->keys) gc_mark_internal_black(tm->keys);
+        if (tm->values) gc_mark_internal_black(tm->values);
+        if (tm->hashes) gc_mark_internal_black(tm->hashes);
+        if (tm->next) gc_mark_internal_black(tm->next);
+        if (tm->left) gc_mark_internal_black(tm->left);
+        if (tm->right) gc_mark_internal_black(tm->right);
+        if (tm->parent) gc_mark_internal_black(tm->parent);
+        if (tm->rb_color) gc_mark_internal_black(tm->rb_color);
+        if (tm->buckets) gc_mark_internal_black(tm->buckets);
+        if (tm->tree) gc_mark_internal_black(tm->tree);
+        if (lumyr_etype_stackcls(tm->key_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->keys)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->key_type;
+                ev.str_inline = 0;
+                ev.v.s = ep;
+                gc_mark_value_to_stack_minor(ev);
+            }
+        }
+        if (lumyr_etype_stackcls(tm->value_type) == 3) {
+            for (int i = 0; i < tm->len; i++) {
+                void* ep = ((void**)tm->values)[i];
+                if (!gc_cstack_set_contains(ep)) continue;
+                Value ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.type = tm->value_type;
                 ev.str_inline = 0;
                 ev.v.s = ep;
                 gc_mark_value_to_stack_minor(ev);

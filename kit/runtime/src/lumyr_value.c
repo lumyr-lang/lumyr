@@ -907,6 +907,7 @@ const char* val_typename(ValueType t) {
     case VAL_STRUCT_PTR:   return "struct_ptr";
     case VAL_CLASS_PTR:    return "class_ptr";
     case VAL_TYPED_ARRAY:  return "typed_array";
+    case VAL_TYPED_MAP:   return "typed_map";
     default:               return "unknown";
     }
 }
@@ -1128,7 +1129,7 @@ int lumyr_etype_stackcls(ValueType et) {
     /* struct/class 实例引用：走 PTR 栈（8 字节指针） */
     case VAL_STRUCT_PTR: case VAL_CLASS_PTR:
     /* 容器引用：map/array/typed_array 均为堆指针，走 PTR 栈 */
-    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY:
+    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY: case VAL_TYPED_MAP:
     /* bytes：不可变字节串堆对象，走 PTR 栈 */
     case VAL_BYTES:
         return 3;
@@ -1155,7 +1156,7 @@ size_t lumyr_etype_itemsz(ValueType et) {
     /* struct/class 实例引用：字段存实例指针，8 字节 */
     case VAL_STRUCT_PTR: case VAL_CLASS_PTR:
     /* 容器引用：字段存 map/array/typed_array/bytes 堆指针，8 字节 */
-    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY: case VAL_BYTES:
+    case VAL_MAP: case VAL_ARRAY: case VAL_TYPED_ARRAY: case VAL_TYPED_MAP: case VAL_BYTES:
         return 8;
     case VAL_LONG_DOUBLE:
         return sizeof(long double);

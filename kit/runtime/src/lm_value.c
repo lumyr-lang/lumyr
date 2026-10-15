@@ -11,6 +11,7 @@
 #include "lm_file.h"
 #include "lm_formdata.h"
 #include "lm_socket.h"
+#include "lumyr_typed_maps.h"
 #include "gc_runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -319,6 +320,8 @@ char* value_to_str(Value v) {
             return res;
         }
         case VAL_MAP:
+            return lumyr_json_stringify(v);
+        case VAL_TYPED_MAP:
             return lumyr_json_stringify(v);
         /* 数组/类型化数组：递归展开为 "[e1, e2, ...]"（与 print 一致，字符串元素不加引号） */
         case VAL_ARRAY: {
@@ -834,6 +837,7 @@ Value lumyr_len(Value v) {
         return lumyr_make_int((long long)lumyr_str_ulen(&v));
     }
     if(v.type == VAL_MAP) return lumyr_make_int(v.v.map->len);
+    if(v.type == VAL_TYPED_MAP) return lumyr_make_int(v.v.typed_map->len);
     if(v.type == VAL_TUPLE) return lumyr_make_int((long long)lumyr_tuple_len(v));
     if(v.type == VAL_SET)   return lumyr_make_int((long long)lumyr_set_len(v));
     if(v.type == VAL_BYTES) return lumyr_make_int((long long)lumyr_bytes_len(v));
@@ -1080,6 +1084,7 @@ Value lumyr_type(Value v) {
         case VAL_FUNC:   return lumyr_make_string("func");
         case VAL_ARRAY:  return lumyr_make_string("array");
         case VAL_MAP:    return lumyr_make_string("map");
+        case VAL_TYPED_MAP: return lumyr_make_string("typed_map");
         case VAL_ERROR:  return lumyr_make_string("error");
         case VAL_GENERATOR: return lumyr_make_string("generator");
         case VAL_STRUCT_PTR: {
@@ -1824,6 +1829,7 @@ _Bool lumyr_to_bool(Value v) {
         case VAL_ARRAY:   return v.v.array && v.v.array->len > 0;
         case VAL_TYPED_ARRAY: return v.v.typed_array && v.v.typed_array->len > 0;
         case VAL_MAP:     return v.v.map && v.v.map->len > 0;
+        case VAL_TYPED_MAP: return v.v.typed_map && v.v.typed_map->len > 0;
         /* 所有 C 整数子类型按数值判定 truthy */
         case VAL_INT8:    return v.v.i8 != 0;
         case VAL_INT16:   return v.v.i16 != 0;

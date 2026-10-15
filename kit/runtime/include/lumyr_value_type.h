@@ -10,6 +10,7 @@ typedef struct Value Value;
 typedef struct EvalCtx EvalCtx;
 typedef struct MapEntry MapEntry;
 typedef struct ValueMap ValueMap;
+typedef struct TypedMap TypedMap;   // 前向声明：VAL_TYPED_MAP 使用，完整定义在 lumyr_typed_maps.h
 // 新增前置声明：FuncEntry 参数需要 StackFrame*，此时还没完整定义 StackFrame
 typedef struct StackFrame StackFrame;
 typedef struct FFIFunc FFIFunc;
@@ -49,6 +50,7 @@ typedef enum {
     CAST_STRUCT_PTR, // C 结构体指针
     CAST_CLASS_PTR,  // class 实例指针
     CAST_TYPED_ARRAY,// 类型化数组
+    CAST_TYPED_MAP,  // 类型化字典（扁平化 8 块数组 + 索引红黑树）
     /* 固定宽度整数（运行时统一 long long 存储，强转时 C 风格截断） */
     CAST_INT8,
     CAST_INT16,
@@ -113,6 +115,7 @@ typedef enum {
     VAL_STRUCT_PTR,  // C结构体指针：零拷贝传递，直接存储void*，配合__structname__标识类型
     VAL_CLASS_PTR,    // class实例指针：零拷贝传递，直接存储void*，配合vtable标识类型，与struct区分
     VAL_TYPED_ARRAY,  // 类型化数组：统一处理 IntArray、DoubleArray、StringArray 等，通过 elem_type 区分元素类型
+    VAL_TYPED_MAP,    // 类型化字典：扁平化 8 块数组 + 索引版红黑树，通过 key_type/value_type 区分
     VAL_DATE,         // date：日期对象（仅日期，不含时间，epoch 为当天 00:00 UTC 秒）
     VAL_DATETIME,     // datetime：日期+时间对象（epoch + nsec）
     VAL_TIME,         // time：当天时间对象（epoch 为当天秒数 [0,86400) + nsec）
@@ -248,6 +251,7 @@ struct Value {
         void* generator;       // VAL_GENERATOR：GeneratorObject* 指针（vm.c 中定义）
         void* struct_ptr;      // VAL_STRUCT_PTR：C结构体指针（零拷贝传递，类型由外部标识）
         TypedArray* typed_array;  // VAL_TYPED_ARRAY：类型化数组（统一处理，通过 elem_type 区分元素类型）
+        TypedMap* typed_map;      // VAL_TYPED_MAP：类型化字典（扁平化 8 块数组 + 索引红黑树）
         void* bigint;           // VAL_BIGINT：BigInt* 指针（堆分配对象）
         void* decimal;          // VAL_DECIMAL：Decimal* 指针（堆分配对象）
         void* bitdecimal;       // VAL_BITDECIMAL：BitDecimal* 指针（堆分配对象，基于 GMP mpf_t）

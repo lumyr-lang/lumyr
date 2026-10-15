@@ -776,10 +776,19 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     if(td->generic_param_count <= 0) return;
     if(!td->field_generic_indices || !td->runtime_info) return;
 
-    /* 检查是否有泛型字段需要绑定 */
+    /* 检查是否有泛型字段需要绑定（typed array 或 typed map） */
     int has_generic_field = 0;
     for(int i = 0; i < td->nprops; i++) {
         if(td->field_generic_indices[i] >= 0) { has_generic_field = 1; break; }
+        if(td->field_map_key_indices && td->field_map_key_indices[i] >= 0) { has_generic_field = 1; break; }
+        if(td->field_map_value_indices && td->field_map_value_indices[i] >= 0) { has_generic_field = 1; break; }
+    }
+    /* 即使无泛型索引，固定类型的 map 字段也需要绑定（转 VAL_MAP→VAL_TYPED_MAP） */
+    if(!has_generic_field) {
+        for(int i = 0; i < td->nprops; i++) {
+            if(td->field_map_key_kinds && td->field_map_key_kinds[i] != CAST_NONE) { has_generic_field = 1; break; }
+            if(td->field_map_value_kinds && td->field_map_value_kinds[i] != CAST_NONE) { has_generic_field = 1; break; }
+        }
     }
     if(!has_generic_field) return;
 
@@ -798,7 +807,15 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     }
     free(ta_copy);
 
-    if(nbound <= 0) { free(bound_types); return; }
+    if(nbound <= 0) {
+        /* 无类型实参但可能有固定类型 map 字段：仍需发射以转换 VAL_MAP→VAL_TYPED_MAP */
+        for(int i = 0; i < td->nprops; i++) {
+            if(td->field_map_key_kinds && td->field_map_key_kinds[i] != CAST_NONE) { nbound = -1; break; }
+            if(td->field_map_value_kinds && td->field_map_value_kinds[i] != CAST_NONE) { nbound = -1; break; }
+        }
+        if(nbound == 0) { free(bound_types); return; }
+        nbound = 0; /* 重置：固定类型字段不需要 bound_types */
+    }
 
     /* 构造 GenericBindInfo 并存入常量池（CONST_UINT64 存指针） */
     GenericBindInfo* gbi = (GenericBindInfo*)calloc(1, sizeof(GenericBindInfo));
@@ -809,6 +826,17 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     for(int i = 0; i < td->nprops; i++)
         gbi->field_generic_indices[i] = td->field_generic_indices[i];
     gbi->bound_types = bound_types;  /* ownership transfer，gbi 生命周期 = 进程 */
+    /* 类型化 map 字段：key/value 泛型索引 + 固定 CastKind */
+    gbi->field_map_key_indices = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
+    gbi->field_map_value_indices = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
+    gbi->field_map_key_kinds = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
+    gbi->field_map_value_kinds = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
+    for(int i = 0; i < td->nprops; i++) {
+        gbi->field_map_key_indices[i] = td->field_map_key_indices ? td->field_map_key_indices[i] : -1;
+        gbi->field_map_value_indices[i] = td->field_map_value_indices ? td->field_map_value_indices[i] : -1;
+        gbi->field_map_key_kinds[i] = td->field_map_key_kinds ? (int)td->field_map_key_kinds[i] : (int)CAST_NONE;
+        gbi->field_map_value_kinds[i] = td->field_map_value_kinds ? (int)td->field_map_value_kinds[i] : (int)CAST_NONE;
+    }
 
     int gbi_idx = bf_add_u64_const(c->fn, (uint64_t)(uintptr_t)gbi);
     emit(c, OPC_GENERIC_BIND, gbi_idx, 0);

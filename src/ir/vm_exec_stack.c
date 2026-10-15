@@ -18,6 +18,7 @@
 #include "lm_socket.h"
 #include "vm_exec.h"
 #include "ast/ast_types.h"   /* castkind_to_valtype（name_to_castkind 反查） */
+#include "lumyr_typed_maps.h" /* lumyr_tmap_from_value_map */
 
 /* 与 GC 内部 GC_VALID_PTR 等价的指针有效性判断（该宏未在头文件公开） */
 static inline int typed_ptr_ok(const void* p) {
@@ -327,6 +328,9 @@ int vm_exec_index_get(VMExecCtx* ctx, Instruction* in) {
         r = arr.v.array->items[i];
     } else if(arr.type == VAL_MAP) {
         r = lumyr_map_get(arr, idx);
+    } else if(arr.type == VAL_TYPED_MAP && typed_ptr_ok(arr.v.typed_map)) {
+        /* 类型化 map 下标读：按键查找值（缺键返回 none） */
+        r = lumyr_tmap_get(arr.v.typed_map, idx);
     } else if(arr.type == VAL_STRING) {
         /* 字符串整数下标：返回 1 个码点的字符串（与 charAt 一致）；
          * 此前无此分支，s[i] 静默返回 null */
@@ -492,6 +496,9 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
         arr.v.array->items[i] = val;
     } else if(arr.type == VAL_MAP) {
         lumyr_map_set(&arr, idx, val);
+    } else if(arr.type == VAL_TYPED_MAP && typed_ptr_ok(arr.v.typed_map)) {
+        /* 类型化 map 下标写：按键插入/更新值 */
+        lumyr_tmap_set(arr.v.typed_map, idx, val);
     } else if(arr.type == VAL_TYPED_ARRAY && typed_ptr_ok(arr.v.typed_array)) {
         TypedArray* ta = arr.v.typed_array;
         int64_t i;
@@ -885,8 +892,28 @@ static Value convert_dynamic_array_to_typed(Value src, CastKind ck) {
     return r;
 }
 
+/* 动态 ValueMap → TypedMap：参照 convert_dynamic_array_to_typed，
+ * 用 lumyr_tmap_from_value_map 完成逐键值提取存储。 */
+static Value convert_dynamic_map_to_typed(Value src, CastKind key_ck, CastKind val_ck) {
+    if(src.type != VAL_MAP || !src.v.map) return src;
+    ValueType key_vt = castkind_to_valtype((int)key_ck);
+    ValueType val_vt = castkind_to_valtype((int)val_ck);
+    if(key_vt == VAL_NONE || val_vt == VAL_NONE) return src;
+
+    gc_disable();
+    TypedMap* tm = lumyr_tmap_from_value_map(src.v.map, key_vt, val_vt);
+    gc_enable();
+    if(!tm) return src;
+
+    Value r;
+    memset(&r, 0, sizeof(r));
+    r.type = VAL_TYPED_MAP;
+    r.v.typed_map = tm;
+    return r;
+}
+
 /* GENERIC_BIND：a=常量池下标（GenericBindInfo*）
- * 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray，压回 PTR 栈 */
+ * 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray、ValueMap 转为 TypedMap，压回 PTR 栈 */
 int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
     (void)ctx;
     int idx = in->a;
@@ -897,23 +924,22 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
 
     /* 实例偏移 0 是 RuntimeTypeInfo* 指针，用 gbi->info 查字段 */
     RuntimeTypeInfo* info = (RuntimeTypeInfo*)gbi->info;
-    if(info && gbi->field_generic_indices && gbi->bound_types) {
+    if(!info) { stack_vm_push(g_stack_mgr, STACK_PTR, &p); return 1; }
+
+    /* 类型化数组字段：VAL_ARRAY → VAL_TYPED_ARRAY */
+    if(gbi->field_generic_indices && gbi->bound_types) {
         for(int i = 0; i < gbi->nfields && i < info->nfields; i++) {
             int gi = gbi->field_generic_indices[i];
             if(gi < 0 || gi >= gbi->nbound) continue;
             CastKind ck = (CastKind)gbi->bound_types[gi];
-            if(ck == CAST_NONE) continue; /* 动态擦除，跳过 */
+            if(ck == CAST_NONE) continue;
 
             FieldInfo* fi = &info->fields[i];
             if(fi->valtype != VAL_TYPED_ARRAY && fi->valtype != VAL_ARRAY) continue;
 
-            /* 读取字段当前值（ValueArray* 指针存储在字段偏移处） */
             void** field_slot = (void**)((char*)p + fi->offset);
             if(!*field_slot) continue;
 
-            /* 构造 Value 假设构造函数创建了动态数组（VAL_ARRAY）。
-             * convert_dynamic_array_to_typed 会检查 type，非 VAL_ARRAY 原样返回。
-             * 如果字段已是 TypedArray（之前已绑定），跳过转换。 */
             Value cur;
             memset(&cur, 0, sizeof(cur));
             cur.type = VAL_ARRAY;
@@ -922,6 +948,39 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
             Value converted = convert_dynamic_array_to_typed(cur, ck);
             if(converted.type == VAL_TYPED_ARRAY) {
                 *field_slot = converted.v.typed_array;
+            }
+        }
+    }
+
+    /* 类型化 map 字段：VAL_MAP → VAL_TYPED_MAP */
+    if(gbi->field_map_key_indices && gbi->field_map_value_indices &&
+       gbi->field_map_key_kinds && gbi->field_map_value_kinds) {
+        for(int i = 0; i < gbi->nfields && i < info->nfields; i++) {
+            int key_gi = gbi->field_map_key_indices[i];
+            int val_gi = gbi->field_map_value_indices[i];
+            /* 泛型形参→bound_types 取 CastKind；否则用固定 CastKind */
+            CastKind key_ck = (key_gi >= 0 && key_gi < gbi->nbound)
+                ? (CastKind)gbi->bound_types[key_gi]
+                : (CastKind)gbi->field_map_key_kinds[i];
+            CastKind val_ck = (val_gi >= 0 && val_gi < gbi->nbound)
+                ? (CastKind)gbi->bound_types[val_gi]
+                : (CastKind)gbi->field_map_value_kinds[i];
+            if(key_ck == CAST_NONE || val_ck == CAST_NONE) continue;
+
+            FieldInfo* fi = &info->fields[i];
+            if(fi->valtype != VAL_MAP && fi->valtype != VAL_TYPED_MAP) continue;
+
+            void** field_slot = (void**)((char*)p + fi->offset);
+            if(!*field_slot) continue;
+
+            Value cur;
+            memset(&cur, 0, sizeof(cur));
+            cur.type = VAL_MAP;
+            cur.v.map = (ValueMap*)*field_slot;
+
+            Value converted = convert_dynamic_map_to_typed(cur, key_ck, val_ck);
+            if(converted.type == VAL_TYPED_MAP) {
+                *field_slot = converted.v.typed_map;
             }
         }
     }

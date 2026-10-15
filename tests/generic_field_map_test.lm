@@ -1,0 +1,87 @@
+// 泛型类字段 typed_map 测试（阶段5：字段声明路径泛型擦除修复）
+// 验证 HashMap<K,V> 和 HashSet<E> 实例化后内部 <K,V>map 字段
+// 从动态 VAL_MAP 转换为 VAL_TYPED_MAP
+
+import <Function/HashMap>;
+import <Function/HashSet>;
+
+func check(cond, msg) {
+    if(cond) {} else {
+        throw msg;
+    }
+}
+
+n = 0;
+
+// ===== M-GF1: HashMap<string,int>() 实例化后 value 为 typed_map =====
+m1 = HashMap<string, int>(null);
+check(type(m1.value) == "typed_map", "M-GF1: value should be typed_map, got " + type(m1.value));
+n = n + 1;
+
+// ===== M-GF2: put/get 后键值类型正确 =====
+m1.put("a", 1);
+check(m1.get("a") == 1, "M-GF2: get(a) should be 1");
+check(type(m1.get("a")) == "int", "M-GF2: value type should be int, got " + type(m1.get("a")));
+ks = m1.keys();
+check(type(ks[0]) == "string", "M-GF2: key type should be string, got " + type(ks[0]));
+n = n + 1;
+
+// ===== M-GF3: HashSet<int>() 内部 <E,bool>map 的 value 为 bool =====
+s3 = HashSet<int>(null);
+check(type(s3.value) == "typed_map", "M-GF3: value should be typed_map, got " + type(s3.value));
+s3.add(42);
+check(s3.contains(42), "M-GF3: should contain 42");
+vs = s3.value.values();
+check(type(vs[0]) == "bool", "M-GF3: value should be bool, got " + type(vs[0]));
+n = n + 1;
+
+// ===== M-GF4: 空 HashMap 实例化后也是 typed_map（0 元素）=====
+m4 = HashMap<string, int>(null);
+check(type(m4.value) == "typed_map", "M-GF4: empty value should be typed_map");
+check(m4.size() == 0, "M-GF4: size should be 0");
+n = n + 1;
+
+// ===== M-GF5: HashMap<string,string>() 字符串键值 =====
+m5 = HashMap<string, string>(null);
+check(type(m5.value) == "typed_map", "M-GF5: value should be typed_map");
+m5.put("hello", "world");
+check(m5.get("hello") == "world", "M-GF5: get(hello) should be world");
+check(type(m5.get("hello")) == "string", "M-GF5: value type should be string");
+n = n + 1;
+
+// ===== M-GF6: HashMap<int,string>() 整型键字符串值 =====
+m6 = HashMap<int, string>(null);
+check(type(m6.value) == "typed_map", "M-GF6: value should be typed_map");
+m6.put(100, "hundred");
+check(m6.get(100) == "hundred", "M-GF6: get(100) should be hundred");
+ks6 = m6.keys();
+check(type(ks6[0]) == "int", "M-GF6: key type should be int, got " + type(ks6[0]));
+n = n + 1;
+
+// ===== M-GF7: 多个实例各自独立拥有 typed_map =====
+m7a = HashMap<string, int>(null);
+m7b = HashMap<string, int>(null);
+m7a.put("x", 10);
+m7b.put("y", 20);
+check(type(m7a.value) == "typed_map", "M-GF7a: value should be typed_map");
+check(type(m7b.value) == "typed_map", "M-GF7b: value should be typed_map");
+check(m7a.get("x") == 10, "M-GF7: m7a.get(x) should be 10");
+check(m7b.get("y") == 20, "M-GF7: m7b.get(y) should be 20");
+check(m7a.size() == 1, "M-GF7: m7a size should be 1");
+check(m7b.size() == 1, "M-GF7: m7b size should be 1");
+n = n + 1;
+
+// ===== M-GF8: GC 压力下 typed_map 不被误回收 =====
+m8 = HashMap<string, int>(null);
+m8.put("gc_key", 999);
+i = 0;
+while (i < 1000) {
+    tmp = HashMap<string, int>(null);
+    tmp.put("k" + i, i);
+    i = i + 1;
+}
+check(m8.get("gc_key") == 999, "M-GF8: value should survive GC pressure");
+check(type(m8.value) == "typed_map", "M-GF8: value should still be typed_map after GC");
+n = n + 1;
+
+print("generic_field_map_test: " + n + " tests passed");

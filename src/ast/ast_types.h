@@ -30,6 +30,10 @@ typedef struct {
     CastKind* field_elem_kinds; // 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
     int* field_generic_indices; // 字段→泛型形参索引（-1=非泛型字段；0+=generic_params 中的索引）
     char** field_type_args;  // 字段泛型实参原文（tags: Array<Double> → "Double"；擦除/非泛型为 NULL）
+    int* field_map_key_indices;   // 类型化 map 字段→key 泛型形参索引（-1=非泛型/固定类型；0+=generic_params）
+    int* field_map_value_indices; // 类型化 map 字段→value 泛型形参索引（-1=非泛型/固定类型；0+=generic_params）
+    CastKind* field_map_key_kinds;   // 类型化 map 字段 key 固定 CastKind（field_map_key_indices==-1 时生效，否则 CAST_NONE）
+    CastKind* field_map_value_kinds; // 类型化 map 字段 value 固定 CastKind（field_map_value_indices==-1 时生效，否则 CAST_NONE）
     int* field_offsets;    // struct 字段偏移量（编译通道用，NULL=未计算）
     /* struct/class 方法 */
     char** method_names;   // 方法名列表（NULL=无方法）

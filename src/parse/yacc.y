@@ -3878,7 +3878,8 @@ type_prop
     | ID COLON TOK_GENERIC ID SEMI {
         if(strcmp($4, "map") != 0 && strcmp($4, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
         if(strcmp($4, "map") == 0) {
-            type_prop_push($1, VAL_MAP, 0, 0, NULL);
+            type_prop_push($1, VAL_TYPED_MAP, 0, 0, NULL);
+            type_prop_set_type_args($3);  /* 记录 "K,V" 原文，供 class_register 拆分计算 key/value 泛型索引 */
         } else {
             /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
@@ -4470,7 +4471,8 @@ class_prop
     | ID COLON TOK_GENERIC ID SEMI {
         if(strcmp($4, "map") != 0 && strcmp($4, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
         if(strcmp($4, "map") == 0) {
-            type_prop_push($1, VAL_MAP, 0, 0, NULL);
+            type_prop_push($1, VAL_TYPED_MAP, 0, 0, NULL);
+            type_prop_set_type_args($3);  /* 记录 "K,V" 原文，供 class_register 拆分计算 key/value 泛型索引 */
         } else {
             /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($1, VAL_TYPED_ARRAY, 0, 0, NULL);
@@ -4517,7 +4519,8 @@ class_prop
     | access_modifier ID COLON TOK_GENERIC ID SEMI {
         if(strcmp($5, "map") != 0 && strcmp($5, "array") != 0) yyerror("泛型字段后缀须为 'map' 或 'array'");
         if(strcmp($5, "map") == 0) {
-            type_prop_push($2, VAL_MAP, $1, 0, NULL);
+            type_prop_push($2, VAL_TYPED_MAP, $1, 0, NULL);
+            type_prop_set_type_args($4);  /* 记录 "K,V" 原文，供 class_register 拆分计算 key/value 泛型索引 */
         } else {
             /* <E>array：泛型形参元素类型，CastKind=CAST_NONE（运行时由 OPC_GENERIC_BIND 绑定） */
             type_prop_push($2, VAL_TYPED_ARRAY, $1, 0, NULL);

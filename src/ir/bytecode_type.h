@@ -34,6 +34,11 @@ typedef struct {
     int* bound_types;            /* callsite 解析的 CastKind 数组（如 CAST_INT, CAST_STRING...） */
     int nfields;                 /* 字段总数 */
     int nbound;                  /* 类型实参数（泛型形参数） */
+    /* 类型化 map 字段：key/value 泛型索引 + 固定 CastKind（与 TypeDef 同语义） */
+    int* field_map_key_indices;   /* -1=非泛型/固定类型；0+=bound_types 索引 */
+    int* field_map_value_indices; /* 同上 */
+    int* field_map_key_kinds;     /* 固定 CastKind（field_map_key_indices==-1 时生效，否则 CAST_NONE） */
+    int* field_map_value_kinds;   /* 同上 */
 } GenericBindInfo;
 
 typedef enum {

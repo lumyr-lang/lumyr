@@ -46,8 +46,16 @@ TypeDef* type_register(const char* name, char** props, ValueType* ptypes, int np
     if(td->field_cast_kinds) free(td->field_cast_kinds);
     if(td->field_elem_kinds) free(td->field_elem_kinds);
     if(td->field_generic_indices) free(td->field_generic_indices);
+    if(td->field_map_key_indices) free(td->field_map_key_indices);
+    if(td->field_map_value_indices) free(td->field_map_value_indices);
+    if(td->field_map_key_kinds) free(td->field_map_key_kinds);
+    if(td->field_map_value_kinds) free(td->field_map_value_kinds);
     if(td->field_offsets) free(td->field_offsets);
     td->field_generic_indices = NULL;
+    td->field_map_key_indices = NULL;
+    td->field_map_value_indices = NULL;
+    td->field_map_key_kinds = NULL;
+    td->field_map_value_kinds = NULL;
     td->props = (char**)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(char*));
     td->ptypes = (ValueType*)malloc((size_t)(nprops > 0 ? nprops : 1) * sizeof(ValueType));
     for(int k = 0; k < nprops; k++) {
@@ -212,6 +220,7 @@ ValueType castkind_to_valtype(int ck)
         case CAST_FOLDER:   return VAL_FOLDER;
         case CAST_FORMDATA: return VAL_FORMDATA;
         case CAST_TYPED_ARRAY: return VAL_TYPED_ARRAY;
+        case CAST_TYPED_MAP:   return VAL_TYPED_MAP;
         /* 容器引用：字段持堆指针（8 字节） */
         case CAST_MAP: return VAL_MAP;
         case CAST_ARRAY: return VAL_ARRAY;
@@ -272,6 +281,7 @@ int valuetype_to_castkind(int vt) {
         case VAL_MAP: return CAST_MAP;
         case VAL_ARRAY: return CAST_ARRAY;
         case VAL_TYPED_ARRAY: return CAST_TYPED_ARRAY;
+        case VAL_TYPED_MAP:   return CAST_TYPED_MAP;
         case VAL_STRUCT_PTR: return CAST_STRUCT_PTR;
         case VAL_CLASS_PTR: return CAST_CLASS_PTR;
         default: return CAST_LONGLONG;
@@ -739,6 +749,37 @@ TypeDef* struct_lookup(const char* name)
     return td;
 }
 
+/* 类型名→CastKind：用于类型化 map 字段拆分 "K,V" 后将固定类型名转为 CastKind。
+ * 仅覆盖类型化 map 常用的基础类型名；泛型形参名（如 "K"/"V"）不在其中，
+ * 返回 CAST_NONE 表示未知/动态。 */
+static CastKind typename_to_castkind(const char* name) {
+    if(!name) return CAST_NONE;
+    while(*name == ' ' || *name == '\t') name++;
+    size_t len = strlen(name);
+    while(len > 0 && (name[len-1] == ' ' || name[len-1] == '\t')) len--;
+    #define MATCH(s) (len == sizeof(s)-1 && strncmp(name, s, len) == 0)
+    if(MATCH("int"))       return CAST_INT;
+    if(MATCH("double"))    return CAST_DOUBLE;
+    if(MATCH("string"))    return CAST_STRING;
+    if(MATCH("bool"))     return CAST_BOOL;
+    if(MATCH("char"))     return CAST_CHAR;
+    if(MATCH("byte"))     return CAST_BYTE;
+    if(MATCH("long"))     return CAST_LONG;
+    if(MATCH("longlong")) return CAST_LONGLONG;
+    if(MATCH("float"))    return CAST_FLOAT;
+    if(MATCH("int8"))     return CAST_INT8;
+    if(MATCH("int16"))    return CAST_INT16;
+    if(MATCH("int32"))    return CAST_INT32;
+    if(MATCH("int64"))    return CAST_INT64;
+    if(MATCH("uint8"))    return CAST_UINT8;
+    if(MATCH("uint16"))   return CAST_UINT16;
+    if(MATCH("uint32"))   return CAST_UINT32;
+    if(MATCH("uint64"))   return CAST_UINT64;
+    if(MATCH("ptr") || MATCH("pointer")) return CAST_PTR;
+    #undef MATCH
+    return CAST_NONE;
+}
+
 // 判断名称是否为 socket 构造函数名（大写主用 + 小写别名）。
 // lexer 据此把 Name{ 识别为 MAP_OPEN，parser 据此把 Name{...} 反糖为 Name({map})。
 int is_socket_ctor_name(const char* name)
@@ -845,6 +886,68 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
         int offset = (parent && type_lookup(parent)) ? type_lookup(parent)->nprops : 0;
         for(int k = 0; k < nprops && offset + k < merged_nprops; k++)
             td->field_generic_indices[offset + k] = g_prop_generic_indices[k];
+    }
+    /* 类型化 map 字段：key/value 泛型索引 + 固定 CastKind */
+    td->field_map_key_indices = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+    td->field_map_value_indices = (int*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(int));
+    td->field_map_key_kinds = (CastKind*)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(CastKind));
+    td->field_map_value_kinds = (CastKind*)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(CastKind));
+    for(int k = 0; k < merged_nprops; k++) {
+        td->field_map_key_indices[k] = -1;
+        td->field_map_value_indices[k] = -1;
+    }
+    /* 合并父类 map key/value 索引与 CastKind */
+    if(parent) {
+        TypeDef* ptd = type_lookup(parent);
+        if(ptd) {
+            int pn = ptd->nprops;
+            if(ptd->field_map_key_indices)
+                for(int k = 0; k < pn && k < merged_nprops; k++)
+                    td->field_map_key_indices[k] = ptd->field_map_key_indices[k];
+            if(ptd->field_map_value_indices)
+                for(int k = 0; k < pn && k < merged_nprops; k++)
+                    td->field_map_value_indices[k] = ptd->field_map_value_indices[k];
+            if(ptd->field_map_key_kinds)
+                for(int k = 0; k < pn && k < merged_nprops; k++)
+                    td->field_map_key_kinds[k] = ptd->field_map_key_kinds[k];
+            if(ptd->field_map_value_kinds)
+                for(int k = 0; k < pn && k < merged_nprops; k++)
+                    td->field_map_value_kinds[k] = ptd->field_map_value_kinds[k];
+        }
+    }
+    /* 从 field_type_args 拆分 "K,V" 查 generic_params 计算索引/固定 CastKind */
+    for(int k = 0; k < merged_nprops; k++) {
+        if(!td->field_type_args[k] || !strchr(td->field_type_args[k], ',')) continue;
+        char* args_copy = strdup(td->field_type_args[k]);
+        char* comma = strchr(args_copy, ',');
+        if(!comma) { free(args_copy); continue; }
+        *comma = '\0';
+        char* key_arg = args_copy;
+        char* val_arg = comma + 1;
+        while(*key_arg == ' ' || *key_arg == '\t') key_arg++;
+        while(*val_arg == ' ' || *val_arg == '\t') val_arg++;
+        /* 去尾部空白 */
+        {
+            char* p = key_arg + strlen(key_arg);
+            while(p > key_arg && (p[-1] == ' ' || p[-1] == '\t')) *--p = '\0';
+            p = val_arg + strlen(val_arg);
+            while(p > val_arg && (p[-1] == ' ' || p[-1] == '\t')) *--p = '\0';
+        }
+        /* key: 查 generic_params → 索引；否则查 CastKind */
+        int key_gi = -1;
+        for(int i = 0; i < td->generic_param_count; i++) {
+            if(td->generic_params[i] && strcmp(td->generic_params[i], key_arg) == 0) { key_gi = i; break; }
+        }
+        td->field_map_key_indices[k] = key_gi;
+        if(key_gi < 0) td->field_map_key_kinds[k] = typename_to_castkind(key_arg);
+        /* value: 同上 */
+        int val_gi = -1;
+        for(int i = 0; i < td->generic_param_count; i++) {
+            if(td->generic_params[i] && strcmp(td->generic_params[i], val_arg) == 0) { val_gi = i; break; }
+        }
+        td->field_map_value_indices[k] = val_gi;
+        if(val_gi < 0) td->field_map_value_kinds[k] = typename_to_castkind(val_arg);
+        free(args_copy);
     }
     for(int k = 0; k < merged_nprops; k++) {
         /* any/动态字段（VAL_NONE）不参与标量 cast 归并：valuetype_to_castkind

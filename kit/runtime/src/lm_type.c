@@ -489,9 +489,10 @@ Value lumyr_field_get(Value obj, const char* field_name)
      * 普通数组（如 self.value = []）时，按声明打包会把 ValueArray* 误标为
      * VAL_TYPED_ARRAY，后续按 TypedArray* 解释 → 布局错位（len 对、items 为垃圾，
      * 元素读 null / sum=0 / SIGSEGV）。与 BOX_PTR 的根修同一原则。 */
-    if(fi->valtype == VAL_ARRAY || fi->valtype == VAL_TYPED_ARRAY || fi->valtype == VAL_MAP) {
+    if(fi->valtype == VAL_ARRAY || fi->valtype == VAL_TYPED_ARRAY ||
+       fi->valtype == VAL_MAP || fi->valtype == VAL_TYPED_MAP) {
         int rt = gc_obj_vtype(ptr);
-        if(rt == VAL_ARRAY || rt == VAL_TYPED_ARRAY || rt == VAL_MAP)
+        if(rt == VAL_ARRAY || rt == VAL_TYPED_ARRAY || rt == VAL_MAP || rt == VAL_TYPED_MAP)
             v.type = (ValueType)rt;
     }
     v.v.struct_ptr = ptr;

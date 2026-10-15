@@ -189,6 +189,7 @@ RUNTIME_SRCS += $(RUNTIME_DIR)/src/lm_qs.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_ffi.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_log.c
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_typed_arrays.c
+RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_typed_maps.c
 # Value 类型定义已迁移到 kit/runtime/
 RUNTIME_SRCS += $(RUNTIME_DIR)/src/lumyr_value.c
 # bigint 任意精度整数

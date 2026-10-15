@@ -50,6 +50,7 @@
 #include "ir_compile.h"
 #include "ast/func_compile.h"
 #include "lm_ws.h"
+#include "lumyr_typed_maps.h" /* VAL_TYPED_MAP 方法分派 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -382,6 +383,7 @@ static int bi_len_of(Value v) {
     case VAL_ARRAY:       return v.v.array ? v.v.array->len : 0;
     case VAL_TYPED_ARRAY: return v.v.typed_array ? v.v.typed_array->len : 0;
     case VAL_MAP:         return v.v.map ? v.v.map->len : 0;
+    case VAL_TYPED_MAP:   return v.v.typed_map ? lumyr_tmap_len(v.v.typed_map) : 0;
     case VAL_TUPLE:       return lumyr_tuple_len(v);
     case VAL_SET:         return lumyr_set_len(v);
     case VAL_BYTES:       return lumyr_bytes_len(v);
@@ -993,6 +995,10 @@ static Value bi_json_clean(Value v) {
         }
         return r;
     }
+    case VAL_TYPED_MAP: {
+        /* typed_map → 动态 map 后递归清洗（JSON 无类型概念） */
+        return bi_json_clean(lumyr_tmap_to_value_map(v.v.typed_map));
+    }
     default:
         return v;
     }
@@ -1351,6 +1357,24 @@ static Value bi_copy(Value v) {
         return r;
     }
 
+    /* ---- typed map：保持类型化，键值逐个深拷贝后重插 ---- */
+    case VAL_TYPED_MAP: {
+        TypedMap* tm = v.v.typed_map;
+        Value rv; memset(&rv, 0, sizeof(rv));
+        rv.type = VAL_TYPED_MAP;
+        if(!tm) { rv.v.typed_map = NULL; return rv; }
+        rv.v.typed_map = lumyr_tmap_new(tm->key_type, tm->value_type, tm->len);
+        Value ks = lumyr_tmap_keys(tm);
+        ValueArray* ka = ks.v.array;
+        int n = ka ? ka->len : 0;
+        for(int i = 0; i < n; i++) {
+            Value nk = bi_copy(ka->items[i]);
+            Value nv = bi_copy(lumyr_tmap_get(tm, ka->items[i]));
+            lumyr_tmap_set(rv.v.typed_map, nk, nv);
+        }
+        return rv;
+    }
+
     /* ---- typed array：缓冲复制；字符串元素逐个独立 ---- */
     case VAL_TYPED_ARRAY: {
         TypedArray* ta = v.v.typed_array;
@@ -1611,6 +1635,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         if(recv.type != VAL_STRING && recv.type != VAL_ARRAY &&
            recv.type != VAL_TYPED_ARRAY && recv.type != VAL_MAP &&
+           recv.type != VAL_TYPED_MAP &&
            recv.type != VAL_TUPLE && recv.type != VAL_SET &&
            recv.type != VAL_BYTES && recv.type != VAL_FORMDATA) {
             /* 准确语义：len() 是函数不是方法，参数须为容器/字符串，
@@ -1675,6 +1700,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             return 1;
         }
         if(recv.type == VAL_MAP) { *out = recv; return 1; } /* type 形状实例本质是 map */
+        if(recv.type == VAL_TYPED_MAP) {
+            /* typed_map → 动态 map（键值装箱，供 toMap/序列化复用） */
+            *out = lumyr_tmap_to_value_map(recv.v.typed_map);
+            return 1;
+        }
         return bi_type_err("toMap", recv);
     case BUILTIN_TOARRAY:
         if(recv.type == VAL_FORMDATA) {
@@ -1710,10 +1740,26 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = r;
             return 1;
         }
+        if(recv.type == VAL_TYPED_MAP) {
+            /* typed_map → [[k, v], ...]（与 map 同语义） */
+            Value ks = recv.v.typed_map ? lumyr_tmap_keys(recv.v.typed_map) : val_array(0);
+            ValueArray* ka = ks.v.array;
+            int n = ka ? ka->len : 0;
+            Value r = val_array(n);
+            for(int i = 0; i < n; i++) {
+                Value pair = val_array(2);
+                pair.v.array->items[0] = ka->items[i];
+                pair.v.array->items[1] = lumyr_tmap_get(recv.v.typed_map, ka->items[i]);
+                r.v.array->items[i] = pair;
+            }
+            *out = r;
+            return 1;
+        }
         return bi_type_err("toArray", recv);
     case BUILTIN_TOJSON: {
         if(recv.type == VAL_FORMDATA || recv.type == VAL_STRUCT_PTR ||
-           recv.type == VAL_CLASS_PTR || recv.type == VAL_MAP || recv.type == VAL_ARRAY) {
+           recv.type == VAL_CLASS_PTR || recv.type == VAL_MAP ||
+           recv.type == VAL_TYPED_MAP || recv.type == VAL_ARRAY) {
             Value cleaned = bi_json_clean(recv);
             char* s = lumyr_json_stringify(cleaned);
             *out = s ? lumyr_make_string(s) : val_none();
@@ -2256,11 +2302,16 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = recv;
             return 1;
         }
-        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_SET)
+        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_SET &&
+           recv.type != VAL_TYPED_MAP)
             return bi_type_err("remove", recv);
         if(!bi_need_args("remove", argc, 1)) return 0;
         if(recv.type == VAL_SET)      *out = lumyr_set_remove(&recv, argv[1]);
         else if(recv.type == VAL_MAP) *out = lumyr_map_del(&recv, argv[1]);
+        else if(recv.type == VAL_TYPED_MAP) {
+            if(recv.v.typed_map) lumyr_tmap_del(recv.v.typed_map, argv[1]);
+            *out = recv;
+        }
         else                          *out = lumyr_del(&recv, argv[1]);
         return 1;
     }
@@ -2271,7 +2322,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = recv;
             return 1;
         }
-        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP)
+        if(recv.type != VAL_ARRAY && recv.type != VAL_MAP && recv.type != VAL_TYPED_MAP)
             return bi_type_err("clear", recv);
         if(recv.type == VAL_MAP) {
             /* 字典清空：迭代键后逐个删除 */
@@ -2279,6 +2330,18 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             int n = bi_len_of(keys);
             for(int i = 0; i < n; i++)
                 lumyr_map_del(&recv, keys.v.array->items[i]);
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_TYPED_MAP) {
+            /* 类型化字典清空：迭代键后逐个删除 */
+            if(recv.v.typed_map) {
+                Value keys = lumyr_tmap_keys(recv.v.typed_map);
+                ValueArray* ka = keys.v.array;
+                int n = ka ? ka->len : 0;
+                for(int i = 0; i < n; i++)
+                    lumyr_tmap_del(recv.v.typed_map, ka->items[i]);
+            }
             *out = recv;
             return 1;
         }
@@ -2349,6 +2412,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             *out = lumyr_map_get(recv, argv[1]);
             return 1;
         }
+        if(recv.type == VAL_TYPED_MAP) {
+            if(!bi_need_args("get", argc, 1)) return 0;
+            *out = recv.v.typed_map ? lumyr_tmap_get(recv.v.typed_map, argv[1]) : val_none();
+            return 1;
+        }
         if(recv.type == VAL_FORMDATA) {
             /* formdata.get(name)：取第一个同名字段值（无匹配 none） */
             if(!bi_need_args("get", argc, 1)) return 0;
@@ -2383,6 +2451,12 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type == VAL_MAP) {
             if(!bi_need_args("set", argc, 2)) return 0;
             lumyr_map_set(&recv, argv[1], argv[2]);
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_TYPED_MAP) {
+            if(!bi_need_args("set", argc, 2)) return 0;
+            if(recv.v.typed_map) lumyr_tmap_set(recv.v.typed_map, argv[1], argv[2]);
             *out = recv;
             return 1;
         }
@@ -2800,11 +2874,19 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
     /* ===== 字典组 ===== */
     case BUILTIN_KEYS:
         if(recv.type == VAL_FORMDATA) { *out = lumyr_formdata_keys(recv); return 1; }
+        if(recv.type == VAL_TYPED_MAP) {
+            *out = recv.v.typed_map ? lumyr_tmap_keys(recv.v.typed_map) : val_array(0);
+            return 1;
+        }
         if(recv.type != VAL_MAP) return bi_type_err("keys", recv);
         *out = lumyr_map_keys(recv);
         return 1;
     case BUILTIN_VALUES:
         if(recv.type == VAL_FORMDATA) { *out = lumyr_formdata_values(recv); return 1; }
+        if(recv.type == VAL_TYPED_MAP) {
+            *out = recv.v.typed_map ? lumyr_tmap_values(recv.v.typed_map) : val_array(0);
+            return 1;
+        }
         if(recv.type != VAL_MAP) return bi_type_err("values", recv);
         *out = lumyr_map_values(recv);
         return 1;
@@ -2817,6 +2899,11 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         if(recv.type == VAL_FORMDATA) {
             if(!bi_need_args("has", argc, 1)) return 0;
             *out = lumyr_make_bool(lumyr_formdata_has(recv, argv[1]));
+            return 1;
+        }
+        if(recv.type == VAL_TYPED_MAP) {
+            if(!bi_need_args("has", argc, 1)) return 0;
+            *out = lumyr_make_bool(recv.v.typed_map ? lumyr_tmap_has(recv.v.typed_map, argv[1]) : 0);
             return 1;
         }
         if(recv.type != VAL_MAP) return bi_type_err("has", recv);
@@ -2868,6 +2955,21 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 Value rv;
                 fargs[0] = ka->items[i];
                 fargs[1] = lumyr_map_get(recv, ka->items[i]);
+                int rc = vm_call_func_value(ctx, argv[1], 2, fargs, &rv);
+                if(rc != 1) return rc;
+            }
+            *out = recv;
+            return 1;
+        }
+        if(recv.type == VAL_TYPED_MAP) {
+            Value ks = recv.v.typed_map ? lumyr_tmap_keys(recv.v.typed_map) : val_array(0);
+            ValueArray* ka = ks.v.array;
+            int n = ka ? ka->len : 0;
+            for(int i = 0; i < n; i++) {
+                Value fargs[2];
+                Value rv;
+                fargs[0] = ka->items[i];
+                fargs[1] = lumyr_tmap_get(recv.v.typed_map, ka->items[i]);
                 int rc = vm_call_func_value(ctx, argv[1], 2, fargs, &rv);
                 if(rc != 1) return rc;
             }

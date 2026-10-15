@@ -325,15 +325,19 @@ int vm_exec_box_ptr(VMExecCtx* ctx, Instruction* in) {
      * 容器类（array/map/typed_array）互相覆盖；GC 头不可读时回退声明类型。 */
     case CAST_ARRAY:
     case CAST_MAP:
-    case CAST_TYPED_ARRAY: {
+    case CAST_TYPED_ARRAY:
+    case CAST_TYPED_MAP: {
         int rt = gc_obj_vtype(val);
         if(rt == VAL_ARRAY)       { v.type = VAL_ARRAY;       v.v.array = val;        break; }
         if(rt == VAL_MAP)         { v.type = VAL_MAP;         v.v.map = val;          break; }
         if(rt == VAL_TYPED_ARRAY) { v.type = VAL_TYPED_ARRAY; v.v.typed_array = val;  break; }
+        if(rt == VAL_TYPED_MAP)   { v.type = VAL_TYPED_MAP;   v.v.typed_map = val;    break; }
         if((CastKind)in->a == CAST_ARRAY)
             v.type = VAL_ARRAY,       v.v.array = val;
         else if((CastKind)in->a == CAST_MAP)
             v.type = VAL_MAP,         v.v.map = val;
+        else if((CastKind)in->a == CAST_TYPED_MAP)
+            v.type = VAL_TYPED_MAP,   v.v.typed_map = val;
         else
             v.type = VAL_TYPED_ARRAY, v.v.typed_array = val;
         break;

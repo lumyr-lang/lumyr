@@ -115,6 +115,7 @@ static inline const char* valtype_to_cstr(ValueType t)
         case VAL_STRUCT_PTR: return "struct*";
         case VAL_CLASS_PTR:  return "class*";
         case VAL_TYPED_ARRAY: return "typed_array";
+        case VAL_TYPED_MAP:  return "typed_map";
         /* 扩展固定宽度类型 */
         case VAL_VOID:       return "void";
         case VAL_INT8:       return "int8_t";

@@ -1,6 +1,7 @@
 // lm_string.c —— 字符串操作内置函数
 #include "lm_string.h"
 #include "gc_runtime.h"
+#include "lumyr_typed_maps.h" /* VAL_TYPED_MAP contains 分派 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -140,6 +141,10 @@ Value lumyr_contains(Value hay, Value needle)
     if(hay.type == VAL_MAP) {
         if(needle.type != VAL_STRING) runtime_error("contains() 字典键必须是字符串");
         return lumyr_make_bool(lumyr_map_has(hay, needle));
+    }
+    if(hay.type == VAL_TYPED_MAP) {
+        /* 类型化字典按键查找（键类型由 tmap 自身校验转换） */
+        return lumyr_make_bool(hay.v.typed_map ? lumyr_tmap_has(hay.v.typed_map, needle) : 0);
     }
     runtime_error("contains() 第一个参数必须是字符串、数组或字典");
     return val_none();
