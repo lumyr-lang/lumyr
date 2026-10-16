@@ -1,0 +1,177 @@
+// 泛型类体内 K/V/E 引用路径运行时类型测试（阶段 6b）
+// 覆盖 <K,V>{...} 字面量、<K,V>expr 强转、new Box<K>() 泛类实例化、<E>[...] typed_array
+
+func check(cond, msg) {
+    if(cond) {} else {
+        throw msg;
+    }
+}
+
+n = 0;
+
+// ===== M-GP1: <K,V>{...} 字面量在泛型类方法体内构造 typed_map =====
+public class BoxKV<K,V> {
+    value: <K,V>map;
+    func BoxKV() {
+        self.value = <K,V>{"a": 1, "b": 2};
+    }
+    func getType(): string {
+        return type(self.value);
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+b1 = BoxKV<string,int>();
+check(type(b1.value) == "typed_map", "M-GP1: value should be typed_map, got " + type(b1.value));
+check(b1.getVal("a") == 1, "M-GP1: getVal(a) should be 1");
+check(b1.getVal("b") == 2, "M-GP1: getVal(b) should be 2");
+check(type(b1.getVal("a")) == "int", "M-GP1: value type should be int");
+n = n + 1;
+
+// ===== M-GP2: <K,V>{...} 整型键 typed_map =====
+public class BoxKI<V> {
+    value: <int,V>map;
+    func BoxKI() {
+        self.value = <int,V>{1: 10, 2: 20};
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+b2 = BoxKI<string>();
+check(type(b2.value) == "typed_map", "M-GP2: value should be typed_map");
+check(b2.getVal(1) == "10", "M-GP2: getVal(1) should be 10");
+check(b2.getVal(2) == "20", "M-GP2: getVal(2) should be 20");
+n = n + 1;
+
+// ===== M-GP3: <K,V>expr 强转（非字面量）在泛型类方法体内 =====
+public class CastBox<K,V> {
+    value: <K,V>map;
+    func CastBox(m) {
+        self.value = <K,V>m;
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+cm = {"x": 100, "y": 200};
+cb = CastBox<string,int>(cm);
+check(type(cb.value) == "typed_map", "M-GP3: value should be typed_map");
+check(cb.getVal("x") == 100, "M-GP3: getVal(x) should be 100");
+check(cb.getVal("y") == 200, "M-GP3: getVal(y) should be 200");
+n = n + 1;
+
+// ===== M-GP4: new Box<K>() 在泛型类体内实例化其他泛型类 =====
+public class Wrap<T> {
+    value: <T>array;
+    func Wrap() {
+        self.value = <T>[1, 2, 3];
+    }
+    func getType(): string {
+        return type(self.value);
+    }
+    func getVal(i) {
+        return self.value[i];
+    }
+}
+
+public class Holder<E> {
+    wrapped: Wrap<E>;
+    func Holder() {
+        self.wrapped = Wrap<E>();
+    }
+    func getWrappedType(): string {
+        return self.wrapped.getType();
+    }
+    func getWrappedVal(i) {
+        return self.wrapped.getVal(i);
+    }
+}
+
+h4 = Holder<int>();
+check(h4.getWrappedType() == "typed_array", "M-GP4: wrapped should be typed_array");
+check(h4.getWrappedVal(0) == 1, "M-GP4: wrapped[0] should be 1");
+check(h4.getWrappedVal(2) == 3, "M-GP4: wrapped[2] should be 3");
+n = n + 1;
+
+// ===== M-GP5: <E>[...] typed_array 字面量在泛型类方法体内 =====
+public class ArrBox<E> {
+    value: <E>array;
+    func ArrBox() {
+        self.value = <E>[10, 20, 30];
+    }
+    func getType(): string {
+        return type(self.value);
+    }
+    func getVal(i) {
+        return self.value[i];
+    }
+}
+
+a5 = ArrBox<int>();
+check(type(a5.value) == "typed_array", "M-GP5: value should be typed_array");
+check(a5.getVal(0) == 10, "M-GP5: value[0] should be 10");
+check(a5.getVal(1) == 20, "M-GP5: value[1] should be 20");
+n = n + 1;
+
+// ===== M-GP6: 泛型类字段先赋普通 {} 字面量，generic_bind 正确迁移 =====
+public class PlainBox<K,V> {
+    value: <K,V>map;
+    func PlainBox() {
+        self.value = {"k1": 111, "k2": 222};
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+p6 = PlainBox<string,int>();
+check(type(p6.value) == "typed_map", "M-GP6: value should be typed_map");
+check(p6.getVal("k1") == 111, "M-GP6: getVal(k1) should be 111");
+check(p6.getVal("k2") == 222, "M-GP6: getVal(k2) should be 222");
+n = n + 1;
+
+// ===== M-GP7: 空 <K,V>{} 赋值后下标写入 =====
+public class EmptyBox<K,V> {
+    value: <K,V>map;
+    func EmptyBox() {
+        self.value = <K,V>{};
+        self.value["empty_key"] = 777;
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+e7 = EmptyBox<string,int>();
+check(type(e7.value) == "typed_map", "M-GP7: value should be typed_map");
+check(e7.getVal("empty_key") == 777, "M-GP7: empty_key should be 777");
+n = n + 1;
+
+// ===== M-GP8: GC 压力下泛型类体内 typed_map/typed_array 保持正确 =====
+public class GcBox<K,V> {
+    value: <K,V>map;
+    func GcBox() {
+        self.value = <K,V>{"gc_key": 999};
+    }
+    func getVal(k) {
+        return self.value[k];
+    }
+}
+
+g8 = GcBox<string,int>();
+i = 0;
+while (i < 1000) {
+    tmp = GcBox<string,int>();
+    tmp.value["k" + i] = i;
+    i = i + 1;
+}
+check(type(g8.value) == "typed_map", "M-GP8: value should still be typed_map after GC");
+check(g8.getVal("gc_key") == 999, "M-GP8: gc_key should survive GC pressure");
+n = n + 1;
+
+print("generic_param_test: " + n + " tests passed");

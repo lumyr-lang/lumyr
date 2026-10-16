@@ -1041,7 +1041,11 @@ static void parse_two_generic_args(const char* text, CastKind* kck, CastKind* vc
 
 /* 泛型 map 字面量 <K,V>{k1:v1,...}：沿 SEQ 链给每个 entry 的键包 K cast、值包 V cast，
    再生成普通 map_lit。编译器按 entry 目标 VALUE 编译，CAST 负责把键/值转到 K/V，
-   存储仍为 ValueMap（运行时键支持任意类型）。 */
+   存储仍为 ValueMap（运行时键支持任意类型）。
+ * K/V 为泛型形参时 kck/vck == CAST_NONE，此时不包 CAST_NONE 节点：
+   CAST_NONE 会触发 BOX_PTR(CAST_NONE)/BOX_INT64(CAST_NONE)，把字符串/整数
+   装箱成 VAL_PTR/VAL_INT64，丢失具体类型信息，后续 generic_bind 转换时
+   按错误类型哈希/比较导致键值丢失。 */
 static AstNode* wrap_map_kv(AstNode* items, CastKind kck, CastKind vck)
 {
     if(!items) return NULL;
@@ -1051,8 +1055,10 @@ static AstNode* wrap_map_kv(AstNode* items, CastKind kck, CastKind vck)
         return items;
     }
     if(items->type == AST_MAP_ENTRY) {
-        items->u.map_entry.key   = new_cast_node(kck, items->u.map_entry.key);
-        items->u.map_entry.value = new_cast_node(vck, items->u.map_entry.value);
+        if(kck != CAST_NONE)
+            items->u.map_entry.key = new_cast_node(kck, items->u.map_entry.key);
+        if(vck != CAST_NONE)
+            items->u.map_entry.value = new_cast_node(vck, items->u.map_entry.value);
     }
     return items;
 }

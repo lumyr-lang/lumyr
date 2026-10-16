@@ -614,13 +614,16 @@ TypedMap* lumyr_tmap_new(ValueType key_type, ValueType value_type, int cap) {
 TypedMap* lumyr_tmap_from_value_map(ValueMap* vm, ValueType key_type, ValueType value_type) {
     if(!vm) return lumyr_tmap_new(key_type, value_type, TMAP_INIT_CAP);
     TypedMap* m = lumyr_tmap_new(key_type, value_type, vm->cap > 0 ? vm->cap : TMAP_INIT_CAP);
-    /* 遍历 ValueMap 逐条写入 */
+    /* 遍历 ValueMap 逐条写入；期间禁止 GC，防止迭代栈上的 k/v 不是根
+     * 而被移动/回收，导致 lumyr_tmap_set 的 hash/compare 读到脏 Value */
+    gc_disable();
     MapIter it;
     map_iter_init(&it, vm);
     Value k, v;
     while(map_iter_next(&it, &k, &v)) {
         lumyr_tmap_set(m, k, v);
     }
+    gc_enable();
     return m;
 }
 

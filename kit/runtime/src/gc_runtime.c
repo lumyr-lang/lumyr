@@ -67,8 +67,11 @@ __attribute__((weak)) void lumyr_gc_mark_generator(Value v) {
 #  define GC_ASAN_ENABLED 1
 #endif
 
-/* 编译期断言：GCObject 必须保持 16 字节（user_size 利用原填充空间） */
-_Static_assert(sizeof(GCObject) == 16, "GCObject must be 16 bytes");
+/* 编译期断言：GCObject 头必须是 16 字节的整数倍，以保证用户指针 16 字节对齐。
+ * 不变量来源：Value 等 16 字节元素数组（ValueArray.items）按 movaps 对齐访问，
+ * 用户指针若仅 8 字节对齐会触发 EXC_BAD_ACCESS(GPFLT)。
+ * 64 位下为 32 字节；32 位下为 16 字节。 */
+_Static_assert(sizeof(GCObject) % 16 == 0, "GCObject must keep user pointers 16-byte aligned");
 
 /* 前向声明：gc_cstack_set_contains 在文件后部定义，但 gc_mark/gc_mark_one 等需提前调用 */
 static int gc_cstack_set_contains(void* ptr);
@@ -375,6 +378,14 @@ static inline size_t tla_real_size(size_t size) {
 
 /* ---- 前向声明（分代辅助函数定义在 gc_alloc 之后） ---- */
 static int gc_generational_enabled(void);
+
+/* 释放 class/struct 实例关联的泛型实参表 */
+static void gc_free_bound_types(GCObject* obj) {
+    if(obj && obj->bound_types) {
+        free(obj->bound_types);
+        obj->bound_types = NULL;
+    }
+}
 static void gc_recount_bytes(void);
 static int gc_need_collect_locked(void);
 
@@ -408,6 +419,7 @@ void* gc_alloc(size_t size, int vtype)
                 cur->vtype = (unsigned char)vtype;
                 cur->age = 0;
                 cur->flags = 0;
+                cur->bound_types = NULL;
                 memset(obj_to_ptr(cur), 0, size);
                 /* 不增加 g_gc_bytes（对象一直在全局链表中，已被统计） */
                 return obj_to_ptr(cur);
@@ -437,6 +449,7 @@ void* gc_alloc(size_t size, int vtype)
             batch[i]->flags = 0;
             batch[i]->user_size = (uint32_t)real_sz;
             batch[i]->next = NULL;
+            batch[i]->bound_types = NULL;
         }
 
         /* 预分配块（i>=1）标记为永生（本地空闲链表）；
@@ -494,6 +507,7 @@ void* gc_alloc(size_t size, int vtype)
     obj->flags = 0;
     obj->user_size = (uint32_t)size;
     obj->next = NULL;
+    obj->bound_types = NULL;
     memset(obj_to_ptr(obj), 0, size);
 
     int need_collect_type = 0;  /* 1=minor, 2=major */
@@ -551,6 +565,7 @@ void* gc_realloc(void* ptr, size_t new_size)
     new_obj->age = PROMOTE_AGE;  /* 内部缓冲区始终老年代，避免被老年代容器引用时 Minor GC 错误回收 */
     new_obj->flags = 0;
     new_obj->next = NULL;
+    new_obj->bound_types = NULL;
     if (new_size > copy_size) {
         memset((char*)new_obj + sizeof(GCObject) + copy_size, 0, new_size - copy_size);
     }
@@ -2159,11 +2174,13 @@ void gc_sweep(void)
             if (cur->user_size <= TLA_MAX_SIZE) {
                 *pp = cur->next;
                 g_gc_bytes -= sizeof(GCObject) + cur->user_size;
+                gc_free_bound_types(cur);
                 free(cur);
             } else {
                 /* 大对象：free */
                 *pp = cur->next;
                 g_gc_bytes -= sizeof(GCObject) + cur->user_size;
+                gc_free_bound_types(cur);
                 free(cur);
             }
         } else {
@@ -2210,12 +2227,14 @@ static void gc_sweep_minor(void)
                     *pp = cur->next;
                     g_gc_bytes -= obj_bytes;
                     g_young_bytes -= obj_bytes;
+                    gc_free_bound_types(cur);
                     free(cur);
                 } else {
                     /* 大对象：free（理论上大对象直接老年代，不会出现在新生代，但防御性处理） */
                     *pp = cur->next;
                     g_gc_bytes -= obj_bytes;
                     g_young_bytes -= obj_bytes;
+                    gc_free_bound_types(cur);
                     free(cur);
                 }
             } else {

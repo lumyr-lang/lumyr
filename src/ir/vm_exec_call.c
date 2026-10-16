@@ -7,6 +7,7 @@
 #include "vm_types.h"
 #include "stack_manager.h"
 #include "ast/stackframe.h"
+#include "ast/ast_types.h"
 #include "ir_compile.h"
 #include "ir_arith.h"
 #include "ir_types.h"
@@ -67,11 +68,14 @@ static void pop_arg_slot(BytecodeFunc* callee, int slot, ArgTmp* out) {
 }
 
 /* vm_bind_only：建帧并按形参顺序绑定参数（ref 别名调用方槽位）。
- * 返回新建帧；调用方负责销毁（或由生成器接管）。 */
+ * 返回新建帧；调用方负责销毁（或由生成器接管）。
+ * bound_types 非空时附加到新建帧（泛型类方法调用时继承实例泛型实参）。 */
 static StackFrame* vm_bind_only(BytecodeFunc* callee, CallSite* cs,
-                                int argc, ArgTmp* args, StackFrame* parent_frame) {
+                                int argc, ArgTmp* args, StackFrame* parent_frame,
+                                BoundTypeInfo* bound_types) {
     StackFrame* caller_frame = parent_frame;   /* ref 形参需引用调用方槽位 */
     StackFrame* new_frame = stackframe_new(parent_frame);
+    new_frame->bound_types = bound_types;   /* 无泛型实参时显式置 NULL，避免残留 */
     int name_slots = callee->param_cnt + callee->has_variadic;
     for (int slot = 0; slot < argc; ++slot) {
         const char* pname = (slot < name_slots && callee->params[slot])
@@ -105,8 +109,9 @@ static StackFrame* vm_bind_only(BytecodeFunc* callee, CallSite* cs,
  * 恢复状态 → 销毁帧。返回 loop 状态；ret 输出返回槽（detach 独立副本）。不处理返回值压栈。
  * 普通 CALL 与多态 CALL_METHOD 共用，保证建帧/状态切换语义单点维护。 */
 static int vm_bind_and_run(VMExecCtx* ctx, BytecodeFunc* callee, CallSite* cs,
-                           int argc, ArgTmp* args, RetSlot* ret) {
-    StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame);
+                           int argc, ArgTmp* args, RetSlot* ret,
+                           BoundTypeInfo* bound_types) {
+    StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame, bound_types);
 
     /* 保存调用方执行状态 */
     SavedState save;
@@ -219,9 +224,15 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     for (int slot = argc - 1; slot >= 0; --slot)
         pop_arg_slot(callee, slot, &args[slot]);
 
+    /* 构造器调用：self 是 slot0 的 PTR 实参，继承其实例 bound_types */
+    BoundTypeInfo* self_bt = NULL;
+    if (argc > 0 && args[0].et == EXPR_TYPE_PTR && is_constructor_name(cs->callee)) {
+        self_bt = gc_obj_bound_types(args[0].p);
+    }
+
     /* 生成器函数：建帧绑定参数，创建生成器对象压栈（不进入 vm_exec_loop） */
     if (callee->is_generator) {
-        StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame);
+        StackFrame* new_frame = vm_bind_only(callee, cs, argc, args, ctx->frame, self_bt);
         free(args);
         GeneratorObject* gen = generator_new_with_frame(callee, new_frame);
         if (!gen) {
@@ -239,7 +250,7 @@ int vm_exec_call(VMExecCtx* ctx, Instruction* in) {
     }
 
     RetSlot ret;
-    int status = vm_bind_and_run(ctx, callee, cs, argc, args, &ret);
+    int status = vm_bind_and_run(ctx, callee, cs, argc, args, &ret, self_bt);
     free(args);
 
     /* 异常穿过本调用：不压返回值，继续向调用方传播 */
@@ -309,6 +320,7 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
     void* recv_ptr = POP_PTR();
     args[0].et = EXPR_TYPE_PTR;
     args[0].p = recv_ptr;
+    BoundTypeInfo* recv_bt = gc_obj_bound_types(recv_ptr);
 
     /* 3. 实例偏移 0 取 RuntimeTypeInfo → 按方法名查实际 RuntimeFunc */
     RuntimeTypeInfo* ri = recv_ptr ? *(RuntimeTypeInfo**)recv_ptr : NULL;
@@ -337,7 +349,7 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
      *    返回，不进入 vm_exec_loop（与 vm_exec_call 的 gen 分支同构）。
      *    缺此分支时 gen 方法体会被当普通方法执行，yield 结果丢失、返回 none。 */
     if (actual_fn->is_generator) {
-        StackFrame* new_frame = vm_bind_only(actual_fn, cs, argc, args, ctx->frame);
+        StackFrame* new_frame = vm_bind_only(actual_fn, cs, argc, args, ctx->frame, recv_bt);
         free(args);
         GeneratorObject* gen = generator_new_with_frame(actual_fn, new_frame);
         if (!gen) {
@@ -356,7 +368,7 @@ int vm_exec_call_method(VMExecCtx* ctx, Instruction* in) {
 
     /* 普通方法：建帧绑定并执行实际方法 */
     RetSlot ret;
-    int status = vm_bind_and_run(ctx, actual_fn, cs, argc, args, &ret);
+    int status = vm_bind_and_run(ctx, actual_fn, cs, argc, args, &ret, recv_bt);
     free(args);
 
     if (status == VM_LOOP_UNWIND) return VM_LOOP_UNWIND;

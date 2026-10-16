@@ -2,6 +2,7 @@
 #define LUMYR_VALUE_TYPE_H
 
 #include <string.h>
+#include <stdlib.h>      /* malloc/free（bound_type_info_clone） */
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/types.h>   /* ssize_t（POSIX，macOS/Linux 需要） */
@@ -301,6 +302,26 @@ struct EvalCtx {
     Value ret_val;
 };
 
+// 泛型实参运行时信息：存储 class/function 实例化后的具体类型（CastKind 数组）
+// 负值保留给 GenericBindInfo 的泛型形参引用，运行时通过当前帧 bound_types 解析
+typedef struct BoundTypeInfo {
+    int nbound;
+    int types[1];  // flexible array：实际分配 sizeof(BoundTypeInfo) + (nbound-1)*sizeof(int)
+} BoundTypeInfo;
+
+/* 深拷贝泛型实参表（堆分配）。实例拷贝后两份实例各持有独立表，
+ * 避免 GC 回收时对同一指针重复 free。src 为 NULL 时返回 NULL。 */
+static inline BoundTypeInfo* bound_type_info_clone(const BoundTypeInfo* src) {
+    if(!src) return NULL;
+    size_t sz = sizeof(BoundTypeInfo) +
+                (size_t)(src->nbound > 0 ? src->nbound - 1 : 0) * sizeof(int);
+    BoundTypeInfo* dst = (BoundTypeInfo*)malloc(sz);
+    if(!dst) return NULL;
+    dst->nbound = src->nbound;
+    for(int i = 0; i < src->nbound; i++) dst->types[i] = src->types[i];
+    return dst;
+}
+
 // 新增，不修改原有EvalCtx，栈帧独立
 // 多线程安全：main/全局帧 shared=1，get/set/bind 走 rwlock（主线程扩容 realloc 不移动共享帧内存
 // 时，其他线程读取同帧会 use-after-free，故共享帧所有访问加锁）；函数帧为线程私有 shared=0 不加锁。
@@ -333,6 +354,7 @@ typedef struct StackFrame {
     /* ref 引用传递：refs[i] 非 NULL 表示槽 i 是调用方某存储的别名，
      * LOAD/STORE 时通过 refs[i]->ptr 转发并按 refs[i]->type 自动 box/unbox。 */
     struct RefDesc** refs;
+    BoundTypeInfo* bound_types;  /* 当前 class/function 实例化后的泛型实参（NULL=无泛型） */
 } StackFrame;
 
 /* ref 引用描述符：指向调用方栈帧的实际存储，附带类型以实现自动 box/unbox */

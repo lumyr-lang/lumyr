@@ -912,15 +912,53 @@ static Value convert_dynamic_map_to_typed(Value src, CastKind key_ck, CastKind v
     return r;
 }
 
+/* 从当前帧 bound_types 解析 CastKind：
+ *   ck >= 0 为具体 CastKind，直接返回；
+ *   ck < 0  为泛型形参引用，索引 = -ck - 1，从 frame->bound_types 取具体类型。 */
+static CastKind resolve_bound_type(BoundTypeInfo* bt, CastKind ck) {
+    if((int)ck >= 0) return ck;
+    if(!bt) return CAST_NONE;
+    int idx = -(int)ck - 1;
+    if(idx < 0 || idx >= bt->nbound) return CAST_NONE;
+    return (CastKind)bt->types[idx];
+}
+
 /* GENERIC_BIND：a=常量池下标（GenericBindInfo*）
- * 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray、ValueMap 转为 TypedMap，压回 PTR 栈 */
+ * 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray、ValueMap 转为 TypedMap，压回 PTR 栈。
+ * 同时把解析后的泛型实参附加到实例 GCObject，供后续方法调用继承。 */
 int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
-    (void)ctx;
     int idx = in->a;
+    int bind_only = in->b;  /* 0=字段迁移+bound_types；非0=仅附加 bound_types */
     GenericBindInfo* gbi = (GenericBindInfo*)(uintptr_t)ctx->const_pool[idx].u64;
     void* p;
     stack_vm_pop(g_stack_mgr, STACK_PTR, &p);
     if(!p || !gbi) { stack_vm_push(g_stack_mgr, STACK_PTR, &p); return 1; }
+
+    /* 解析 GenericBindInfo 中的泛型实参（负值索引从当前帧 bound_types 解析）。
+     * 若实例已有 bound_types（如构造函数前的预绑定），直接复用，避免重复分配。 */
+    BoundTypeInfo* instance_bt = gc_obj_bound_types(p);
+    if(gbi->nbound > 0 && gbi->bound_types &&
+       (!instance_bt || instance_bt->nbound != gbi->nbound)) {
+        size_t bsz = sizeof(BoundTypeInfo) + (size_t)(gbi->nbound - 1) * sizeof(int);
+        BoundTypeInfo* new_bt = (BoundTypeInfo*)malloc(bsz);
+        if(new_bt) {
+            new_bt->nbound = gbi->nbound;
+            for(int i = 0; i < gbi->nbound; i++) {
+                new_bt->types[i] = (int)resolve_bound_type(ctx->frame ? ctx->frame->bound_types : NULL,
+                                                            (CastKind)gbi->bound_types[i]);
+            }
+            /* 尺寸不一致时替换旧表，必须先释放，否则泄漏 */
+            if(instance_bt) free(instance_bt);
+            gc_obj_set_bound_types(p, new_bt);
+            instance_bt = new_bt;
+        }
+    }
+
+    /* 仅预挂 bound_types：不访问字段，直接返回实例 */
+    if(bind_only) {
+        stack_vm_push(g_stack_mgr, STACK_PTR, &p);
+        return 1;
+    }
 
     /* 实例偏移 0 是 RuntimeTypeInfo* 指针，用 gbi->info 查字段 */
     RuntimeTypeInfo* info = (RuntimeTypeInfo*)gbi->info;
@@ -931,7 +969,7 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
         for(int i = 0; i < gbi->nfields && i < info->nfields; i++) {
             int gi = gbi->field_generic_indices[i];
             if(gi < 0 || gi >= gbi->nbound) continue;
-            CastKind ck = (CastKind)gbi->bound_types[gi];
+            CastKind ck = resolve_bound_type(instance_bt, (CastKind)gbi->bound_types[gi]);
             if(ck == CAST_NONE) continue;
 
             FieldInfo* fi = &info->fields[i];
@@ -939,6 +977,12 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
 
             void** field_slot = (void**)((char*)p + fi->offset);
             if(!*field_slot) continue;
+
+            /* 按运行时真实 vtype 判断：字段声明为 VAL_ARRAY/VAL_TYPED_ARRAY，
+             * 但赋值时可能已直接存入 typed_array（如 <T>[...] 字面量）。
+             * 若按声明类型强转，会把 TypedArray 误当 ValueArray 解读而崩溃；
+             * 已类型化或非动态数组的字段无需转换。 */
+            if(gc_obj_vtype(*field_slot) != VAL_ARRAY) continue;
 
             Value cur;
             memset(&cur, 0, sizeof(cur));
@@ -960,10 +1004,10 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
             int val_gi = gbi->field_map_value_indices[i];
             /* 泛型形参→bound_types 取 CastKind；否则用固定 CastKind */
             CastKind key_ck = (key_gi >= 0 && key_gi < gbi->nbound)
-                ? (CastKind)gbi->bound_types[key_gi]
+                ? resolve_bound_type(instance_bt, (CastKind)gbi->bound_types[key_gi])
                 : (CastKind)gbi->field_map_key_kinds[i];
             CastKind val_ck = (val_gi >= 0 && val_gi < gbi->nbound)
-                ? (CastKind)gbi->bound_types[val_gi]
+                ? resolve_bound_type(instance_bt, (CastKind)gbi->bound_types[val_gi])
                 : (CastKind)gbi->field_map_value_kinds[i];
             if(key_ck == CAST_NONE || val_ck == CAST_NONE) continue;
 
@@ -972,6 +1016,9 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
 
             void** field_slot = (void**)((char*)p + fi->offset);
             if(!*field_slot) continue;
+
+            /* 同数组字段：按运行时真实 vtype 判断，已为 typed_map 或非动态 map 则跳过 */
+            if(gc_obj_vtype(*field_slot) != VAL_MAP) continue;
 
             Value cur;
             memset(&cur, 0, sizeof(cur));

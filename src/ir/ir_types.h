@@ -52,6 +52,7 @@ typedef struct {
  */
 typedef struct {
     BytecodeFunc* fn;
+    void* cur_class_td;      /* 当前编译方法所属的 class/struct TypeDef（泛型类方法体内解析 K/V/E 用） */
     Layer* layers;           /* 动态：循环/switch 嵌套无硬上限 */
     int layer_depth;
     int layers_cap;

@@ -29,6 +29,11 @@ typedef struct GCObject {
     unsigned char flags;       /* 标志位：bit0=GC_OBJ_IN_RS, bit1=GC_OBJ_INTERNAL_BUF（items/buckets 内部缓冲区，非用户对象） */
     uint32_t user_size;       /* 用户数据大小（不含 GCObject 头） */
     struct GCObject* next;
+    BoundTypeInfo* bound_types; /* class/struct 实例的泛型实参（仅 VAL_STRUCT_PTR/VAL_CLASS_PTR 有效；其余为 NULL） */
+#if defined(__LP64__) || defined(_LP64)
+    void* _pad;               /* 补齐到 32 字节：GC 用户指针必须 16 字节对齐（Value[] 等
+                               * 16 字节元素按 movaps 对齐访问，头为 24 字节会使指针 8 字节对齐而崩溃） */
+#endif
 } GCObject;
 
 /* ---- 分配 / 重分配 ---- */
@@ -47,6 +52,22 @@ void* gc_alloc_old(size_t size, int vtype);
  * 指针无效返回 -1。供 BOX_PTR 装箱按运行时身份打标（修复字段声明类型
  * 与运行时容器类型不一致时身份丢失）。 */
 int gc_obj_vtype(void* ptr);
+
+/* class/struct 实例的泛型实参读写（ptr 为实例用户指针；非实例返回 NULL） */
+static inline BoundTypeInfo* gc_obj_bound_types(void* ptr) {
+    if(!ptr) return NULL;
+    /* 仅实例才可能持有泛型实参：按 GC 头 vtype 过滤，
+     * 避免对字符串/数组/原生指针等非实例对象误读该字段 */
+    int vt = gc_obj_vtype(ptr);
+    if(vt != VAL_STRUCT_PTR && vt != VAL_CLASS_PTR) return NULL;
+    GCObject* obj = (GCObject*)((char*)ptr - sizeof(GCObject));
+    return obj->bound_types;
+}
+static inline void gc_obj_set_bound_types(void* ptr, BoundTypeInfo* bt) {
+    if(!ptr) return;
+    GCObject* obj = (GCObject*)((char*)ptr - sizeof(GCObject));
+    obj->bound_types = bt;
+}
 
 /* Remembered set 检查：老年代容器写入新值时，若新值可能引用新生代对象，
  * 将容器加入 remembered set。在所有修改堆对象内部引用的位置调用。 */

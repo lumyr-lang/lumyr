@@ -27,11 +27,15 @@
 
 /* 泛型类型绑定信息（编译期构造，存入常量池供 OPC_GENERIC_BIND 使用）。
  * 用 void* info 避免引入 RuntimeTypeInfo 依赖到本头文件；
- * vm_exec_generic_bind 中 cast 回 RuntimeTypeInfo*。 */
+ * vm_exec_generic_bind 中 cast 回 RuntimeTypeInfo*。
+ *
+ * bound_types 编码：
+ *   >=0 : 已解析的 CastKind（如 CAST_INT, CAST_STRING）
+ *   <0  : 泛型形参引用，索引 = -bound_types[i] - 1，运行时从当前帧 bound_types 解析 */
 typedef struct {
     void* info;                  /* RuntimeTypeInfo* 指针（查字段偏移和类型） */
     int* field_generic_indices;  /* 字段→泛型形参索引（-1=非泛型；0+=bound_types 索引） */
-    int* bound_types;            /* callsite 解析的 CastKind 数组（如 CAST_INT, CAST_STRING...） */
+    int* bound_types;            /* callsite 解析的 CastKind 数组，或负值表示泛型形参索引 */
     int nfields;                 /* 字段总数 */
     int nbound;                  /* 类型实参数（泛型形参数） */
     /* 类型化 map 字段：key/value 泛型索引 + 固定 CastKind（与 TypeDef 同语义） */

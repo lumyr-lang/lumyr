@@ -346,6 +346,9 @@ Value lumyr_instance_copy(Value obj)
     }
     memcpy(mem, obj.v.struct_ptr, info->instance_size);
     /* 偏移 0 的 info 指针随 memcpy 自动复制 */
+    /* GCObject 头中的泛型实参表需要深拷贝：两份实例各持有独立表，
+     * 否则 GC sweep 会对同一指针重复 free（double free） */
+    gc_obj_set_bound_types(mem, bound_type_info_clone(gc_obj_bound_types(obj.v.struct_ptr)));
 
     Value v;
     v.type = obj.type;   /* 保留原类型（class copy 必须仍是 VAL_CLASS_PTR，否则方法分派失败） */

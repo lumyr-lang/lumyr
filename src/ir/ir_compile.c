@@ -46,6 +46,7 @@ static int resolve_free_call(Ctx* c, const char* name, AstNode* args,
 static int ol_group_exists(const char* name);
 static int g_ol_seq = 0;   /* 重载唯一键全局序号（定义在后，此处前置） */
 static void emit_value_cast(Ctx* c, ExprType from, ExprType to);  /* typed → typed 栈转换 */
+static int cur_class_generic_param_index(Ctx* c, const char* name); /* 当前 class 泛型形参索引 */
 char* c_expr_owner_type(Ctx* c, AstNode* node);  /* 表达式持有的自定义类型名 */
 static void record_var_owner(Ctx* c, int bf_idx, AstNode* rhs);  /* 记录变量槽属主类型 */
 static ExprType compile_method_call_expr(Ctx* c, AstNode* node, int keep_result);  /* 方法调用编译 */
@@ -767,33 +768,21 @@ static int is_typed_bytes_cast(CastKind ct) {
 
 /* 泛型类型绑定：解析 type_args 为 CastKind 数组，构造 GenericBindInfo 存入常量池，
  * 发射 OPC_GENERIC_BIND。实例已在 PTR 栈顶（构造函数调用后/CLASS_NEW 后）。
- * 仅当类型有泛型形参、字段含泛型索引且 callsite 提供了类型实参时发射，否则 no-op。
+ * 只要 callsite 提供了类型实参，就发射指令，用于：
+ *   1) 把泛型字段的 ValueArray/ValueMap 转为 TypedArray/TypedMap；
+ *   2) 把解析后的泛型实参附加到实例 GCObject，供方法调用继承 bound_types。
+ * bind_only=1 时只做第 2 件事（用于构造函数执行前预挂 bound_types）。
  * 用户提供的类型实参可能是单类型（"int"）或多类型（"string,int"），按逗号拆分。 */
-static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
+static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td, int bind_only)
 {
     if(!node || !td) return;
     if(!node->u.class_new.type_args) return;
     if(td->generic_param_count <= 0) return;
-    if(!td->field_generic_indices || !td->runtime_info) return;
-
-    /* 检查是否有泛型字段需要绑定（typed array 或 typed map） */
-    int has_generic_field = 0;
-    for(int i = 0; i < td->nprops; i++) {
-        if(td->field_generic_indices[i] >= 0) { has_generic_field = 1; break; }
-        if(td->field_map_key_indices && td->field_map_key_indices[i] >= 0) { has_generic_field = 1; break; }
-        if(td->field_map_value_indices && td->field_map_value_indices[i] >= 0) { has_generic_field = 1; break; }
-    }
-    /* 即使无泛型索引，固定类型的 map 字段也需要绑定（转 VAL_MAP→VAL_TYPED_MAP） */
-    if(!has_generic_field) {
-        for(int i = 0; i < td->nprops; i++) {
-            if(td->field_map_key_kinds && td->field_map_key_kinds[i] != CAST_NONE) { has_generic_field = 1; break; }
-            if(td->field_map_value_kinds && td->field_map_value_kinds[i] != CAST_NONE) { has_generic_field = 1; break; }
-        }
-    }
-    if(!has_generic_field) return;
 
     /* 解析 type_args（逗号分隔的类型名字符串，如 "int" 或 "string,int"）。
-     * 菱形语法 Array<>() 传入空字符串，nbound=0，无操作。 */
+     * 菱形语法 Array<>() 传入空字符串，nbound=0，无操作。
+     * 若类型名是当前 class 的泛型形参（如 Holder<E> 体内写 Wrap<E>），
+     * 编码为 -(index+1)，运行时由调用帧的 bound_types 解析为具体 CastKind。 */
     char* ta_copy = strdup(node->u.class_new.type_args);
     int cap_bound = td->generic_param_count;
     int* bound_types = (int*)calloc((size_t)cap_bound, sizeof(int));
@@ -802,19 +791,26 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     char* saveptr = NULL;
     char* tok = strtok_r(ta_copy, ",", &saveptr);
     while(tok && nbound < cap_bound) {
-        bound_types[nbound++] = name_to_castkind(tok);
+        /* name_to_castkind 容忍类型名前后空白（"string, int" 的第二段带前导空格） */
+        CastKind ck = name_to_castkind(tok);
+        if(ck == CAST_NONE) {
+            int gi = cur_class_generic_param_index(c, tok);
+            if(gi >= 0) ck = (CastKind)(-(gi + 1));
+        }
+        bound_types[nbound++] = (int)ck;
         tok = strtok_r(NULL, ",", &saveptr);
     }
     free(ta_copy);
 
     if(nbound <= 0) {
         /* 无类型实参但可能有固定类型 map 字段：仍需发射以转换 VAL_MAP→VAL_TYPED_MAP */
+        int has_fixed_map = 0;
         for(int i = 0; i < td->nprops; i++) {
-            if(td->field_map_key_kinds && td->field_map_key_kinds[i] != CAST_NONE) { nbound = -1; break; }
-            if(td->field_map_value_kinds && td->field_map_value_kinds[i] != CAST_NONE) { nbound = -1; break; }
+            if(td->field_map_key_kinds && td->field_map_key_kinds[i] != CAST_NONE) { has_fixed_map = 1; break; }
+            if(td->field_map_value_kinds && td->field_map_value_kinds[i] != CAST_NONE) { has_fixed_map = 1; break; }
         }
-        if(nbound == 0) { free(bound_types); return; }
-        nbound = 0; /* 重置：固定类型字段不需要 bound_types */
+        if(!has_fixed_map) { free(bound_types); return; }
+        nbound = 0; /* 固定类型字段不需要 bound_types */
     }
 
     /* 构造 GenericBindInfo 并存入常量池（CONST_UINT64 存指针） */
@@ -824,7 +820,7 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     gbi->nbound = nbound;
     gbi->field_generic_indices = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
     for(int i = 0; i < td->nprops; i++)
-        gbi->field_generic_indices[i] = td->field_generic_indices[i];
+        gbi->field_generic_indices[i] = td->field_generic_indices ? td->field_generic_indices[i] : -1;
     gbi->bound_types = bound_types;  /* ownership transfer，gbi 生命周期 = 进程 */
     /* 类型化 map 字段：key/value 泛型索引 + 固定 CastKind */
     gbi->field_map_key_indices = (int*)calloc((size_t)(td->nprops > 0 ? td->nprops : 1), sizeof(int));
@@ -839,7 +835,7 @@ static void emit_generic_bind(Ctx* c, AstNode* node, TypeDef* td)
     }
 
     int gbi_idx = bf_add_u64_const(c->fn, (uint64_t)(uintptr_t)gbi);
-    emit(c, OPC_GENERIC_BIND, gbi_idx, 0);
+    emit(c, OPC_GENERIC_BIND, gbi_idx, bind_only);
 }
 
 /* BinOp → 运算符重载方法名（与 yacc operator 规则注册名一致）；不可重载返回 NULL */
@@ -1053,7 +1049,11 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* cast 目标是数组字面量（(T)[e1,e2]）：逐元素强转构造类型化数组。
          * 例外：CAST_ARRAY（及容器类 cast）语义为透传，不应构造 typed_array，
          * 否则 type 形状的 array 字段会被错误转为 typed_array */
+        /* ct == CAST_NONE（如泛型形参 <T>[...]，编译期无法确定元素类型）不走此路径：
+         * 否则会构造 elem_type=VAL_NONE 的 TypedArray，元素缓冲区尺寸为 0 而写入越界。
+         * 退化为普通动态数组，由运行时 generic_bind 按解析出的具体类型转换。 */
         if(node->u.cast.child && node->u.cast.child->type == AST_ARRAY_LIT &&
+           ct != CAST_NONE &&
            ct != CAST_ARRAY && ct != CAST_MAP && ct != CAST_TYPED_ARRAY &&
            ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR) {
             compile_typed_array_lit(c, ct, node->u.cast.child->u.array_lit.elems, 1);
@@ -1203,7 +1203,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         }
         /* 标注目标是数组字面量（<T>[e1,e2]）：逐元素转型构造类型化数组。
          * CAST_ARRAY/容器类标注语义为透传，不应构造 typed_array */
+        /* ct == CAST_NONE（泛型形参 <T>[...]）：同 cast 分支，退化为普通动态数组，
+         * 避免 elem_type=VAL_NONE 的 0 字节元素缓冲区越界写。 */
         if(ann_child && ann_child->type == AST_ARRAY_LIT &&
+           ct != CAST_NONE &&
            ct != CAST_ARRAY && ct != CAST_MAP && ct != CAST_TYPED_ARRAY &&
            ct != CAST_STRUCT_PTR && ct != CAST_CLASS_PTR && ct != CAST_FORMDATA) {
             compile_typed_array_lit(c, ct, ann_child->u.array_lit.elems, 0);
@@ -1763,6 +1766,10 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             if(ctor_fn && ctor_ast) {
                 /* 加载 self（临时变量）到 PTR 栈 */
                 emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
+                /* 预挂泛型实参：构造函数体内若再实例化泛型类（如 Holder<E> 里 Wrap<E>()），
+                 * 需要 bound_types 已附加到 self，方法调用才能继承。bind_only=1 只做绑定、
+                 * 不迁移字段（字段在构造后由第二次 generic_bind 处理）。 */
+                emit_generic_bind(c, node, td, 1);
                 /* 按形参类型编译实参（slot 0 = self，已加载；slot 1+ = 用户实参） */
                 int slot = 1;
                 AstNode* p = ctor_ast->u.func_def.params;
@@ -1839,7 +1846,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             /* 加载临时变量（实例）到 PTR 栈作为表达式结果 */
             emit(c, OPC_LOAD_PTR_VAR, tmp_idx, 0);
             /* 泛型类型绑定：构造函数调用后，把泛型字段的 ValueArray 转为 TypedArray */
-            emit_generic_bind(c, node, td);
+            emit_generic_bind(c, node, td, 0);
             return EXPR_TYPE_PTR;
         } else {
             /* struct 或 class 无 __init__：实参压 VALUE 栈，CLASS_NEW 弹参直接初始化 */
@@ -1850,7 +1857,7 @@ ExprType c_expr(Ctx* c, AstNode* node) {
             free(argv2);
             emit(c, OPC_CLASS_NEW, cp_idx, argc2);
             /* 泛型类型绑定：构造后，把泛型字段的 ValueArray 转为 TypedArray */
-            emit_generic_bind(c, node, td);
+            emit_generic_bind(c, node, td, 0);
             return EXPR_TYPE_PTR;
         }
     }
@@ -5366,6 +5373,18 @@ CastKind ir_type_name_to_castkind(const char* n) {
     return CAST_NONE;
 }
 
+/* 在当前 class/struct 泛型形参列表中查找 name；命中返回 0..N-1，否则 -1。
+ * 用于在泛型类方法体内识别 K/V/E 等泛型形参引用。 */
+static int cur_class_generic_param_index(Ctx* c, const char* name) {
+    if(!c || !c->cur_class_td || !name) return -1;
+    TypeDef* td = (TypeDef*)c->cur_class_td;
+    if(td->generic_param_count <= 0 || !td->generic_params) return -1;
+    for(int i = 0; i < td->generic_param_count; i++) {
+        if(td->generic_params[i] && strcmp(td->generic_params[i], name) == 0) return i;
+    }
+    return -1;
+}
+
 /* 把形参注册进 Ctx 变量表（下标必须与 bf_sym 槽位一致，保证函数体 STORE 索引正确） */
 static void ctx_register_param(Ctx* c, const char* name, ExprType t) {
     if(c->var_cnt >= c->var_cap) {
@@ -5504,6 +5523,8 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     Ctx c;
     memset(&c, 0, sizeof(Ctx));
     c.fn = fn;
+    c.cur_class_td = class_name ? (void*)class_lookup(class_name) : NULL;
+    if(!c.cur_class_td && class_name) c.cur_class_td = (void*)struct_lookup(class_name);
     c.cur_params = params;
 
     int total = 0, pcap = 0;
