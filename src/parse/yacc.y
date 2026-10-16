@@ -2952,6 +2952,8 @@ param
     | TOK_REF ID COLON ID       { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型 ref p: Point */
     | TOK_REF ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup(castkind_to_name($4)); } /*ref + 基本类型+默认值 */
     | TOK_REF ID COLON ID ASSIGN expr { $$ = ast_param($2, 0, $6); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); } /*ref + 自定义类型+默认值 */
+    | TOK_REF ID COLON ID TOK_GENERIC { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($4); $$->u.param.constraint_full = $5; } /*ref + 泛型容器 ref m: map<K,V>；实参原文保留供 IR 期解析 */
+    | TOK_REF ID COLON TOK_GENERIC ID { $$ = ast_param($2, 0, NULL); $$->u.param.is_ref = 1; $$->u.param.constraint = strdup($5); $$->u.param.constraint_full = $4; } /*ref + 前缀式泛型容器 ref m: <K,V>map */
     /* ===== 可空形参 T?：constraint 记基础类型，is_nullable=1（绑定时跳过非空校验） ===== */
     | TOK_TYPE_ANNOT ID QMARK { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($1)); $$->u.param.is_nullable = 1; } /* <int>a? */
     | TOK_GENERIC ID QMARK   { $$ = ast_param($2, 0, NULL); $$->u.param.constraint = strdup($1); $$->u.param.is_nullable = 1; free($1); } /* <Point>a? <K>a? */
@@ -2959,6 +2961,8 @@ param
     | ID COLON ID QMARK               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.is_nullable = 1; } /* n: Point? */
     | ID COLON builtin_type_name QMARK ASSIGN expr { $$ = ast_param($1, 0, $6); $$->u.param.constraint = strdup(castkind_to_name($3)); $$->u.param.is_nullable = 1; } /* n: int? = 5 */
     | ID COLON ID QMARK ASSIGN expr   { $$ = ast_param($1, 0, $6); $$->u.param.constraint = strdup($3); $$->u.param.is_nullable = 1; } /* n: Point? = ... */
+    | ID COLON ID TOK_GENERIC QMARK { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.constraint_full = $4; $$->u.param.is_nullable = 1; } /*可空泛型容器 m: map<K,V>?；实参原文保留供 IR 期解析 */
+    | ID COLON TOK_GENERIC ID QMARK { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($4); $$->u.param.constraint_full = $3; $$->u.param.is_nullable = 1; } /*可空前缀式泛型容器 m: <K,V>map? */
 ;
 
 /* 注解：@name 或 @name(args) */

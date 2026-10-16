@@ -406,4 +406,60 @@ check(dr20.rtype() == "typed_map", "M-GP20: inherited field via method should be
 check(dr20.rget("rk") == 55, "M-GP20: inherited field[rk] should be 55");
 n = n + 1;
 
+// ===== M-GP21: ref 后缀式泛型容器形参 ref m: map<K,V> 转换写穿回调用方 =====
+public class RefSuffix<K,V> {
+    func RefSuffix() {}
+    func fill(ref m: map<K,V>) {
+        m["added"] = 71;
+    }
+}
+
+rs21 = RefSuffix<string,int>();
+src21 = {"orig": 70};
+rs21.fill(src21);
+check(type(src21) == "typed_map", "M-GP21: caller var should become typed_map, got " + type(src21));
+check(src21["added"] == 71, "M-GP21: mutation via ref should be visible at caller");
+check(src21["orig"] == 70, "M-GP21: original entry should be preserved");
+n = n + 1;
+
+// ===== M-GP22: ref 前缀式泛型容器形参 ref m: <K,V>map 转换写穿回调用方 =====
+public class RefPrefix<K,V> {
+    func RefPrefix() {}
+    func fill(ref m: <K,V>map) {
+        m["added"] = 81;
+    }
+}
+
+rp22 = RefPrefix<string,int>();
+src22 = {"orig": 80};
+rp22.fill(src22);
+check(type(src22) == "typed_map", "M-GP22: caller var should become typed_map, got " + type(src22));
+check(src22["added"] == 81, "M-GP22: mutation via ref should be visible at caller");
+check(src22["orig"] == 80, "M-GP22: original entry should be preserved");
+n = n + 1;
+
+// ===== M-GP23: 可空后缀式泛型容器形参 m: map<K,V>? 在方法入口按实参转 typed_map =====
+public class NullSuffix<K,V> {
+    func NullSuffix() {}
+    func ntype(m: map<K,V>?): string {
+        return type(m);
+    }
+}
+
+ns23 = NullSuffix<string,int>();
+check(ns23.ntype({"k": 91}) == "typed_map", "M-GP23: nullable param should be typed_map, got " + ns23.ntype({"k": 91}));
+n = n + 1;
+
+// ===== M-GP24: 可空前缀式泛型容器形参 m: <K,V>map? 在方法入口按实参转 typed_map =====
+public class NullPrefix<K,V> {
+    func NullPrefix() {}
+    func ntype(m: <K,V>map?): string {
+        return type(m);
+    }
+}
+
+np24 = NullPrefix<string,int>();
+check(np24.ntype({"k": 92}) == "typed_map", "M-GP24: nullable prefix param should be typed_map, got " + np24.ntype({"k": 92}));
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");
