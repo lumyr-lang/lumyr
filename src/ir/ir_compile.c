@@ -1232,7 +1232,9 @@ ExprType c_expr(Ctx* c, AstNode* node) {
          * 运行期用当前帧 bound_types 解析负值索引得到具体 CastKind 并转为 typed。
          * 覆盖方法体内局部变量场景（字段场景由 generic_bind 迁移，与此处等价）。 */
         if(node->u.type_annotation.generic_args_text && ann_child) {
-            int is_map = (ann_child->type == AST_MAP_LIT);
+            /* is_map 由实参原文的逗号判定（"K,V"→map；"E"→array），而非子节点类型——
+             * 强制转换 <K,V>expr（非字面量）子节点不是 AST_MAP_LIT，需按实参个数分类 */
+            int is_map = (strchr(node->u.type_annotation.generic_args_text, ',') != NULL);
             c_expr(c, ann_child);   /* VALUE 栈：动态 array/map */
             compile_generic_lit_resolve(c, node->u.type_annotation.generic_args_text, is_map);
             return EXPR_TYPE_NONE;

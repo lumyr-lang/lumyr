@@ -257,4 +257,44 @@ while (i < 1000) {
 check(lg12.runType() == "typed_map", "M-GP12: local should still be typed_map after GC");
 n = n + 1;
 
+// ===== M-GP13: <K,V>expr 强转（非字面量）在泛型类方法体内构造 typed_map =====
+public class CastLocal<K,V> {
+    func CastLocal() {}
+    func castType(m): string {
+        x = <K,V>m;
+        return type(x);
+    }
+    func castVal(m, k) {
+        x = <K,V>m;
+        return x[k];
+    }
+}
+
+cl13 = CastLocal<string,int>();
+src13 = {"a": 11, "b": 22};
+check(cl13.castType(src13) == "typed_map", "M-GP13: cast local should be typed_map, got " + cl13.castType(src13));
+check(cl13.castVal(src13, "a") == 11, "M-GP13: cast local[a] should be 11");
+check(cl13.castVal(src13, "b") == 22, "M-GP13: cast local[b] should be 22");
+n = n + 1;
+
+// ===== M-GP14: <E>expr 强转（非字面量）在泛型类方法体内构造 typed_array =====
+public class CastArr<E> {
+    func CastArr() {}
+    func castType(a): string {
+        x = <E>a;
+        return type(x);
+    }
+    func castVal(a, i) {
+        x = <E>a;
+        return x[i];
+    }
+}
+
+ca14 = CastArr<int>();
+src14 = [1, 2, 3];
+check(ca14.castType(src14) == "typed_array", "M-GP14: cast local should be typed_array, got " + ca14.castType(src14));
+check(ca14.castVal(src14, 0) == 1, "M-GP14: cast local[0] should be 1");
+check(ca14.castVal(src14, 2) == 3, "M-GP14: cast local[2] should be 3");
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");

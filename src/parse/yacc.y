@@ -3478,6 +3478,19 @@ primary
                   $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
                   free(gt);
                   $$ = $2;
+              } else if($2 && generic_text_has_param(gt)) {
+                  /* 路径 5：方法体强转 <K,V>expr / <E>expr（非字面量、非 class_new）——
+                   * 实参含当前类泛型形参时保留原文，包装为 AST_TYPE_ANNOTATION，
+                   * IR 期编为负值索引、运行期按当前帧 bound_types 解析并原地转换为
+                   * typed_map/typed_array，消除局部变量强转的类型擦除（与字面量同链路） */
+                  AstNode* n = ast_type_annotation(CAST_NONE, $2);
+                  n->u.type_annotation.generic_args_text = gt;
+                  $$ = L(n);
+              } else if($2 && strchr(gt, ',')) {
+                  /* 固定类型对强转 <string,int>expr（非字面量）：同样运行期转换 */
+                  AstNode* n = ast_type_annotation(CAST_NONE, $2);
+                  n->u.type_annotation.generic_args_text = gt;
+                  $$ = L(n);
               } else {
                   free(gt);
                   $$ = $2;
