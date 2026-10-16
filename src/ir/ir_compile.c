@@ -785,6 +785,16 @@ static CastKind ir_generic_arg_to_castkind(Ctx* c, const char* item, int len) {
     return ck;
 }
 
+/* 泛型容器基类型名 → 容器种类：map→1，array→0，其它（非泛型容器）→-1。
+ * 泛型标识符只存在于 class 体内，故基类型名只可能是 map/array 两种容器。 */
+static int container_kind_of(const char* base) {
+    if(!base) return -1;
+    CastKind ck = ir_type_name_to_castkind(base);
+    if(ck == CAST_MAP) return 1;
+    if(ck == CAST_ARRAY) return 0;
+    return -1;
+}
+
 /* 泛型字面量运行期类型解析：动态 array/map 已在 VALUE 栈顶（c_expr 先按动态构造），
  * 发射 OPC_TYPED_LIT_RESOLVE，运行期用当前帧 bound_types 解析负值索引得到具体
  * CastKind，原地转换为 typed_array/typed_map。修复方法体内局部变量泛型字面量
@@ -4944,6 +4954,11 @@ void c_stmt(Ctx* c, AstNode* node) {
                 }
                 if(target != EXPR_TYPE_NONE)
                     emit_to_dynamic(c, target, ret_ck);
+                /* 返回类型为泛型容器（如 : map<K,V> / : <K,V>map）时，返回值（动态
+                 * map/array，已在 VALUE 栈顶）按当前实例绑定的泛型实参原地转 typed */
+                int ret_k = container_kind_of(c->fn->ret_type_name);
+                if(c->fn->ret_type_full && ret_k >= 0)
+                    compile_generic_lit_resolve(c, c->fn->ret_type_full, ret_k);
                 /* 值已 box 到 VALUE 栈，再 LIFO 执行 defer（可能修改 self.field/全局；
                    不影响已压栈的返回值），最后 PEND_RETURN */
                 emit_deferred(c);
@@ -4984,6 +4999,11 @@ void c_stmt(Ctx* c, AstNode* node) {
             target = EXPR_TYPE_NONE;
             ret_ck = CAST_NONE;
         }
+        /* 返回类型为泛型容器（如 : map<K,V> / : <K,V>map）时，返回值（动态
+         * map/array，已在 VALUE 栈顶）按当前实例绑定的泛型实参原地转 typed */
+        int ret_k = container_kind_of(c->fn->ret_type_name);
+        if(c->fn->ret_type_full && ret_k >= 0)
+            compile_generic_lit_resolve(c, c->fn->ret_type_full, ret_k);
         /* 返回值已 box 到 VALUE 栈，再 LIFO 执行 defer，最后 RETURN */
         emit_deferred(c);
         /* a=ExprType（RETURN 从对应栈弹）；b=CastKind（PTR 字符串需深拷贝） */
@@ -5535,7 +5555,7 @@ int extract_alias_names(AstNode* args, char*** out_names) {
 }
 
 /* 编译函数 / Compile a lumin function into bytecode and register it */
-BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
+BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name, const char* ret_type_full) {
     /* 方法唯一内部名：<属主>__m__<方法>，避免不同 struct/class 的同名方法
      * 在全局函数表互相覆盖（分派必须通过接收者类型）。
      * 构造函数名 <Class>___init__ 已唯一保持；普通函数 class_name==NULL 保持原名 */
@@ -5559,6 +5579,7 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     fn->is_generator = is_generator ? 1 : 0;
     fn->class_name = class_name ? strdup(class_name) : NULL;
     fn->ret_type_name = ret_type_name ? strdup(ret_type_name) : NULL;
+    fn->ret_type_full = ret_type_full ? strdup(ret_type_full) : NULL;
 
     /* 自由函数（非 lambda/arrow/ctor）：分配唯一注册键以支持重载同名多版本；
      * fn->name 保留源名用于显示，实际入表键为 __ol__<name>__<seq> */
@@ -5626,6 +5647,21 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
         if(p->u.param.is_ellipsis) fn->has_variadic = 1;
         else fn->param_cnt++;
         total++;
+    }
+
+    /* 泛型容器形参序言：形参以泛型容器标注（如 m: map<K,V> / m: <K,V>map）时，
+     * 调用方传入的动态 map/array 需在进入函数体前按当前实例绑定的泛型实参
+     * 转为 typed 容器（形参槽为 VALUE 栈，运行期零改动用 TYPED_LIT_RESOLVE 原地转换）。
+     * 泛型标识符只存在于 class 体内，故基类型名只可能是 map/array。 */
+    for(AstNode* p = params; p; p = p->u.param.next) {
+        if(!p->u.param.constraint_full) continue;
+        int k = container_kind_of(p->u.param.constraint);
+        if(k < 0) continue;
+        int slot = bf_sym_lookup(fn, p->u.param.name);
+        if(slot < 0) continue;
+        emit(&c, OPC_LOAD_VAR, slot, 0);
+        compile_generic_lit_resolve(&c, p->u.param.constraint_full, k);
+        emit(&c, OPC_STORE_VAR, slot, 0);
     }
 
     /* 先注册再编译函数体：使函数体内的自引用递归调用能查到自身。
@@ -6131,11 +6167,11 @@ void ir_func_table_foreach(void (*callback)(const char*, const char*, void*, voi
     rbtree_foreach(g_func_table, foreach_adapter, user_data);
 }
 
-BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name) {
+BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name, const char* ret_type_full) {
     /* 键重定向由两条已有路径处理，此处无需干预：
      * - 方法（class_name != NULL）：register 同键替换（别名 rebind + 延迟释放）
      * - 自由函数：ol_add 同 arity 候选替换（rebind 全表共享键 + 延迟释放） */
-    return ir_compile_function(name, params, body, is_generator, class_name, ret_type_name);
+    return ir_compile_function(name, params, body, is_generator, class_name, ret_type_name, ret_type_full);
 }
 
 void string_cache_reset(void) {

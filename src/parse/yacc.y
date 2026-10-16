@@ -137,6 +137,7 @@ static char** g_cur_generic_names = NULL;   /* 当前 class/interface/struct 的
 static char** g_cur_generic_bounds = NULL;  /* 平行的上界名（CAST 语义扩展点），NULL 项=无界 */
 static int g_cur_generic_count = 0;
 static char* g_parent_gargs_text = NULL;    /* 父类/父接口后的泛型实参原文（擦除：消费记录） */
+static char* g_type_name_gargs_text = NULL; /* type_name_str 最近一次的泛型实参原文（func 返回类型传输通道） */
 
 /* trim 首尾空白（返回新指针区间，不修改原文） */
 static const char* str_trim(const char* s, int* out_len) {
@@ -222,6 +223,8 @@ static void clear_formal_generics(void) {
     g_cur_generic_count = 0;
     free(g_parent_gargs_text);
     g_parent_gargs_text = NULL;
+    free(g_type_name_gargs_text);
+    g_type_name_gargs_text = NULL;
 }
 
 /* name 是否为当前类/接口/struct 的泛型形参 */
@@ -1825,7 +1828,7 @@ closed_stmt
           /* @annotation class Point { ... }：带注解的 class 定义（无继承） */
           /* 注解暂时保存，后续可扩展语义处理 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           if(g_current_class_is_abstract) {
               TypeDef* td = type_lookup(g_current_class_name);
               if(td) td->is_abstract = 1;
@@ -1875,7 +1878,7 @@ closed_stmt
     | class_header class_prop_list RBRACE {
           /* class Point { x: int, y: int, func dist(): int {...} }：编译期注册 class 类型（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记是否是抽象类 */
           if(g_current_class_is_abstract) {
@@ -1929,7 +1932,7 @@ closed_stmt
     | annotation_list class_header_inherit class_prop_list RBRACE {
           /* @annotation class Point extends Shape { ... }：带注解的 class 定义（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -1974,7 +1977,7 @@ closed_stmt
     | class_header_inherit class_prop_list RBRACE {
           /* class Point extends Shape { ... }：编译期注册 class 类型（带继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -2024,7 +2027,7 @@ closed_stmt
     | annotation_list class_header_implements class_prop_list RBRACE {
           /* @annotation class Point implements Printable { ... }：带注解的 class 定义（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -2081,7 +2084,7 @@ closed_stmt
     | class_header_implements class_prop_list RBRACE {
           /* class Point implements Printable { ... }：编译期注册 class 类型（带接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -2142,7 +2145,7 @@ closed_stmt
     | abstract_class_header class_prop_list RBRACE {
           /* abstract class Shape { ... }：抽象类定义（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, NULL, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 标记为抽象类 */
           TypeDef* td = type_lookup(g_current_class_name);
@@ -2193,7 +2196,7 @@ closed_stmt
     | abstract_class_header_inherit class_prop_list RBRACE {
           /* abstract public class Number extends Object { ... }：抽象类 + 继承 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, NULL, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -2238,7 +2241,7 @@ closed_stmt
     | abstract_class_header_implements class_prop_list RBRACE {
           /* abstract class C<T> implements I<T> { ... }：抽象类 + 接口（无继承） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -2293,7 +2296,7 @@ closed_stmt
     | abstract_class_header_inherit_implements class_prop_list RBRACE {
           /* abstract public class Number extends Object implements IFoo { ... }：抽象类 + 继承 + 接口 */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);
           TypeDef* td = type_lookup(g_current_class_name);
           if(td) td->is_abstract = 1;
@@ -2354,7 +2357,7 @@ closed_stmt
     | annotation_list class_header_inherit_implements class_prop_list RBRACE {
           /* @annotation class Point extends Shape implements Printable { ... }：带注解的 class 定义（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           /* 类级注解登记 + @Data 访问器生成；字段初始化器注入 ctor */
           register_class_annotations($1);
           apply_accessors(annotation_list_has($1, "Data"));
@@ -2411,7 +2414,7 @@ closed_stmt
     | class_header_inherit_implements class_prop_list RBRACE {
           /* class Point extends Shape implements Printable { ... }：编译期注册 class 类型（带继承和接口实现） */
           char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
           apply_accessors(0);   /* 无类级 @Data：字段级 @Getter/@Setter 仍独立生效 */
           /* 字段初始化器注入 ctor */
           if(apply_field_initializers()) YYABORT;
@@ -2662,6 +2665,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$ = ast_func_def($2, $4, $8);
           $$->u.func_def.annotations = NULL;
           $$->u.func_def.ret_type_name = $7;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
@@ -2715,6 +2719,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.annotations = NULL;
           $$->u.func_def.is_const = 1;
           $$->u.func_def.ret_type_name = $8;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
@@ -2789,6 +2794,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.is_const = 1;
           $$->u.func_def.is_generator = 1;
           $$->u.func_def.ret_type_name = $9;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
@@ -2843,6 +2849,7 @@ func_def : FUNC TOK_TYPE_ANNOT ID LPAREN param_list RPAREN block_stmt {
           $$->u.func_def.annotations = NULL;
           $$->u.func_def.is_generator = 1;
           $$->u.func_def.ret_type_name = $8;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           annotate_self_if_in_struct($$);
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
@@ -2936,7 +2943,8 @@ param
     | ID COLON builtin_type_name { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型 n: int */
     | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
     | ID COLON ID LBRACKET RBRACKET { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*数组类型 n: E[]（擦除为动态数组） */
-    | ID COLON ID TOK_GENERIC   { free($4); $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*泛型类型 n: Map<K,V>（擦除为 Map） */
+    | ID COLON ID TOK_GENERIC   { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.constraint_full = $4; } /*泛型类型 n: Map<K,V> / n: map<K,V>；实参原文保留供 IR 期解析 */
+    | ID COLON TOK_GENERIC ID  { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($4); $$->u.param.constraint_full = $3; } /*前缀式泛型容器 n: <K,V>map / n: <E>array（实参原文在前，容器名在后） */
     | ID COLON ID TOK_TYPE_ANNOT { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
     | ID COLON builtin_type_name ASSIGN expr { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型+默认值 n: int = 5 */
     | ID COLON ID ASSIGN expr   { $$ = ast_param($1, 0, $5); $$->u.param.constraint = strdup($3); } /*自定义类型+默认值 n: Point = ... */
@@ -3550,6 +3558,7 @@ primary
           snprintf(nm, sizeof nm, "_arrow_%d", g_lambda_seq++);
           $$ = L(ast_func_def(nm, $2, $7));
           $$->u.func_def.ret_type_name = $5;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
@@ -3585,6 +3594,7 @@ primary
           AstNode* blk = ast_block(ast_seq(ast_return($7), NULL));
           $$ = L(ast_func_def(nm, $2, blk));
           $$->u.func_def.ret_type_name = $5;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
@@ -3620,6 +3630,7 @@ primary
           $$ = L(ast_func_def(nm, $3, $8));
           $$->u.func_def.is_generator = 1;
           $$->u.func_def.ret_type_name = $6;
+          $$->u.func_def.ret_type_full = g_type_name_gargs_text; g_type_name_gargs_text = NULL;
           RuntimeFunc* rf = NULL;
           if(!g_current_class_name && !g_current_struct_name) {
               rf = compile_func_from_ast($$);
@@ -4107,7 +4118,7 @@ class_prop_list
         if($3 && $3->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $3->u.func_def.name);
@@ -4191,7 +4202,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
             }
             $4->u.func_def.annotations = $2;
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
@@ -4285,7 +4296,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
             }
             /* 给静态方法一个唯一的名字 <类名>_<方法名>，避免全局命名冲突 */
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($3->u.func_def.name) + 2);
@@ -4342,7 +4353,7 @@ class_prop_list
             /* 提前注册 class 类型定义，以便静态方法中可以调用构造函数 */
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -4371,7 +4382,7 @@ class_prop_list
         if($4 && $4->type == AST_FUNC_DEF) {
             if(!type_lookup(g_current_class_name)) {
                 char* saved_class_name = g_current_class_name;
-          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args);
+          class_register(g_current_class_name, g_prop_names, g_prop_types, g_prop_access_modifiers, g_prop_const_flags, g_prop_struct_names, g_prop_n, g_current_class_parent, g_class_interfaces, g_prop_elem_kinds, g_cur_generic_names, g_cur_generic_count, g_prop_type_args, g_parent_gargs_text); g_parent_gargs_text = NULL;
             }
             char* static_name = (char*)malloc(strlen(g_current_class_name) + strlen($4->u.func_def.name) + 2);
             sprintf(static_name, "%s_%s", g_current_class_name, $4->u.func_def.name);
@@ -4642,10 +4653,11 @@ type_name
 
 /* 类型名字符串（用于 FFI 参数类型标注，直接返回原始字符串，避免 ValueType 枚举冲突） */
 type_name_str
-    : ID                         { $$ = $1; }
-    | ID TOK_GENERIC             { free($2); $$ = $1; }
-    | ID TOK_TYPE_ANNOT          { free($2); $$ = $1; }
-    | builtin_type_name          { $$ = castkind_to_name($1); }
+    : ID                         { g_type_name_gargs_text = NULL; $$ = $1; }
+    | ID TOK_GENERIC             { g_type_name_gargs_text = $2; $$ = $1; } /*后缀式 map<K,V>：实参原文经侧信道传出 */
+    | TOK_GENERIC ID             { g_type_name_gargs_text = $1; $$ = $2; } /*前缀式 <K,V>map：实参原文经侧信道传出 */
+    | ID TOK_TYPE_ANNOT          { g_type_name_gargs_text = NULL; free($2); $$ = $1; }
+    | builtin_type_name          { g_type_name_gargs_text = NULL; $$ = castkind_to_name($1); }
     ;
 
 /* 双泛型 map <K,V> 的类型实参：内建类型直接取 CastKind；自定义类型查注册表
@@ -4878,9 +4890,9 @@ gdecl_opt : %empty { $$ = NULL; } | gdecl
     ;
 
 /* 父类/父接口名，其后可跟泛型实参 <...>（擦除语义：仅消费记录原文） */
-extends_name : ID                 { $$ = $1; }
-             | ID TOK_GENERIC     { g_parent_gargs_text = $2; $$ = $1; }
-             | ID TOK_TYPE_ANNOT  { g_parent_gargs_text = strdup(castkind_to_name($2)); $$ = $1; }
+extends_name : ID                 { free(g_parent_gargs_text); g_parent_gargs_text = NULL; $$ = $1; }
+             | ID TOK_GENERIC     { free(g_parent_gargs_text); g_parent_gargs_text = $2; $$ = $1; }
+             | ID TOK_TYPE_ANNOT  { free(g_parent_gargs_text); g_parent_gargs_text = strdup(castkind_to_name($2)); $$ = $1; }
     ;
 
 /* 抽象类前缀：abstract class / abstract public class / public abstract class */

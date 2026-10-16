@@ -25,6 +25,7 @@ typedef struct {
     int is_class;        // 是否是 class（1=class，0=非 class）
     int is_abstract;     // 是否是抽象类（1=抽象类，0=普通类）
     char* parent;        // 父类名（NULL=无父类，仅 class 使用）
+    char* parent_type_args; // extends 父类的泛型实参原文（如 "K,V"/"A,B"；NULL=无泛型实参）
     CastKind* field_cast_kinds; // struct 字段的精确 CastKind 类型（NULL=非 struct，CAST_NONE=嵌套struct）
     char** field_struct_names; // struct 字段的嵌套 struct 类型名（NULL=非嵌套struct字段）
     CastKind* field_elem_kinds; // 类型化数组字段的元素 CastKind（value: <int32>array → CAST_INT32；其余 CAST_NONE）
@@ -54,7 +55,7 @@ typedef struct {
 /* class 注册（属性用 ValueType 类型；struct_names 为字段自定义类型名，与 props 平行，可为全 NULL；
  * elem_kinds 为类型化数组字段的元素 CastKind，与 props 平行，可为 NULL） */
 TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
-                        char** generic_params, int generic_param_count, char** field_type_args);
+                        char** generic_params, int generic_param_count, char** field_type_args, char* parent_type_args);
 /* 查找是否是 class（返回 TypeDef* 或 NULL） */
 TypeDef* class_lookup(const char* name);
 /* 添加 class 方法 */

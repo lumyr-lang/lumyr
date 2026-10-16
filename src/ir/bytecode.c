@@ -31,6 +31,7 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn->method_self_struct);
     free(fn->class_name);
     free(fn->ret_type_name);
+    free(fn->ret_type_full);
     free(fn->var_type_tags);
     free(fn->var_is_global);
     if(fn->var_struct_names) {

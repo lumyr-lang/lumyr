@@ -139,6 +139,7 @@ struct AstNode {
             AstNode* generic_params;  // 泛型参数列表（AST_PARAM链表，NULL=非泛型函数）
             int is_generator;  // generator function (gen func)
             char* ret_type_name;  // 返回值类型名（如 "int","double","string"），NULL=无类型声明
+            char* ret_type_full;  // 返回类型泛型容器实参原文（如 "K,V"/"E"），NULL=无泛型实参
             int is_class_method;  // 1=class方法，0=普通函数
             int is_static_method;  // 1=静态方法，0=普通方法
             int access_modifier;  // 访问控制：0=public, 1=private, 2=protected
@@ -177,6 +178,7 @@ struct AstNode {
             AstNode* default_val; // 默认值表达式，NULL=无默认值
             AstNode* next;   // 参数链表
             char* constraint; // 泛型参数类型约束（如 "Comparable"），NULL=无约束/普通函数参数
+            char* constraint_full; // 泛型容器实参原文（如 "K,V"/"E"，不含尖括号），NULL=无泛型实参
             int is_ref;      // 1=引用传递参数（ref p），0=值传递（默认）
             int is_nullable; // 1=可空类型 T?（允许 null），0=非空（默认，绑定/写入时校验非空）
         } param;

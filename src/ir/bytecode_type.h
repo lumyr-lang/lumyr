@@ -769,6 +769,7 @@ typedef struct {
     char* method_self_struct;   // 方法 self 参数的 struct 类型名
     char* class_name;           // 方法所属的 class 名（NULL 表示不是 class 方法）
     char* ret_type_name;        // 返回值类型名（如 "int"/"double"，NULL=无标注）
+    char* ret_type_full;        // 返回类型泛型容器实参原文（如 "K,V"/"E"，NULL=无泛型实参）
     CallSite* callsites;        // 本函数内全部调用点（OPC_CALL.a 索引）
     int callsite_cnt, callsite_cap;
     SymHash sym_idx;            // syms 符号名 → 下标哈希（编译期 O(1) 查找）

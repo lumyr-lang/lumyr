@@ -32,9 +32,9 @@ char* c_expr_owner_type(Ctx* c, AstNode* node);
 int operator_overload_result_type(Ctx* c, AstNode* left, int binop);
 
 // 编译一个 lum 函数体为字节码（yacc 期注册函数时调用）
-BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
+BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name, const char* ret_type_full);
 // 重编译已注册函数（typecheck 转换 AST_VAR→AST_FUNCREF 后原位替换字节码）
-BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name);
+BytecodeFunc* ir_func_table_recompile(const char* name, AstNode* params, AstNode* body, int is_generator, const char* class_name, const char* ret_type_name, const char* ret_type_full);
 
 /* 释放重编译期间延迟释放的旧 BytecodeFunc 链表（阶段3重编译全部完成后调用） */
 void ir_free_deferred_funcs(void);

@@ -791,9 +791,41 @@ int is_socket_ctor_name(const char* name)
            strcmp(name, "UnixDgramSocket") == 0 || strcmp(name, "unixDgramSocket") == 0;
 }
 
+/* 拆 "K,V"/"A,B" 为名字数组（去首尾空白，每段 strdup）；调用方负责释放 */
+static char** split_generic_args(const char* text, int* out_n) {
+    *out_n = 0;
+    if(!text || !text[0]) return NULL;
+    /* 预算段数 */
+    int cap = 1;
+    for(const char* p = text; *p; p++) if(*p == ',') cap++;
+    char** arr = (char**)calloc((size_t)cap, sizeof(char*));
+    int n = 0;
+    const char* s = text;
+    for(;;) {
+        const char* comma = strchr(s, ',');
+        const char* e = comma ? comma : s + strlen(s);
+        while(s < e && (*s == ' ' || *s == '\t')) s++;
+        const char* end = e;
+        while(end > s && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        arr[n++] = strndup(s, (size_t)(end - s));
+        if(!comma) break;
+        s = comma + 1;
+    }
+    *out_n = n;
+    return arr;
+}
+
+/* 名字在类型泛型形参表中的索引；未命中返回 -1 */
+static int child_param_index(TypeDef* ctd, const char* name) {
+    if(!ctd || !name) return -1;
+    for(int i = 0; i < ctd->generic_param_count; i++)
+        if(ctd->generic_params[i] && strcmp(ctd->generic_params[i], name) == 0) return i;
+    return -1;
+}
+
 /* ===== class 注册 ===== */
 TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* prop_access_modifiers, int* prop_const_flags, char** struct_names, int nprops, const char* parent, char** interfaces, CastKind* elem_kinds,
-                        char** generic_params, int generic_param_count, char** field_type_args)
+                        char** generic_params, int generic_param_count, char** field_type_args, char* parent_type_args)
 {
     // 合并父类和子类的属性（父类属性在前，子类属性在后）
     char** merged_props = props;
@@ -864,6 +896,8 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
     // 标记为 class 并保存父类
     td->is_class = 1;
     td->parent = parent ? strdup(parent) : NULL;
+    td->parent_type_args = parent_type_args ? strdup(parent_type_args) : NULL;
+    free(parent_type_args);   /* 所有权已消费 */
     /* 设置 field_cast_kinds：根据 ValueType 转换成 CastKind，用于 C 代码生成时生成精确的字段类型 */
     td->field_cast_kinds = (CastKind*)malloc((size_t)(merged_nprops > 0 ? merged_nprops : 1) * sizeof(CastKind));
     td->field_struct_names = (char**)calloc((size_t)(merged_nprops > 0 ? merged_nprops : 1), sizeof(char*));
@@ -948,6 +982,54 @@ TypeDef* class_register(const char* name, char** props, ValueType* ptypes, int* 
         td->field_map_value_indices[k] = val_gi;
         if(val_gi < 0) td->field_map_value_kinds[k] = typename_to_castkind(val_arg);
         free(args_copy);
+    }
+    /* 父类字段段索引重映射（路径 6：extends Parent<...> 的泛型实参原先只存不用）：
+     * 上面的重算用子类 generic_params 去匹配父字段原文，父形参改名（Sub<A,B>
+     * extends Base<K,V>）会退化为 -1；此处按 parent_type_args 的实参名把父形参
+     * 序号映射到子形参序号。父实参是具体类型名（未出现在子形参表）时置索引
+     * -1 并回填对应固定 CastKind；父字段本身非泛型时保留继承值。 */
+    if(parent && td->parent_type_args && td->parent_type_args[0]) {
+        TypeDef* ptd = type_lookup(parent);
+        if(ptd) {
+            int npnames = 0;
+            char** pnames = split_generic_args(td->parent_type_args, &npnames);
+            int pn = ptd->nprops < merged_nprops ? ptd->nprops : merged_nprops;
+            for(int k = 0; k < pn; k++) {
+                /* 数组元素/通用泛型索引 */
+                int pgi = (ptd->field_generic_indices ? ptd->field_generic_indices[k] : -1);
+                if(pgi >= 0) {
+                    const char* pname = (pgi < npnames) ? pnames[pgi] : NULL;
+                    int cj = child_param_index(td, pname);
+                    td->field_generic_indices[k] = cj;
+                    if(cj < 0 && pname && merged_ptypes[k] == VAL_TYPED_ARRAY)
+                        td->field_elem_kinds[k] = typename_to_castkind(pname);
+                }
+                /* map key */
+                int kpgi = (ptd->field_map_key_indices ? ptd->field_map_key_indices[k] : -1);
+                if(kpgi >= 0) {
+                    const char* pname = (kpgi < npnames) ? pnames[kpgi] : NULL;
+                    int cj = child_param_index(td, pname);
+                    td->field_map_key_indices[k] = cj;
+                    if(cj < 0 && pname) td->field_map_key_kinds[k] = typename_to_castkind(pname);
+                } else {
+                    td->field_map_key_indices[k] = -1;
+                    td->field_map_key_kinds[k] = ptd->field_map_key_kinds ? ptd->field_map_key_kinds[k] : CAST_NONE;
+                }
+                /* map value */
+                int vpgi = (ptd->field_map_value_indices ? ptd->field_map_value_indices[k] : -1);
+                if(vpgi >= 0) {
+                    const char* pname = (vpgi < npnames) ? pnames[vpgi] : NULL;
+                    int cj = child_param_index(td, pname);
+                    td->field_map_value_indices[k] = cj;
+                    if(cj < 0 && pname) td->field_map_value_kinds[k] = typename_to_castkind(pname);
+                } else {
+                    td->field_map_value_indices[k] = -1;
+                    td->field_map_value_kinds[k] = ptd->field_map_value_kinds ? ptd->field_map_value_kinds[k] : CAST_NONE;
+                }
+            }
+            for(int i = 0; i < npnames; i++) free(pnames[i]);
+            free(pnames);
+        }
     }
     for(int k = 0; k < merged_nprops; k++) {
         /* any/动态字段（VAL_NONE）不参与标量 cast 归并：valuetype_to_castkind

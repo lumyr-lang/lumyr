@@ -371,7 +371,8 @@ RuntimeFunc* compile_func_from_ast_with_class(AstNode* func_def_ast, const char*
     payload->body = func_def_ast->u.func_def.body;
     payload->bytecode = ir_compile_function(func_def_ast->u.func_def.name, func_def_ast->u.func_def.params, func_def_ast->u.func_def.body,
                                             func_def_ast->u.func_def.is_generator, class_name,
-                                            func_def_ast->u.func_def.ret_type_name);
+                                            func_def_ast->u.func_def.ret_type_name,
+                                            func_def_ast->u.func_def.ret_type_full);
 
     // 构造RuntimeFunc，原有字段一个不动
     RuntimeFunc* rf = malloc(sizeof(RuntimeFunc));
@@ -422,7 +423,8 @@ void func_compile_recompile(AstNode* def)
     const char* name = def->u.func_def.name;
     BytecodeFunc* nb = ir_func_table_recompile(name, def->u.func_def.params, def->u.func_def.body,
                                                def->u.func_def.is_generator, NULL,
-                                               def->u.func_def.ret_type_name);
+                                               def->u.func_def.ret_type_name,
+                                               def->u.func_def.ret_type_full);
     Value fv = sym_get(name);
     if(fv.type == VAL_FUNC) {
         RuntimeFunc* rf = (RuntimeFunc*)fv.v.func.func_obj;
@@ -444,7 +446,8 @@ void func_compile_recompile_method(const char* owner, AstNode* def)
                                                def->u.func_def.body,
                                                def->u.func_def.is_generator,
                                                owner,
-                                               def->u.func_def.ret_type_name);
+                                               def->u.func_def.ret_type_name,
+                                               def->u.func_def.ret_type_full);
     TypeDef* td = struct_lookup(owner);
     if(!td) td = class_lookup(owner);
     if(!td) return;

@@ -297,4 +297,113 @@ check(ca14.castVal(src14, 0) == 1, "M-GP14: cast local[0] should be 1");
 check(ca14.castVal(src14, 2) == 3, "M-GP14: cast local[2] should be 3");
 n = n + 1;
 
+// ===== M-GP15: 后缀式泛型容器形参 m: map<K,V> 在方法入口按实参转 typed_map =====
+public class ParamSuffix<K,V> {
+    func ParamSuffix() {}
+    func ptype(m: map<K,V>): string {
+        return type(m);
+    }
+    func pval(m: map<K,V>, k) {
+        return m[k];
+    }
+}
+
+ps15 = ParamSuffix<string,int>();
+src15 = {"a": 1, "b": 2};
+check(ps15.ptype(src15) == "typed_map", "M-GP15: param should be typed_map, got " + ps15.ptype(src15));
+check(ps15.pval(src15, "a") == 1, "M-GP15: param[a] should be 1");
+check(ps15.pval(src15, "b") == 2, "M-GP15: param[b] should be 2");
+n = n + 1;
+
+// ===== M-GP16: 前缀式泛型容器形参 m: <K,V>map 在方法入口按实参转 typed_map =====
+public class ParamPrefix<K,V> {
+    func ParamPrefix() {}
+    func ptype(m: <K,V>map): string {
+        return type(m);
+    }
+    func pval(m: <K,V>map, k) {
+        return m[k];
+    }
+}
+
+pp16 = ParamPrefix<string,int>();
+src16 = {"x": 10, "y": 20};
+check(pp16.ptype(src16) == "typed_map", "M-GP16: param should be typed_map, got " + pp16.ptype(src16));
+check(pp16.pval(src16, "x") == 10, "M-GP16: param[x] should be 10");
+check(pp16.pval(src16, "y") == 20, "M-GP16: param[y] should be 20");
+n = n + 1;
+
+// ===== M-GP17: 前缀式泛型数组形参 a: <E>array 在方法入口按实参转 typed_array =====
+public class ArrPrefix<E> {
+    func ArrPrefix() {}
+    func atype(a: <E>array): string {
+        return type(a);
+    }
+    func aval(a: <E>array, i) {
+        return a[i];
+    }
+}
+
+ap17 = ArrPrefix<int>();
+src17 = [7, 8, 9];
+check(ap17.atype(src17) == "typed_array", "M-GP17: param should be typed_array, got " + ap17.atype(src17));
+check(ap17.aval(src17, 0) == 7, "M-GP17: param[0] should be 7");
+check(ap17.aval(src17, 2) == 9, "M-GP17: param[2] should be 9");
+n = n + 1;
+
+// ===== M-GP18: 后缀式泛型容器返回类型 : map<K,V> 返回值转 typed_map =====
+public class RetSuffix<K,V> {
+    func RetSuffix() {}
+    func mk(): map<K,V> {
+        return {"r1": 31, "r2": 32};
+    }
+}
+
+rs18 = RetSuffix<string,int>();
+m18 = rs18.mk();
+check(type(m18) == "typed_map", "M-GP18: return should be typed_map, got " + type(m18));
+check(m18["r1"] == 31, "M-GP18: return[r1] should be 31");
+check(m18["r2"] == 32, "M-GP18: return[r2] should be 32");
+n = n + 1;
+
+// ===== M-GP19: 前缀式泛型容器返回类型 : <K,V>map 返回值转 typed_map =====
+public class RetPrefix<K,V> {
+    func RetPrefix() {}
+    func mk(): <K,V>map {
+        return {"p1": 41, "p2": 42};
+    }
+}
+
+rp19 = RetPrefix<string,int>();
+m19 = rp19.mk();
+check(type(m19) == "typed_map", "M-GP19: return should be typed_map, got " + type(m19));
+check(m19["p1"] == 41, "M-GP19: return[p1] should be 41");
+check(m19["p2"] == 42, "M-GP19: return[p2] should be 42");
+n = n + 1;
+
+// ===== M-GP20: 路径 6 父类泛型形参改名继承（extends Base<K,V>），
+//              子类字段索引按父实参名重映射，generic_bind 按子类形参序转 typed_map =====
+public class BaseRename<KA,VA> {
+    data: <KA,VA>map;
+    func BaseRename() {}
+}
+
+public class DerivedRename<K,V> extends BaseRename<K,V> {
+    func DerivedRename() {
+        self.data = {"rk": 55};
+    }
+    func rtype(): string {
+        return type(self.data);
+    }
+    func rget(k) {
+        return self.data[k];
+    }
+}
+
+dr20 = DerivedRename<string,int>();
+check(type(dr20.data) == "typed_map", "M-GP20: inherited field should be typed_map, got " + type(dr20.data));
+check(dr20.rtype() == "typed_map", "M-GP20: inherited field via method should be typed_map");
+check(dr20.rget("rk") == 55, "M-GP20: inherited field[rk] should be 55");
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");
