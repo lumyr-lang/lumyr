@@ -179,6 +179,7 @@ struct AstNode {
             AstNode* next;   // 参数链表
             char* constraint; // 泛型参数类型约束（如 "Comparable"），NULL=无约束/普通函数参数
             char* constraint_full; // 泛型容器实参原文（如 "K,V"/"E"，不含尖括号），NULL=无泛型实参
+            int constraint_is_elem; // 1=数组元素标注（n: E[]，constraint 为元素类型名，擦除为动态数组），0=裸类型标注
             int is_ref;      // 1=引用传递参数（ref p），0=值传递（默认）
             int is_nullable; // 1=可空类型 T?（允许 null），0=非空（默认，绑定/写入时校验非空）
         } param;

@@ -462,4 +462,67 @@ np24 = NullPrefix<string,int>();
 check(np24.ntype({"k": 92}) == "typed_map", "M-GP24: nullable prefix param should be typed_map, got " + np24.ntype({"k": 92}));
 n = n + 1;
 
+// ===== M-GP25: 裸泛型形参 v: K 类型匹配时不强转 =====
+public class GPBox<K> {
+    val: K;
+    func GPBox() { self.val = 0; }
+    func put(v: K) { self.val = v; }
+}
+
+gb25 = GPBox<int>();
+gb25.put(5);
+check(type(gb25.val) == "int", "M-GP25: matching int should stay int, got " + type(gb25.val));
+check(gb25.val == 5, "M-GP25: value should be 5");
+n = n + 1;
+
+// ===== M-GP26: 裸泛型形参 double→int 不匹配强转（允许精度丢失） =====
+gb26 = GPBox<int>();
+gb26.put(5.9);
+check(type(gb26.val) == "int", "M-GP26: double should be cast to int, got " + type(gb26.val));
+check(gb26.val == 5, "M-GP26: truncation should give 5, got " + gb26.val);
+n = n + 1;
+
+// ===== M-GP27: 裸泛型形参 string→int 按 C 语义解析 =====
+gb27 = GPBox<int>();
+gb27.put("42");
+check(type(gb27.val) == "int", "M-GP27: string should be parsed to int, got " + type(gb27.val));
+check(gb27.val == 42, "M-GP27: parsed value should be 42");
+n = n + 1;
+
+// ===== M-GP28: 前缀式 <K>a 与 k: K 等价；int→string 强转 =====
+public class GPStr<K> {
+    last: K;
+    func GPStr() { self.last = ""; }
+    func setv(<K>a) { self.last = a; }
+}
+
+gs28 = GPStr<string>();
+gs28.setv(7);
+check(type(gs28.last) == "string", "M-GP28: int should be cast to string, got " + type(gs28.last));
+check(gs28.last == "7", "M-GP28: stringified value should be \"7\", got " + gs28.last);
+n = n + 1;
+
+// ===== M-GP29: 精确 CastKind 匹配：int→bool 族内不同型仍强转 =====
+gb29 = GPBox<bool>();
+gb29.put(0);
+check(type(gb29.val) == "bool", "M-GP29: int 0 should be cast to bool, got " + type(gb29.val));
+check(gb29.val == false, "M-GP29: bool value should be false");
+n = n + 1;
+
+// ===== M-GP30: 容器→标量强转失败抛运行时异常 =====
+gb30 = GPBox<int>();
+thrown30 = false;
+try {
+    gb30.put({"a": 1});
+} catch(e) {
+    thrown30 = true;
+}
+check(thrown30, "M-GP30: map->int coercion should throw");
+n = n + 1;
+
+// ===== M-GP31: 类外裸标注 k: K 无泛型上下文，保持动态绑定不报错 =====
+func gp_toplevel(k: GK2) { return k; }
+check(gp_toplevel(3.5) == 3.5, "M-GP31: top-level bare annotation should pass through dynamically");
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");

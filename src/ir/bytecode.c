@@ -33,6 +33,7 @@ void bytecode_func_free(BytecodeFunc* fn)
     free(fn->ret_type_name);
     free(fn->ret_type_full);
     free(fn->var_type_tags);
+    free(fn->param_generic_indices);
     free(fn->var_is_global);
     if(fn->var_struct_names) {
         for(int i = 0; i < fn->sym_cnt; i++) free(fn->var_struct_names[i]);

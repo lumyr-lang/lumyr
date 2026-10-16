@@ -5608,9 +5608,12 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     for(AstNode* p = params; p; p = p->u.param.next) {
         /* fn->params / param_is_ref 动态数组 */
         if(total >= pcap) {
+            int old_pcap = pcap;
             pcap = pcap ? pcap * 2 : 8;
             fn->params = realloc(fn->params, pcap * sizeof(char*));
             fn->param_is_ref = realloc(fn->param_is_ref, pcap * sizeof(int));
+            fn->param_generic_indices = realloc(fn->param_generic_indices, pcap * sizeof(int));
+            for(int i = old_pcap; i < pcap; i++) fn->param_generic_indices[i] = -1;
         }
         /* 形参名预注册为函数符号（槽位下标即声明顺序） */
         int slot = bf_sym(fn, p->u.param.name);
@@ -5640,6 +5643,15 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
                (pck == CAST_STRUCT_PTR || pck == CAST_CLASS_PTR)) {
                 if(!fn->method_self_struct) fn->method_self_struct = strdup(p->u.param.constraint);
             }
+        }
+        /* 阶段 6c：裸泛型形参标注 k: K / <K>a —— constraint 为当前类泛型形参名时
+         * 记录泛型索引，运行期绑定时按帧 bound_types 解析实际类型并强转（见 vm_bind_only）。
+         * 类外（独立函数/struct）cur_class_td 无泛型表返回 -1：保持动态绑定。
+         * 容器形参（m: map<K,V>）constraint 为容器名而非泛型形参名，gi=-1 不受影响。
+         * 数组元素标注（arr: E[]，constraint_is_elem=1）排除：实参是整个数组而非 E 值。 */
+        if(p->u.param.constraint && !p->u.param.is_ellipsis && !p->u.param.constraint_is_elem) {
+            int gi = cur_class_generic_param_index(&c, p->u.param.constraint);
+            if(gi >= 0) fn->param_generic_indices[slot] = gi;
         }
         /* 可空形参 T?：Ctx 类型也落 NONE（动态 VALUE 槽访问），与 var_type_tags 一致 */
         ExprType et = p->u.param.is_nullable ? EXPR_TYPE_NONE : castkind_to_exprtype(pck);

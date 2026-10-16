@@ -2942,7 +2942,7 @@ param
      * 直接用 builtin_type_name / ID 而非 type_name_str，避免与返回类型/三元/map 上下文冲突 */
     | ID COLON builtin_type_name { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup(castkind_to_name($3)); } /*基本类型 n: int */
     | ID COLON ID               { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*自定义类型 n: Point */
-    | ID COLON ID LBRACKET RBRACKET { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /*数组类型 n: E[]（擦除为动态数组） */
+    | ID COLON ID LBRACKET RBRACKET { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.constraint_is_elem = 1; } /*数组类型 n: E[]（擦除为动态数组）；元素标注非裸泛型形参，阶段 6c 不强转 */
     | ID COLON ID TOK_GENERIC   { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); $$->u.param.constraint_full = $4; } /*泛型类型 n: Map<K,V> / n: map<K,V>；实参原文保留供 IR 期解析 */
     | ID COLON TOK_GENERIC ID  { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($4); $$->u.param.constraint_full = $3; } /*前缀式泛型容器 n: <K,V>map / n: <E>array（实参原文在前，容器名在后） */
     | ID COLON ID TOK_TYPE_ANNOT { $$ = ast_param($1, 0, NULL); $$->u.param.constraint = strdup($3); } /* n: Box<int>（擦除为 Box） */
