@@ -12,6 +12,7 @@ BytecodeFunc* bytecode_func_new(const char* name, int is_main)
     if(!fn) { perror("bytecode_func_new"); exit(EXIT_FAILURE); }
     fn->name = name ? strdup(name) : NULL;
     fn->is_main = is_main;
+    fn->ret_generic_index = -1;   /* calloc 默认 0 是合法泛型索引，必须显式置 -1 */
     return fn;
 }
 
@@ -513,6 +514,7 @@ const char* opc_name(OpCode op)
         case OPC_CALL_METHODV:  return "CALL_METHODV";
         case OPC_GENERIC_BIND:  return "GENERIC_BIND";
         case OPC_TYPED_LIT_RESOLVE: return "TYPED_LIT_RESOLVE";
+        case OPC_GENERIC_RET_COERCE: return "GENERIC_RET_COERCE";
         default: return "UNKNOWN";
     }
 }

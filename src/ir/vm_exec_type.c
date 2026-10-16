@@ -3,13 +3,18 @@
  * 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
  */
 #include "vm_types.h"
+#include "vm_exec.h"
 #include "stack_manager.h"
 #include "ir_types.h"
 #include "lm_value.h"
 #include "lm_bigint.h"
 #include "lm_decimal.h"
 #include "lm_bitdecimal.h"
+#include "lumyr_value.h"
 #include "gc_runtime.h"
+#include "ast/ast_types.h"
+#include "ast/stackframe.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ===== 类型转换 ===== */
@@ -230,6 +235,78 @@ double vm_value_to_f64(Value v) {
     return (double)vm_value_to_i64(v);
 }
 
+/* ===== 阶段 6c：裸泛型标量（K/V/E）运行期按实际绑定类型强转 ===== */
+
+/* CastKind 整型族/浮点族判定（与 ir_compile.c 同名静态实现保持同口径） */
+static int gp_cast_is_intfamily(CastKind ck) {
+    switch(ck) {
+    case CAST_INT: case CAST_SHORT: case CAST_USHORT: case CAST_INT8: case CAST_INT16:
+    case CAST_INT32: case CAST_INT64: case CAST_LONG: case CAST_LONGLONG:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
+    case CAST_UINT64: case CAST_ULONG: case CAST_UCHAR: case CAST_BYTE:
+    case CAST_ASCII: case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_CHAR: case CAST_BOOL:
+        return 1;
+    default: return 0;
+    }
+}
+static int gp_cast_is_floatfamily(CastKind ck) {
+    return ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE;
+}
+
+/* 裸泛型值按解析出的实际类型 tk 强转。
+ * 语义：精确 CastKind 匹配不强转；不匹配按 C 语义强转（允许精度丢失/截断）；
+ * 容器/对象/函数等无法强转为标量时抛运行时错误。非标量目标（容器等）不干预。
+ * site_zh/site_en 为错误位置描述（如 "泛型形参 arr "/"generic parameter arr "，
+ * 或 "泛型返回值 "/"generic return value "，尾部留空格）。 */
+Value vm_generic_value_coerce(Value v, CastKind tk, const char* site_zh, const char* site_en) {
+    int want_int = gp_cast_is_intfamily(tk);
+    int want_dbl = gp_cast_is_floatfamily(tk);
+    int want_str = (tk == CAST_STRING);
+    if(!want_int && !want_dbl && !want_str) return v;
+    if(v.type == VAL_NONE) return v;   /* null 原样传递（非空校验在别处） */
+    CastKind vck = (CastKind)valuetype_to_castkind((int)v.type);
+    /* 精确 CastKind 匹配才不强转；族内宽度不同（int→int8/bool 等）按 C 语义截断强转 */
+    if(vck == tk)
+        return v;
+    /* 可强转源仅限标量（数值/字符串/高精度族）；容器/对象等强转失败抛异常 */
+    int coercible = gp_cast_is_intfamily(vck) || gp_cast_is_floatfamily(vck)
+                    || vck == CAST_STRING || v.type == VAL_BIGINT
+                    || v.type == VAL_DECIMAL || v.type == VAL_BITDECIMAL;
+    if(!coercible) {
+        char buf[384];
+        snprintf(buf, sizeof(buf),
+                 "运行时错误: %s无法将 %s 强转为 %s / runtime error: %s cannot cast %s to %s",
+                 site_zh ? site_zh : "", valtype_to_name(v.type), castkind_to_name((int)tk),
+                 site_en ? site_en : "", valtype_to_name(v.type), castkind_to_name((int)tk));
+        runtime_error(buf);
+    }
+    if(want_int) return vm_box_int64_as(vm_value_to_i64(v), tk);
+    if(want_dbl) {
+        if(tk == CAST_FLOAT) return lumyr_make_float((float)vm_value_to_f64(v));
+        if(tk == CAST_LONG_DOUBLE) return lumyr_make_long_double((long double)vm_value_to_f64(v));
+        return lumyr_make_double(vm_value_to_f64(v));
+    }
+    char* s = value_to_str(v);
+    Value r = lumyr_make_string(s);
+    free(s);
+    return r;
+}
+
+/* GENERIC_RET_COERCE：裸泛型返回标注 func f(): K 的返回值强转。
+ * a=当前类泛型形参索引；从当前帧 bound_types 解析实际 CastKind（与参数侧绑定同源）。
+ * bound_types 缺失（如脱离实例的调用）时不干预，保持动态。弹/压 VALUE 栈净 0。 */
+int vm_exec_generic_ret_coerce(VMExecCtx* ctx, Instruction* in) {
+    Value v;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+    BoundTypeInfo* bt = ctx->frame ? ctx->frame->bound_types : NULL;
+    if(bt && in->a >= 0 && in->a < bt->nbound) {
+        CastKind tk = (CastKind)bt->types[in->a];
+        if((int)tk > (int)CAST_NONE)
+            v = vm_generic_value_coerce(v, tk, "泛型返回值 ", "generic return value ");
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}
 
 /* 按声明类型把机器 int64 装箱为 Value（BOX_INT64 与动态分派返回共用）。
  * ck 决定整型子类型标签：CAST_INT → VAL_INT（"int"）、CAST_BOOL → VAL_BOOL...

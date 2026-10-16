@@ -4959,6 +4959,9 @@ void c_stmt(Ctx* c, AstNode* node) {
                 int ret_k = container_kind_of(c->fn->ret_type_name);
                 if(c->fn->ret_type_full && ret_k >= 0)
                     compile_generic_lit_resolve(c, c->fn->ret_type_full, ret_k);
+                /* 裸泛型返回标注 : K：返回值已在 VALUE 栈顶，按帧 bound_types 原地强转 */
+                if(c->fn->ret_generic_index >= 0)
+                    emit(c, OPC_GENERIC_RET_COERCE, c->fn->ret_generic_index, 0);
                 /* 值已 box 到 VALUE 栈，再 LIFO 执行 defer（可能修改 self.field/全局；
                    不影响已压栈的返回值），最后 PEND_RETURN */
                 emit_deferred(c);
@@ -5004,6 +5007,9 @@ void c_stmt(Ctx* c, AstNode* node) {
         int ret_k = container_kind_of(c->fn->ret_type_name);
         if(c->fn->ret_type_full && ret_k >= 0)
             compile_generic_lit_resolve(c, c->fn->ret_type_full, ret_k);
+        /* 裸泛型返回标注 : K：返回值已在 VALUE 栈顶，按帧 bound_types 原地强转 */
+        if(c->fn->ret_generic_index >= 0)
+            emit(c, OPC_GENERIC_RET_COERCE, c->fn->ret_generic_index, 0);
         /* 返回值已 box 到 VALUE 栈，再 LIFO 执行 defer，最后 RETURN */
         emit_deferred(c);
         /* a=ExprType（RETURN 从对应栈弹）；b=CastKind（PTR 字符串需深拷贝） */
@@ -5603,6 +5609,16 @@ BytecodeFunc* ir_compile_function(const char* name, AstNode* params, AstNode* bo
     c.cur_class_td = class_name ? (void*)class_lookup(class_name) : NULL;
     if(!c.cur_class_td && class_name) c.cur_class_td = (void*)struct_lookup(class_name);
     c.cur_params = params;
+
+    /* 阶段 6c：裸泛型返回标注 func f(): K —— 返回类型名恰为当前类泛型形参名时
+     * 记录形参索引，各 return 点发 OPC_GENERIC_RET_COERCE，运行期按帧 bound_types
+     * 解析实际类型后强转（与形参绑定同源）。容器返回（ret_type_full 非空，如
+     * map<K,V> / E[]）由 TYPED_LIT_RESOLVE 链路处理，此处排除；类外 cur_class_td
+     * 无泛型表或具体内建/自定义类型名均返回 -1，保持原有动态返回行为。 */
+    if(ret_type_name && !ret_type_full) {
+        int rgi = cur_class_generic_param_index(&c, ret_type_name);
+        if(rgi >= 0) fn->ret_generic_index = rgi;
+    }
 
     int total = 0, pcap = 0;
     for(AstNode* p = params; p; p = p->u.param.next) {

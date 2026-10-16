@@ -525,4 +525,94 @@ func gp_toplevel(k: GK2) { return k; }
 check(gp_toplevel(3.5) == 3.5, "M-GP31: top-level bare annotation should pass through dynamically");
 n = n + 1;
 
+// ===== M-GP32: 裸泛型返回标注 func get(): K —— 字段透传与精确匹配不强转 =====
+public class GPRet<K> {
+    val: K;
+    func GPRet(v) { self.val = v; }
+    func get(): K { return self.val; }
+    func cast(x): K { return x; }
+}
+
+gr32 = GPRet<int>(5);
+r32 = gr32.get();
+check(type(r32) == "int", "M-GP32: field return should be int, got " + type(r32));
+check(r32 == 5, "M-GP32: field return should be 5");
+r32b = gr32.cast(9);
+check(type(r32b) == "int" && r32b == 9, "M-GP32: exact int match should not be coerced");
+n = n + 1;
+
+// ===== M-GP33: 裸泛型返回 string→int 按 C 语义解析 =====
+r33 = gr32.cast("42");
+check(type(r33) == "int", "M-GP33: return string should parse to int, got " + type(r33));
+check(r33 == 42, "M-GP33: return value should be 42");
+n = n + 1;
+
+// ===== M-GP34: 裸泛型返回 double→int 截断（允许精度丢失） =====
+r34 = gr32.cast(7.9);
+check(type(r34) == "int", "M-GP34: return double should cast to int, got " + type(r34));
+check(r34 == 7, "M-GP34: return truncation should give 7, got " + r34);
+n = n + 1;
+
+// ===== M-GP35: 裸泛型返回 int→string 强转 =====
+gs35 = GPRet<string>("");
+r35 = gs35.cast(99);
+check(type(r35) == "string", "M-GP35: return int should cast to string, got " + type(r35));
+check(r35 == "99", "M-GP35: return value should be \"99\", got " + r35);
+n = n + 1;
+
+// ===== M-GP36: 裸泛型返回容器→标量强转失败抛运行时异常 =====
+thrown36 = false;
+try {
+    gr32.cast({"a": 1});
+} catch(e) {
+    thrown36 = true;
+}
+check(thrown36, "M-GP36: map->int return coercion should throw");
+n = n + 1;
+
+// ===== M-GP37: 双形参类 func get(): V —— 按 V 索引（index=1）解析绑定类型 =====
+public class GPRetKV<K,V> {
+    k: K;
+    v: V;
+    func GPRetKV(a, b) { self.k = a; self.v = b; }
+    func getV(): V { return self.v; }
+    func castV(x): V { return x; }
+}
+
+gk37 = GPRetKV<string,int>("a", 1);
+r37 = gk37.getV();
+check(type(r37) == "int" && r37 == 1, "M-GP37: V field return should be int 1");
+r37b = gk37.castV("77");
+check(type(r37b) == "int" && r37b == 77, "M-GP37: V return string should parse to int 77, got " + type(r37b));
+n = n + 1;
+
+// ===== M-GP38: try-finally 内 return 走 PEND_RETURN 分支，强转语义一致 =====
+public class GPRetFin<K> {
+    val: K;
+    func GPRetFin(v) { self.val = v; }
+    func weirdFin(x): K {
+        try {
+            return x;
+        } finally {
+            self.val = self.val;
+        }
+    }
+}
+
+gf38 = GPRetFin<string>("");
+r38 = gf38.weirdFin(123);
+check(type(r38) == "string", "M-GP38: PEND_RETURN int should cast to string, got " + type(r38));
+check(r38 == "123", "M-GP38: PEND_RETURN value should be \"123\", got " + r38);
+gf38i = GPRetFin<int>(0);
+r38b = gf38i.weirdFin(8.9);
+check(type(r38b) == "int" && r38b == 8, "M-GP38: PEND_RETURN double should truncate to int 8");
+thrown38 = false;
+try {
+    gf38i.weirdFin([1, 2, 3]);
+} catch(e) {
+    thrown38 = true;
+}
+check(thrown38, "M-GP38: PEND_RETURN array->int should throw");
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");

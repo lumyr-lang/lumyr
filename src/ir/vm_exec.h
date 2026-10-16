@@ -53,6 +53,14 @@ int64_t vm_value_to_i64(Value v);
 /* Value → double 通用解箱：浮点/整型族直接取，string 按浮点解析 */
 double vm_value_to_f64(Value v);
 
+/* 阶段 6c：裸泛型标量（K/V/E）按运行期解析出的实际类型 tk 强转 Value。
+ * 精确 CastKind 匹配不强转；不匹配 C 语义强转（允许精度丢失）；强转失败抛运行时错误。
+ * site_zh/site_en 为错误位置描述（尾部留空格）。形参绑定与 OPC_GENERIC_RET_COERCE 共用。 */
+Value vm_generic_value_coerce(Value v, CastKind tk, const char* site_zh, const char* site_en);
+
+/* OPC_GENERIC_RET_COERCE：裸泛型返回标注 func f(): K 的返回值强转 */
+int vm_exec_generic_ret_coerce(VMExecCtx* ctx, Instruction* in);
+
 /* BuiltinId 的反汇编名（bytecode.c 名表用） */
 const char* builtin_id_name(int id);
 

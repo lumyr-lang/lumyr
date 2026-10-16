@@ -52,59 +52,6 @@ typedef struct {
 
 /* ========== 共用调用辅助 ========== */
 
-/* 阶段 6c：CastKind 整型族/浮点族判定（与 ir_compile.c 同名静态实现保持同口径） */
-static int gp_cast_is_intfamily(CastKind ck) {
-    switch(ck) {
-    case CAST_INT: case CAST_SHORT: case CAST_USHORT: case CAST_INT8: case CAST_INT16:
-    case CAST_INT32: case CAST_INT64: case CAST_LONG: case CAST_LONGLONG:
-    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
-    case CAST_UINT64: case CAST_ULONG: case CAST_UCHAR: case CAST_BYTE:
-    case CAST_ASCII: case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_CHAR: case CAST_BOOL:
-        return 1;
-    default: return 0;
-    }
-}
-static int gp_cast_is_floatfamily(CastKind ck) {
-    return ck == CAST_DOUBLE || ck == CAST_FLOAT || ck == CAST_LONG_DOUBLE;
-}
-
-/* 阶段 6c：裸泛型形参（k: K / <K>a）绑定时按解析出的实际类型强转 Value。
- * 语义：类型匹配（同族）原样返回不强转；不匹配按 C 语义强转（允许精度丢失）；
- * 容器/对象/函数等无法强转为标量时抛运行时错误。非标量目标（容器等）不干预。 */
-static Value vm_generic_param_coerce(Value v, CastKind tk, const char* pname) {
-    int want_int = gp_cast_is_intfamily(tk);
-    int want_dbl = gp_cast_is_floatfamily(tk);
-    int want_str = (tk == CAST_STRING);
-    if(!want_int && !want_dbl && !want_str) return v;
-    if(v.type == VAL_NONE) return v;   /* null 原样传递（非空校验在别处） */
-    CastKind vck = (CastKind)valuetype_to_castkind((int)v.type);
-    /* 精确 CastKind 匹配才不强转；族内宽度不同（int→int8/bool 等）按 C 语义截断强转 */
-    if(vck == tk)
-        return v;   /* 类型匹配：不强转 */
-    /* 可强转源仅限标量（数值/字符串/高精度族）；容器/对象等强转失败抛异常 */
-    int coercible = gp_cast_is_intfamily(vck) || gp_cast_is_floatfamily(vck)
-                    || vck == CAST_STRING || v.type == VAL_BIGINT
-                    || v.type == VAL_DECIMAL || v.type == VAL_BITDECIMAL;
-    if(!coercible) {
-        char buf[320];
-        snprintf(buf, sizeof(buf),
-                 "运行时错误: 泛型形参 %s 无法将 %s 强转为 %s / runtime error: generic parameter %s cannot cast %s to %s",
-                 pname ? pname : "?", valtype_to_name(v.type), castkind_to_name((int)tk),
-                 pname ? pname : "?", valtype_to_name(v.type), castkind_to_name((int)tk));
-        runtime_error(buf);
-    }
-    if(want_int) return vm_box_int64_as(vm_value_to_i64(v), tk);
-    if(want_dbl) {
-        if(tk == CAST_FLOAT) return lumyr_make_float((float)vm_value_to_f64(v));
-        if(tk == CAST_LONG_DOUBLE) return lumyr_make_long_double((long double)vm_value_to_f64(v));
-        return lumyr_make_double(vm_value_to_f64(v));
-    }
-    char* s = value_to_str(v);
-    Value r = lumyr_make_string(s);
-    free(s);
-    return r;
-}
-
 /* pop_arg_slot：按 callee 形参 slot 的宽类型，从对应核心栈弹一个实参到 out */
 static void pop_arg_slot(BytecodeFunc* callee, int slot, ArgTmp* out) {
     CastKind pck = (slot < callee->param_cnt && slot < callee->sym_cnt)
@@ -150,8 +97,13 @@ static StackFrame* vm_bind_only(BytecodeFunc* callee, CallSite* cs,
             int gi = callee->param_generic_indices[slot];
             CastKind gtk = (bound_types && gi < bound_types->nbound)
                            ? (CastKind)bound_types->types[gi] : CAST_NONE;
-            if((int)gtk > (int)CAST_NONE)
-                args[slot].v = vm_generic_param_coerce(args[slot].v, gtk, callee->params[slot]);
+            if((int)gtk > (int)CAST_NONE) {
+                char site_zh[160], site_en[160];
+                const char* pn = callee->params[slot] ? callee->params[slot] : "?";
+                snprintf(site_zh, sizeof(site_zh), "泛型形参 %s ", pn);
+                snprintf(site_en, sizeof(site_en), "generic parameter %s ", pn);
+                args[slot].v = vm_generic_value_coerce(args[slot].v, gtk, site_zh, site_en);
+            }
         }
         switch (args[slot].et) {
         case EXPR_TYPE_INT:

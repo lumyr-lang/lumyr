@@ -455,6 +455,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_CALL_METHODV: LM_BUMP_REDS(co); handled = vm_exec_call_method_dyn(ctx, &in); break;
         case OPC_GENERIC_BIND: handled = vm_exec_generic_bind(ctx, &in); break;
         case OPC_TYPED_LIT_RESOLVE: handled = vm_exec_typed_lit_resolve(ctx, &in); break;
+        case OPC_GENERIC_RET_COERCE: handled = vm_exec_generic_ret_coerce(ctx, &in); break;
 
         /* ===== 打印 ===== */
         case OPC_PRINT: handled = vm_exec_io_print(ctx, &in); break;

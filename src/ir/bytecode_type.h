@@ -299,6 +299,11 @@ typedef enum {
     // 弹 VALUE 栈动态 array/map，用当前帧 bound_types 解析 CastKind 后原地转换为
     // typed_array/typed_map，压回 VALUE 栈。用于局部变量等无字段 generic_bind 的路径
     OPC_TYPED_LIT_RESOLVE,
+
+    // 裸泛型返回标注（func f(): K）返回值强转：a=当前类泛型形参索引。
+    // 弹 VALUE 栈返回值，用当前帧 bound_types 解析实际 CastKind 后按参数侧同语义
+    // 强转（精确匹配不强转，不匹配 C 语义强转，失败抛异常），压回 VALUE 栈
+    OPC_GENERIC_RET_COERCE,
 } OpCode;
 
 /* ============================================================
@@ -762,6 +767,7 @@ typedef struct {
     int has_variadic;
     int* param_is_ref;         // 参数是否是 ref 引用传递（1=ref，0=值传递），长度 param_cnt
     int* param_generic_indices; // 裸泛型形参标注（k: K / <K>a）→ 当前类泛型形参索引（-1=非泛型标注），与 params 平行；运行期绑定时按帧 bound_types 解析实际类型并强转
+    int ret_generic_index;      // 裸泛型返回标注（func f(): K）→ 当前类泛型形参索引（-1=非裸泛型返回标注）；各 return 点发 OPC_GENERIC_RET_COERCE
     int is_generator;          // 是否为生成器函数（gen func）
     int* var_type_tags;        // 变量类型标记（CastKind 枚举，-1 表示无标记），与 syms 平行数组
     char** var_struct_names;    // 变量的 struct 类型名（NULL 表示不是 struct），与 syms 平行数组
