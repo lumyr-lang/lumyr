@@ -475,6 +475,9 @@ AstNode* ast_clone_node(const AstNode* src)
             AstNode* n = ast_new(AST_TYPE_ANNOTATION);
             n->u.type_annotation.cast_type = src->u.type_annotation.cast_type;
             n->u.type_annotation.expr = ast_clone_node(src->u.type_annotation.expr);
+            n->u.type_annotation.generic_args_text =
+                src->u.type_annotation.generic_args_text
+                    ? strdup(src->u.type_annotation.generic_args_text) : NULL;
             return n;
         }
         case AST_TERNARY: {

@@ -53,6 +53,11 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
             d.ptr = 0;
             break;
 
+        /* TYPED_LIT_RESOLVE：弹 1 VALUE 动态容器，转换后压回，净 0 */
+        case OPC_TYPED_LIT_RESOLVE:
+            d.value = 0;
+            break;
+
         /* CALL_METHOD 与 CALL 共用下方精确扣减分支 */
 
         /* ===== 弹栈指令：a 选择栈（0 VALUE/1 INT64/2 DOUBLE/3 PTR） ===== */
@@ -413,6 +418,7 @@ int op_stack_push(OpCode op)
         case OPC_GET_ERR:
         case OPC_CLASS_NEW:
         case OPC_GENERIC_BIND:
+        case OPC_TYPED_LIT_RESOLVE:
         case OPC_NEG: case OPC_POS: case OPC_LOGIC_NOT:
         case OPC_TO_BOOL:
             return 1;

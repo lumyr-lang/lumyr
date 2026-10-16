@@ -510,6 +510,7 @@ const char* opc_name(OpCode op)
         case OPC_PUSH_CONST_VAL: return "PUSH_CONST_VAL";
         case OPC_CALL_METHODV:  return "CALL_METHODV";
         case OPC_GENERIC_BIND:  return "GENERIC_BIND";
+        case OPC_TYPED_LIT_RESOLVE: return "TYPED_LIT_RESOLVE";
         default: return "UNKNOWN";
     }
 }

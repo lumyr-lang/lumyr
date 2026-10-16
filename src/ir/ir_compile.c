@@ -766,6 +766,50 @@ static int is_typed_bytes_cast(CastKind ct) {
     }
 }
 
+/* 泛型实参项原文 → CastKind：具体类型名走 name_to_castkind（容忍前后空白）；
+ * 当前类泛型形参（如 K/V/E）编码为负值 -(index+1)，运行期由帧 bound_types 解析。
+ * 无法识别（通配符/未知类型）返回 CAST_NONE。 */
+static CastKind ir_generic_arg_to_castkind(Ctx* c, const char* item, int len) {
+    while(len > 0 && (item[0] == ' ' || item[0] == '\t')) { item++; len--; }
+    while(len > 0 && (item[len - 1] == ' ' || item[len - 1] == '\t')) len--;
+    if(len <= 0) return CAST_NONE;
+    char* name = (char*)malloc((size_t)len + 1);
+    memcpy(name, item, (size_t)len);
+    name[len] = '\0';
+    CastKind ck = name_to_castkind(name);
+    if(ck == CAST_NONE) {
+        int gi = cur_class_generic_param_index(c, name);
+        if(gi >= 0) ck = (CastKind)(-(gi + 1));
+    }
+    free(name);
+    return ck;
+}
+
+/* 泛型字面量运行期类型解析：动态 array/map 已在 VALUE 栈顶（c_expr 先按动态构造），
+ * 发射 OPC_TYPED_LIT_RESOLVE，运行期用当前帧 bound_types 解析负值索引得到具体
+ * CastKind，原地转换为 typed_array/typed_map。修复方法体内局部变量泛型字面量
+ * 退化动态容器的问题（字段场景由 generic_bind 迁移，局部变量无此路径）。
+ * args_text: "E"（数组元素）或 "K,V"（map 键值）；is_map: 1=map 字面量。 */
+static void compile_generic_lit_resolve(Ctx* c, const char* args_text, int is_map) {
+    TypedLitInfo* tli = (TypedLitInfo*)calloc(1, sizeof(TypedLitInfo));
+    tli->kind = is_map ? 1 : 0;
+    if(is_map) {
+        const char* comma = strchr(args_text, ',');
+        if(comma) {
+            tli->ck1 = (int)ir_generic_arg_to_castkind(c, args_text, (int)(comma - args_text));
+            tli->ck2 = (int)ir_generic_arg_to_castkind(c, comma + 1, (int)strlen(comma + 1));
+        } else {
+            tli->ck1 = (int)ir_generic_arg_to_castkind(c, args_text, (int)strlen(args_text));
+            tli->ck2 = (int)CAST_NONE;
+        }
+    } else {
+        tli->ck1 = (int)ir_generic_arg_to_castkind(c, args_text, (int)strlen(args_text));
+        tli->ck2 = (int)CAST_NONE;
+    }
+    int idx = bf_add_u64_const(c->fn, (uint64_t)(uintptr_t)tli);
+    emit(c, OPC_TYPED_LIT_RESOLVE, idx, 0);
+}
+
 /* 泛型类型绑定：解析 type_args 为 CastKind 数组，构造 GenericBindInfo 存入常量池，
  * 发射 OPC_GENERIC_BIND。实例已在 PTR 栈顶（构造函数调用后/CLASS_NEW 后）。
  * 只要 callsite 提供了类型实参，就发射指令，用于：
@@ -1183,6 +1227,16 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
+        /* 泛型形参字面量 <E>[...] / <K,V>{...}：实参含当前类泛型形参，编译期无法确定
+         * 元素/键值类型，先按动态 array/map 构造，再发射 OPC_TYPED_LIT_RESOLVE，
+         * 运行期用当前帧 bound_types 解析负值索引得到具体 CastKind 并转为 typed。
+         * 覆盖方法体内局部变量场景（字段场景由 generic_bind 迁移，与此处等价）。 */
+        if(node->u.type_annotation.generic_args_text && ann_child) {
+            int is_map = (ann_child->type == AST_MAP_LIT);
+            c_expr(c, ann_child);   /* VALUE 栈：动态 array/map */
+            compile_generic_lit_resolve(c, node->u.type_annotation.generic_args_text, is_map);
+            return EXPR_TYPE_NONE;
+        }
         /* <T>bytes(arg)：类型化 bytes 构造（按 T 打包元素 / 重解释字节）
          * 仅当 T 为数值类型且子表达式是单参 bytes() 调用时拦截 */
         if(ann_child && ann_child->type == AST_CALL && ann_child->u.call.name &&

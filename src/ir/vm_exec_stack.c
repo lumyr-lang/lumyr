@@ -1035,3 +1035,26 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
     stack_vm_push(g_stack_mgr, STACK_PTR, &p);
     return 1;
 }
+
+/* TYPED_LIT_RESOLVE：a=常量池下标（TypedLitInfo*）
+ * 弹 VALUE 栈顶动态 array/map，用当前帧 bound_types 解析出具体 CastKind，
+ * 原地转换为 typed_array/typed_map 后压回 VALUE 栈。用于方法体内局部变量等
+ * 无字段 generic_bind 事件的泛型字面量 <E>[...] / <K,V>{...}。 */
+int vm_exec_typed_lit_resolve(VMExecCtx* ctx, Instruction* in) {
+    TypedLitInfo* tli = (TypedLitInfo*)(uintptr_t)ctx->const_pool[in->a].u64;
+    Value v;
+    stack_vm_pop(g_stack_mgr, STACK_VALUE, &v);
+    if(tli) {
+        BoundTypeInfo* bt = ctx->frame ? ctx->frame->bound_types : NULL;
+        if(tli->kind == 0) {
+            CastKind ck = resolve_bound_type(bt, (CastKind)tli->ck1);
+            if(ck != CAST_NONE) v = convert_dynamic_array_to_typed(v, ck);
+        } else {
+            CastKind kck = resolve_bound_type(bt, (CastKind)tli->ck1);
+            CastKind vck = resolve_bound_type(bt, (CastKind)tli->ck2);
+            if(kck != CAST_NONE && vck != CAST_NONE) v = convert_dynamic_map_to_typed(v, kck, vck);
+        }
+    }
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &v);
+    return 1;
+}

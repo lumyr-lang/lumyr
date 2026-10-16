@@ -45,6 +45,20 @@ typedef struct {
     int* field_map_value_kinds;   /* 同上 */
 } GenericBindInfo;
 
+/* 泛型字面量运行期类型解析信息（编译期构造，存入常量池供 OPC_TYPED_LIT_RESOLVE 使用）。
+ * 用于方法体内的局部变量等无字段 generic_bind 路径的场景：<E>[...] / <K,V>{...}
+ * 编译期无法确定元素/键值类型（泛型形参），先按动态 array/map 构造，运行期用当前帧
+ * bound_types 解析负值索引得到具体 CastKind，再原地转换为 typed_array/typed_map。
+ *
+ * ck 编码同 GenericBindInfo.bound_types：
+ *   >=0 : 已解析的 CastKind（固定类型名）
+ *   <0  : 泛型形参引用，索引 = -ck - 1，运行时从当前帧 bound_types 解析 */
+typedef struct {
+    int kind;   /* 0=array（数组字面量） 1=map（map 字面量） */
+    int ck1;    /* array: 元素 CastKind；map: key CastKind */
+    int ck2;    /* map: value CastKind（array 忽略） */
+} TypedLitInfo;
+
 typedef enum {
     /* ===== 栈操作（通用） ===== */
     OPC_NOP,
@@ -280,6 +294,11 @@ typedef enum {
     // 泛型类型绑定：a=常量池下标（GenericBindInfo* 存为 CONST_UINT64）
     // 弹 PTR 栈实例，遍历泛型字段把 ValueArray 转为 TypedArray，压回 PTR 栈
     OPC_GENERIC_BIND,
+
+    // 泛型字面量运行期类型解析：a=常量池下标（TypedLitInfo* 存为 CONST_UINT64）
+    // 弹 VALUE 栈动态 array/map，用当前帧 bound_types 解析 CastKind 后原地转换为
+    // typed_array/typed_map，压回 VALUE 栈。用于局部变量等无字段 generic_bind 的路径
+    OPC_TYPED_LIT_RESOLVE,
 } OpCode;
 
 /* ============================================================

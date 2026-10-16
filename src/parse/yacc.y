@@ -1062,6 +1062,31 @@ static AstNode* wrap_map_kv(AstNode* items, CastKind kck, CastKind vck)
     }
     return items;
 }
+
+/* 泛型实参原文是否含当前类泛型形参："K,V"→1、"int,V"→1、"string,int"→0。
+   用于判定 <K,V>{...} / <E>[...] 是否需要保留原文走运行期类型解析路径。 */
+static int generic_text_has_param(const char* text)
+{
+    if(!text) return 0;
+    const char* p = text;
+    while(*p) {
+        const char* comma = strchr(p, ',');
+        int len = comma ? (int)(comma - p) : (int)strlen(p);
+        int tlen;
+        const char* t = str_trim2(p, len, &tlen);
+        if(tlen > 0) {
+            char* name = (char*)malloc((size_t)tlen + 1);
+            memcpy(name, t, (size_t)tlen);
+            name[tlen] = '\0';
+            int hit = is_current_generic_param(name);
+            free(name);
+            if(hit) return 1;
+        }
+        if(!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
 /* catch 子句辅助：创建单个 catch 子句节点（用 AST_SEQ 包装，first=type_string, second=var_body_seq） */
 static AstNode* make_catch_clause(char* type_name, char* var_name, AstNode* body)
 {
@@ -3425,23 +3450,38 @@ primary
               free(gt);
           } else {
               /* 泛型形参/通配符/非接口类型：透传表达式
-               * 特例：<K,V>{...} / <string,int>{...} 泛型 map 字面量——逐 entry 包 K/V cast
-               * 仅当泛型参数含逗号（双参数 K,V）时才应用，避免 <map>{...} 被误 cast
-               * 特例：<T>ClassName{...} 前缀泛型命名构造——记录 type_args 到 class_new */
-              if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',')) {
+               * 特例 1：<T>ClassName{...} 前缀泛型命名构造——记录 type_args 到 class_new
+               *   <string,int>HashMap{...} / <T>Box(...)：内层构造规则拿不到尖括号原文
+               *   （type_args=NULL），在此回填——否则 IR 期"泛型类必须提供类型实参"检查会
+               *   误伤前缀形式（擦除语义，仅记录原文）
+               * 特例 2（本次修复）：<K,V>{...} / <E>[...] 实参含当前类泛型形参时保留原文，
+               *   包装成 AST_TYPE_ANNOTATION，IR 期编为负值索引、运行期按当前帧 bound_types
+               *   解析构造 typed_array/typed_map。修复方法体内局部变量泛型字面量退化为
+               *   动态 array/map 的问题（字段场景此前靠 generic_bind 迁移，局部变量无此路径）
+               * 特例 3：<string,int>{...} 全固定类型——保持既有逐 entry 包 cast 路径 */
+              if($2 && $2->type == AST_CLASS_NEW && !$2->u.class_new.type_args) {
+                  $2->u.class_new.type_args = gt;
+                  $$ = $2;
+              } else if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',') &&
+                        generic_text_has_param(gt)) {
+                  AstNode* n = ast_type_annotation(CAST_NONE, $2);
+                  n->u.type_annotation.generic_args_text = gt;
+                  $$ = L(n);
+              } else if($2 && $2->type == AST_ARRAY_LIT && !strchr(gt, ',') &&
+                        is_current_generic_param(gt)) {
+                  AstNode* n = ast_type_annotation(CAST_NONE, $2);
+                  n->u.type_annotation.generic_args_text = gt;
+                  $$ = L(n);
+              } else if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',')) {
                   CastKind kck, vck;
                   parse_two_generic_args(gt, &kck, &vck);
                   $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
                   free(gt);
-              } else if($2 && $2->type == AST_CLASS_NEW && !$2->u.class_new.type_args) {
-                  /* <string,int>HashMap{...} / <T>Box(...)：内层构造规则拿不到
-                   * 尖括号原文（type_args=NULL），在此回填——否则 IR 期"泛型类
-                   * 必须提供类型实参"检查会误伤前缀形式（擦除语义，仅记录原文） */
-                  $2->u.class_new.type_args = gt;
+                  $$ = $2;
               } else {
                   free(gt);
+                  $$ = $2;
               }
-              $$ = $2;
           }
       }
     | LT ID GT ARRAY_OPEN arg_list RBRACKET {

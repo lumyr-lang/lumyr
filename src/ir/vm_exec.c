@@ -43,6 +43,7 @@ int vm_exec_ptr_to_int64(VMExecCtx* ctx, Instruction* in);
 int vm_exec_map_lit(VMExecCtx* ctx, Instruction* in);
 int vm_exec_typed_bytes(VMExecCtx* ctx, Instruction* in);
 int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in);
+int vm_exec_typed_lit_resolve(VMExecCtx* ctx, Instruction* in);
 
 /* 常量加载 */
 int vm_exec_load_int64_const(VMExecCtx* ctx, Instruction* in);
@@ -453,6 +454,7 @@ int vm_exec_loop(VMExecCtx* ctx, RetSlot* ret) {
         case OPC_CALL_METHOD: LM_BUMP_REDS(co); handled = vm_exec_call_method(ctx, &in); break;
         case OPC_CALL_METHODV: LM_BUMP_REDS(co); handled = vm_exec_call_method_dyn(ctx, &in); break;
         case OPC_GENERIC_BIND: handled = vm_exec_generic_bind(ctx, &in); break;
+        case OPC_TYPED_LIT_RESOLVE: handled = vm_exec_typed_lit_resolve(ctx, &in); break;
 
         /* ===== 打印 ===== */
         case OPC_PRINT: handled = vm_exec_io_print(ctx, &in); break;

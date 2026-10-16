@@ -174,4 +174,87 @@ check(type(g8.value) == "typed_map", "M-GP8: value should still be typed_map aft
 check(g8.getVal("gc_key") == 999, "M-GP8: gc_key should survive GC pressure");
 n = n + 1;
 
+// ===== M-GP9: <E>[...] 局部变量字面量在泛型类方法体内构造 typed_array =====
+public class LocalArr<E> {
+    func LocalArr() {}
+    func arrType(): string {
+        x = <E>[10, 20, 30];
+        return type(x);
+    }
+    func arrElem(i) {
+        x = <E>[10, 20, 30];
+        return x[i];
+    }
+}
+
+la9 = LocalArr<int>();
+check(la9.arrType() == "typed_array", "M-GP9: local should be typed_array, got " + la9.arrType());
+check(la9.arrElem(0) == 10, "M-GP9: local[0] should be 10");
+check(la9.arrElem(2) == 30, "M-GP9: local[2] should be 30");
+n = n + 1;
+
+// ===== M-GP10: <K,V>{...} 局部变量字面量在泛型类方法体内构造 typed_map =====
+public class LocalKV<K,V> {
+    func LocalKV() {}
+    func mapType(): string {
+        m = <K,V>{"p": 11, "q": 22};
+        return type(m);
+    }
+    func mapVal(k) {
+        m = <K,V>{"p": 11, "q": 22};
+        return m[k];
+    }
+}
+
+lk10 = LocalKV<string,int>();
+check(lk10.mapType() == "typed_map", "M-GP10: local should be typed_map, got " + lk10.mapType());
+check(lk10.mapVal("p") == 11, "M-GP10: local[p] should be 11");
+check(lk10.mapVal("q") == 22, "M-GP10: local[q] should be 22");
+n = n + 1;
+
+// ===== M-GP11: <int,V>{...} 混合泛型实参局部变量 =====
+public class LocalMix<V> {
+    func LocalMix() {}
+    func mapType(): string {
+        m = <int,V>{1: 100, 2: 200};
+        return type(m);
+    }
+    func mapVal(k) {
+        m = <int,V>{1: 100, 2: 200};
+        return m[k];
+    }
+}
+
+lm11 = LocalMix<string>();
+check(lm11.mapType() == "typed_map", "M-GP11: local should be typed_map, got " + lm11.mapType());
+check(lm11.mapVal(1) == 100, "M-GP11: local[1] should be 100");
+check(lm11.mapVal(2) == 200, "M-GP11: local[2] should be 200");
+n = n + 1;
+
+// ===== M-GP12: 空 <K,V>{} 局部变量下标写入 + GC 压力 =====
+public class LocalGc<K,V> {
+    func LocalGc() {}
+    func run(k, v) {
+        m = <K,V>{};
+        m[k] = v;
+        return m[k];
+    }
+    func runType(): string {
+        m = <K,V>{};
+        return type(m);
+    }
+}
+
+lg12 = LocalGc<string,int>();
+check(lg12.runType() == "typed_map", "M-GP12: empty local should be typed_map");
+check(lg12.run("ek", 777) == 777, "M-GP12: empty local write should be 777");
+i = 0;
+while (i < 1000) {
+    t = LocalGc<string,int>();
+    t.run("k" + i, i);
+    i = i + 1;
+}
+check(lg12.runType() == "typed_map", "M-GP12: local should still be typed_map after GC");
+n = n + 1;
+
 print("generic_param_test: " + n + " tests passed");

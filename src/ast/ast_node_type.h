@@ -162,6 +162,8 @@ struct AstNode {
         struct {
             CastKind cast_type;       // 标注的类型（CastKind枚举），如 CAST_INT/CAST_DOUBLE/CAST_LONG
             AstNode* expr;       // 被标注的表达式
+            char* generic_args_text; // 泛型形参标注原文（"E" / "K,V"），NULL=普通标注；
+                                     // 仅当实参含当前类泛型形参时设置，IR 期编为负值索引运行期解析
         } type_annotation;
 
         struct {
