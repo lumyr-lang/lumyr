@@ -259,10 +259,11 @@ static void* value_to_typed_ptr(Value v) {
     case VAL_BIGINT:     return v.v.bigint;
     case VAL_DECIMAL:    return v.v.decimal;
     case VAL_BITDECIMAL: return v.v.bitdecimal;
-    /* 容器引用：字段直接持有 map/array/typed_array 堆指针 */
+    /* 容器引用：字段直接持有 map/array/typed_array/typed_map 堆指针 */
     case VAL_MAP:        return v.v.map;
     case VAL_ARRAY:      return v.v.array;
     case VAL_TYPED_ARRAY: return v.v.typed_array;
+    case VAL_TYPED_MAP:  return v.v.typed_map;
     default: {
         /* 数值写入 string 数组：转字符串表示，复制为 GC 字符串 */
         char buf[40];
@@ -593,6 +594,81 @@ int vm_exec_typed_array_lit(VMExecCtx* ctx, Instruction* in) {
         }
     }
     r.v.typed_array = ta;
+    gc_enable();
+    stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
+    return 1;
+}
+
+/* TYPED_MAP_LIT：a=键值对数；b=高16位value ValueType|低16位key ValueType。
+ * 先弹 a 个 value（所属 typed 栈），再弹 a 个 key，构造 TypedMap 压 VALUE 栈。
+ * 与 typed_array_lit 同构：栈顶为最后一个元素，逆序弹出后正序插入。 */
+int vm_exec_typed_map_lit(VMExecCtx* ctx, Instruction* in) {
+    (void)ctx;
+    int n = in->a;
+    ValueType key_vt = (ValueType)(in->b & 0xFFFF);
+    ValueType val_vt = (ValueType)((in->b >> 16) & 0xFFFF);
+    Value r;
+    memset(&r, 0, sizeof(r));
+    r.type = VAL_TYPED_MAP;
+    gc_disable();
+    TypedMap* m = lumyr_tmap_new(key_vt, val_vt, n > 0 ? n : TMAP_INIT_CAP);
+
+    Value* vals = NULL;
+    Value* keys = NULL;
+    if(n > 0) {
+        vals = (Value*)malloc(sizeof(Value) * n);
+        keys = (Value*)malloc(sizeof(Value) * n);
+        /* 先弹 value（栈顶为最后一个 value）。浮点族须按实际类型写对应 union
+         * 成员：VAL_FLOAT→v.f / VAL_LONG_DOUBLE→v.ld，否则 tmap_write_value
+         * 读取时取错成员（此前统一写 v.d，float 值被截断为垃圾）。 */
+        for(int i = n - 1; i >= 0; --i) {
+            Value v;
+            memset(&v, 0, sizeof(v));
+            v.type = val_vt;
+            int cls = lumyr_etype_stackcls(val_vt);
+            if(cls == 1) {
+                int64_t iv; stack_vm_pop(g_stack_mgr, STACK_INT64, &iv);
+                v.v.i64 = iv;
+            } else if(cls == 2) {
+                double dv; stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &dv);
+                if(val_vt == VAL_FLOAT) v.v.f = (float)dv;
+                else if(val_vt == VAL_LONG_DOUBLE) v.v.ld = (long double)dv;
+                else v.v.d = dv;
+            } else {
+                void* pv; stack_vm_pop(g_stack_mgr, STACK_PTR, &pv);
+                v.v.s = (char*)pv;
+            }
+            vals[i] = v;
+        }
+        /* 再弹 key */
+        for(int i = n - 1; i >= 0; --i) {
+            Value v;
+            memset(&v, 0, sizeof(v));
+            v.type = key_vt;
+            int cls = lumyr_etype_stackcls(key_vt);
+            if(cls == 1) {
+                int64_t iv; stack_vm_pop(g_stack_mgr, STACK_INT64, &iv);
+                v.v.i64 = iv;
+            } else if(cls == 2) {
+                double dv; stack_vm_pop(g_stack_mgr, STACK_DOUBLE, &dv);
+                if(key_vt == VAL_FLOAT) v.v.f = (float)dv;
+                else if(key_vt == VAL_LONG_DOUBLE) v.v.ld = (long double)dv;
+                else v.v.d = dv;
+            } else {
+                void* pv; stack_vm_pop(g_stack_mgr, STACK_PTR, &pv);
+                v.v.s = (char*)pv;
+            }
+            keys[i] = v;
+        }
+        /* 正序插入，保持字面量声明顺序 */
+        for(int i = 0; i < n; ++i) {
+            lumyr_tmap_set(m, keys[i], vals[i]);
+        }
+    }
+    free(keys);
+    free(vals);
+
+    r.v.typed_map = m;
     gc_enable();
     stack_vm_push(g_stack_mgr, STACK_VALUE, &r);
     return 1;

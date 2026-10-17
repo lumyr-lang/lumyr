@@ -466,7 +466,7 @@ print("H CLASS + POLYMORPHISM OK");
 // I：容器
 assertType("I-map", iMap, "map");
 assertType("I-array", iArr, "array");
-assertType("I-typed", iTyped, "typed_array");
+assertType("I-typed", iTyped, "array");
 assertType("I-map-boundary", iMap2, "map");
 assertType("I-array-boundary", iArr2, "array");
 assertEq("I-map-elem", iElem, 1);

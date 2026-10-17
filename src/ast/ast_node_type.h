@@ -165,6 +165,8 @@ struct AstNode {
             AstNode* expr;       // 被标注的表达式
             char* generic_args_text; // 泛型形参标注原文（"E" / "K,V"），NULL=普通标注；
                                      // 仅当实参含当前类泛型形参时设置，IR 期编为负值索引运行期解析
+            CastKind key_cast_type;   // typed map 的 key 固定 CastKind（<int,string>{}），CAST_NONE=未设置
+            CastKind value_cast_type; // typed map 的 value 固定 CastKind
         } type_annotation;
 
         struct {

@@ -705,6 +705,44 @@ static void compile_typed_array_lit(Ctx* c, CastKind ct, AstNode* elems, int via
     free(argv);
 }
 
+/* 编译类型化 map 字面量：<int,string>{"a":"hello"}。
+ * 键按 key_ck 编译到对应栈，值按 val_ck 编译到对应栈，
+ * 再 emit OPC_TYPED_MAP_LIT 由 VM 构造 TypedMap 压 VALUE 栈。
+ * 设计为与 compile_typed_array_lit 同构：栈顶为最后一个元素，VM 逆序弹出。 */
+static void compile_typed_map_lit(Ctx* c, CastKind key_ck, CastKind val_ck, AstNode* map_lit) {
+    AstNode** ev = NULL;
+    int ecnt = 0, ecap = 0;
+    collect_call_args(map_lit->u.map_lit.entries, &ev, &ecnt, &ecap);
+    /* 先编译所有 key */
+    for(int i = 0; i < ecnt; i++) {
+        AstNode* e = ev[i];
+        if(e && e->type == AST_MAP_ENTRY) {
+            AstNode key_ann;
+            memset(&key_ann, 0, sizeof(key_ann));
+            key_ann.type = AST_TYPE_ANNOTATION;
+            key_ann.u.type_annotation.cast_type = key_ck;
+            key_ann.u.type_annotation.expr = e->u.map_entry.key;
+            c_expr(c, &key_ann);
+        }
+    }
+    /* 再编译所有 value */
+    for(int i = 0; i < ecnt; i++) {
+        AstNode* e = ev[i];
+        if(e && e->type == AST_MAP_ENTRY) {
+            AstNode val_ann;
+            memset(&val_ann, 0, sizeof(val_ann));
+            val_ann.type = AST_TYPE_ANNOTATION;
+            val_ann.u.type_annotation.cast_type = val_ck;
+            val_ann.u.type_annotation.expr = e->u.map_entry.value;
+            c_expr(c, &val_ann);
+        }
+    }
+    ValueType key_vt = castkind_to_valtype(key_ck);
+    ValueType val_vt = castkind_to_valtype(val_ck);
+    emit(c, OPC_TYPED_MAP_LIT, ecnt, ((int)val_vt << 16) | (int)key_vt);
+    free(ev);
+}
+
 /* formdata 字面量：<formdata>{k:v,...}（map 形式）或 <formdata>[[k,v],...]（pair 数组形式，允许同名重复）
  * 生成 __formdata_new()（结果留在 VALUE 栈）；逐字段压 name/value，
  * __formdata_append(fd,name,value) 弹三个参数并把 fd 压回，栈顶始终是 fd */
@@ -1237,6 +1275,14 @@ ExprType c_expr(Ctx* c, AstNode* node) {
         /* 类型标注 <type>expr：编译子表达式，标记类型 */
         CastKind ct = node->u.type_annotation.cast_type;
         AstNode* ann_child = node->u.type_annotation.expr;
+        CastKind key_ck = node->u.type_annotation.key_cast_type;
+        CastKind val_ck = node->u.type_annotation.value_cast_type;
+        /* 固定类型对 typed map 字面量 <int,string>{...}：直接编译为 TypedMap */
+        if(key_ck != CAST_NONE && val_ck != CAST_NONE && ann_child &&
+           ann_child->type == AST_MAP_LIT) {
+            compile_typed_map_lit(c, key_ck, val_ck, ann_child);
+            return EXPR_TYPE_NONE;
+        }
         /* 泛型形参字面量 <E>[...] / <K,V>{...}：实参含当前类泛型形参，编译期无法确定
          * 元素/键值类型，先按动态 array/map 构造，再发射 OPC_TYPED_LIT_RESOLVE，
          * 运行期用当前帧 bound_types 解析负值索引得到具体 CastKind 并转为 typed。

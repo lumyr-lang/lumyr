@@ -76,8 +76,8 @@ check(map_get({"key": 42}, "key") == 42, "colon: map param");
 func arr_first(a: array) { return a[0]; }
 check(arr_first([10, 20, 30]) == 10, "colon: array param");
 
-func typed_map_get(m: map, k: int) { return m[k]; }
-check(typed_map_get({1: "a", 2: "b"}, 2) == "b", "colon: map with int key");
+func map_get(m: map, k: int) { return m[k]; }
+check(map_get({1: "a", 2: "b"}, 2) == "b", "colon: map with int key");
 
 // ------------------------------------------------------------
 // 5. 可变参数 + 冒号语法

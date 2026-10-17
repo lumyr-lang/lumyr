@@ -1,5 +1,5 @@
 // 泛型类体内 K/V/E 引用路径运行时类型测试（阶段 6b）
-// 覆盖 <K,V>{...} 字面量、<K,V>expr 强转、new Box<K>() 泛类实例化、<E>[...] typed_array
+// 覆盖 <K,V>{...} 字面量、<K,V>expr 强转、new Box<K>() 泛类实例化、<E>[...] array
 
 func check(cond, msg) {
     if(cond) {} else {
@@ -9,7 +9,7 @@ func check(cond, msg) {
 
 n = 0;
 
-// ===== M-GP1: <K,V>{...} 字面量在泛型类方法体内构造 typed_map =====
+// ===== M-GP1: <K,V>{...} 字面量在泛型类方法体内构造 map =====
 public class BoxKV<K,V> {
     value: <K,V>map;
     func BoxKV() {
@@ -24,13 +24,13 @@ public class BoxKV<K,V> {
 }
 
 b1 = BoxKV<string,int>();
-check(type(b1.value) == "typed_map", "M-GP1: value should be typed_map, got " + type(b1.value));
+check(type(b1.value) == "map", "M-GP1: value should be map, got " + type(b1.value));
 check(b1.getVal("a") == 1, "M-GP1: getVal(a) should be 1");
 check(b1.getVal("b") == 2, "M-GP1: getVal(b) should be 2");
 check(type(b1.getVal("a")) == "int", "M-GP1: value type should be int");
 n = n + 1;
 
-// ===== M-GP2: <K,V>{...} 整型键 typed_map =====
+// ===== M-GP2: <K,V>{...} 整型键 map =====
 public class BoxKI<V> {
     value: <int,V>map;
     func BoxKI() {
@@ -42,7 +42,7 @@ public class BoxKI<V> {
 }
 
 b2 = BoxKI<string>();
-check(type(b2.value) == "typed_map", "M-GP2: value should be typed_map");
+check(type(b2.value) == "map", "M-GP2: value should be map");
 check(b2.getVal(1) == "10", "M-GP2: getVal(1) should be 10");
 check(b2.getVal(2) == "20", "M-GP2: getVal(2) should be 20");
 n = n + 1;
@@ -60,7 +60,7 @@ public class CastBox<K,V> {
 
 cm = {"x": 100, "y": 200};
 cb = CastBox<string,int>(cm);
-check(type(cb.value) == "typed_map", "M-GP3: value should be typed_map");
+check(type(cb.value) == "map", "M-GP3: value should be map");
 check(cb.getVal("x") == 100, "M-GP3: getVal(x) should be 100");
 check(cb.getVal("y") == 200, "M-GP3: getVal(y) should be 200");
 n = n + 1;
@@ -93,12 +93,12 @@ public class Holder<E> {
 }
 
 h4 = Holder<int>();
-check(h4.getWrappedType() == "typed_array", "M-GP4: wrapped should be typed_array");
+check(h4.getWrappedType() == "array", "M-GP4: wrapped should be array");
 check(h4.getWrappedVal(0) == 1, "M-GP4: wrapped[0] should be 1");
 check(h4.getWrappedVal(2) == 3, "M-GP4: wrapped[2] should be 3");
 n = n + 1;
 
-// ===== M-GP5: <E>[...] typed_array 字面量在泛型类方法体内 =====
+// ===== M-GP5: <E>[...] array 字面量在泛型类方法体内 =====
 public class ArrBox<E> {
     value: <E>array;
     func ArrBox() {
@@ -113,7 +113,7 @@ public class ArrBox<E> {
 }
 
 a5 = ArrBox<int>();
-check(type(a5.value) == "typed_array", "M-GP5: value should be typed_array");
+check(type(a5.value) == "array", "M-GP5: value should be array");
 check(a5.getVal(0) == 10, "M-GP5: value[0] should be 10");
 check(a5.getVal(1) == 20, "M-GP5: value[1] should be 20");
 n = n + 1;
@@ -130,7 +130,7 @@ public class PlainBox<K,V> {
 }
 
 p6 = PlainBox<string,int>();
-check(type(p6.value) == "typed_map", "M-GP6: value should be typed_map");
+check(type(p6.value) == "map", "M-GP6: value should be map");
 check(p6.getVal("k1") == 111, "M-GP6: getVal(k1) should be 111");
 check(p6.getVal("k2") == 222, "M-GP6: getVal(k2) should be 222");
 n = n + 1;
@@ -148,11 +148,11 @@ public class EmptyBox<K,V> {
 }
 
 e7 = EmptyBox<string,int>();
-check(type(e7.value) == "typed_map", "M-GP7: value should be typed_map");
+check(type(e7.value) == "map", "M-GP7: value should be map");
 check(e7.getVal("empty_key") == 777, "M-GP7: empty_key should be 777");
 n = n + 1;
 
-// ===== M-GP8: GC 压力下泛型类体内 typed_map/typed_array 保持正确 =====
+// ===== M-GP8: GC 压力下泛型类体内 map/array 保持正确 =====
 public class GcBox<K,V> {
     value: <K,V>map;
     func GcBox() {
@@ -170,11 +170,11 @@ while (i < 1000) {
     tmp.value["k" + i] = i;
     i = i + 1;
 }
-check(type(g8.value) == "typed_map", "M-GP8: value should still be typed_map after GC");
+check(type(g8.value) == "map", "M-GP8: value should still be map after GC");
 check(g8.getVal("gc_key") == 999, "M-GP8: gc_key should survive GC pressure");
 n = n + 1;
 
-// ===== M-GP9: <E>[...] 局部变量字面量在泛型类方法体内构造 typed_array =====
+// ===== M-GP9: <E>[...] 局部变量字面量在泛型类方法体内构造 array =====
 public class LocalArr<E> {
     func LocalArr() {}
     func arrType(): string {
@@ -188,12 +188,12 @@ public class LocalArr<E> {
 }
 
 la9 = LocalArr<int>();
-check(la9.arrType() == "typed_array", "M-GP9: local should be typed_array, got " + la9.arrType());
+check(la9.arrType() == "array", "M-GP9: local should be array, got " + la9.arrType());
 check(la9.arrElem(0) == 10, "M-GP9: local[0] should be 10");
 check(la9.arrElem(2) == 30, "M-GP9: local[2] should be 30");
 n = n + 1;
 
-// ===== M-GP10: <K,V>{...} 局部变量字面量在泛型类方法体内构造 typed_map =====
+// ===== M-GP10: <K,V>{...} 局部变量字面量在泛型类方法体内构造 map =====
 public class LocalKV<K,V> {
     func LocalKV() {}
     func mapType(): string {
@@ -207,7 +207,7 @@ public class LocalKV<K,V> {
 }
 
 lk10 = LocalKV<string,int>();
-check(lk10.mapType() == "typed_map", "M-GP10: local should be typed_map, got " + lk10.mapType());
+check(lk10.mapType() == "map", "M-GP10: local should be map, got " + lk10.mapType());
 check(lk10.mapVal("p") == 11, "M-GP10: local[p] should be 11");
 check(lk10.mapVal("q") == 22, "M-GP10: local[q] should be 22");
 n = n + 1;
@@ -226,7 +226,7 @@ public class LocalMix<V> {
 }
 
 lm11 = LocalMix<string>();
-check(lm11.mapType() == "typed_map", "M-GP11: local should be typed_map, got " + lm11.mapType());
+check(lm11.mapType() == "map", "M-GP11: local should be map, got " + lm11.mapType());
 check(lm11.mapVal(1) == 100, "M-GP11: local[1] should be 100");
 check(lm11.mapVal(2) == 200, "M-GP11: local[2] should be 200");
 n = n + 1;
@@ -246,7 +246,7 @@ public class LocalGc<K,V> {
 }
 
 lg12 = LocalGc<string,int>();
-check(lg12.runType() == "typed_map", "M-GP12: empty local should be typed_map");
+check(lg12.runType() == "map", "M-GP12: empty local should be map");
 check(lg12.run("ek", 777) == 777, "M-GP12: empty local write should be 777");
 i = 0;
 while (i < 1000) {
@@ -254,10 +254,10 @@ while (i < 1000) {
     t.run("k" + i, i);
     i = i + 1;
 }
-check(lg12.runType() == "typed_map", "M-GP12: local should still be typed_map after GC");
+check(lg12.runType() == "map", "M-GP12: local should still be map after GC");
 n = n + 1;
 
-// ===== M-GP13: <K,V>expr 强转（非字面量）在泛型类方法体内构造 typed_map =====
+// ===== M-GP13: <K,V>expr 强转（非字面量）在泛型类方法体内构造 map =====
 public class CastLocal<K,V> {
     func CastLocal() {}
     func castType(m): string {
@@ -272,12 +272,12 @@ public class CastLocal<K,V> {
 
 cl13 = CastLocal<string,int>();
 src13 = {"a": 11, "b": 22};
-check(cl13.castType(src13) == "typed_map", "M-GP13: cast local should be typed_map, got " + cl13.castType(src13));
+check(cl13.castType(src13) == "map", "M-GP13: cast local should be map, got " + cl13.castType(src13));
 check(cl13.castVal(src13, "a") == 11, "M-GP13: cast local[a] should be 11");
 check(cl13.castVal(src13, "b") == 22, "M-GP13: cast local[b] should be 22");
 n = n + 1;
 
-// ===== M-GP14: <E>expr 强转（非字面量）在泛型类方法体内构造 typed_array =====
+// ===== M-GP14: <E>expr 强转（非字面量）在泛型类方法体内构造 array =====
 public class CastArr<E> {
     func CastArr() {}
     func castType(a): string {
@@ -292,12 +292,12 @@ public class CastArr<E> {
 
 ca14 = CastArr<int>();
 src14 = [1, 2, 3];
-check(ca14.castType(src14) == "typed_array", "M-GP14: cast local should be typed_array, got " + ca14.castType(src14));
+check(ca14.castType(src14) == "array", "M-GP14: cast local should be array, got " + ca14.castType(src14));
 check(ca14.castVal(src14, 0) == 1, "M-GP14: cast local[0] should be 1");
 check(ca14.castVal(src14, 2) == 3, "M-GP14: cast local[2] should be 3");
 n = n + 1;
 
-// ===== M-GP15: 后缀式泛型容器形参 m: map<K,V> 在方法入口按实参转 typed_map =====
+// ===== M-GP15: 后缀式泛型容器形参 m: map<K,V> 在方法入口按实参转 map =====
 public class ParamSuffix<K,V> {
     func ParamSuffix() {}
     func ptype(m: map<K,V>): string {
@@ -310,12 +310,12 @@ public class ParamSuffix<K,V> {
 
 ps15 = ParamSuffix<string,int>();
 src15 = {"a": 1, "b": 2};
-check(ps15.ptype(src15) == "typed_map", "M-GP15: param should be typed_map, got " + ps15.ptype(src15));
+check(ps15.ptype(src15) == "map", "M-GP15: param should be map, got " + ps15.ptype(src15));
 check(ps15.pval(src15, "a") == 1, "M-GP15: param[a] should be 1");
 check(ps15.pval(src15, "b") == 2, "M-GP15: param[b] should be 2");
 n = n + 1;
 
-// ===== M-GP16: 前缀式泛型容器形参 m: <K,V>map 在方法入口按实参转 typed_map =====
+// ===== M-GP16: 前缀式泛型容器形参 m: <K,V>map 在方法入口按实参转 map =====
 public class ParamPrefix<K,V> {
     func ParamPrefix() {}
     func ptype(m: <K,V>map): string {
@@ -328,12 +328,12 @@ public class ParamPrefix<K,V> {
 
 pp16 = ParamPrefix<string,int>();
 src16 = {"x": 10, "y": 20};
-check(pp16.ptype(src16) == "typed_map", "M-GP16: param should be typed_map, got " + pp16.ptype(src16));
+check(pp16.ptype(src16) == "map", "M-GP16: param should be map, got " + pp16.ptype(src16));
 check(pp16.pval(src16, "x") == 10, "M-GP16: param[x] should be 10");
 check(pp16.pval(src16, "y") == 20, "M-GP16: param[y] should be 20");
 n = n + 1;
 
-// ===== M-GP17: 前缀式泛型数组形参 a: <E>array 在方法入口按实参转 typed_array =====
+// ===== M-GP17: 前缀式泛型数组形参 a: <E>array 在方法入口按实参转 array =====
 public class ArrPrefix<E> {
     func ArrPrefix() {}
     func atype(a: <E>array): string {
@@ -346,12 +346,12 @@ public class ArrPrefix<E> {
 
 ap17 = ArrPrefix<int>();
 src17 = [7, 8, 9];
-check(ap17.atype(src17) == "typed_array", "M-GP17: param should be typed_array, got " + ap17.atype(src17));
+check(ap17.atype(src17) == "array", "M-GP17: param should be array, got " + ap17.atype(src17));
 check(ap17.aval(src17, 0) == 7, "M-GP17: param[0] should be 7");
 check(ap17.aval(src17, 2) == 9, "M-GP17: param[2] should be 9");
 n = n + 1;
 
-// ===== M-GP18: 后缀式泛型容器返回类型 : map<K,V> 返回值转 typed_map =====
+// ===== M-GP18: 后缀式泛型容器返回类型 : map<K,V> 返回值转 map =====
 public class RetSuffix<K,V> {
     func RetSuffix() {}
     func mk(): map<K,V> {
@@ -361,12 +361,12 @@ public class RetSuffix<K,V> {
 
 rs18 = RetSuffix<string,int>();
 m18 = rs18.mk();
-check(type(m18) == "typed_map", "M-GP18: return should be typed_map, got " + type(m18));
+check(type(m18) == "map", "M-GP18: return should be map, got " + type(m18));
 check(m18["r1"] == 31, "M-GP18: return[r1] should be 31");
 check(m18["r2"] == 32, "M-GP18: return[r2] should be 32");
 n = n + 1;
 
-// ===== M-GP19: 前缀式泛型容器返回类型 : <K,V>map 返回值转 typed_map =====
+// ===== M-GP19: 前缀式泛型容器返回类型 : <K,V>map 返回值转 map =====
 public class RetPrefix<K,V> {
     func RetPrefix() {}
     func mk(): <K,V>map {
@@ -376,13 +376,13 @@ public class RetPrefix<K,V> {
 
 rp19 = RetPrefix<string,int>();
 m19 = rp19.mk();
-check(type(m19) == "typed_map", "M-GP19: return should be typed_map, got " + type(m19));
+check(type(m19) == "map", "M-GP19: return should be map, got " + type(m19));
 check(m19["p1"] == 41, "M-GP19: return[p1] should be 41");
 check(m19["p2"] == 42, "M-GP19: return[p2] should be 42");
 n = n + 1;
 
 // ===== M-GP20: 路径 6 父类泛型形参改名继承（extends Base<K,V>），
-//              子类字段索引按父实参名重映射，generic_bind 按子类形参序转 typed_map =====
+//              子类字段索引按父实参名重映射，generic_bind 按子类形参序转 map =====
 public class BaseRename<KA,VA> {
     data: <KA,VA>map;
     func BaseRename() {}
@@ -401,8 +401,8 @@ public class DerivedRename<K,V> extends BaseRename<K,V> {
 }
 
 dr20 = DerivedRename<string,int>();
-check(type(dr20.data) == "typed_map", "M-GP20: inherited field should be typed_map, got " + type(dr20.data));
-check(dr20.rtype() == "typed_map", "M-GP20: inherited field via method should be typed_map");
+check(type(dr20.data) == "map", "M-GP20: inherited field should be map, got " + type(dr20.data));
+check(dr20.rtype() == "map", "M-GP20: inherited field via method should be map");
 check(dr20.rget("rk") == 55, "M-GP20: inherited field[rk] should be 55");
 n = n + 1;
 
@@ -417,7 +417,7 @@ public class RefSuffix<K,V> {
 rs21 = RefSuffix<string,int>();
 src21 = {"orig": 70};
 rs21.fill(src21);
-check(type(src21) == "typed_map", "M-GP21: caller var should become typed_map, got " + type(src21));
+check(type(src21) == "map", "M-GP21: caller var should become map, got " + type(src21));
 check(src21["added"] == 71, "M-GP21: mutation via ref should be visible at caller");
 check(src21["orig"] == 70, "M-GP21: original entry should be preserved");
 n = n + 1;
@@ -433,12 +433,12 @@ public class RefPrefix<K,V> {
 rp22 = RefPrefix<string,int>();
 src22 = {"orig": 80};
 rp22.fill(src22);
-check(type(src22) == "typed_map", "M-GP22: caller var should become typed_map, got " + type(src22));
+check(type(src22) == "map", "M-GP22: caller var should become map, got " + type(src22));
 check(src22["added"] == 81, "M-GP22: mutation via ref should be visible at caller");
 check(src22["orig"] == 80, "M-GP22: original entry should be preserved");
 n = n + 1;
 
-// ===== M-GP23: 可空后缀式泛型容器形参 m: map<K,V>? 在方法入口按实参转 typed_map =====
+// ===== M-GP23: 可空后缀式泛型容器形参 m: map<K,V>? 在方法入口按实参转 map =====
 public class NullSuffix<K,V> {
     func NullSuffix() {}
     func ntype(m: map<K,V>?): string {
@@ -447,10 +447,10 @@ public class NullSuffix<K,V> {
 }
 
 ns23 = NullSuffix<string,int>();
-check(ns23.ntype({"k": 91}) == "typed_map", "M-GP23: nullable param should be typed_map, got " + ns23.ntype({"k": 91}));
+check(ns23.ntype({"k": 91}) == "map", "M-GP23: nullable param should be map, got " + ns23.ntype({"k": 91}));
 n = n + 1;
 
-// ===== M-GP24: 可空前缀式泛型容器形参 m: <K,V>map? 在方法入口按实参转 typed_map =====
+// ===== M-GP24: 可空前缀式泛型容器形参 m: <K,V>map? 在方法入口按实参转 map =====
 public class NullPrefix<K,V> {
     func NullPrefix() {}
     func ntype(m: <K,V>map?): string {
@@ -459,7 +459,7 @@ public class NullPrefix<K,V> {
 }
 
 np24 = NullPrefix<string,int>();
-check(np24.ntype({"k": 92}) == "typed_map", "M-GP24: nullable prefix param should be typed_map, got " + np24.ntype({"k": 92}));
+check(np24.ntype({"k": 92}) == "map", "M-GP24: nullable prefix param should be map, got " + np24.ntype({"k": 92}));
 n = n + 1;
 
 // ===== M-GP25: 裸泛型形参 v: K 类型匹配时不强转 =====
@@ -613,6 +613,34 @@ try {
     thrown38 = true;
 }
 check(thrown38, "M-GP38: PEND_RETURN array->int should throw");
+n = n + 1;
+
+// ===== M-GP39~M-GP42: 具体类型 typed map 字面量直接编译 =====
+
+// M-GP39: <int,string> 基本读写
+m39 = <int,string>{1: "hello", 2: "world"};
+check(type(m39) == "map", "M-GP39: type should be map, got " + type(m39));
+check(m39.len() == 2, "M-GP39: len should be 2, got " + m39.len());
+check(m39[1] == "hello", "M-GP39: m[1] should be hello, got " + m39[1]);
+check(m39[2] == "world", "M-GP39: m[2] should be world, got " + m39[2]);
+n = n + 1;
+
+// M-GP40: <int,int> 数值键值
+m40 = <int,int>{10: 100, 20: 200, 30: 300};
+check(type(m40) == "map", "M-GP40: type should be map, got " + type(m40));
+check(m40[10] == 100 && m40[20] == 200 && m40[30] == 300, "M-GP40: int,int values mismatch");
+n = n + 1;
+
+// M-GP41: <string,int> 字符串键
+m41 = <string,int>{"a": 1, "b": 2, "c": 3};
+check(type(m41) == "map", "M-GP41: type should be map, got " + type(m41));
+check(m41["a"] == 1 && m41["b"] == 2 && m41["c"] == 3, "M-GP41: string,int values mismatch");
+n = n + 1;
+
+// M-GP42: 空 typed map
+m42 = <string,double>{};
+check(type(m42) == "map", "M-GP42: empty typed map type should be map, got " + type(m42));
+check(m42.len() == 0, "M-GP42: empty typed map len should be 0, got " + m42.len());
 n = n + 1;
 
 print("generic_param_test: " + n + " tests passed");

@@ -1042,13 +1042,35 @@ static void parse_two_generic_args(const char* text, CastKind* kck, CastKind* vc
     }
 }
 
-/* 泛型 map 字面量 <K,V>{k1:v1,...}：沿 SEQ 链给每个 entry 的键包 K cast、值包 V cast，
-   再生成普通 map_lit。编译器按 entry 目标 VALUE 编译，CAST 负责把键/值转到 K/V，
-   存储仍为 ValueMap（运行时键支持任意类型）。
- * K/V 为泛型形参时 kck/vck == CAST_NONE，此时不包 CAST_NONE 节点：
-   CAST_NONE 会触发 BOX_PTR(CAST_NONE)/BOX_INT64(CAST_NONE)，把字符串/整数
-   装箱成 VAL_PTR/VAL_INT64，丢失具体类型信息，后续 generic_bind 转换时
-   按错误类型哈希/比较导致键值丢失。 */
+/* typed map 字面量直接编译的元素类型白名单：标量族 / string / 高精度族 /
+ * struct/class 实例指针。容器（map/array/set/tuple/date 族等）与 CAST_NONE
+ * 不在其列——TypedMap 不承载，走 wrap_map_kv 动态 map 回退路径。 */
+static int tmap_lit_ck_ok(CastKind ck)
+{
+    switch(ck) {
+    case CAST_INT: case CAST_DOUBLE: case CAST_STRING: case CAST_BOOL:
+    case CAST_ASCII: case CAST_CHAR: case CAST_BYTE:
+    case CAST_INT8: case CAST_INT16: case CAST_INT32: case CAST_INT64:
+    case CAST_UINT8: case CAST_UINT16: case CAST_UINT32: case CAST_UINT:
+    case CAST_UINT64: case CAST_LONG: case CAST_LONGLONG: case CAST_FLOAT:
+    case CAST_ULONG: case CAST_UCHAR: case CAST_SHORT: case CAST_USHORT:
+    case CAST_SIZE_T: case CAST_SSIZE_T: case CAST_LONG_DOUBLE:
+    case CAST_BIGINT: case CAST_DECIMAL: case CAST_BITDECIMAL:
+    case CAST_STRUCT_PTR: case CAST_CLASS_PTR: case CAST_PTR:
+    case CAST_INT_INFER:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* 泛型 map 字面量 <K,V>{k1:v1,...} 回退路径：沿 SEQ 链给每个 entry 的键包
+   K cast、值包 V cast，再生成普通 map_lit。编译器按 entry 目标 VALUE 编译，
+   CAST 负责把键/值转到 K/V，存储仍为 ValueMap（运行时键支持任意类型）。
+   K/V 为泛型形参或容器类型时 kck/vck == CAST_NONE/容器 CastKind，此时不包
+   CAST_NONE 节点：CAST_NONE 会触发 BOX_PTR(CAST_NONE)/BOX_INT64(CAST_NONE)，
+   把字符串/整数装箱成 VAL_PTR/VAL_INT64，丢失具体类型信息，后续 generic_bind
+   转换时按错误类型哈希/比较导致键值丢失。 */
 static AstNode* wrap_map_kv(AstNode* items, CastKind kck, CastKind vck)
 {
     if(!items) return NULL;
@@ -3487,9 +3509,22 @@ primary
               } else if($2 && $2->type == AST_MAP_LIT && strchr(gt, ',')) {
                   CastKind kck, vck;
                   parse_two_generic_args(gt, &kck, &vck);
-                  $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
-                  free(gt);
-                  $$ = $2;
+                  if(tmap_lit_ck_ok(kck) && tmap_lit_ck_ok(vck)) {
+                      /* 固定标量类型对 <int,string>{...}：走 AST_TYPE_ANNOTATION +
+                       * key/value CastKind，IR 期直接 emit OPC_TYPED_MAP_LIT 构造
+                       * TypedMap（替代逐 entry 包 cast，避免退化为普通 map）。 */
+                      AstNode* n = ast_type_annotation(CAST_NONE, $2);
+                      n->u.type_annotation.generic_args_text = gt;
+                      n->u.type_annotation.key_cast_type = kck;
+                      n->u.type_annotation.value_cast_type = vck;
+                      $$ = L(n);
+                  } else {
+                      /* 容器/对象值类型（<string,map> / <string,array> / date 族等）：
+                       * TypedMap 不承载，回退逐 entry 包 cast 的动态 map（旧行为）。 */
+                      $2->u.map_lit.entries = wrap_map_kv($2->u.map_lit.entries, kck, vck);
+                      free(gt);
+                      $$ = $2;
+                  }
               } else if($2 && generic_text_has_param(gt)) {
                   /* 路径 5：方法体强转 <K,V>expr / <E>expr（非字面量、非 class_new）——
                    * 实参含当前类泛型形参时保留原文，包装为 AST_TYPE_ANNOTATION，

@@ -2,6 +2,7 @@
 // 4 核心栈设计：STACK_VALUE / INT64 / DOUBLE / PTR
 #include "bc_stack.h"
 #include "ir_types.h"
+#include "lumyr_value_type.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -98,6 +99,31 @@ StackDelta op_stack_delta(BytecodeFunc* fn, Instruction in)
         case OPC_MAP_LIT:              /* 弹 2*b（key+val）压 1 map */
             d.value = 1 - 2 * in.b;
             break;
+        case OPC_TYPED_MAP_LIT: {      /* a=键值对数；b=高16位value vt|低16位key vt */
+            ValueType key_vt = (ValueType)(in.b & 0xFFFF);
+            ValueType val_vt = (ValueType)((in.b >> 16) & 0xFFFF);
+            int n = in.a;
+            d.value = +1;
+            if(key_vt == VAL_DOUBLE || key_vt == VAL_FLOAT || key_vt == VAL_LONG_DOUBLE) {
+                d.double_stk -= n;
+            } else if(key_vt == VAL_STRING || key_vt == VAL_PTR || key_vt == VAL_BIGINT ||
+                      key_vt == VAL_DECIMAL || key_vt == VAL_BITDECIMAL ||
+                      key_vt == VAL_STRUCT_PTR || key_vt == VAL_CLASS_PTR) {
+                d.ptr -= n;
+            } else {
+                d.int64 -= n;
+            }
+            if(val_vt == VAL_DOUBLE || val_vt == VAL_FLOAT || val_vt == VAL_LONG_DOUBLE) {
+                d.double_stk -= n;
+            } else if(val_vt == VAL_STRING || val_vt == VAL_PTR || val_vt == VAL_BIGINT ||
+                      val_vt == VAL_DECIMAL || val_vt == VAL_BITDECIMAL ||
+                      val_vt == VAL_STRUCT_PTR || val_vt == VAL_CLASS_PTR) {
+                d.ptr -= n;
+            } else {
+                d.int64 -= n;
+            }
+            break;
+        }
         case OPC_TYPED_BYTES:          /* 弹 1 源压 1 结果 */
             d.value = 0;
             break;
@@ -509,6 +535,7 @@ int op_stack_push(OpCode op)
         case OPC_INT64_ARRAY_LIT:
         case OPC_DOUBLE_ARRAY_LIT:
         case OPC_PTR_ARRAY_LIT:
+        case OPC_TYPED_MAP_LIT:
         case OPC_MAP_LIT:
         case OPC_TYPED_BYTES:
             return 1;

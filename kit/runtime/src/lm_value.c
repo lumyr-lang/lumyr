@@ -1083,8 +1083,9 @@ Value lumyr_type(Value v) {
         case VAL_STRING: return lumyr_make_string("string");
         case VAL_FUNC:   return lumyr_make_string("func");
         case VAL_ARRAY:  return lumyr_make_string("array");
+        case VAL_TYPED_ARRAY: return lumyr_make_string("array");
         case VAL_MAP:    return lumyr_make_string("map");
-        case VAL_TYPED_MAP: return lumyr_make_string("typed_map");
+        case VAL_TYPED_MAP: return lumyr_make_string("map");
         case VAL_ERROR:  return lumyr_make_string("error");
         case VAL_GENERATOR: return lumyr_make_string("generator");
         case VAL_STRUCT_PTR: {
@@ -1095,9 +1096,6 @@ Value lumyr_type(Value v) {
             const char* n = lumyr_instance_get_name(v);
             return lumyr_make_string(n ? n : "class");
         }
-        /* 根因修复：类型化数组不再误标为 "array"——与运行时身份一致，
-         * 避免调试/错误信息失真（此前 ta 元素类型丢失难排查） */
-        case VAL_TYPED_ARRAY: return lumyr_make_string("typed_array");
         // C类型（各类型专用，不混用）
         case VAL_VOID:     return lumyr_make_string("void");
         case VAL_INT8:     return lumyr_make_string("int8");

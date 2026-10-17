@@ -441,6 +441,7 @@ const char* opc_name(OpCode op)
         case OPC_INT64_ARRAY_LIT: return "INT64_ARRAY_LIT";
         case OPC_DOUBLE_ARRAY_LIT: return "DOUBLE_ARRAY_LIT";
         case OPC_PTR_ARRAY_LIT: return "PTR_ARRAY_LIT";
+        case OPC_TYPED_MAP_LIT: return "TYPED_MAP_LIT";
         case OPC_MAP_LIT: return "MAP_LIT";
         case OPC_TYPED_BYTES: return "TYPED_BYTES";
         case OPC_INDEX_GET: return "INDEX_GET";
