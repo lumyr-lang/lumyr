@@ -1,6 +1,6 @@
 // ============================================================
 // lumyr Math 类测试
-// 运行：./bin/lumyr lumyr-lms/example/math_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/math_example.lm
 // ============================================================
 
 import <Function/Math>;

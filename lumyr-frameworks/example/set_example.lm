@@ -1,7 +1,7 @@
 // ============================================================
 // HashSet 验证示例
 // 验证 E 泛型 + 增删查 + 集合运算 + 别名 + 复制
-// 运行：./bin/lumyr lumyr-lms/example/set_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/set_example.lm
 // ============================================================
 
 import <Function/HashSet>;

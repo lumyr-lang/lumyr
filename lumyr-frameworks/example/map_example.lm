@@ -1,6 +1,6 @@
 // ============================================================
 // Map 封装类综合测试（MapInterface / AbstractMap / HashMap）
-// 运行：./bin/lumyr lumyr-lms/example/map_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/map_example.lm
 // ============================================================
 
 import <Function/HashMap>;

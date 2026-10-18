@@ -2,7 +2,7 @@
 // @FuncAlias 多语言别名综合测试
 // 验证 Array / HashMap / StringBuffer / ArrayBuffer / 数值类
 // 在各语言习惯别名下的方法调用
-// 运行：./bin/lumyr lumyr-lms/example/alias_full_test.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/alias_full_test.lm
 // ============================================================
 
 import <Function/Array>;

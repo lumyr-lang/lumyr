@@ -1,6 +1,6 @@
 // ============================================================
 // lumyr 封装类全量测试：Integer / Double / Float / Long / Byte / Short / Character / String / Boolean / Number
-// 运行：./bin/lumyr lumyr-lms/example/number_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/number_example.lm
 // ============================================================
 
 import <Function/Integer>;

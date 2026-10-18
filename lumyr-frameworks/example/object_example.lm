@@ -1,6 +1,6 @@
 // ============================================================
 // lumyr-Object 示例：继承 Object 基类并重写值语义方法
-// 运行：./bin/lumyr lumyr-lms/example/object_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/object_example.lm
 // ============================================================
 
 import <Function/Object> as obj;

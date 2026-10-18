@@ -367,7 +367,7 @@ int builtin_id_by_name(const char* name) {
         {"__private_system__compute_begin", BUILTIN_COMPUTE_BEGIN},
         {"__private_system__compute_end", BUILTIN_COMPUTE_END},
         /* Phase 8.10/8.11：私有机制内置（__private_system__ 前缀约定：
-         * 不面向用户直接调用，由 lumyr-lms 框架模块封装后暴露） */
+         * 不面向用户直接调用，由 lumyr-frameworks 框架模块封装后暴露） */
         {"__private_system__compute_pool_size", BUILTIN_COMPUTE_POOL_SIZE},
         {"__private_system__compute_pool_capacity", BUILTIN_COMPUTE_POOL_CAPACITY},
         {"__private_system__compute_pool_grow", BUILTIN_COMPUTE_POOL_GROW},

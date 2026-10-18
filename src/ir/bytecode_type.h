@@ -645,7 +645,7 @@ typedef enum {
     BUILTIN_COMPUTE_BEGIN,      // __private_system__compute_begin()：当前协程迁入 compute 池（Compute.lm 封装）
     BUILTIN_COMPUTE_END,        // __private_system__compute_end()：迁回老家 IO scheduler
     /* ===== Phase 8.10：compute 池容量（运行期调核，私有机制内置） =====
-     * __private_system__ 前缀约定：不面向用户直接调用，由 lumyr-lms
+     * __private_system__ 前缀约定：不面向用户直接调用，由 lumyr-frameworks
      * 框架模块（Compute.grow/shrink/poolSize/poolCapacity）封装后暴露。 */
     BUILTIN_COMPUTE_POOL_SIZE,      // __private_system__compute_pool_size()：当前 worker 数
     BUILTIN_COMPUTE_POOL_CAPACITY,  // __private_system__compute_pool_capacity()：worker 硬上限

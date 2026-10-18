@@ -489,9 +489,9 @@ static void load_framework_config(void) {
     /* 1. ./lumyr.json（相对 root 以配置文件目录为基准） */
     char* json = slurp_file("lumyr.json");
     if(json) { parse_frameworks_json(json, "."); free(json); return; }
-    /* 2. ./lumyr-lms/lumyr.json */
-    json = slurp_file("lumyr-lms/lumyr.json");
-    if(json) { parse_frameworks_json(json, "lumyr-lms"); free(json); return; }
+    /* 2. ./lumyr-frameworks/lumyr.json */
+    json = slurp_file("lumyr-frameworks/lumyr.json");
+    if(json) { parse_frameworks_json(json, "lumyr-frameworks"); free(json); return; }
     /* 3. ~/.lumyr/frameworks.json */
     const char* home = getenv("HOME");
 #ifdef _WIN32
@@ -562,8 +562,8 @@ static int resolve_framework(const char* fw_spec, char* out, size_t outsz) {
         roots[nroots++] = env_root;
     }
 
-    /* 3. ./lumyr-lms/lumyr-<fw_name> */
-    snprintf(sys_root, sizeof sys_root, "./lumyr-lms/lumyr-%s", fw_name);
+    /* 3. ./lumyr-frameworks/lumyr-<fw_name> */
+    snprintf(sys_root, sizeof sys_root, "./lumyr-frameworks/lumyr-%s", fw_name);
     roots[nroots++] = sys_root;
 
     /* 4. 编译期常量 */

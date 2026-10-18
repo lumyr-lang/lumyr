@@ -1,6 +1,6 @@
 // ============================================================
 // @FuncAlias 函数别名注解示例
-// 运行：./bin/lumyr lumyr-lms/example/alias_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/alias_example.lm
 // 为函数/方法创建别名：调用别名等同调用原函数。
 // 支持单字符串、数组字面量、多实参三种形式：
 //   @FuncAlias("push")

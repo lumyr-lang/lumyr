@@ -1,7 +1,7 @@
 // ============================================================
 // Buffer 封装类综合测试
 // 覆盖 Array / StringBuffer / ArrayBuffer / 15 种类型化数组 Buffer
-// 运行：./bin/lumyr lumyr-lms/example/buffer_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/buffer_example.lm
 // ============================================================
 
 import <Function/Array>;

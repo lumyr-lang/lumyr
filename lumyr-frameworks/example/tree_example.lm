@@ -1,7 +1,7 @@
 // ============================================================
 // 树形组装工具验证示例
 // 验证 E 泛型 + 节点自实现 TreeIdAccessor + 单循环组装
-// 运行：./bin/lumyr lumyr-lms/example/tree_example.lm
+// 运行：./bin/lumyr lumyr-frameworks/example/tree_example.lm
 // ============================================================
 
 import <Utils/Tree>;
