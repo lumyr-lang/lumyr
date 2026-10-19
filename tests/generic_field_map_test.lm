@@ -84,4 +84,41 @@ check(m8.get("gc_key") == 999, "M-GF8: value should survive GC pressure");
 check(type(m8.value) == "map", "M-GF8: value should still be map after GC");
 n = n + 1;
 
+// ===== M-GF9: typed map 的 JSON 序列化 + 二进制序列化往返 =====
+q = (char)34;
+
+// JSON：单键精确断言（多键顺序由桶序决定，不做全等断言）
+mj9 = <string, int>{"a": 1};
+check((string)mj9 == "{" + q + "a" + q + ":1}", "M-GF9: json single-key, got " + (string)mj9);
+n = n + 1;
+
+// JSON：空 typed map
+me9 = <string, int>{};
+check((string)me9 == "{}", "M-GF9: json empty, got " + (string)me9);
+n = n + 1;
+
+// 二进制往返：值恢复
+mr9 = <string, int>{"a": 1, "b": 2};
+dr9 = __lmDeserialize(__lmSerialize(mr9), 0)[0];
+check(type(dr9) == "map", "M-GF9: roundtrip type should be map, got " + type(dr9));
+check(dr9["a"] == 1 && dr9["b"] == 2, "M-GF9: roundtrip values");
+n = n + 1;
+
+// 二进制往返：key/value 类型保留（byte 强转在往返后仍生效）
+mb9 = <string, byte>{"x": 999};
+db9 = __lmDeserialize(__lmSerialize(mb9), 0)[0];
+check(db9["x"] == 231, "M-GF9: roundtrip should keep byte coercion, got " + (string)db9["x"]);
+n = n + 1;
+
+// 二进制往返：空 typed map
+dmt9 = __lmDeserialize(__lmSerialize(me9), 0)[0];
+check((string)dmt9 == "{}" && dmt9.size() == 0, "M-GF9: roundtrip empty map");
+n = n + 1;
+
+// 二进制往返：整型键 typed map
+mi9 = <int, string>{100: "hundred"};
+di9 = __lmDeserialize(__lmSerialize(mi9), 0)[0];
+check(di9[100] == "hundred", "M-GF9: roundtrip int-key map");
+n = n + 1;
+
 print("generic_field_map_test: " + n + " tests passed");

@@ -13,6 +13,7 @@
 #include "gc_runtime.h"
 #include "lm_container.h"
 #include "lm_type.h"
+#include "lumyr_typed_maps.h"   /* VAL_TYPED_MAP 编解码 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +41,8 @@ typedef enum {
     TAG_BYTES       = 0x0B,  /* be32 len + raw */
     TAG_OBJECT      = 0x0C,  /* be32 nameLen + name + be32 fieldN + (name value) */
     TAG_TUPLE       = 0x0D,  /* be32 n + values */
-    TAG_SET         = 0x0E   /* be32 n + values */
+    TAG_SET         = 0x0E,  /* be32 n + values */
+    TAG_TYPED_MAP   = 0x0F   /* be32 keyType + be32 valueType + be32 n + (key value) pairs */
 } SerTag;
 
 /* ==================== 通用错误 ==================== */
@@ -320,6 +322,27 @@ static void encValue(SerBuf* b, Value v) {
         }
         return;
     }
+    case VAL_TYPED_MAP: {
+        TypedMap* tm = v.v.typed_map;
+        int n = tm ? tm->len : 0;
+        ValueType kt = tm ? tm->key_type : VAL_NONE;
+        ValueType vt = tm ? tm->value_type : VAL_NONE;
+        sbU8(b, TAG_TYPED_MAP);
+        sbBE32(b, (uint32_t)kt);
+        sbBE32(b, (uint32_t)vt);
+        sbBE32(b, (uint32_t)n);
+        if(n > 0) {
+            /* 键/值装箱为 Value 后递归；类型由读侧 key_type/value_type 恢复 */
+            Value ks = lumyr_tmap_keys(tm);
+            ValueArray* ka = ks.v.array;
+            for(int i = 0; i < n; i++) {
+                Value k = ka->items[i];
+                encValue(b, k);
+                encValue(b, lumyr_tmap_get(tm, k));
+            }
+        }
+        return;
+    }
     case VAL_BYTES: {
         BytesObj* bo = (BytesObj*)v.v.bytes_obj;
         int n = bo ? bo->len : 0;
@@ -469,6 +492,23 @@ static Value decTypedArray(DecCursor* c) {
     return v;
 }
 
+static Value decTypedMap(DecCursor* c) {
+    ValueType kt = (ValueType)dcBE32(c);
+    ValueType vt = (ValueType)dcBE32(c);
+    int n = (int)dcBE32(c);
+    if(n < 0) serFatal("字典长度非法 / invalid map length");
+    TypedMap* tm = lumyr_tmap_new(kt, vt, n > 0 ? n : 0);
+    for(int i = 0; i < n; i++) {
+        Value key = decValue(c);
+        Value val = decValue(c);
+        lumyr_tmap_set(tm, key, val);   /* 按 key_type/value_type 精确写回槽位 */
+    }
+    Value v = val_none();
+    v.type = VAL_TYPED_MAP;
+    v.v.typed_map = tm;
+    return v;
+}
+
 static Value decInstance(DecCursor* c) {
     const uint8_t* nd = NULL;
     int nlen = dcLenData(c, &nd);
@@ -554,6 +594,8 @@ static Value decValue(DecCursor* c) {
     }
     case TAG_TYPED_ARRAY:
         return decTypedArray(c);
+    case TAG_TYPED_MAP:
+        return decTypedMap(c);
     case TAG_BYTES: {
         const uint8_t* pd = NULL;
         int n = dcLenData(c, &pd);

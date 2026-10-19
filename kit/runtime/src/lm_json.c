@@ -10,6 +10,7 @@
 #include "lm_time.h"
 #include "lm_calendar.h"
 #include "lumyr_typed_arrays.h"
+#include "lumyr_typed_maps.h"   /* VAL_TYPED_MAP 序列化分派 */
 #include "gc_runtime.h"
 #include "lm_co.h"          /* Phase 8.5 J：lm_co_builtin_checkpoint */
 #include "lm_array.h"       /* lumyr_array_add：GC 管理数组追加（T4 根修） */
@@ -483,6 +484,30 @@ static void jq_stringify(SB* b, Value v, Value enc)
                 free(kstr);
                 sb_putc(b, ':');
                 jq_stringify(b, vv, enc);
+            }
+            sb_putc(b, '}');
+            break;
+        }
+        /* 类型化字典：与 VAL_MAP 同构，键值经 keys()/get() 装箱后复用既有渲染 */
+        case VAL_TYPED_MAP: {
+            TypedMap* tm = v.v.typed_map;
+            sb_putc(b, '{');
+            if(tm) {
+                Value ks = lumyr_tmap_keys(tm);
+                ValueArray* ka = ks.v.array;
+                int n = ka ? ka->len : 0;
+                for(int i = 0; i < n; i++) {
+                    lm_co_builtin_checkpoint();   /* T4：不持操作数栈裸指针 */
+                    if(i > 0) sb_putc(b, ',');
+                    Value k = ka->items[i];
+                    char* kstr = value_to_str(k);
+                    if(enc.type == VAL_NONE || (enc.type == VAL_STRING && (!lumyr_str_cstr(&enc) || !*lumyr_str_cstr(&enc))))
+                        sb_json_string(b, kstr);
+                    else { char* t = lumyr_utf8_to_text(kstr, enc); sb_json_string(b, t ? t : kstr); free(t); }
+                    free(kstr);
+                    sb_putc(b, ':');
+                    jq_stringify(b, lumyr_tmap_get(tm, k), enc);
+                }
             }
             sb_putc(b, '}');
             break;
