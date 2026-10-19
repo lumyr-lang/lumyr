@@ -418,6 +418,16 @@ $(TEST_STACKFRAME): $(OBJS) $(RUNTIME_LIB) tests/stackframe_test.c
 test: $(TEST_STACKFRAME)
 	./$(TEST_STACKFRAME)
 
+# TypedMap 删除策略单测：free_list 复用 + 60% 阈值 compact + 内存归还 + infer 契约
+TEST_TYPEDMAP_COMPACT := $(TEST_DIR)/typed_map_compact_test$(EXE_EXT)
+
+$(TEST_TYPEDMAP_COMPACT): $(RUNTIME_LIB) tests/typed_map_compact_test.c
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SSL_LDFLAGS) tests/typed_map_compact_test.c -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
+
+.PHONY: test-typedmap
+test-typedmap: $(TEST_TYPEDMAP_COMPACT)
+	./$(TEST_TYPEDMAP_COMPACT)
+
 # ========== 清理 ==========
 clean:
 	rm -f $(OBJS) $(RUNTIME_OBJS) $(DEPS)

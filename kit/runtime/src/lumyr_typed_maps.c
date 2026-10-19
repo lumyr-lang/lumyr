@@ -827,6 +827,9 @@ void lumyr_tmap_del(TypedMap* m, Value key) {
     m->free_head = slot;
     m->free_count++;
     m->len--;
+
+    /* free 槽位占比超 60% 时主动 compact，回收删除遗留槽位（对齐 3.10 策略） */
+    if(m->free_count * 100 > m->cap * 60) lumyr_tmap_compact(m);
 }
 
 Value lumyr_tmap_keys(TypedMap* m) {
@@ -926,6 +929,166 @@ Value lumyr_tmap_to_value_map(TypedMap* m) {
         lumyr_map_set(&r, k, lumyr_tmap_get(m, k));
     }
     return r;
+}
+
+/* compact 第二遍：把旧槽位 old 的键/值/哈希写到紧凑下标 ni，并重建新桶链 */
+static void tmap_compact_place(TypedMap* m, int32_t old, int32_t ni,
+                               void* nk, void* nv, uint32_t* nh, int32_t* nn, int32_t* nb,
+                               int new_cap, size_t keysz, size_t valsz) {
+    memcpy((char*)nk + (size_t)ni * keysz, (const char*)m->keys + (size_t)old * keysz, keysz);
+    memcpy((char*)nv + (size_t)ni * valsz, (const char*)m->values + (size_t)old * valsz, valsz);
+    nh[ni] = m->hashes[old];
+    int bucket = tmap_bucket_idx(nh[ni], new_cap);
+    nn[ni] = nb[bucket];
+    nb[bucket] = ni;
+}
+
+/* 主动 compact：遍历桶（链表 + 红黑树）枚举存活槽位，顺序重排到 [0, len)
+ * 并重建桶索引；负载因子允许时缩容 cap。free 槽位与 free_head 链随之清空。 */
+void lumyr_tmap_compact(TypedMap* m) {
+    if(!m || m->free_count == 0) return;
+    int live = m->len;
+
+    /* 目标容量：满足负载因子、不小于初始容量、不超过当前容量（避免刚整理又扩容抖动） */
+    int new_cap = TMAP_INIT_CAP;
+    while((double)live > (double)new_cap * TMAP_LOAD_FACTOR) new_cap <<= 1;
+    if(new_cap > m->cap) new_cap = m->cap;
+
+    int32_t* remap = (int32_t*)malloc(sizeof(int32_t) * (size_t)m->cap);
+    if(!remap) return;
+    for(int i = 0; i < m->cap; i++) remap[i] = -1;
+
+    /* 第一遍：按桶顺序给存活槽位分配紧凑下标 */
+    int ns = 0;
+    for(int b = 0; b < m->cap; b++) {
+        int32_t cur = m->buckets[b];
+        if(cur == -1) continue;
+        if(m->tree[b]) {
+            int32_t stk[256];
+            int top = 0;
+            int32_t node = cur;
+            while(node != -1 || top > 0) {
+                while(node != -1) {
+                    if(top < 256) stk[top++] = node;
+                    node = m->left[node];
+                }
+                if(top == 0) break;
+                node = stk[--top];
+                remap[node] = ns++;
+                node = m->right[node];
+            }
+        } else {
+            while(cur != -1) {
+                remap[cur] = ns++;
+                cur = m->next[cur];
+            }
+        }
+    }
+    if(ns != live) { free(remap); return; }   /* 结构不一致：放弃整理，保持原状 */
+
+    size_t keysz = lumyr_etype_itemsz(m->key_type);
+    size_t valsz = lumyr_etype_itemsz(m->value_type);
+    void* nk = gc_alloc_old(keysz * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nk);
+    void* nv = gc_alloc_old(valsz * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nv);
+    uint32_t* nh = (uint32_t*)gc_alloc_old(sizeof(uint32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nh);
+    int32_t* nn = (int32_t*)gc_alloc_old(sizeof(int32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nn);
+    int32_t* nl = (int32_t*)gc_alloc_old(sizeof(int32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nl);
+    int32_t* nr = (int32_t*)gc_alloc_old(sizeof(int32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nr);
+    int32_t* np = (int32_t*)gc_alloc_old(sizeof(int32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(np);
+    int8_t* ncol = (int8_t*)gc_alloc_old(sizeof(int8_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(ncol);
+    int32_t* nb = (int32_t*)gc_alloc_old(sizeof(int32_t) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nb);
+    unsigned char* nt = (unsigned char*)gc_alloc_old(sizeof(unsigned char) * (size_t)new_cap, VAL_TYPED_MAP);
+    gc_mark_internal_buf(nt);
+
+    /* 未占用槽位置零：避免 GC 保守扫描读到残留指针 */
+    memset(nk, 0, keysz * (size_t)new_cap);
+    memset(nv, 0, valsz * (size_t)new_cap);
+    for(int i = 0; i < new_cap; i++) {
+        nb[i] = -1;
+        nn[i] = -1;
+        nl[i] = nr[i] = np[i] = -1;
+        nt[i] = 0;
+    }
+
+    /* 第二遍：紧凑写入并重建桶链（整理后统一退化为链表） */
+    for(int b = 0; b < m->cap; b++) {
+        int32_t cur = m->buckets[b];
+        if(cur == -1) continue;
+        if(m->tree[b]) {
+            int32_t stk[256];
+            int top = 0;
+            int32_t node = cur;
+            while(node != -1 || top > 0) {
+                while(node != -1) {
+                    if(top < 256) stk[top++] = node;
+                    node = m->left[node];
+                }
+                if(top == 0) break;
+                node = stk[--top];
+                tmap_compact_place(m, node, remap[node], nk, nv, nh, nn, nb, new_cap, keysz, valsz);
+                node = m->right[node];
+            }
+        } else {
+            while(cur != -1) {
+                int32_t nx = m->next[cur];
+                tmap_compact_place(m, cur, remap[cur], nk, nv, nh, nn, nb, new_cap, keysz, valsz);
+                cur = nx;
+            }
+        }
+    }
+
+    m->keys = nk;
+    m->values = nv;
+    m->hashes = nh;
+    m->next = nn;
+    m->left = nl;
+    m->right = nr;
+    m->parent = np;
+    m->rb_color = ncol;
+    m->buckets = nb;
+    m->tree = nt;
+    m->cap = new_cap;
+    m->free_head = -1;
+    m->free_count = 0;
+    free(remap);
+}
+
+/* 运行时推断：全键同类型 + 全值同类型（且与目标类型一致）时按原类型装箱；
+ * 任一条件不满足返回 NULL，由调用方回退逐条强转转换。 */
+TypedMap* lumyr_map_to_tmap_infer(ValueMap* vm, ValueType want_key, ValueType want_val) {
+    if(!vm || vm->len <= 0) return NULL;   /* 空 map 无类型信息可推断 */
+
+    /* 第一遍：只读 Value.type 推断类型，不分配（避免类型不匹配时的无谓分配） */
+    MapIter it;
+    map_iter_init(&it, vm);
+    Value k, v;
+    if(!map_iter_next(&it, &k, &v)) return NULL;
+    ValueType kt = k.type, vt = v.type;
+    if(kt == VAL_NONE || vt == VAL_NONE) return NULL;
+    while(map_iter_next(&it, &k, &v)) {
+        if(k.type != kt || v.type != vt) return NULL;   /* 混合类型：不推断 */
+    }
+    if(want_key != VAL_NONE && want_key != kt) return NULL;
+    if(want_val != VAL_NONE && want_val != vt) return NULL;
+
+    /* 第二遍：按推断出的类型直接装箱写入 */
+    TypedMap* m = lumyr_tmap_new(kt, vt, vm->len);
+    gc_disable();
+    map_iter_init(&it, vm);
+    while(map_iter_next(&it, &k, &v)) {
+        lumyr_tmap_set(m, k, v);
+    }
+    gc_enable();
+    return m;
 }
 
 void lumyr_tmap_free(TypedMap* m) {

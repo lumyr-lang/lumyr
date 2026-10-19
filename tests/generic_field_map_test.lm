@@ -121,4 +121,25 @@ di9 = __lmDeserialize(__lmSerialize(mi9), 0)[0];
 check(di9[100] == "hundred", "M-GF9: roundtrip int-key map");
 n = n + 1;
 
+// ===== M-GF10: 运行时动态 map 强转为 typed map（infer 快路径 + 回退强转）=====
+// 均匀类型：键值类型已与目标一致，走 lumyr_map_to_tmap_infer 直接装箱
+b10 = {"a": 11, "b": 22};
+c10 = <string, int>b10;
+check(type(c10) == "map", "M-GF10: inferred type should be map, got " + type(c10));
+check(c10["a"] == 11 && c10["b"] == 22, "M-GF10: inferred values");
+n = n + 1;
+
+// 类型不匹配：999 超出 byte 需强转，infer 返回 NULL 后回退逐条转换
+b10b = {"x": 999};
+c10b = <string, byte>b10b;
+check(c10b["x"] == 231, "M-GF10: fallback coerce, got " + (string)c10b["x"]);
+n = n + 1;
+
+// 空 map：无类型信息可推断，回退 from_value_map，仍为 0 元素 map
+b10c = {};
+c10c = <string, int>b10c;
+check(type(c10c) == "map", "M-GF10: empty cast type should be map");
+check(c10c.size() == 0, "M-GF10: empty cast size should be 0");
+n = n + 1;
+
 print("generic_field_map_test: " + n + " tests passed");

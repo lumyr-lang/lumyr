@@ -968,8 +968,9 @@ static Value convert_dynamic_array_to_typed(Value src, CastKind ck) {
     return r;
 }
 
-/* 动态 ValueMap → TypedMap：参照 convert_dynamic_array_to_typed，
- * 用 lumyr_tmap_from_value_map 完成逐键值提取存储。 */
+/* 动态 ValueMap → TypedMap：参照 convert_dynamic_array_to_typed。
+ * 快路径优先用 lumyr_map_to_tmap_infer（键值已与目标类型一致时直接装箱，
+ * 省去逐条强转）；非均匀/类型不匹配时回退 lumyr_tmap_from_value_map 逐条转换。 */
 static Value convert_dynamic_map_to_typed(Value src, CastKind key_ck, CastKind val_ck) {
     if(src.type != VAL_MAP || !src.v.map) return src;
     ValueType key_vt = castkind_to_valtype((int)key_ck);
@@ -977,7 +978,8 @@ static Value convert_dynamic_map_to_typed(Value src, CastKind key_ck, CastKind v
     if(key_vt == VAL_NONE || val_vt == VAL_NONE) return src;
 
     gc_disable();
-    TypedMap* tm = lumyr_tmap_from_value_map(src.v.map, key_vt, val_vt);
+    TypedMap* tm = lumyr_map_to_tmap_infer(src.v.map, key_vt, val_vt);
+    if(!tm) tm = lumyr_tmap_from_value_map(src.v.map, key_vt, val_vt);
     gc_enable();
     if(!tm) return src;
 

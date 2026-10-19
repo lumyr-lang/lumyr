@@ -109,6 +109,16 @@ int lumyr_tmap_len(TypedMap* m);
 /* TypedMap → 动态 ValueMap（键值装箱为 Value，供 toMap/json/copy 复用） */
 Value lumyr_tmap_to_value_map(TypedMap* m);
 
+/* 主动 compact：按当前存活条目重建紧凑数组，回收删除遗留的空闲槽位，
+ * 并在负载因子允许时缩容 cap（对齐 3.10 free_list + 主动 compact 策略）。
+ * free_count == 0 时为空操作。 */
+void lumyr_tmap_compact(TypedMap* m);
+
+/* 运行时推断：全部 key 同类型且全部 value 同类型，并与 want_key / want_val
+ * （VAL_NONE 表示不限型）一致时，按原值类型直接装箱为 TypedMap；不满足返回 NULL。
+ * 空 map 无类型信息可推断，返回 NULL；调用方须自行回退 lumyr_tmap_from_value_map。 */
+TypedMap* lumyr_map_to_tmap_infer(struct ValueMap* m, ValueType want_key, ValueType want_val);
+
 /* 释放（仅栈分配实例用；堆分配由 GC sweep 回收） */
 void lumyr_tmap_free(TypedMap* m);
 
