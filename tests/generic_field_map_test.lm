@@ -142,4 +142,39 @@ check(type(c10c) == "map", "M-GF10: empty cast type should be map");
 check(c10c.size() == 0, "M-GF10: empty cast size should be 0");
 n = n + 1;
 
+// ===== M-GF11: typed map 值相等（lumyr_eq VAL_TYPED_MAP 分支）=====
+e11a = <string, int>{"a": 1, "b": 2};
+e11b = <string, int>{"a": 1, "b": 2};
+check(e11a == e11b, "M-GF11: same-content typed maps should be equal");
+check(!(e11a != e11b), "M-GF11: same-content typed maps should not be !=");
+n = n + 1;
+
+e11c = <string, int>{"a": 1, "b": 3};
+check(e11a != e11c, "M-GF11: diff-value typed maps should be !=");
+e11d = <string, int>{"a": 1, "c": 2};
+check(e11a != e11d, "M-GF11: diff-key typed maps should be !=");
+e11e = <string, int>{"a": 1};
+check(e11a != e11e, "M-GF11: diff-len typed maps should be !=");
+n = n + 1;
+
+// typed 与普通 map 混比（双向）
+d11 = {"a": 1, "b": 2};
+check(e11a == d11, "M-GF11: typed == map same content");
+check(d11 == e11a, "M-GF11: map == typed same content");
+check(d11 != e11c, "M-GF11: map != typed diff value");
+n = n + 1;
+
+// 跨数值子类型：int 值与 long 值按值契约相等
+e11f = <string, long>{"a": 1, "b": 2};
+check(e11a == e11f, "M-GF11: cross int/long subtype equality");
+n = n + 1;
+
+// 空 typed map
+e11g = <string, int>{};
+e11h = <string, int>{};
+check(e11g == e11h, "M-GF11: empty typed maps equal");
+check(e11g == {}, "M-GF11: empty typed == empty map");
+check(e11g != e11e, "M-GF11: empty != non-empty");
+n = n + 1;
+
 print("generic_field_map_test: " + n + " tests passed");

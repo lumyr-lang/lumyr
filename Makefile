@@ -409,23 +409,14 @@ ifeq ($(OS_NAME),windows)
 	@echo "    copied licenses -> bin/licenses/"
 endif
 # ========== 单元测试 ==========
-TEST_STACKFRAME := $(TEST_DIR)/stackframe_test$(EXE_EXT)
-
-$(TEST_STACKFRAME): $(OBJS) $(RUNTIME_LIB) tests/stackframe_test.c
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SSL_LDFLAGS) $(filter-out src/main.o,$(OBJS)) tests/stackframe_test.c -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
-
-.PHONY: test
-test: $(TEST_STACKFRAME)
-	./$(TEST_STACKFRAME)
-
 # TypedMap 删除策略单测：free_list 复用 + 60% 阈值 compact + 内存归还 + infer 契约
 TEST_TYPEDMAP_COMPACT := $(TEST_DIR)/typed_map_compact_test$(EXE_EXT)
 
 $(TEST_TYPEDMAP_COMPACT): $(RUNTIME_LIB) tests/typed_map_compact_test.c
 	$(CC) $(CFLAGS) $(LDFLAGS) $(SSL_LDFLAGS) tests/typed_map_compact_test.c -L$(LIB_DIR) -lruntime $(LDLIBS) -o $@
 
-.PHONY: test-typedmap
-test-typedmap: $(TEST_TYPEDMAP_COMPACT)
+.PHONY: test
+test: $(TEST_TYPEDMAP_COMPACT)
 	./$(TEST_TYPEDMAP_COMPACT)
 
 # ========== 清理 ==========

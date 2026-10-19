@@ -1091,6 +1091,72 @@ TypedMap* lumyr_map_to_tmap_infer(ValueMap* vm, ValueType want_key, ValueType wa
     return m;
 }
 
+/* ==================== 值相等（3.11 第 4 条） ==================== */
+
+/* 单槽位对拍：tb 非空时与 typed map 比，否则与动态 ValueMap 比。
+ * 键从 a 的类型化槽位还原为 Value 后查询——hash/相等走与 VAL_MAP 一致的
+ * 跨子类型值契约，因此两侧 key_type 不同（如 int vs long）也能正确对拍。 */
+static int tmap_eq_slot(TypedMap* a, int32_t slot, TypedMap* tb, struct ValueMap* mb) {
+    Value k = tmap_read_value(a->key_type, a->keys, slot);
+    Value va = tmap_read_value(a->value_type, a->values, slot);
+    Value vb;
+    if(tb) {
+        vb = lumyr_tmap_get(tb, k);
+        /* typed map 存储值类型必为 value_type（非 VAL_NONE），NONE 即键不存在 */
+        if(vb.type == VAL_NONE) return 0;
+    } else {
+        Value mv;
+        memset(&mv, 0, sizeof(mv));
+        mv.type = VAL_MAP;
+        mv.v.map = mb;
+        if(!lumyr_map_has(mv, k)) return 0;
+        vb = lumyr_map_get(mv, k);
+    }
+    return lumyr_eq(va, vb).v.b;
+}
+
+/* 按桶枚举 a 的全部存活槽位（树桶中序、链表桶走 next），逐槽位对拍 */
+static int tmap_eq_walk(TypedMap* a, TypedMap* tb, struct ValueMap* mb) {
+    for(int b = 0; b < a->cap; b++) {
+        int32_t cur = a->buckets[b];
+        if(cur == -1) continue;
+        if(a->tree[b]) {
+            int32_t stk[256];
+            int top = 0;
+            int32_t node = cur;
+            while(node != -1 || top > 0) {
+                while(node != -1) {
+                    if(top < 256) stk[top++] = node;
+                    node = a->left[node];
+                }
+                if(top == 0) break;
+                node = stk[--top];
+                if(!tmap_eq_slot(a, node, tb, mb)) return 0;
+                node = a->right[node];
+            }
+        } else {
+            while(cur != -1) {
+                if(!tmap_eq_slot(a, cur, tb, mb)) return 0;
+                cur = a->next[cur];
+            }
+        }
+    }
+    return 1;
+}
+
+int lumyr_tmap_eq(TypedMap* a, TypedMap* b) {
+    if(a == b) return 1;
+    if(!a || !b) return 0;
+    if(a->len != b->len) return 0;
+    return tmap_eq_walk(a, b, NULL);
+}
+
+int lumyr_tmap_eq_value_map(TypedMap* a, struct ValueMap* b) {
+    if(!a || !b) return 0;
+    if(a->len != (int)b->len) return 0;
+    return tmap_eq_walk(a, NULL, b);
+}
+
 void lumyr_tmap_free(TypedMap* m) {
     if(!m) return;
     /* 栈分配实例由调用方释放内存；堆分配由 GC sweep 回收 */

@@ -1746,6 +1746,17 @@ Value lumyr_eq(Value a, Value b) {
         }
         return lumyr_make_bool(lumyr_instance_eq(a, b));
     }
+    /* typed map 值相等：与 VAL_MAP 同语义（同长 + 逐键对拍）；
+     * typed map 与 VAL_MAP 混比时 typed 侧流式逐对比较，不做整体转换 */
+    if(a.type == VAL_TYPED_MAP || b.type == VAL_TYPED_MAP) {
+        if(a.type == VAL_TYPED_MAP && b.type == VAL_TYPED_MAP)
+            return lumyr_make_bool(lumyr_tmap_eq(a.v.typed_map, b.v.typed_map));
+        if(a.type == VAL_TYPED_MAP && b.type == VAL_MAP)
+            return lumyr_make_bool(lumyr_tmap_eq_value_map(a.v.typed_map, b.v.map));
+        if(a.type == VAL_MAP && b.type == VAL_TYPED_MAP)
+            return lumyr_make_bool(lumyr_tmap_eq_value_map(b.v.typed_map, a.v.map));
+        return lumyr_make_bool(0);
+    }
     if(a.type == VAL_MAP || b.type == VAL_MAP) {
         if(a.type != VAL_MAP || b.type != VAL_MAP) return lumyr_make_bool(0);
         if(a.v.map->len != b.v.map->len) return lumyr_make_bool(0);

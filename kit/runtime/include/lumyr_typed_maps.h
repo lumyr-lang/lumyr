@@ -119,6 +119,14 @@ void lumyr_tmap_compact(TypedMap* m);
  * 空 map 无类型信息可推断，返回 NULL；调用方须自行回退 lumyr_tmap_from_value_map。 */
 TypedMap* lumyr_map_to_tmap_infer(struct ValueMap* m, ValueType want_key, ValueType want_val);
 
+/* 值相等：len 相同且 a 的每个键在 b 中存在、对应值 lumyr_eq 相等。
+ * 键/值跨数值子类型按与 VAL_MAP 一致的跨子类型值契约比较（键 hash 同契约）。 */
+int lumyr_tmap_eq(TypedMap* a, TypedMap* b);
+
+/* 与动态 VAL_MAP 值相等：typed map 侧按存活槽位流式逐对比较，
+ * 不做一次性整体转换（对齐 3.11 第 4 条，避免大表转换内存峰值）。 */
+int lumyr_tmap_eq_value_map(TypedMap* a, struct ValueMap* b);
+
 /* 释放（仅栈分配实例用；堆分配由 GC sweep 回收） */
 void lumyr_tmap_free(TypedMap* m);
 
