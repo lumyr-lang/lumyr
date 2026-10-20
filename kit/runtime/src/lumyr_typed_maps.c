@@ -172,13 +172,29 @@ static void tmap_write_value(ValueType et, void* arr, int idx, Value v) {
         else ((long double*)arr)[idx] = (long double)val;
     } else {
         /* PTR 族 */
-        void* p = tmap_value_to_ptr(v);
-        if(et == VAL_STRING && p) {
-            /* 字符串：复制一份独立副本（GC 管理，与 TypedArray string 处理一致） */
-            size_t l = strlen((const char*)p);
+        void* p = NULL;
+        if(et == VAL_STRING) {
+            /* 字符串落独立 GC 副本（与 TypedArray string 处理一致），但只拷一次：
+             * SSO 数据在栈上 Value 内、直接从 SSO 缓冲区拷；堆串从堆指针拷。
+             * 不走 tmap_value_to_ptr——它会对 SSO 预拷一份，
+             * 旧路径每条字符串两次 gc_alloc，第一份立即成为垃圾。
+             * 非标量族 Value（如 int 写入 <K,string>map）仍走 tmap_value_to_ptr
+             * 格式化为字符串，保留标量→string 强转语义。 */
+            const char* src;
+            size_t l;
+            if(v.type == VAL_STRING) {
+                if(v.str_inline) { src = v.v.sso.data; l = (size_t)v.v.sso.len; }
+                else { src = v.v.s ? v.v.s : ""; l = strlen(src); }
+            } else {
+                src = (const char*)tmap_value_to_ptr(v);
+                if(!src) src = "";
+                l = strlen(src);
+            }
             char* np = (char*)gc_alloc(l + 1, VAL_STRING);
-            memcpy(np, p, l + 1);
+            memcpy(np, src, l + 1);
             p = np;
+        } else {
+            p = tmap_value_to_ptr(v);
         }
         ((void**)arr)[idx] = p;
     }
