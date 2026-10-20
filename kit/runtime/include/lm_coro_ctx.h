@@ -44,13 +44,17 @@
  * lm_ctx_jump 保存帧），上下文结构仅需一个栈指针槽。
  * 16 字节自然对齐（void* 槽），满足"不透明对齐槽位"约定。 */
 typedef struct lm_ctx_s {
-    void* sp;   /* 冻结协程的栈指针；寄存器现场在栈上 */
+    void* sp;            /* 冻结协程的栈指针；寄存器现场在栈上 */
+    void* stack_bottom;  /* 栈可用区低地址（ASAN fiber 切换需要） */
+    size_t stack_size;   /* 栈可用区大小（ASAN fiber 切换需要） */
 } lm_ctx_t;
 #else
 /* ucontext 回退：嵌入完整 ucontext_t（含信号掩码 + FPU 态，重但通用）。 */
 #include <ucontext.h>
 typedef struct lm_ctx_s {
     ucontext_t uc;
+    void* stack_bottom;  /* 栈可用区低地址（ASAN fiber 切换需要） */
+    size_t stack_size;   /* 栈可用区大小（ASAN fiber 切换需要） */
 } lm_ctx_t;
 #endif
 

@@ -7,6 +7,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__SANITIZE_ADDRESS__)
+#define LM_CTX_NO_ASAN __attribute__((no_sanitize("address")))
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define LM_CTX_NO_ASAN __attribute__((no_sanitize("address")))
+#endif
+#endif
+#ifndef LM_CTX_NO_ASAN
+#define LM_CTX_NO_ASAN
+#endif
+
 #if defined(LM_CTX_FCONTEXT)
 
 /* 初始帧 trampoline 的地址由汇编侧给出（adrp/add 直接取址）：
@@ -14,6 +25,10 @@
  * 被汇编裸分支使用会触发鉴权失败；由汇编取址则天然是未签名原始地址。
  * x86_64 无 PAC，同样走此接口保持两架构代码路径统一。 */
 extern void* lm_ctx_start_ptr(void);
+
+/* 汇编实现的裸切换（保存当前寄存器现场到 *from 所指协程栈，恢复 *to 的
+ * 寄存器现场）。ASAN 构建下由本文件 C 包装层负责 fiber API 调用。 */
+extern void lm_ctx_jump_raw(lm_ctx_t* from, lm_ctx_t* to);
 
 #if defined(__x86_64__)
 /* ============ x86_64 帧布局（与 lm_ctx_jump_x86_64.S 严格一致） ============
@@ -30,6 +45,7 @@ extern void* lm_ctx_start_ptr(void);
  * 任何改动必须与 .S 文件同步修改！ */
 #define LM_X86_64_FRAME_WORDS 7
 
+LM_CTX_NO_ASAN
 void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
                  void (*entry)(void*), void* arg) {
     /* 栈顶（高地址）16B 对齐后向下放帧 */
@@ -44,6 +60,8 @@ void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
     frame[5] = 0;
     frame[6] = (uintptr_t)lm_ctx_start_ptr();
     ctx->sp = (void*)frame;
+    ctx->stack_bottom = sp;
+    ctx->stack_size = size;
 }
 
 #elif defined(__aarch64__)
@@ -59,6 +77,7 @@ void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
  * 任何改动必须与 .S 文件同步修改！ */
 #define LM_ARM64_FRAME_BYTES 160
 
+LM_CTX_NO_ASAN
 void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
                  void (*entry)(void*), void* arg) {
     uintptr_t top = ((uintptr_t)sp + size) & ~(uintptr_t)15;
@@ -68,12 +87,22 @@ void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
     frame[1]  = (uintptr_t)entry;
     frame[11] = (uintptr_t)lm_ctx_start_ptr();
     ctx->sp = (void*)frame;
+    ctx->stack_bottom = sp;
+    ctx->stack_size = size;
 }
 #endif
 
+/* fcontext 后端的 C 包装：调用汇编裸切换。
+ * ASAN fiber 切换注解统一由调用方（lm_co.c）维护，避免双层调用导致状态混乱。 */
+void lm_ctx_jump(lm_ctx_t* from, lm_ctx_t* to) {
+    (void)from;
+    (void)to;
+    lm_ctx_jump_raw(from, to);
+}
+
 #else /* ==================== ucontext 回退后端 ==================== */
 
-void lm_ctx_jump(lm_ctx_t* from, lm_ctx_t* to) {
+static void lm_ctx_jump_raw(lm_ctx_t* from, lm_ctx_t* to) {
     /* swapcontext 语义与 lm_ctx_jump 对称语义天然一致 */
     swapcontext(&from->uc, &to->uc);
 }
@@ -90,17 +119,27 @@ static void lm_ctx_uc_trampoline(unsigned int ehi, unsigned int elo,
     abort();
 }
 
+LM_CTX_NO_ASAN
 void lm_ctx_make(lm_ctx_t* ctx, void* sp, size_t size,
                  void (*entry)(void*), void* arg) {
     getcontext(&ctx->uc);
     ctx->uc.uc_stack.ss_sp = sp;
     ctx->uc.uc_stack.ss_size = size;
+    ctx->stack_bottom = sp;
+    ctx->stack_size = size;
     ctx->uc.uc_link = NULL;   /* 隐式链回已废弃：trampoline 末尾显式 jump */
     uintptr_t e = (uintptr_t)entry;
     uintptr_t a = (uintptr_t)arg;
     makecontext(&ctx->uc, (void (*)(void))lm_ctx_uc_trampoline, 4,
                 (unsigned int)(e >> 32), (unsigned int)(e & 0xFFFFFFFFu),
                 (unsigned int)(a >> 32), (unsigned int)(a & 0xFFFFFFFFu));
+}
+
+/* ucontext 后端的 C 包装：ASAN fiber 切换注解统一由调用方（lm_co.c）维护。 */
+void lm_ctx_jump(lm_ctx_t* from, lm_ctx_t* to) {
+    (void)from;
+    (void)to;
+    lm_ctx_jump_raw(from, to);
 }
 
 #endif /* LM_CTX_FCONTEXT */

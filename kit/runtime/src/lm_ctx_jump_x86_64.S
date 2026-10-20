@@ -10,7 +10,7 @@
  * 首次切入经 lm_ctx_start stub：r12→rdi（arg）、rbx→rax（entry），对齐后 call。
  *
  * 本文件经 C 预处理器处理：-DLM_CTX_UCONTEXT 回退构建时整体为空，
- * 避免与 lm_ctx.c 的 C 版 lm_ctx_jump 重定义。 */
+ * 避免与 lm_ctx.c 的 C 版 lm_ctx_jump 包装层重定义。 */
 #if !defined(LM_CTX_UCONTEXT)
 
 #if defined(__APPLE__)
@@ -23,13 +23,13 @@
 
     .intel_syntax noprefix
 
-/* void lm_ctx_jump(lm_ctx_t* from [rdi], lm_ctx_t* to [rsi]) */
+/* void lm_ctx_jump_raw(lm_ctx_t* from [rdi], lm_ctx_t* to [rsi]) */
     .p2align 4
-    .globl C_SYMBOL(lm_ctx_jump)
+    .globl C_SYMBOL(lm_ctx_jump_raw)
 #if !defined(__APPLE__)
-    .type lm_ctx_jump, @function
+    .type lm_ctx_jump_raw, @function
 #endif
-C_SYMBOL(lm_ctx_jump):
+C_SYMBOL(lm_ctx_jump_raw):
     push rbp
     push rbx
     push r12
@@ -46,7 +46,7 @@ C_SYMBOL(lm_ctx_jump):
     pop  rbp
     ret                    /* 弹目标返回地址并跳入（make 帧：lm_ctx_start） */
 #if !defined(__APPLE__)
-    .size lm_ctx_jump, .-lm_ctx_jump
+    .size lm_ctx_jump_raw, .-lm_ctx_jump_raw
 #endif
 
 /* 初始帧 stub：make 伪造帧的返回地址指向这里。

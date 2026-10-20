@@ -27,13 +27,13 @@
     .text
 #endif
 
-/* void lm_ctx_jump(lm_ctx_t* from [x0], lm_ctx_t* to [x1]) */
+/* void lm_ctx_jump_raw(lm_ctx_t* from [x0], lm_ctx_t* to [x1]) */
     .p2align 4
-    .globl C_SYMBOL(lm_ctx_jump)
+    .globl C_SYMBOL(lm_ctx_jump_raw)
 #if !defined(__APPLE__)
-    .type lm_ctx_jump, @function
+    .type lm_ctx_jump_raw, @function
 #endif
-C_SYMBOL(lm_ctx_jump):
+C_SYMBOL(lm_ctx_jump_raw):
     sub  sp, sp, #160
     stp  x19, x20, [sp, #0]
     stp  x21, x22, [sp, #16]
@@ -62,12 +62,12 @@ C_SYMBOL(lm_ctx_jump):
     add  sp, sp, #160
     ret                         /* 跳入 lr（make 帧：lm_ctx_start） */
 #if !defined(__APPLE__)
-    .size lm_ctx_jump, .-lm_ctx_jump
+    .size lm_ctx_jump_raw, .-lm_ctx_jump_raw
 #endif
 
 /* 初始帧 stub：x19=arg、x20=entry；x29 清 0 终止帧链。
  * 进入时 sp = frame+160 ≡ 0 (mod 16)，满足 AAPCS64 公共接口对齐，无需调整。
- * entry 不得返回（co_trampoline 末尾显式 lm_ctx_jump），brk 兜底。 */
+ * entry 不得返回（co_trampoline 末尾显式 lm_ctx_jump_raw），brk 兜底。 */
     .p2align 4
 C_SYMBOL(lm_ctx_start):
     mov  x0, x19           /* arg → 第 1 实参 */

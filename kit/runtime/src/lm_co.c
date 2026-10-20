@@ -234,6 +234,11 @@ static size_t lm_co_default_stack_size(void) {
     static size_t cached = 0;
     if (cached) return cached;
     size_t v = LM_CO_DEFAULT_STACK_SIZE;
+#ifdef LM_ASAN
+    /* ASAN 构建下局部变量红区显著增加栈用量，默认协程栈加大到 1 MiB，
+     * 用户仍可通过 LM_CO_STACK_SIZE 覆盖。 */
+    v = 1024 * 1024;
+#endif
     const char* e = getenv("LM_CO_STACK_SIZE");
     if (e && *e) {
         char* end = NULL;
