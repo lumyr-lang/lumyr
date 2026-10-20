@@ -22,6 +22,7 @@
 #include "lumyr_value.h"
 #include "lumyr_typed_maps.h"
 #include "lm_calendar.h"
+#include "lm_type.h"        /* RuntimeTypeInfo/FieldInfo：struct/class 实例字段扫描 */
 #include "lumyr_log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -75,6 +76,34 @@ _Static_assert(sizeof(GCObject) % 16 == 0, "GCObject must keep user pointers 16-
 
 /* 前向声明：gc_cstack_set_contains 在文件后部定义，但 gc_mark/gc_mark_one 等需提前调用 */
 static int gc_cstack_set_contains(void* ptr);
+/* 前向声明：struct/class 实例字段扫描（定义于 gc_mark_value_to_stack_minor 之后，
+ * gc_mark / gc_mark_one 等前部标记路径经此声明调用） */
+static void gc_scan_instance_fields(GCObject* obj, void (*markfn)(Value), int (*markptr)(void*));
+
+/* VM 闭包捕获链可能自环（递归 lambda 通过 cell 捕获自身）。
+ * 递归标记时必须记录路径上已访问的 RuntimeFunc，否则无限递归导致栈溢出。
+ * per-call 小 visited 栈足以覆盖常见短链。 */
+static inline void gc_mark_func_captures_with(RuntimeFunc* f, void (*mark_value)(Value),
+                                              void** visited, int depth, int max_depth)
+{
+    if (!f || !f->captures || f->capture_count <= 0) return;
+    if (depth >= max_depth) return;
+    for (int i = 0; i < depth; i++) {
+        if (visited[i] == f) return;
+    }
+    visited[depth] = f;
+    Value** cells = (Value**)f->captures;
+    for (int i = 0; i < f->capture_count; i++) {
+        Value* cell = cells[i];
+        if (!cell) continue;
+        Value v = *cell;
+        if (v.type == VAL_FUNC && v.v.func.func_obj) {
+            gc_mark_func_captures_with(v.v.func.func_obj, mark_value, visited, depth + 1, max_depth);
+        } else {
+            mark_value(v);
+        }
+    }
+}
 
 /* ---- TLA 常量 ---- */
 #define TLA_MAX_SIZE   256   /* 用户数据 <=256 字节走 TLA */
@@ -167,9 +196,14 @@ static _Thread_local int      tls_cframe_registered = 0;
  * 支持同一线程嵌套注册（头插，栈式语义），unregister 移除最近的 entry。 */
 typedef struct GCThreadEntry {
     pthread_t tid;
-    Value* stack;
-    int* sp_ptr;
-    StackFrame* frame;
+    /* 栈/帧均以「指针的指针」登记：stack_vm_push 在栈满时会 realloc 扩容，
+     * 缓冲区地址会变；VM 帧链顶也会随调用/返回推进。缓存值会读到已释放/陈旧
+     * 地址，必须在 GC 标记时解引用取当前值。 */
+    Value** stack_ptr;       /* 指向线程当前 VALUE 操作数栈缓冲区指针 */
+    int* sp_ptr;             /* VALUE 栈 sp 地址 */
+    StackFrame** frame_ptr;  /* 指向线程当前最深帧（VM: &ctx.frame；非 VM: NULL）*/
+    void** raw_stack_ptr;    /* 指向线程 PTR 裸指针操作数栈缓冲区指针（可 NULL）*/
+    int* raw_sp_ptr;         /* PTR 栈 sp 地址（可 NULL） */
     volatile int at_safepoint;  /* STW 确认：线程在 gc_stw_check 自旋时为 1 */
     void* c_stack_top;          /* 线程注册时的栈顶（保守扫描上界） */
     void* c_stack_sp;           /* 最近 safepoint 时的栈指针（保守扫描下界） */
@@ -209,6 +243,28 @@ typedef struct GCCoroutineEntry {
 } GCCoroutineEntry;
 
 static GCCoroutineEntry* g_gc_coroutines = NULL;
+
+/* ---- 协程 VM 根注册表 ----
+ * GCCoroutineEntry 仅保守扫描协程冻结的 C 栈；但 VM 通道下协程的活根在
+ * 「堆上 StackFrame 帧链」与「yield 时搬入 mig_copy 的操作数栈」两处，
+ * 均不在 C 栈扫描范围内（StackFrame / mig_copy 缓冲区都不是 C 栈上的
+ * GC 对象指针，保守扫描只看到指向它们的裸指针，无法下钻）。缺此表则
+ * 协程让出期间其活对象会被 sweep → UAF（builtin_fairness 等用例崩溃根因）。
+ * 全部字段为「指针的指针」：StackFrame 顶随协程推进变化；mig_copy 在
+ * yield 时 realloc、resume 时 free 并置 NULL（故运行期 val_stack_ptr 解
+ * 引用得 NULL，自然跳过——运行期操作数栈由本线程 GCThreadEntry 覆盖）。
+ * 与 GCCoroutineEntry 一样不绑定 pthread_t、无 at_safepoint：协程挂起即安全点。 */
+typedef struct GCCoroVMRootEntry {
+    void* key;                 /* 协程标识（lm_co_t*），注销匹配键 */
+    StackFrame** frame_ptr;    /* 指向协程当前最深帧（&co_ctx.frame，冻结栈上稳定） */
+    Value** val_stack_ptr;     /* 指向迁移缓冲 VALUE 数组（&st->mig_copy[STACK_VALUE]） */
+    int*    val_sp_ptr;        /* 指向该 VALUE 栈 sp（&st->stack_sp[STACK_VALUE]） */
+    void**  raw_stack_ptr;     /* 指向迁移缓冲 PTR 数组（&st->mig_copy[STACK_PTR]） */
+    int*    raw_sp_ptr;        /* 指向该 PTR 栈 sp（&st->stack_sp[STACK_PTR]） */
+    struct GCCoroVMRootEntry* next;
+} GCCoroVMRootEntry;
+
+static GCCoroVMRootEntry* g_gc_coro_vm_roots = NULL;
 
 /* 协程冻结栈扫描下界解析（Phase 8.2）：fcontext 路径优先间接读 sp_slot
  *（lm_ctx_jump 把 callee-saved 寄存器现场 push 到协程栈后，ctx.sp 指向保存区
@@ -305,9 +361,42 @@ static void gc_record_self_cstack_sp(void) {
     }
 }
 
+/* ---- 当前线程保守扫描上界切换（协程栈 / 主栈）----
+ * gc_register_thread 记录的 c_stack_top 是注册处帧地址（主栈），而协程运行在自己的
+ * mmap 栈上。协程运行期若触发 GC，c_stack_sp 是协程栈地址、c_stack_top 仍是主栈
+ * 地址，gc_conservative_cstack_scan 会从主栈顶一路向下扫到协程栈，横跨两栈之间的
+ * 未映射区 → SIGBUS/SIGSEGV。lm_co_resume 在切入协程前用本接口把上界切到协程
+ * 可用区顶、切回后恢复，使扫描窗口始终落在同一栈内（覆盖 VM 与纯 C 两类协程）。
+ * 同时复位下界：切入瞬间协程内尚无安全点记录，保留他栈陈旧 sp 会把窗口重新
+ * 拉大；退化为 1 word 后，由协程内下次 gc_stw_check 更新为真实 sp。 */
+void gc_set_thread_cstack_top(void* top) {
+    pthread_t self = pthread_self();
+    pthread_mutex_lock(&g_gc_mutex);
+    for (GCThreadEntry* e = g_gc_threads; e; e = e->next) {
+        if (pthread_equal(e->tid, self)) {
+            e->c_stack_top = top;
+            e->c_stack_sp = top;
+        }
+    }
+    pthread_mutex_unlock(&g_gc_mutex);
+}
+
+/* 读取当前线程最近注册 entry 的扫描上界（供 resume/yield 保存-恢复基线）。 */
+void* gc_get_thread_cstack_top(void) {
+    void* top = NULL;
+    pthread_t self = pthread_self();
+    pthread_mutex_lock(&g_gc_mutex);
+    for (GCThreadEntry* e = g_gc_threads; e; e = e->next) {
+        if (pthread_equal(e->tid, self)) { top = e->c_stack_top; break; }
+    }
+    pthread_mutex_unlock(&g_gc_mutex);
+    return top;
+}
+
 /* ---- GC 值保护：临时注册 1 元素最小栈，保护 C 栈上的 Value 不被 GC 回收 ----
  * 用于线程退出（已 unregister）时 val_clone 结果值等场景。TLS 保存旧根，不可嵌套。 */
 static _Thread_local Value        tls_protect_val;
+static _Thread_local Value*       tls_protect_stack_slot = NULL;  /* 指向 tls_protect_val（1 元素栈缓冲区） */
 static _Thread_local int          tls_protect_sp = 0;
 static _Thread_local Value*       tls_protect_old_stack = NULL;
 static _Thread_local int*         tls_protect_old_sp = NULL;
@@ -318,9 +407,10 @@ void gc_protect_push(Value v) {
     gc_get_roots(&tls_protect_old_stack, &tls_protect_old_sp, &tls_protect_old_frame);
     /* 设置 1 元素最小保护栈 */
     tls_protect_val = v;
+    tls_protect_stack_slot = &tls_protect_val;
     tls_protect_sp = 1;
     gc_set_roots(&tls_protect_val, &tls_protect_sp, NULL);
-    gc_register_thread(&tls_protect_val, &tls_protect_sp, NULL);
+    gc_register_thread(&tls_protect_stack_slot, &tls_protect_sp, NULL, NULL, NULL);
     /* 若 GC 已在进行，设置 at_safepoint 并自旋等待其结束（避免新 entry at_safepoint=0 导致 GC 空等） */
     gc_stw_check_fast();
 }
@@ -501,7 +591,10 @@ void* gc_alloc(size_t size, int vtype)
         LOG_ERROR("GC: out of memory (requested %zu bytes)\n", size);
         abort();
     }
-    obj->marked = g_gc_marking ? 1 : 3;  /* 新分配预标记 / 标记期黑色 */
+    /* 临时永生：对象尚未被任何根引用，下方可能自触发 Major GC，
+     * 而 gc_sweep 将 marked==3 视同垃圾——必须先置 2 防止被自己触发的 GC 回收，
+     * GC 完成后统一恢复为新分配状态（与 TLA 快速路径同一约定）。 */
+    obj->marked = 2;
     obj->vtype = (unsigned char)vtype;
     obj->age = (size > TLA_MAX_SIZE) ? PROMOTE_AGE : 0;  /* 大对象直接老年代 */
     obj->flags = 0;
@@ -524,6 +617,8 @@ void* gc_alloc(size_t size, int vtype)
         if (need_collect_type == 1) gc_collect_minor(tls_stack, *tls_sp, tls_frame);
         else gc_collect_major(tls_stack, *tls_sp, tls_frame);
     }
+    /* 从临时永生态恢复为新分配状态（marked=2 会永不回收） */
+    obj->marked = g_gc_marking ? 1 : 3;
     return obj_to_ptr(obj);
 }
 
@@ -563,7 +658,10 @@ void* gc_realloc(void* ptr, size_t new_size)
     new_obj->marked = g_gc_marking ? 1 : 3;
     new_obj->vtype = vtype;
     new_obj->age = PROMOTE_AGE;  /* 内部缓冲区始终老年代，避免被老年代容器引用时 Minor GC 错误回收 */
-    new_obj->flags = 0;
+    /* 内部缓冲区标志必须继承：旧 items/buckets/MapEntry 等带有 GC_OBJ_INTERNAL_BUF，
+     * 新对象若被清零则会被保守 C 栈扫描集收录并按容器结构误读 → 崩溃。
+     * GC_OBJ_IN_RS 仅属于容器，内部缓冲区不应携带，此处清零该位保险。 */
+    new_obj->flags = old_obj->flags & ~GC_OBJ_IN_RS;
     new_obj->next = NULL;
     new_obj->bound_types = NULL;
     if (new_size > copy_size) {
@@ -653,16 +751,74 @@ size_t gc_rs_size(void) { return g_rs_size; }
  * 在所有修改堆对象内部引用的位置调用。如果 owner 是老年代容器且
  * new_val 可能引用新生代对象，将 owner 加入 remembered set。
  * ============================================================ */
+/* 检查 new_val 是否可能引用新生代对象
+ * （gc_remembered_set_check 与 gc_remembered_set_check_field 共用）。 */
+static int gc_new_val_may_ref_young(Value new_val)
+{
+    switch (new_val.type) {
+    case VAL_STRING:
+        if (!new_val.str_inline && GC_VALID_PTR(new_val.v.s)) {
+            if (ptr_to_obj(new_val.v.s)->age < PROMOTE_AGE) return 1;
+        }
+        break;
+    case VAL_ARRAY:
+        if (GC_VALID_PTR(new_val.v.array) && !new_val.v.array->stack_alloc) {
+            if (ptr_to_obj(new_val.v.array)->age < PROMOTE_AGE) return 1;
+        }
+        break;
+    case VAL_MAP:
+        if (GC_VALID_PTR(new_val.v.map) && !new_val.v.map->stack_alloc) {
+            if (ptr_to_obj(new_val.v.map)->age < PROMOTE_AGE) return 1;
+        }
+        break;
+    case VAL_FUNC:
+        /* 保守：captures 可能引用新生代对象 */
+        return 1;
+    case VAL_ERROR:
+        /* 保守：type/message/stack 字符串可能是新生代 */
+        return 1;
+    case VAL_CLASS_PTR:
+        /* class 实例必为 GC 对象，可直接读年代 */
+        if (GC_VALID_PTR(new_val.v.struct_ptr)
+            && ptr_to_obj(new_val.v.struct_ptr)->age < PROMOTE_AGE) return 1;
+        break;
+    case VAL_STRUCT_PTR:
+        /* 可能是 struct 实例（GC），也可能是内建 malloc 裸指针（非 GC，
+         * 此处无集合可用，无法安全回退对象头读年代）：保守视同引用新生代，
+         * owner 入 RS（RS 扫描时经 gc_cstack_set_contains 验证，安全）。 */
+        if (GC_VALID_PTR(new_val.v.struct_ptr)) return 1;
+        break;
+    case VAL_SOCKET:
+        /* socket 必为 GC 对象（lm_socket.c gc_alloc），可直接读年代 */
+        if (GC_VALID_PTR(new_val.v.socket_obj)
+            && ptr_to_obj(new_val.v.socket_obj)->age < PROMOTE_AGE) return 1;
+        break;
+    case VAL_PTR:
+        /* GC Value 盒（any/泛型擦除字段槽，lm_type.c 唯一分配点）：
+         * 必为 GC 对象，可直接读年代 */
+        if (GC_VALID_PTR(new_val.v.s)
+            && ptr_to_obj(new_val.v.s)->age < PROMOTE_AGE) return 1;
+        break;
+    default:
+        /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
+        break;
+    }
+    return 0;
+}
+
 void gc_remembered_set_check(Value owner, Value new_val)
 {
     if (!gc_generational_enabled()) return;
 
-    /* 从 owner 获取 GCObject*（仅 VAL_ARRAY/VAL_MAP 且非 stack_alloc） */
+    /* 从 owner 获取 GCObject*（仅 VAL_ARRAY/VAL_MAP/VAL_CLASS_PTR 且非 stack_alloc） */
     GCObject* owner_obj = NULL;
     if (owner.type == VAL_ARRAY && GC_VALID_PTR(owner.v.array) && !owner.v.array->stack_alloc) {
         owner_obj = ptr_to_obj(owner.v.array);
     } else if (owner.type == VAL_MAP && GC_VALID_PTR(owner.v.map) && !owner.v.map->stack_alloc) {
         owner_obj = ptr_to_obj(owner.v.map);
+    } else if (owner.type == VAL_CLASS_PTR && GC_VALID_PTR(owner.v.struct_ptr)) {
+        /* class 实例必为 GC 对象（lumyr_instance_new/copy），可安全回退对象头 */
+        owner_obj = ptr_to_obj(owner.v.struct_ptr);
     } else {
         return;  /* stack_alloc 容器在 C 栈上，等效于根，无需 rs */
     }
@@ -672,51 +828,40 @@ void gc_remembered_set_check(Value owner, Value new_val)
 
     /* 有效性校验：防止已释放/损坏的容器被加入 remembered set。
      * VM 解释器中弹出栈到 C 局部变量的容器在扩容分配触发 GC 时可能被回收，
-     * 此处校验内部指针对齐性和字段合理性，跳过可疑对象。 */
+     * 此处校验内部指针对齐性和字段合理性，跳过可疑对象。
+     * 仅容器（array/map）有内部缓冲区可校验；class 实例不解释其内存
+     * （旧代码落入 map 分支按 ValueMap 误读实例内存，随 cap 垃圾值随机丢弃
+     * RS 登记）。 */
     if (owner.type == VAL_ARRAY) {
         ValueArray* arr = owner.v.array;
         if (arr->items && (!GC_VALID_PTR(arr->items) || ((unsigned long long)arr->items & 0xF) != 0))
             return;
         if (arr->len < 0 || arr->cap < 0 || arr->len > arr->cap) return;
-    } else {
+    } else if (owner.type == VAL_MAP) {
         ValueMap* m = owner.v.map;
         if (m->buckets && (!GC_VALID_PTR(m->buckets) || ((unsigned long long)m->buckets & 0xF) != 0))
             return;
         if (m->cap <= 0) return;
     }
 
-    /* 检查 new_val 是否可能引用新生代对象 */
-    int may_ref_young = 0;
-    switch (new_val.type) {
-    case VAL_STRING:
-        if (!new_val.str_inline && GC_VALID_PTR(new_val.v.s)) {
-            if (ptr_to_obj(new_val.v.s)->age < PROMOTE_AGE) may_ref_young = 1;
-        }
-        break;
-    case VAL_ARRAY:
-        if (GC_VALID_PTR(new_val.v.array) && !new_val.v.array->stack_alloc) {
-            if (ptr_to_obj(new_val.v.array)->age < PROMOTE_AGE) may_ref_young = 1;
-        }
-        break;
-    case VAL_MAP:
-        if (GC_VALID_PTR(new_val.v.map) && !new_val.v.map->stack_alloc) {
-            if (ptr_to_obj(new_val.v.map)->age < PROMOTE_AGE) may_ref_young = 1;
-        }
-        break;
-    case VAL_FUNC:
-        /* 保守：captures 可能引用新生代对象 */
-        may_ref_young = 1;
-        break;
-    case VAL_ERROR:
-        /* 保守：type/message/stack 字符串可能是新生代 */
-        may_ref_young = 1;
-        break;
-    default:
-        /* INT/DOUBLE/BOOL/CHAR/BYTE/NONE：无堆引用 */
-        break;
+    if (gc_new_val_may_ref_young(new_val)) {
+        remembered_set_add(owner_obj);
     }
+}
 
-    if (may_ref_young) {
+/* 实例字段写屏障（分代）：owner_inst 为 class/struct 实例用户指针
+ * （调用方保证是 GC 对象——VM typed 存储与 lumyr_field_set 的接收者；
+ * 大对象实例直接分配在老年代，新实例也可能是老年代），new_val 为重建的
+ * 字段值（类型标签 + 指针）。owner 老年代且 new_val 可能引用新生代时入 RS。
+ * 与 gc_remembered_set_check 共用 new_val 判定；owner 侧不做容器校验
+ * （实例无内部缓冲区，字段指针在标记期经 gc_cstack_set_contains 验证）。 */
+void gc_remembered_set_check_field(void* owner_inst, Value new_val)
+{
+    if (!gc_generational_enabled()) return;
+    if (!owner_inst) return;
+    GCObject* owner_obj = ptr_to_obj(owner_inst);
+    if (owner_obj->age < PROMOTE_AGE) return;
+    if (gc_new_val_may_ref_young(new_val)) {
         remembered_set_add(owner_obj);
     }
 }
@@ -827,11 +972,25 @@ void gc_mark(Value v)
         if (v.v.err.stack) gc_mark_ptr(v.v.err.stack);
         break;
     }
+    case VAL_CLASS_PTR:
+    case VAL_STRUCT_PTR: {
+        /* struct/class 实例：GC 对象（lumyr_instance_new/copy 以 VAL_STRUCT_PTR
+         * vtype 分配）。内建也把 malloc 裸指针包成 VAL_STRUCT_PTR（reactor/
+         * socket 等），非 GC 指针回退 GCObject 头会越界读 → 必须集合验证。
+         * gc_mark_ptr 直接置黑不入灰色栈，字段须在此递归扫描。 */
+        void* p = v.v.struct_ptr;
+        if (!GC_VALID_PTR(p) || !gc_cstack_set_contains(p)) break;
+        if (!gc_mark_ptr(p)) break;   /* 已黑/永生：字段已扫过 */
+        gc_scan_instance_fields(ptr_to_obj(p), gc_mark, gc_mark_ptr);
+        break;
+    }
     case VAL_FUNC: {
         RuntimeFunc* f = v.v.func.func_obj;
         if (f && GC_VALID_PTR(f) && f->captures && GC_VALID_PTR(f->captures) && f->capture_count > 0) {
+            /* capture_count>0 的 VM 闭包：captures 实际为 Value** cell 指针数组 */
+            Value** cells = (Value**)f->captures;
             for (int i = 0; i < f->capture_count; i++) {
-                gc_mark(f->captures[i]);
+                if (cells[i]) gc_mark(*cells[i]);
             }
         } else if (f && GC_VALID_PTR(f) && f->capture_count == -1) {
             /* VM 解释器闭包实例：capture_count==-1，captures 指向 InterpFuncPayload，
@@ -1016,7 +1175,129 @@ void gc_mark(Value v)
 }
 
 /* ============================================================
- * 标记根：VM 栈 + 当前帧及父帧链的局部变量
+ * 帧链局部变量根扫描（VM 通道）
+ *
+ * 每个 StackFrame 有三类可能持有堆引用的存储：
+ *   - vals[0..cnt)       : 通用 Value 槽
+ *   - cells[0..cell_cnt) : 闭包 cell（堆分配的 Value*，需解引用后标 Value）
+ *   - ptr_slots[0..cnt)  : PTR 族裸指针（class/struct/string/bigint...），
+ *                          VM 侧只写 ptr_slots、不镜像进 vals，必须单独扫描
+ *
+ * ptr_slots 中可能是非 GC 指针（strdup 的 C 串、SSO 内联串内部地址等），
+ * 禁止无条件 ptr_to_obj；统一经 gc_cstack_set_contains 过滤，只保留确为
+ * GC 对象用户指针的项。调用方必须在标记前完成 gc_cstack_set_build()。
+ *
+ * mark_val / mark_raw 为标记原语（由调用方按通道选择）：
+ *   major 递归:  gc_mark / gc_mark_ptr
+ *   to_stack :  gc_mark_value_to_stack / gc_mark_ptr_to_stack
+ *   minor    :  gc_mark_value_to_stack_minor / gc_mark_ptr_to_stack
+ * ============================================================ */
+static void gc_mark_stack_frame_with(StackFrame* frame,
+                                     void (*mark_val)(Value),
+                                     int (*mark_raw)(void*))
+{
+    for (StackFrame* f = frame; f; f = f->parent) {
+        /* 槽位有效范围是 [0, cap)，不是 [0, cnt)：VM 帧按编译期符号下标直接读写
+         * vals/ptr_slots[idx]（frame_ensure_slots 只扩容 cap、不经 stackframe_bind 递增
+         * cnt）。尤其主根帧 g_main_root_frame：cnt 恒为 0 而 cap = main_fn->sym_cnt，
+         * 所有顶层全局变量都落在 vals[0..cap)。若按 cnt 扫描则全局根被整帧漏掉 →
+         * 存活的全局容器被判垃圾 → Minor GC 误回收 → 协程读全局时 UAF。 */
+        if (f->vals) {
+            for (int i = 0; i < f->cap; i++) {
+                mark_val(f->vals[i]);
+            }
+        }
+        if (f->cells) {
+            for (int i = 0; i < f->cell_cnt; i++) {
+                Value* c = f->cells[i];
+                if (c) mark_val(*c);
+            }
+        }
+        if (f->ptr_slots) {
+            for (int i = 0; i < f->cap; i++) {
+                void* p = f->ptr_slots[i];
+                if (p && gc_cstack_set_contains(p)) mark_raw(p);
+            }
+        }
+    }
+}
+
+/* 扫描裸指针操作数栈 [0..sp)（VM 的 PTR 族栈）：经 GC 对象集合过滤后标根。 */
+static void gc_mark_raw_operand_stack(void** stack, int sp, int (*mark_raw)(void*))
+{
+    if (!stack) return;
+    for (int i = 0; i < sp; i++) {
+        void* p = stack[i];
+        if (p && gc_cstack_set_contains(p)) mark_raw(p);
+    }
+}
+
+/* ============================================================
+ * 协程 VM 根注册 / 注销（供 src/ir/vm_co.c 的协程 trampoline 调用）
+ * 注册键 = lm_co_t*（协程指针）；按 key 精确移除（非栈式）。
+ * g_gc_mutex 保护：GC 扫描期间可能在遍历本表，注销须互斥。
+ * ============================================================ */
+void gc_register_coroutine_vm_roots(void* key, StackFrame** frame_ptr,
+                                    Value** val_stack_ptr, int* val_sp_ptr,
+                                    void** raw_stack_ptr, int* raw_sp_ptr)
+{
+    if (!key) return;
+    GCCoroVMRootEntry* e = (GCCoroVMRootEntry*)malloc(sizeof(GCCoroVMRootEntry));
+    if (!e) {
+        LOG_ERROR("GC: out of memory registering coroutine vm roots\n");
+        abort();
+    }
+    e->key = key;
+    e->frame_ptr = frame_ptr;
+    e->val_stack_ptr = val_stack_ptr;
+    e->val_sp_ptr = val_sp_ptr;
+    e->raw_stack_ptr = raw_stack_ptr;
+    e->raw_sp_ptr = raw_sp_ptr;
+    pthread_mutex_lock(&g_gc_mutex);
+    e->next = g_gc_coro_vm_roots;
+    g_gc_coro_vm_roots = e;
+    pthread_mutex_unlock(&g_gc_mutex);
+}
+
+void gc_unregister_coroutine_vm_roots(void* key)
+{
+    if (!key) return;
+    pthread_mutex_lock(&g_gc_mutex);
+    GCCoroVMRootEntry** pp = &g_gc_coro_vm_roots;
+    while (*pp) {
+        if ((*pp)->key == key) {
+            GCCoroVMRootEntry* victim = *pp;
+            *pp = victim->next;
+            free(victim);
+            break;
+        }
+        pp = &(*pp)->next;
+    }
+    pthread_mutex_unlock(&g_gc_mutex);
+}
+
+/* 扫描所有已注册协程的 VM 根：帧链（vals/cells/ptr_slots）+ 迁移缓冲操作数栈。
+ * 调用方须已持 g_gc_mutex 且已完成 gc_cstack_set_build()（ptr_slots / 裸指针栈
+ * 过滤依赖该集合）。运行期协程的 mig_copy 为 NULL，故操作数栈天然跳过
+ * （由本线程 GCThreadEntry 精确覆盖），仅帧链仍逐帧扫描。 */
+static void gc_scan_coroutine_vm_roots(void (*mark_val)(Value), int (*mark_raw)(void*))
+{
+    for (GCCoroVMRootEntry* e = g_gc_coro_vm_roots; e; e = e->next) {
+        StackFrame* f = e->frame_ptr ? *e->frame_ptr : NULL;
+        gc_mark_stack_frame_with(f, mark_val, mark_raw);
+        if (e->val_stack_ptr && *e->val_stack_ptr && e->val_sp_ptr) {
+            Value* st = *e->val_stack_ptr;
+            int sp = *e->val_sp_ptr;
+            for (int i = 0; i < sp; i++) mark_val(st[i]);
+        }
+        if (e->raw_stack_ptr && e->raw_sp_ptr) {
+            gc_mark_raw_operand_stack(*e->raw_stack_ptr, *e->raw_sp_ptr, mark_raw);
+        }
+    }
+}
+
+/* ============================================================
+ * 标记根：VM 栈 + 当前帧及父帧链的局部变量（递归标记，fallback Major）
  * ============================================================ */
 void gc_mark_roots(Value* stack, int sp, StackFrame* frame)
 {
@@ -1025,15 +1306,7 @@ void gc_mark_roots(Value* stack, int sp, StackFrame* frame)
             gc_mark(stack[i]);
         }
     }
-    StackFrame* f = frame;
-    while (f) {
-        if (f->vals) {
-            for (int i = 0; i < f->cnt; i++) {
-                gc_mark(f->vals[i]);
-            }
-        }
-        f = f->parent;
-    }
+    gc_mark_stack_frame_with(frame, gc_mark, gc_mark_ptr);
     /* 标记所有暂停生成器持有的 GC 对象（yield 后不再是当前 VM 根） */
     lumyr_gc_mark_paused_generators();
 }
@@ -1083,7 +1356,19 @@ static void mark_stack_push(GCObject* obj) {
 int gc_mark_ptr_to_stack(void* ptr)
 {
     if (!ptr) return 0;
+    /* 指针验证（与保守 C 栈扫描同一安全前提：绝不回退 GCObject 头读未验证指针）。
+     * 根来源（帧槽/细胞/容器槽位）可能含撕裂或陈旧指针——落在 GC_VALID_PTR 范围
+     * 内却非 GC 对象，ptr_to_obj 读 flags/marked 即崩。
+     * 集合在本次 GC 的 STW 起点构建（minor 全量；major 初始 STW），涵盖全部已分配
+     * 对象；major 并发标记期新分配对象 marked=1（黑色出生）本就不需要入栈，且写屏障
+     * 只处理真实存活引用——集合未覆盖它们时跳过语义等价。
+     * 集合构建时已排除内部缓冲区（0x02），故缓冲区在此被一并拦截。 */
+    if (!gc_cstack_set_contains(ptr)) return 0;
     GCObject* obj = ptr_to_obj(ptr);
+    /* 内部缓冲区（GC_OBJ_INTERNAL_BUF）不是容器，入灰色栈会被 gc_mark_one 按
+     * 宿主结构体误读（如裸字节缓冲被当 BytesObj/ValueMap 扫描）。其生命周期由
+     * 宿主对象经 gc_mark_internal_black 保证，此处视同已处理直接返回。 */
+    if (obj->flags & 0x02) return 0;
     unsigned char m = obj->marked;
     if (m == 1 || m == 2 || m == 4) return 0;
     /* m==0(白色) 或 m==3(新对象预标记，视同未标记） */
@@ -1094,7 +1379,7 @@ int gc_mark_ptr_to_stack(void* ptr)
 /* 标记内部缓冲区（buckets/tree/MapEntry 等）：直接设为黑色，不入灰色栈。
  * 这些对象与 ValueMap 共用 vtype=VAL_MAP，入灰色栈会导致 gc_mark_one 误判。
  * 它们的 Value 子引用（如 MapEntry.key/value）由父级 ValueMap 的 gc_mark_one 显式扫描。 */
-static void gc_mark_internal_black(void* ptr)
+void gc_mark_internal_black(void* ptr)
 {
     if (!ptr) return;
     GCObject* obj = ptr_to_obj(ptr);
@@ -1189,13 +1474,14 @@ void gc_mark_value_to_stack(Value v)
     }
     case VAL_FUNC: {
         /* RuntimeFunc 是 malloc 不是 GC 对象，不能入栈。
-         * 立即遍历 captures（capture_count > 0 时是真实 Value 数组）。
+         * capture_count>0 的 VM 闭包：captures 实际为 Value** cell 指针数组；
          * capture_count==-1 是解释器 payload 标记：普通函数无捕获；闭包实例的
          * InterpFuncPayload 中 captured_cells[i] 是堆 Value* 单元，需递归标记。 */
         RuntimeFunc* f = v.v.func.func_obj;
         if (f && GC_VALID_PTR(f) && f->captures && GC_VALID_PTR(f->captures) && f->capture_count > 0) {
+            Value** cells = (Value**)f->captures;
             for (int i = 0; i < f->capture_count; i++) {
-                gc_mark_value_to_stack(f->captures[i]);
+                if (cells[i]) gc_mark_value_to_stack(*cells[i]);
             }
         } else if (f && GC_VALID_PTR(f) && f->capture_count == -1) {
             lumyr_interp_scan_captures(f, gc_mark_value_to_stack);
@@ -1275,6 +1561,21 @@ void gc_mark_value_to_stack(Value v)
         /* formdata：容器变灰入栈，names/vals 由 gc_mark_one 扫描 */
         FormDataObj* o = (FormDataObj*)v.v.formdata_obj;
         if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_SOCKET: {
+        /* socket：持有 fd（系统资源，非 GC 对象），无内部 GC 指针，仅标记自身 */
+        SocketObj* o = (SocketObj*)v.v.socket_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_CLASS_PTR:
+    case VAL_STRUCT_PTR: {
+        /* struct/class 实例：变灰入栈，字段由 gc_mark_one 的 VAL_STRUCT_PTR 分支扫描。
+         * 内建 malloc 裸指针（reactor/socket 等）也包成 VAL_STRUCT_PTR，
+         * 非 GC 指针对象头越界读 → 必须集合验证。 */
+        void* p = v.v.struct_ptr;
+        if (GC_VALID_PTR(p) && gc_cstack_set_contains(p)) gc_mark_ptr_to_stack(p);
         break;
     }
     default:
@@ -1365,6 +1666,16 @@ void gc_mark_one(GCObject* obj)
         break;
     case VAL_FUNC:
         /* RuntimeFunc 是 malloc 的，不是 GCObject。gc_mark_one 不会遇到。 */
+        break;
+    case VAL_STRUCT_PTR:
+        /* struct/class 实例（lumyr_instance_new/copy 以 VAL_STRUCT_PTR vtype 分配）：
+         * 扫描 PTR 族字段与 any(VAL_NONE) 动态槽的 Value 盒。 */
+        gc_scan_instance_fields(obj, gc_mark_value_to_stack, gc_mark_ptr_to_stack);
+        break;
+    case VAL_PTR:
+        /* GC Value 盒（lm_type.c 以 VAL_PTR 分配的单个 Value，如 any 字段槽）：
+         * 解引用标记内容物。 */
+        gc_mark_value_to_stack(*(Value*)obj_to_ptr(obj));
         break;
     case VAL_TYPED_ARRAY: {
         /* TypedArray：items 标内部黑；仅 PTR 族元素需变灰入栈 */
@@ -1603,12 +1914,14 @@ static void gc_mark_value_to_stack_minor(Value v)
     }
     case VAL_FUNC: {
         /* RuntimeFunc 是 malloc 非 GC 对象，始终遍历 captures。
+         * capture_count>0 的 VM 闭包：captures 实际为 Value** cell 指针数组。
          * 安全检查：f 和 f->captures 都必须在合理堆范围内，
          * 防止 C 栈上的垃圾 Value 被误判为 VAL_FUNC 导致 UAF。 */
         RuntimeFunc* f = v.v.func.func_obj;
         if (f && GC_VALID_PTR(f) && f->captures && GC_VALID_PTR(f->captures) && f->capture_count > 0) {
+            Value** cells = (Value**)f->captures;
             for (int i = 0; i < f->capture_count; i++) {
-                gc_mark_value_to_stack_minor(f->captures[i]);
+                if (cells[i]) gc_mark_value_to_stack_minor(*cells[i]);
             }
         } else if (f && GC_VALID_PTR(f) && f->capture_count == -1) {
             lumyr_interp_scan_captures(f, gc_mark_value_to_stack_minor);
@@ -1673,8 +1986,64 @@ static void gc_mark_value_to_stack_minor(Value v)
         if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
         break;
     }
+    case VAL_SOCKET: {
+        /* socket：持有 fd（系统资源，非 GC 对象），无内部 GC 指针，仅标记自身 */
+        SocketObj* o = (SocketObj*)v.v.socket_obj;
+        if (GC_VALID_PTR(o)) gc_mark_ptr_to_stack(o);
+        break;
+    }
+    case VAL_CLASS_PTR:
+    case VAL_STRUCT_PTR: {
+        /* struct/class 实例：变灰入栈，字段由 gc_mark_one_minor 的 VAL_STRUCT_PTR
+         * 分支扫描。内建 malloc 裸指针（reactor/socket 等）也包成
+         * VAL_STRUCT_PTR，非 GC 指针对象头越界读 → 必须集合验证。 */
+        void* p = v.v.struct_ptr;
+        if (GC_VALID_PTR(p) && gc_cstack_set_contains(p)) gc_mark_ptr_to_stack(p);
+        break;
+    }
     default:
         break;
+    }
+}
+
+/* struct/class 实例字段扫描（gc_mark / gc_mark_one / gc_mark_one_minor 共用）：
+ * 实例以 vtype=VAL_STRUCT_PTR 经 gc_alloc 分配（lumyr_instance_new/copy），
+ * 偏移 0 为 RuntimeTypeInfo*（编译期静态，非 GC 对象）。
+ *   - PTR 族字段槽（lumyr_etype_stackcls==3）：重建完整 Value 交 markfn 标记；
+ *   - VAL_NONE(any/泛型擦除) 动态槽：槽内是 GC Value 盒（vtype=VAL_PTR），
+ *     先经 markptr 标记盒对象，再经 markfn 标记盒内容。
+ * 所有槽内指针一律经 gc_cstack_set_contains 验证：内建 malloc 裸指针
+ * （reactor/socket 等 VAL_STRUCT_PTR）绝不回退 GCObject 头读取。 */
+static void gc_scan_instance_fields(GCObject* obj, void (*markfn)(Value), int (*markptr)(void*))
+{
+    void* mem = obj_to_ptr(obj);
+    RuntimeTypeInfo* info = *(RuntimeTypeInfo**)mem;
+    if (!GC_VALID_PTR(info)) return;
+    int nf = info->nfields;
+    FieldInfo* fl = info->fields;
+    if (nf < 0 || nf > 1024) return;                 /* 防御：损坏对象 */
+    if (nf > 0 && !GC_VALID_PTR(fl)) return;
+    for (int i = 0; i < nf; i++) {
+        FieldInfo* fi = &fl[i];
+        if ((size_t)fi->offset + sizeof(void*) > obj->user_size) continue;
+        const char* fp = (const char*)mem + fi->offset;
+        if (fi->valtype == VAL_NONE) {
+            void* box = *(void**)fp;
+            if (!gc_cstack_set_contains(box)) continue;
+            markptr(box);
+            Value bv;
+            memcpy(&bv, box, sizeof(bv));
+            markfn(bv);
+        } else if (lumyr_etype_stackcls(fi->valtype) == 3) {
+            void* ep = *(void**)fp;
+            if (!gc_cstack_set_contains(ep)) continue;
+            Value ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.type = fi->valtype;
+            ev.str_inline = 0;
+            ev.v.s = ep;
+            markfn(ev);
+        }
     }
 }
 
@@ -1740,6 +2109,14 @@ static void gc_mark_one_minor(GCObject* obj)
         }
         break;
     }
+    case VAL_STRUCT_PTR:
+        /* struct/class 实例：扫描 PTR 族字段与 any(VAL_NONE) 动态槽的 Value 盒 */
+        gc_scan_instance_fields(obj, gc_mark_value_to_stack_minor, gc_mark_ptr_to_stack);
+        break;
+    case VAL_PTR:
+        /* GC Value 盒（any 字段槽）：解引用标记内容物 */
+        gc_mark_value_to_stack_minor(*(Value*)obj_to_ptr(obj));
+        break;
     case VAL_TYPED_ARRAY: {
         TypedArray* ta = (TypedArray*)obj_to_ptr(obj);
         if (ta->items) gc_mark_internal_black(ta->items);
@@ -1871,6 +2248,8 @@ static void gc_scan_remembered_set(void)
     for (size_t i = 0; i < g_rs_size; i++) {
         GCObject* obj = g_remembered_set[i];
         if (!obj) continue;
+        /* 内部缓冲区不是容器，不得按容器结构扫描（防御： stale 条目/误登记） */
+        if (obj->flags & 0x02) continue;
         /* 老年代对象：扫描其子对象，将新生代子对象推入标记栈。
          * 复用 gc_mark_one_minor 逻辑（它会标记内部缓冲区黑色）。
          * 注意：gc_mark_one_minor 会设 obj->marked=1，但 Minor GC 结束时
@@ -1883,7 +2262,7 @@ static void gc_scan_remembered_set(void)
  * 根扫描（推入标记栈而非递归标记）
  * ============================================================ */
 
-/* 扫描单个 VM 栈 + 帧链 */
+/* 扫描单个 VM 栈 + 帧链（推入标记栈） */
 static void gc_scan_vm_roots_to_stack(Value* stack, int sp, StackFrame* frame)
 {
     if (stack) {
@@ -1891,15 +2270,7 @@ static void gc_scan_vm_roots_to_stack(Value* stack, int sp, StackFrame* frame)
             gc_mark_value_to_stack(stack[i]);
         }
     }
-    StackFrame* f = frame;
-    while (f) {
-        if (f->vals) {
-            for (int i = 0; i < f->cnt; i++) {
-                gc_mark_value_to_stack(f->vals[i]);
-            }
-        }
-        f = f->parent;
-    }
+    gc_mark_stack_frame_with(frame, gc_mark_value_to_stack, gc_mark_ptr_to_stack);
 }
 
 /* 扫描单个 CFrame 链（操作数栈 + 局部变量指针数组） */
@@ -2048,7 +2419,12 @@ void gc_scan_roots_to_stack(Value* stack, int sp, StackFrame* frame)
 {
     if (g_gc_threads) {
         for (GCThreadEntry* e = g_gc_threads; e; e = e->next) {
-            gc_scan_vm_roots_to_stack(e->stack, e->sp_ptr ? *e->sp_ptr : 0, e->frame);
+            gc_scan_vm_roots_to_stack(e->stack_ptr ? *e->stack_ptr : NULL,
+                                      e->sp_ptr ? *e->sp_ptr : 0,
+                                      e->frame_ptr ? *e->frame_ptr : NULL);
+            gc_mark_raw_operand_stack(e->raw_stack_ptr ? *e->raw_stack_ptr : NULL,
+                                      e->raw_sp_ptr ? *e->raw_sp_ptr : 0,
+                                      gc_mark_ptr_to_stack);
             gc_conservative_cstack_scan(e->c_stack_top, e->c_stack_sp, NULL);
         }
     } else {
@@ -2070,6 +2446,9 @@ void gc_scan_roots_to_stack(Value* stack, int sp, StackFrame* frame)
     for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
         gc_conservative_cstack_scan(e->stack_top, gc_co_scan_bottom(e), NULL);
     }
+    /* 扫描协程 VM 根（帧链 + 迁移缓冲操作数栈）：冻结 C 栈扫描只覆盖 C 局部，
+     * 协程挂在堆上的 StackFrame 链与 mig_copy 操作数栈需单独精确扫描。 */
+    gc_scan_coroutine_vm_roots(gc_mark_value_to_stack, gc_mark_ptr_to_stack);
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
 }
@@ -2082,15 +2461,7 @@ static void gc_scan_vm_roots_minor(Value* stack, int sp, StackFrame* frame)
             gc_mark_value_to_stack_minor(stack[i]);
         }
     }
-    StackFrame* f = frame;
-    while (f) {
-        if (f->vals) {
-            for (int i = 0; i < f->cnt; i++) {
-                gc_mark_value_to_stack_minor(f->vals[i]);
-            }
-        }
-        f = f->parent;
-    }
+    gc_mark_stack_frame_with(frame, gc_mark_value_to_stack_minor, gc_mark_ptr_to_stack);
 }
 
 /* Minor GC 专用：扫描单个 CFrame 链（只标记新生代） */
@@ -2118,7 +2489,12 @@ static void gc_scan_roots_minor(Value* stack, int sp, StackFrame* frame)
 {
     if (g_gc_threads) {
         for (GCThreadEntry* e = g_gc_threads; e; e = e->next) {
-            gc_scan_vm_roots_minor(e->stack, e->sp_ptr ? *e->sp_ptr : 0, e->frame);
+            gc_scan_vm_roots_minor(e->stack_ptr ? *e->stack_ptr : NULL,
+                                   e->sp_ptr ? *e->sp_ptr : 0,
+                                   e->frame_ptr ? *e->frame_ptr : NULL);
+            gc_mark_raw_operand_stack(e->raw_stack_ptr ? *e->raw_stack_ptr : NULL,
+                                      e->raw_sp_ptr ? *e->raw_sp_ptr : 0,
+                                      gc_mark_ptr_to_stack);
             gc_conservative_cstack_scan(e->c_stack_top, e->c_stack_sp, NULL);
         }
     } else {
@@ -2136,6 +2512,8 @@ static void gc_scan_roots_minor(Value* stack, int sp, StackFrame* frame)
     for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
         gc_conservative_cstack_scan(e->stack_top, gc_co_scan_bottom(e), NULL);
     }
+    /* 扫描协程 VM 根（帧链 + 迁移缓冲操作数栈），只标记新生代 */
+    gc_scan_coroutine_vm_roots(gc_mark_value_to_stack_minor, gc_mark_ptr_to_stack);
     /* 扫描外部模块注册的全局根（如线程表中的待 join 结果） */
     if (g_global_root_scan) g_global_root_scan();
 }
@@ -2169,8 +2547,13 @@ void gc_sweep(void)
         if (cur->marked == 2) {
             /* 永生对象（钉住 / 本地空闲链表预分配）：跳过 */
             pp = &cur->next;
-        } else if (!cur->marked) {
-            /* 未标记：需要回收 */
+        } else if (cur->marked != 1) {
+            /* 未标记：需要回收。
+             * marked==0（白色）与 marked==3（新对象预标记、但本轮标记阶段未被根
+             * 触达）均视同垃圾。marked==3 是为「标记期新分配对象」设计的预标记，
+             * Major GC 是 STW/增量全量标记，标记结束仍为 3 说明不可达 → 回收。
+             * 与 gc_sweep_minor 的 `marked != 1` 判垃圾保持一致（旧代码用
+             * `!cur->marked` 导致 marked==3 被误判存活、多留一代）。 */
             if (cur->user_size <= TLA_MAX_SIZE) {
                 *pp = cur->next;
                 g_gc_bytes -= sizeof(GCObject) + cur->user_size;
@@ -2246,8 +2629,10 @@ static void gc_sweep_minor(void)
                     g_young_bytes -= obj_bytes;
                     g_old_bytes += obj_bytes;
                     /* 晋升对象加入 remembered set（保守策略：刚从新生代来，
-                     * 很可能引用其他新生代对象，必须追踪以防下轮 Minor GC 丢失引用） */
-                    remembered_set_add(cur);
+                     * 很可能引用其他新生代对象，必须追踪以防下轮 Minor GC 丢失引用）。
+                     * 内部缓冲区（GC_OBJ_INTERNAL_BUF）除外：它不是容器，子引用由宿主
+                     * 对象扫描，入 RS 会被 gc_mark_one_minor 按容器结构误读崩溃。 */
+                    if (!(cur->flags & 0x02)) remembered_set_add(cur);
                 }
                 cur->marked = 0;
                 pp = &cur->next;
@@ -2404,10 +2789,20 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
 
         pthread_mutex_lock(&g_gc_mutex);
 
+        /* 构建保守式 C 栈扫描 / ptr_slots 过滤共用的 GC 指针集合。
+         * 必须在根扫描前完成——gc_mark_roots 扫描 ptr_slots 时依赖该集合
+         * 过滤非 GC 裸指针（禁止对任意指针做 ptr_to_obj 越界读）。 */
+        gc_cstack_set_build();
+
         /* 递归标记所有根 */
         if (g_gc_threads) {
             for (GCThreadEntry* e = g_gc_threads; e; e = e->next) {
-                gc_mark_roots(e->stack, e->sp_ptr ? *e->sp_ptr : 0, e->frame);
+                gc_mark_roots(e->stack_ptr ? *e->stack_ptr : NULL,
+                              e->sp_ptr ? *e->sp_ptr : 0,
+                              e->frame_ptr ? *e->frame_ptr : NULL);
+                gc_mark_raw_operand_stack(e->raw_stack_ptr ? *e->raw_stack_ptr : NULL,
+                                          e->raw_sp_ptr ? *e->raw_sp_ptr : 0,
+                                          gc_mark_ptr);
             }
         } else {
             gc_mark_roots(stack, sp, frame);
@@ -2444,8 +2839,8 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
         /* 扫描挂起协程的冻结 C 栈（递归兼容：直接调 gc_mark_ptr 设黑，不用标记栈）。
          * 非增量路径用递归 gc_mark，不使用 gc_mark_ptr_to_stack（迭代入栈），
          * 避免标记栈残留 entries 干扰 gc_sweep。gc_mark_ptr 设 marked=1 即可保活；
-         * 容器子对象由 VM 栈精确扫描覆盖，C 栈保守扫描仅需保活直接引用。 */
-        gc_cstack_set_build();
+         * 容器子对象由 VM 栈精确扫描覆盖，C 栈保守扫描仅需保活直接引用。
+         * 注：gc_cstack_set_build() 已在本路径根扫描前完成，此处直接复用。 */
         for (GCCoroutineEntry* e = g_gc_coroutines; e; e = e->next) {
             if (!e->stack_top) continue;
             uintptr_t* p = (uintptr_t*)e->stack_top;
@@ -2459,6 +2854,9 @@ void gc_collect_major(Value* stack, int sp, StackFrame* frame)
                 gc_mark_ptr((void*)word);
             }
         }
+
+        /* 扫描协程 VM 根（帧链 + 迁移缓冲操作数栈），递归标记设黑 */
+        gc_scan_coroutine_vm_roots(gc_mark, gc_mark_ptr);
 
         /* Major GC：sweep 前清空 remembered set（避免 sweep 后悬空指针） */
         remembered_set_clear();
@@ -2746,7 +3144,8 @@ void gc_collect_now(void)
 /* ============================================================
  * 多线程栈根注册表
  * ============================================================ */
-void gc_register_thread(Value* stack, int* sp_ptr, StackFrame* frame)
+void gc_register_thread(Value** stack_ptr, int* sp_ptr, StackFrame** frame_ptr,
+                        void** raw_stack_ptr, int* raw_sp_ptr)
 {
     GCThreadEntry* e = (GCThreadEntry*)malloc(sizeof(GCThreadEntry));
     if (!e) {
@@ -2754,9 +3153,11 @@ void gc_register_thread(Value* stack, int* sp_ptr, StackFrame* frame)
         abort();
     }
     e->tid = pthread_self();
-    e->stack = stack;
+    e->stack_ptr = stack_ptr;
     e->sp_ptr = sp_ptr;
-    e->frame = frame;
+    e->frame_ptr = frame_ptr;
+    e->raw_stack_ptr = raw_stack_ptr;
+    e->raw_sp_ptr = raw_sp_ptr;
     e->at_safepoint = 0;
     e->c_stack_top = __builtin_frame_address(0);
     e->c_stack_sp = e->c_stack_top;

@@ -14,6 +14,7 @@
 //     未捕获错误 longjmp 到根垫而非 exit(1)，记录到 co->vm_state->error
 #include "vm_co.h"
 #include "lm_co.h"          /* lm_co_t, lm_co_spawn, lm_co_set_vm_hooks */
+#include "lm_compute.h"     /* lm_compute_set_worker_gc_hooks（compute worker GC 注册注入） */
 #include "lm_reactor.h"     /* lm_reactor_t, lm_reactor_add_timer */
 #include "lm_signal.h"      /* G1：信号表 + self-pipe（lm_signal_watch/attach/...） */
 #include "lm_scheduler.h"   /* Phase 8.6 修复：timer 回调投递回 reactor（get_current/wakeup） */
@@ -28,6 +29,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+
+/* 全局变量主存储帧（定义于 vm_exec_var.c）：协程根帧挂其下供 GC 帧链标记 */
+extern StackFrame* g_main_root_frame;
 
 /* ============================================================
  * VMCoState：协程专属 VM 状态快照
@@ -172,6 +176,10 @@ static void vm_co_yield_hook(lm_co_t* co) {
 static void vm_co_release_hook(lm_co_t* co) {
     if(!co || !co->vm_state) return;
     VMCoState* st = (VMCoState*)co->vm_state;
+    /* 注销协程 VM 根：覆盖「挂起中被销毁」（trampoline 未返回、未走到其注销点）
+     * 的路径，避免 mig_copy 释放后基址被 GC 解引用（UAF）。正常结束的协程已在
+     * trampoline 注销，此处按键查找为空 → no-op。须在 free(mig_copy) 之前。 */
+    gc_unregister_coroutine_vm_roots(co);
     /* Phase 7.4：迁移中途销毁（computeBegin 后未 computeEnd 即 destroy）时
      * 释放搬家缓冲，防泄漏。 */
     for (int i = 0; i < STACK_TYPE_COUNT; i++) {
@@ -227,10 +235,37 @@ static int vm_co_can_preempt(lm_co_t* co) {
     return 1;
 }
 
+/* compute worker 线程 GC 注册回调（lm_compute worker 主循环启动时调用）。
+ * 登记本线程 TLS 操作数栈（VALUE/PTR）：协程 resume 后活数据已从 mig_copy
+ * 写回栈池，运行期只能经本 entry 扫描；STW 等待集纳入 worker，使其在安全点
+ * 停驻、不再与 GC 扫描并发改帧。
+ * frame_ptr=NULL：运行期协程帧链由其 GCCoroVMRootEntry（&co_ctx.frame，随
+ * 帧推进实时更新）覆盖；worker 自身不持有 VM 帧。
+ * 保守 C 栈扫描窗口由 lm_co_resume 的 gc_set_thread_cstack_top 切换（注册后
+ * 生效）：协程内安全点记录协程栈 sp，pop 阻塞期复位为主栈 1 word 窗口。 */
+static void vm_compute_worker_gc_register(void) {
+    if(!g_stack_mgr) stack_global_init(0);  /* 与 resume_hook 首次 resume 同约定 */
+    gc_register_thread((Value**)&g_stack_mgr->stacks[STACK_VALUE],
+                       &g_stack_mgr->sp[STACK_VALUE],
+                       NULL,
+                       &g_stack_mgr->stacks[STACK_PTR],
+                       &g_stack_mgr->sp[STACK_PTR]);
+}
+
+static void vm_compute_worker_gc_unregister(void) {
+    gc_unregister_thread();
+}
+
 void vm_co_hooks_register(void) {
     lm_co_set_vm_hooks(vm_co_resume_hook, vm_co_yield_hook, vm_co_release_hook);
     lm_co_set_can_swap_hook(vm_co_can_swap);   /* Phase 8.6 F：注册换出裁量 */
     lm_co_set_can_preempt_hook(vm_co_can_preempt); /* 非平衡栈禁止 slice 抢占 */
+    /* compute worker 线程 GC 注册：worker 跑协程会建/毁 StackFrame、搬移 TLS
+     * 操作数栈，必须进 STW 等待集并登记操作数栈根——否则 GC 扫描协程根帧链时
+     * worker 并发改帧，扫描读到撕裂/复用内存（http/websocket 高压崩溃根因）。
+     * VM 启动早期注入，先于首个 worker 创建（compute 池懒初始化于用户代码）。 */
+    lm_compute_set_worker_gc_hooks(vm_compute_worker_gc_register,
+                                   vm_compute_worker_gc_unregister);
 }
 
 /* ============================================================
@@ -295,7 +330,26 @@ static void vm_co_trampoline(void* arg) {
     CoSpawnCtx* sc = (CoSpawnCtx*)arg;
     VMExecCtx co_ctx;
     memset(&co_ctx, 0, sizeof(co_ctx));
-    co_ctx.frame = stackframe_new(NULL);  /* 独立根帧，parent=NULL，避免 frame 链污染 */
+    /* 协程根帧挂到全局共享根帧 g_main_root_frame 之下（parent 链）：
+     * GC 沿 frame 链标记时能从协程根帧一路触达全局变量存储帧。
+     * 若保持 parent=NULL，协程让出/迁移期间 GC 扫描其帧链会在根帧处断裂，
+     * 全局 map/容器（如 builtin_fairness 的 g）整帧漏标被 sweep →
+     * 协程 resume 后读全局得 none（a.len() 抛错 → 协程早夭 → 挂起根因）。
+     * LOAD_VAR/LOAD_GLOBAL 从不沿 parent 解析变量（仅 GC 与 AST stackframe_get
+     * 走 parent），故挂链只影响 GC 标记，不改变协程变量解析语义。 */
+    co_ctx.frame = stackframe_new(g_main_root_frame);
+
+    /* 注册协程 VM 根：帧链（&co_ctx.frame，冻结栈上地址恒定）+ yield 时搬入
+     * mig_copy 的操作数栈。GCCoroutineEntry 只保守扫描协程冻结 C 栈，而协程的
+     * 堆上 StackFrame 链与 mig_copy 缓冲都不在 C 栈扫描范围内；缺此注册，协程
+     * 让出期间其活对象会被 sweep → UAF（builtin_fairness 等用例崩溃根因）。
+     * 运行期 mig_copy 为 NULL，操作数栈自然跳过（由本线程 GCThreadEntry 覆盖）。 */
+    VMCoState* st = (VMCoState*)sc->co->vm_state;
+    if (st) {
+        gc_register_coroutine_vm_roots(sc->co, &co_ctx.frame,
+            (Value**)&st->mig_copy[STACK_VALUE], &st->stack_sp[STACK_VALUE],
+            (void**)&st->mig_copy[STACK_PTR], &st->stack_sp[STACK_PTR]);
+    }
 
     /* 协程根兜底：未捕获错误 longjmp 到这里，只终止本协程不 exit 进程。
      * vm_except_enter_thread_root 设 g_thread_root=1，使 vm_except_throw_value
@@ -330,6 +384,9 @@ static void vm_co_trampoline(void* arg) {
         vm_co_set_error(sc->co, err);
         gc_protect_pop();
     }
+    /* 注销协程 VM 根（必须在销毁帧之前，避免 GC 扫描到已释放帧链）。
+     * 与注册对称，键同为 sc->co。 */
+    gc_unregister_coroutine_vm_roots(sc->co);
     stackframe_destroy(co_ctx.frame);
     free(sc);
     (void)jumped;

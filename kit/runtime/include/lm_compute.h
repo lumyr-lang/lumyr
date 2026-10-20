@@ -74,6 +74,15 @@ int lm_compute_pool_size(void);
 /* compute worker 硬上限（max_workers 解析结果）。 */
 int lm_compute_pool_capacity(void);
 
+/* 注入 worker 线程 GC 注册/注销 hook（由 VM 层调用，kit 层不感知 VM 栈管理器）。
+ * worker 主循环启动时回调 reg、退出前回调 unreg：把 worker 纳入 GC 的 STW
+ * 等待集并登记其 TLS 操作数栈根。worker 跑协程会建/毁 StackFrame、并发修改
+ * 协程帧链——未注册时 GC 不停等 worker，扫描协程根帧链会读到并发撕裂/已
+ * 复用的帧内存（http/websocket 高压用例垃圾指针崩溃根因）。
+ * 纯 C 场景（不注入）worker 不注册：无 VM 根可扫，也不进 STW 等待集。
+ * 须在首个 worker 创建前调用（VM 启动早期）。 */
+void lm_compute_set_worker_gc_hooks(void (*reg)(void), void (*unreg)(void));
+
 #ifdef __cplusplus
 }
 #endif

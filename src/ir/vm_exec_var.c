@@ -96,17 +96,19 @@ static void frame_ensure_slots(StackFrame* f, int need) {
     if(!f->names) f->names = calloc(newcap, sizeof(char*));
     else { f->names = realloc(f->names, newcap * sizeof(char*)); memset(f->names + oldcap, 0, (newcap - oldcap) * sizeof(char*)); }
 
-    /* 分配 vals */
+    /* 分配 vals（realloc 扩容必须清零新增区间：GC 帧扫描范围是 [0, cap)，
+     * 新槽未初始化时是堆垃圾——被当成 Value 扫描会解引用野指针。
+     * 与 ast/stackframe.c stackframe_ensure_slots 的零填充语义一致。） */
     if(!f->vals) f->vals = calloc(newcap, sizeof(Value));
-    else f->vals = realloc(f->vals, newcap * sizeof(Value));
+    else { f->vals = realloc(f->vals, newcap * sizeof(Value)); memset(f->vals + oldcap, 0, (newcap - oldcap) * sizeof(Value)); }
 
-    /* 分配 int_slots */
+    /* 分配 int_slots（同上：新增区间清零，保持四通道槽位一致的初始态） */
     if(!f->int_slots) f->int_slots = calloc(newcap, sizeof(int64_t));
-    else f->int_slots = realloc(f->int_slots, newcap * sizeof(int64_t));
+    else { f->int_slots = realloc(f->int_slots, newcap * sizeof(int64_t)); memset(f->int_slots + oldcap, 0, (newcap - oldcap) * sizeof(int64_t)); }
 
-    /* 分配 flt_slots */
+    /* 分配 flt_slots（同上） */
     if(!f->flt_slots) f->flt_slots = calloc(newcap, sizeof(double));
-    else f->flt_slots = realloc(f->flt_slots, newcap * sizeof(double));
+    else { f->flt_slots = realloc(f->flt_slots, newcap * sizeof(double)); memset(f->flt_slots + oldcap, 0, (newcap - oldcap) * sizeof(double)); }
 
     /* 分配 ptr_slots */
     if(!f->ptr_slots) f->ptr_slots = calloc(newcap, sizeof(void*));

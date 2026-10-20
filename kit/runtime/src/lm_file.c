@@ -1064,6 +1064,7 @@ Value lumyr_file_read_bytes(Value v) {
     bo->len = (int)sz;
     bo->data = (uint8_t*)gc_alloc((size_t)sz + 1, VAL_BYTES);
     if (bo->data) {
+        gc_mark_internal_buf(bo->data);
         memcpy(bo->data, content, (size_t)sz);
     }
     bo->stack_alloc = 0;

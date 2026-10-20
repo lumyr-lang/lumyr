@@ -73,6 +73,12 @@ static inline void gc_obj_set_bound_types(void* ptr, BoundTypeInfo* bt) {
  * 将容器加入 remembered set。在所有修改堆对象内部引用的位置调用。 */
 void gc_remembered_set_check(Value owner, Value new_val);
 
+/* Remembered set 检查（实例字段写屏障）：owner_inst 为 class/struct 实例
+ * 用户指针（调用方保证是 GC 对象），new_val 为重建的字段值（类型标签+指针）。
+ * owner 老年代且 new_val 可能引用新生代时将 owner 加入 remembered set。
+ * 在 VM/运行时所有写实例 PTR 族字段的位置调用。 */
+void gc_remembered_set_check_field(void* owner_inst, Value new_val);
+
 /* 返回 remembered set 当前大小（统计用） */
 size_t gc_rs_size(void);
 
@@ -122,15 +128,29 @@ void gc_collect_now(void);
 void gc_pin(void* ptr);
 
 /* ---- 多线程栈根注册表 ---- */
-/* 注册当前线程的操作数栈/栈指针/帧链指针到全局注册表。
+/* 注册当前线程的操作数栈/帧链到全局注册表。
  * GC 时遍历所有注册线程，扫描每个线程的 stack[0..*sp] + frame 链局部变量。
- * sp_ptr 和 frame 是指针（动态变化），GC 时解引用获取当前值。
+ * 所有参数均为「指针的指针」：stack_vm_push 扩容 realloc 会改变栈缓冲区地址，
+ * VM 帧链顶也随调用/返回推进——GC 标记时解引用取当前值，避免读到陈旧地址。
+ *   stack_ptr     : 指向 VALUE 操作数栈缓冲区指针的地址
+ *   sp_ptr        : VALUE 栈 sp 地址
+ *   frame_ptr     : 指向当前最深栈帧的地址（VM: &ctx.frame；非 VM: NULL）
+ *   raw_stack_ptr : 指向 PTR 裸指针操作数栈缓冲区指针的地址（可为 NULL）
+ *   raw_sp_ptr    : PTR 栈 sp 地址（可为 NULL）
  * 线程退出时必须调用 gc_unregister_thread()。
  * 支持同一线程嵌套注册（栈式语义），unregister 移除最近注册的 entry。 */
-void gc_register_thread(Value* stack, int* sp_ptr, StackFrame* frame);
+void gc_register_thread(Value** stack_ptr, int* sp_ptr, StackFrame** frame_ptr,
+                        void** raw_stack_ptr, int* raw_sp_ptr);
 
 /* 从全局注册表移除当前线程最近注册的 entry（栈式语义） */
 void gc_unregister_thread(void);
+
+/* ---- 保守扫描上界切换（协程栈 / 主栈）----
+ * 协程运行在独立 mmap 栈上；切入/切出协程时把当前线程注册 entry 的保守扫描
+ * 上界切到对应栈顶（协程可用区顶 / 主栈顶），避免扫描窗口跨未映射区崩溃。
+ * 非 VM 通道（无注册 entry）调用为 no-op。 */
+void  gc_set_thread_cstack_top(void* top);
+void* gc_get_thread_cstack_top(void);
 
 /* 移除当前线程倒数第二个 entry（保留最近注册的 protect entry）。
  * 用于 OPC_RETURN 最外层：先 gc_protect_push(v)，再调本函数移除 VM entry，
@@ -171,6 +191,18 @@ void gc_register_global_root_scan(GCGlobalRootScanFn fn);
  *   不变式 + 挂起协程冻结栈/全局根扫描"共同保证。 */
 void gc_register_coroutine(void* stack_top, void* stack_bottom, void** sp_slot);
 void gc_unregister_coroutine(void* stack_top);
+
+/* 协程 VM 根注册（供 vm_co.c 协程 trampoline 调用）：把协程的帧链与迁移缓冲
+ * 操作数栈挂进协程 VM 根表。gc_register_coroutine 只保守扫描冻结 C 栈，而 VM
+ * 通道下协程活根在「堆上 StackFrame 链」（frame_ptr=&co_ctx.frame）与「yield 时
+ * 搬入的 mig_copy 操作数栈」（*_stack_ptr=&mig_copy[...]，*_sp_ptr=&stack_sp[...]）
+ * 两处，均在 C 栈扫描范围外，缺此注册则 yield 期间活对象被 sweep → UAF。
+ * 运行期 mig_copy 为 NULL，操作数栈自然跳过（由本线程 GCThreadEntry 精确覆盖）。
+ * 注册键 = lm_co_t*；协程销毁前必须 gc_unregister_coroutine_vm_roots(key)。 */
+void gc_register_coroutine_vm_roots(void* key, StackFrame** frame_ptr,
+                                    Value** val_stack_ptr, int* val_sp_ptr,
+                                    void** raw_stack_ptr, int* raw_sp_ptr);
+void gc_unregister_coroutine_vm_roots(void* key);
 
 /* 协作式 STW 安全点：在 VM 解释循环回边（JMP 家族）、gc_alloc、锁等待、
  * native block 等位置调用；非 GC 期快速路径仅一次 volatile 读，GC 运行时自旋等待。 */
@@ -214,6 +246,7 @@ void gc_protect_push(Value v);
 void gc_protect_pop(void);
 void gc_protect_set(Value v);
 void gc_mark_internal_buf(void* ptr);
+void gc_mark_internal_black(void* ptr);  /* 将内部缓冲区直接染黑，防止分配期间被并发 GC 回收 */
 
 /* ============================================================
  * 编译通道（C 代码生成）帧链表

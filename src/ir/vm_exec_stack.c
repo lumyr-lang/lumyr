@@ -494,6 +494,8 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
          * 走 VM 协作式异常传播（IndexError），try/catch 可捕获，与 OPC_THROW 同语义。 */
         int64_t len = arr.v.array ? (int64_t)arr.v.array->len : 0;
         if(i < 0 || i >= len) { raise_index_oob(ctx, "数组", i, len); return 1; }
+        gc_write_barrier(val);  /* 增量标记写屏障 */
+        gc_remembered_set_check(arr, val);  /* 老年代数组引用新生代时加入 remembered set */
         arr.v.array->items[i] = val;
     } else if(arr.type == VAL_MAP) {
         lumyr_map_set(&arr, idx, val);
@@ -518,7 +520,16 @@ int vm_exec_index_set(VMExecCtx* ctx, Instruction* in) {
                 else if(et == VAL_FLOAT)      ((float*)ta->items)[i] = (float)v;
                 else                          ((long double*)ta->items)[i] = (long double)v;
             } else {
-                ((void**)ta->items)[i] = value_to_typed_ptr(val);
+                void* raw = value_to_typed_ptr(val);
+                if(raw) {
+                    /* 增量标记 + RS 双屏障：老年代 TypedArray 引用新生代对象必须登记，
+                     * 否则 Minor GC 看不到该引用会误回收（与普通数组下标写同约定） */
+                    Value nv; memset(&nv, 0, sizeof(nv));
+                    nv.type = et; nv.str_inline = 0; nv.v.s = (char*)raw;
+                    gc_write_barrier(nv);
+                    gc_remembered_set_check_field(ta, nv);
+                }
+                ((void**)ta->items)[i] = raw;
             }
         }
     } else if(arr.type == VAL_STRUCT_PTR || arr.type == VAL_CLASS_PTR) {
@@ -694,7 +705,16 @@ int vm_exec_typed_index_set(VMExecCtx* ctx, Instruction* in) {
                 else if(et == VAL_FLOAT)      ((float*)ta->items)[i] = (float)v;
                 else                          ((long double*)ta->items)[i] = (long double)v;
             } else {
-                ((void**)ta->items)[i] = value_to_typed_ptr(val);
+                void* raw = value_to_typed_ptr(val);
+                if(raw) {
+                    /* 增量标记 + RS 双屏障：老年代 TypedArray 引用新生代对象必须登记，
+                     * 否则 Minor GC 看不到该引用会误回收（与普通数组下标写同约定） */
+                    Value nv; memset(&nv, 0, sizeof(nv));
+                    nv.type = et; nv.str_inline = 0; nv.v.s = (char*)raw;
+                    gc_write_barrier(nv);
+                    gc_remembered_set_check_field(ta, nv);
+                }
+                ((void**)ta->items)[i] = raw;
             }
         }
     }
@@ -855,6 +875,16 @@ int vm_exec_store_field(VMExecCtx* ctx, Instruction* in) {
                 } else {
                     *(void**)((char*)ptr + fi->offset) = pv;
                 }
+                /* 写屏障（与 map/array 写入点同约）：增量标记期新值变灰；
+                 * owner 为老年代（大对象实例直接分配在老年代）且新值引用
+                 * 新生代时 owner 入 remembered set。 */
+                void* stored = *(void**)((char*)ptr + fi->offset);
+                if(stored) {
+                    Value nv; memset(&nv, 0, sizeof(nv));
+                    nv.type = fi->valtype; nv.str_inline = 0; nv.v.s = (char*)stored;
+                    gc_write_barrier(nv);
+                    gc_remembered_set_check_field(ptr, nv);
+                }
             }
         }
     }
@@ -909,6 +939,14 @@ int vm_exec_class_new(VMExecCtx* ctx, Instruction* in) {
                     *(void**)((char*)p + fi->offset) = gs;
                 } else {
                     *(void**)((char*)p + fi->offset) = sp;
+                }
+                /* 写屏障：大对象实例直接分配在老年代，字段初始化亦需屏障 */
+                void* stored = *(void**)((char*)p + fi->offset);
+                if(stored) {
+                    Value nv; memset(&nv, 0, sizeof(nv));
+                    nv.type = fi->valtype; nv.str_inline = 0; nv.v.s = (char*)stored;
+                    gc_write_barrier(nv);
+                    gc_remembered_set_check_field(p, nv);
                 }
             }
         }
@@ -1070,6 +1108,8 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
             Value converted = convert_dynamic_array_to_typed(cur, ck);
             if(converted.type == VAL_TYPED_ARRAY) {
                 *field_slot = converted.v.typed_array;
+                gc_write_barrier(converted);
+                gc_remembered_set_check_field(p, converted);
             }
         }
     }
@@ -1106,6 +1146,8 @@ int vm_exec_generic_bind(VMExecCtx* ctx, Instruction* in) {
             Value converted = convert_dynamic_map_to_typed(cur, key_ck, val_ck);
             if(converted.type == VAL_TYPED_MAP) {
                 *field_slot = converted.v.typed_map;
+                gc_write_barrier(converted);
+                gc_remembered_set_check_field(p, converted);
             }
         }
     }

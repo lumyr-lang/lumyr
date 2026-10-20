@@ -290,7 +290,7 @@ static Value bytes_alloc(const uint8_t* data, int len) {
     o->stack_alloc = 0;
     if(len > 0) {
         o->data = (uint8_t*)gc_alloc(sizeof(uint8_t) * (len > 0 ? len : 1), VAL_BYTES);
-        if(o->data) memcpy(o->data, data, len);
+        if(o->data) { gc_mark_internal_buf(o->data); memcpy(o->data, data, len); }
         else o->len = 0;
     } else {
         o->data = NULL;
@@ -329,6 +329,7 @@ Value lumyr_bytes_concat(Value parts) {
     o->stack_alloc = 0;
     if(total > 0) {
         o->data = (uint8_t*)gc_alloc((size_t)total, VAL_BYTES);
+        if(o->data) gc_mark_internal_buf(o->data);
         int off = 0;
         for(int i = 0; i < n; i++) {
             BytesObj* b = (BytesObj*)parts.v.array->items[i].v.bytes_obj;
@@ -490,6 +491,7 @@ Value lumyr_bytes_typed(int cast_kind, Value src) {
         o->len = blen;
         if(blen > 0) {
             o->data = (uint8_t*)gc_alloc(blen, VAL_BYTES);
+            if(o->data) gc_mark_internal_buf(o->data);
             if(!o->data) { o->len = 0; }
             else for(int i = 0; i < n; i++) pack_elem(o->data + i*es, es, et, a->items[i]);
         }
@@ -499,13 +501,13 @@ Value lumyr_bytes_typed(int cast_kind, Value src) {
         o->len = blen;
         if(blen > 0) {
             o->data = (uint8_t*)gc_alloc(blen, VAL_BYTES);
-            if(o->data) memcpy(o->data, str, blen); else o->len = 0;
+            if(o->data) { gc_mark_internal_buf(o->data); memcpy(o->data, str, blen); } else o->len = 0;
         }
     } else {
         /* 标量 → 单元素（宽度 es 字节） */
         o->len = es;
         o->data = (uint8_t*)gc_alloc(es > 0 ? es : 1, VAL_BYTES);
-        if(o->data) pack_elem(o->data, es, et, src); else o->len = 0;
+        if(o->data) { gc_mark_internal_buf(o->data); pack_elem(o->data, es, et, src); } else o->len = 0;
     }
     Value r;
     r.type = VAL_BYTES;
@@ -526,7 +528,7 @@ static Value bytes_alloc_capacity(int n) {
     o->stack_alloc = 0;
     if(n > 0) {
         o->data = (uint8_t*)gc_alloc((size_t)n, VAL_BYTES);
-        if(o->data) memset(o->data, 0, (size_t)n);
+        if(o->data) { gc_mark_internal_buf(o->data); memset(o->data, 0, (size_t)n); }
         else { o->len = 0; o->cap = 0; }
     } else {
         o->data = NULL;

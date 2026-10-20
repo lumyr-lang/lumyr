@@ -52,8 +52,23 @@ Value vm_run(BytecodeFunc* fn) {
         stackframe_ensure_slots(ctx.frame, fn->sym_cnt);
     }
 
+    /* 向 GC 注册本线程根：否则 GC 的自动触发守卫（tls_stack/tls_sp/tls_frame）
+     * 恒假 → GC 从不运行，堆只增不减。登记 VALUE 操作数栈 + 当前帧链
+     * （&ctx.frame 地址稳定，帧推进/回退都经此变量）+ PTR 裸指针栈。
+     * 栈缓冲区在 stack_vm_push 扩容时会 realloc，故登记「指针的指针」。 */
+    gc_register_thread((Value**)&g_stack_mgr->stacks[STACK_VALUE],
+                       &g_stack_mgr->sp[STACK_VALUE],
+                       &ctx.frame,
+                       &g_stack_mgr->stacks[STACK_PTR],
+                       &g_stack_mgr->sp[STACK_PTR]);
+    gc_set_roots((Value*)g_stack_mgr->stacks[STACK_VALUE],
+                 &g_stack_mgr->sp[STACK_VALUE], ctx.frame);
+
     /* 执行字节码 */
     Value result = vm_execute(&ctx);
+
+    /* 注销 GC 根（必须在销毁帧之前，避免 GC 扫描到已释放帧） */
+    gc_unregister_thread();
 
     /* 清理栈帧 */
     stackframe_destroy(ctx.frame);
@@ -98,6 +113,16 @@ void vm_thread_body(ThreadLaunch* t) {
     VMExecCtx ctx = {0};
     ctx.frame = stackframe_new(NULL);
 
+    /* 向 GC 注册本线程根（与 vm_run 同构）：本线程独立的 VALUE/PTR 操作数栈 +
+     * 当前帧链。缺此登记则自动 GC 守卫恒假 → 工作线程分配只增不减。 */
+    gc_register_thread((Value**)&g_stack_mgr->stacks[STACK_VALUE],
+                       &g_stack_mgr->sp[STACK_VALUE],
+                       &ctx.frame,
+                       &g_stack_mgr->stacks[STACK_PTR],
+                       &g_stack_mgr->sp[STACK_PTR]);
+    gc_set_roots((Value*)g_stack_mgr->stacks[STACK_VALUE],
+                 &g_stack_mgr->sp[STACK_VALUE], ctx.frame);
+
     /* 根帧兜底：VM 协作式异常（throw_value 空 try 栈）与 kit runtime_error
      * 未被用户代码捕获时，longjmp 到这里——只终止本线程：错误作为结果
      * 存入线程槽，join 时在调用线程重新抛出，不再 exit 整个进程。
@@ -117,6 +142,7 @@ void vm_thread_body(ThreadLaunch* t) {
         if(rc != 1) {
             /* 非异常类硬错误（指令 not handled 等，详情已打印）：
              * 进程级致命，维持旧行为 */
+            gc_unregister_thread();
             stackframe_destroy(ctx.frame);
             stack_global_destroy();
             fprintf(stderr, "VM: 线程函数执行失败 / thread function failed\n");
@@ -140,6 +166,8 @@ void vm_thread_body(ThreadLaunch* t) {
         gc_protect_pop();
     }
 
+    /* 注销 GC 根（先于销毁帧） */
+    gc_unregister_thread();
     stackframe_destroy(ctx.frame);
     stack_global_destroy();
 }

@@ -9,10 +9,21 @@
 #include "lm_reactor.h"   /* Phase 8.5：lm_now_ns() 长调度告警 */
 #include "lm_butex.h"     /* Phase 8.10：shrink 时 lm_butex_wake 唤醒待退出 worker */
 #include "lm_sched_stats.h" /* Phase 8.11：reduction 账本 + 长调度告警计数 */
+#include "gc_runtime.h"   /* gc_enter/leave_native_block（pop 阻塞期安全点标记） */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
+
+/* worker 线程 GC 注册 hook（VM 层经 lm_compute_set_worker_gc_hooks 注入）。
+ * 未注入（纯 C 场景）时 worker 不注册，不进 STW 等待集。 */
+static void (*g_worker_gc_reg_hook)(void) = NULL;
+static void (*g_worker_gc_unreg_hook)(void) = NULL;
+
+void lm_compute_set_worker_gc_hooks(void (*reg)(void), void (*unreg)(void)) {
+    g_worker_gc_reg_hook = reg;
+    g_worker_gc_unreg_hook = unreg;
+}
 
 /* compute 池：N worker 线程，各持一个无 reactor scheduler（就绪队列 +
  * idle_cond），只跑 compute 协程。全局单例，懒初始化。
@@ -58,8 +69,21 @@ static int max_workers(void) {
 static void* compute_worker_run(void* arg) {
     lm_scheduler_t* s = (lm_scheduler_t*)arg;
     lm_scheduler_set_current(s);
+    /* 注册 GC 线程根（hook 由 VM 层注入）：worker 跑协程会建/毁 StackFrame、
+     * 并发搬移 TLS 操作数栈，必须进 STW 等待集并让操作数栈可扫描——否则 GC
+     * 扫描协程根帧链时 worker 仍在并发改帧（帧销毁进 freelist、ensure_slots
+     * 扩容释放旧数组被复用），扫描读到撕裂/复用内存 → 垃圾指针解引用崩溃
+     *（http/websocket 高压用例根因）。纯 C 场景未注入 hook：无 VM 根可扫，
+     * 也不进 STW 等待集。 */
+    if (g_worker_gc_reg_hook) g_worker_gc_reg_hook();
     for (;;) {
+        /* 阻塞 pop 期间不触碰 GC 根：标记安全点使 GC 无需等本线程空转。
+         * 唤醒后 leave 内先 gc_stw_check_fast——GC 进行中保持标记自旋到 GC
+         * 结束再放行，消除「已离开安全点但 GC 仍在扫描」的竞态窗口。
+         * 未注册时两调用对本线程为 no-op。 */
+        gc_enter_native_block();
         lm_co_t* co = lm_scheduler_pop_blocking(s);
+        gc_leave_native_block();
         if (!co) break;   /* stop / reject_new 置位且全源空：worker 退出 */
         atomic_store_explicit(&s->current, co, memory_order_release);
         lm_co_resume(co);
@@ -81,6 +105,8 @@ static void* compute_worker_run(void* arg) {
         lm_scheduler_handle_migrate(co);
         /* DEAD 协程不自动销毁（owner 管，与 IO scheduler 契约一致）。 */
     }
+    /* 注销 GC 线程根（与上方注册对称；未注册时为 no-op 保护下的空转） */
+    if (g_worker_gc_unreg_hook) g_worker_gc_unreg_hook();
     /* Phase 8.10：缩容（reject_new）退出的 worker 自我释放 scheduler——
      * release owner 引用，无异步引用时归零 free 并从 g_scheds 注销。
      * stop 路径由 owner 管理生命周期，不在此自我释放。 */

@@ -482,6 +482,7 @@ static Value decTypedArray(DecCursor* c) {
     ta->elem_type = et;
     ta->stack_alloc = 0;
     ta->items = gc_alloc_old(isz * (size_t)ta->cap, VAL_TYPED_ARRAY);
+    gc_mark_internal_buf(ta->items);
     Value v = val_none();
     v.type = VAL_TYPED_ARRAY;
     v.v.typed_array = ta;

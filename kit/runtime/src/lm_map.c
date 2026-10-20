@@ -585,8 +585,10 @@ static void map_resize(ValueMap* m) {
     int new_cap = old_cap * 2;
     MapEntry** new_buckets = (MapEntry**)gc_alloc_old(new_cap * sizeof(MapEntry*), VAL_MAP);  /* 内部缓冲区老年代 */
     gc_mark_internal_buf(new_buckets);  /* 标记为内部缓冲区，保守 C 栈扫描跳过 */
+    gc_mark_internal_black(new_buckets); /* 立即染黑：避免后续分配触发 GC 时该临时缓冲区尚未挂到父对象而被回收 */
     unsigned char* new_tree = (unsigned char*)gc_alloc_old(new_cap * sizeof(unsigned char), VAL_MAP);  /* 内部缓冲区老年代 */
     gc_mark_internal_buf(new_tree);
+    gc_mark_internal_black(new_tree);
     for(int i = 0; i < old_cap; i++) {
         MapEntry* e = m->buckets[i];
         if(!e) continue;

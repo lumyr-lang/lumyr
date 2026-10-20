@@ -155,7 +155,7 @@ static Value make_bytes_value(const uint8_t* data, int len)
     o->stack_alloc = 0;
     if(len > 0) {
         o->data = (uint8_t*)gc_alloc(sizeof(uint8_t) * len, VAL_BYTES);
-        if(o->data) memcpy(o->data, data, len);
+        if(o->data) { gc_mark_internal_buf(o->data); memcpy(o->data, data, len); }
         else o->len = 0;
     } else {
         o->data = NULL;

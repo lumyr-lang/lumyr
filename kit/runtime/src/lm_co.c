@@ -388,8 +388,9 @@ static void co_swap_in(lm_co_t* co) {
         memcpy(co->ctx.sp, co->swap_buffer, co->swap_size);
     }
     /* GC 注销 buffer 区间（协程将运行，不进协程栈表）。
-     * buffer 注册键 = buffer+swap_size（swap_out 第 6 步注册时的 stack_top）。 */
-    gc_unregister_coroutine((char*)co->swap_buffer + co->swap_size);
+     * buffer 注册键 = buffer+swap_size-sizeof(void*)（swap_out 第 6 步注册时的
+     * stack_top，指向缓冲内最后有效 word——保守扫描从上界开始读，越界会 SIGBUS）。 */
+    gc_unregister_coroutine((char*)co->swap_buffer + co->swap_size - sizeof(void*));
     free(co->swap_buffer);
     co->swap_buffer = NULL;
     co->swap_size   = 0;
@@ -469,7 +470,17 @@ void lm_co_resume(lm_co_t* co) {
     __sanitizer_start_switch_fiber(caller ? &caller->asan_fake : &tl_main_fake,
                                    co->stack_top, co->stack_size);
 #endif
+    /* 切入协程前把本线程 GC 保守扫描上界切到协程栈可用区顶（切回后恢复基线）。
+     * 注册时记录的上界是主栈帧地址，与协程 mmap 栈不属同一映射区；协程运行期
+     * 若触发 GC，扫描窗口 [c_stack_sp(协程栈) .. c_stack_top(主栈)] 会横跨两栈之间的
+     * 未映射内存 → SIGBUS/SIGSEGV（builtin_fairness 等协程用例崩溃根因）。
+     * 放在 lm_co_resume 统一处理，覆盖 VM 与纯 C 两类协程（不依赖 vm_state）。 */
+    void* saved_cstack_top = gc_get_thread_cstack_top();
+    if (co->stack_base) {
+        gc_set_thread_cstack_top((char*)co->stack_base - sizeof(void*));
+    }
     lm_ctx_jump(&co->resume_ctx, &co->ctx);
+    gc_set_thread_cstack_top(saved_cstack_top);
 #ifdef LM_ASAN_FIBER
     /* 协程 yield/结束切回这里：恢复 caller 自己的 fake */
     __sanitizer_finish_switch_fiber(caller ? caller->asan_fake : tl_main_fake,
@@ -739,6 +750,14 @@ void lm_co_destroy(lm_co_t* co) {
     co_sleep_cancel_on_destroy(co);
     /* Phase 8.6：先从全局注册表摘除（reaper 不再扫到本协程）。 */
     co_registry_remove(co);
+    /* GC 根注销兜底：协程挂起（yield 冻结栈已注册、仅 resume 路径注销）或
+     * 换出（swap buffer 已注册）期间被强制 destroy 时，下方随即 free/归还栈内存，
+     * 根表条目悬空会让 GC 保守扫描读未映射内存（SIGBUS/EXC_BAD_ACCESS）。
+     * 键未注册时 unregister 为安全 no-op（仅指针比较，不解引用）。 */
+    if (co->stack_base)
+        gc_unregister_coroutine((char*)co->stack_base - sizeof(void*));
+    if (co->swap_buffer && co->swap_size)
+        gc_unregister_coroutine((char*)co->swap_buffer + co->swap_size - sizeof(void*));
     /* Phase 5: 销毁前释放 vm_state（由 vm 层 release hook 释放，
      * 避免泄漏协程专属的 VMCoState 结构）。未注册 hook 时 vm_state==NULL，no-op。 */
     if (co->vm_state && g_co_release_hook) g_co_release_hook(co);
@@ -899,8 +918,11 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
     memcpy(buffer, sp, used);
     /* 6. GC 区间切换（顺序：先注册 buffer，再注销旧栈——保证任意时刻至少
      *    一区注册，防 GC 标记窗口漏根 → UAF。buffer 内容=旧栈拷贝，双注册
-     *    期间保守扫描重复标根无害）。 */
-    gc_register_coroutine((char*)buffer + used, buffer, NULL);
+     *    期间保守扫描重复标根无害）。
+     *    stack_top 必须指向缓冲内最后有效 word（buffer+used-sizeof(void*)），
+     *    保守扫描从 stack_top 开始读——指向 buffer+used 会越过 malloc 边界
+     *    读到未映射页（SIGBUS/EXC_BAD_ACCESS），与 lm_co_yield 注册约定一致。 */
+    gc_register_coroutine((char*)buffer + used - sizeof(void*), buffer, NULL);
     gc_unregister_coroutine((char*)base - sizeof(void*));
     /* 7. 释放栈物理页：内容已在 buffer。
      *
@@ -925,7 +947,7 @@ static int co_swap_out(lm_co_t* co, uint64_t now_ns) {
          * 释放 buffer，回退双重仲裁后放弃。 */
         gc_register_coroutine((char*)base - sizeof(void*),
                               co->stack_mmap, NULL);
-        gc_unregister_coroutine((char*)buffer + used);
+        gc_unregister_coroutine((char*)buffer + used - sizeof(void*));
         free(buffer);
         atomic_store_explicit(&co->swap_state, LM_CO_SWAP_NORMAL,
                               memory_order_release);

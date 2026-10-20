@@ -240,6 +240,12 @@ static void bi_ta_write_value(TypedArray* ta, int i, Value v) {
         char* gs = (char*)gc_alloc(l + 1, VAL_STRING);
         if(l) memcpy(gs, s, l);
         gs[l] = '\0';
+        {   /* 增量标记 + RS 双屏障：老年代 TypedArray 引用新生代字符串必须登记 */
+            Value nv; memset(&nv, 0, sizeof(nv));
+            nv.type = VAL_STRING; nv.str_inline = 0; nv.v.s = gs;
+            gc_write_barrier(nv);
+            gc_remembered_set_check_field(ta, nv);
+        }
         ((char**)ta->items)[i] = gs;
         return;
     }
@@ -257,6 +263,13 @@ static void bi_ta_write_value(TypedArray* ta, int i, Value v) {
         case VAL_ARRAY:      raw = v.v.array; break;
         case VAL_TYPED_ARRAY: raw = v.v.typed_array; break;
         default: break;
+        }
+        if(raw) {
+            /* 增量标记 + RS 双屏障：老年代 TypedArray 引用新生代对象必须登记 */
+            Value nv; memset(&nv, 0, sizeof(nv));
+            nv.type = et; nv.str_inline = 0; nv.v.s = (char*)raw;
+            gc_write_barrier(nv);
+            gc_remembered_set_check_field(ta, nv);
         }
         ((void**)ta->items)[i] = raw;
         return;
@@ -1531,6 +1544,7 @@ static Value bi_copy(Value v) {
         } else no->mode = NULL;
         if(o->content && o->contentLen > 0) {
             no->content = (uint8_t*)gc_alloc((size_t)o->contentLen + 1, VAL_BYTES);
+            gc_mark_internal_buf(no->content);
             memcpy(no->content, o->content, (size_t)o->contentLen);
             no->content[o->contentLen] = 0;
             no->contentLen = o->contentLen;
@@ -3487,6 +3501,10 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
             if(nuser < 1) { runtime_error("send(data [, flags]) 至少需要 1 个参数"); return 0; }
             int flags = (nuser >= 2) ? (int)bi_num_i64(argv[2]) : 0;
             Value dataArg = argv[1];
+            /* send 可能长时间阻塞并进入 native safepoint，期间 GC 会扫描 C 栈。
+             * 用 volatile 锚定 dataArg，确保 bytes/string Value 本身在栈上可见，
+             * 避免底层 buffer 被并发 GC 回收后 send 访问已释放内存。 */
+            volatile Value sendAnchor = dataArg;
             if(dataArg.type == VAL_BYTES) {
                 BytesObj* b = (BytesObj*)dataArg.v.bytes_obj;
                 const char* d = b ? (const char*)b->data : "";
@@ -3497,6 +3515,7 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
                 *out = lumyr_socket_send(recv, s, -1, flags);
                 free(s);
             }
+            (void)sendAnchor;
             return 1;
         }
         /* send(gen, val)：向生成器发送值，返回下一个 yield 值 */
@@ -4302,6 +4321,9 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         int nuser = is_method ? argc : argc - 1;
         if(!o) { runtime_error("sendTo() 套接字对象无效"); return 0; }
         Value dataArg = argv[1];
+        /* sendTo 同 send，可能在 native safepoint 期间被并发 GC 扫描 C 栈，
+         * 锚定 dataArg 防止底层 buffer 被回收。 */
+        volatile Value sendtoAnchor = dataArg;
         const char* d = NULL; int dlen = -1; char* dalloc = NULL;
         if(dataArg.type == VAL_BYTES) {
             BytesObj* b = (BytesObj*)dataArg.v.bytes_obj;
@@ -4313,14 +4335,15 @@ int builtin_dispatch(VMExecCtx* ctx, int id, Value* argv, int argc, Value* out, 
         }
         if(o->kind == SOCK_KIND_UNIX_STREAM || o->kind == SOCK_KIND_UNIX_DGRAM) {
             /* Unix 数据报：data + path */
-            if(nuser < 2 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, path) 需要 2 个参数"); free(dalloc); return 0; }
+            if(nuser < 2 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, path) 需要 2 个参数"); free(dalloc); (void)sendtoAnchor; return 0; }
             *out = lumyr_socket_sendto(recv, d, dlen, lumyr_str_cstr(&argv[2]), 0, 0);
         } else {
             /* UDP：data + host + port */
-            if(nuser < 3 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, host, port) 需要 3 个参数"); free(dalloc); return 0; }
+            if(nuser < 3 || argv[2].type != VAL_STRING) { runtime_error("sendTo(data, host, port) 需要 3 个参数"); free(dalloc); (void)sendtoAnchor; return 0; }
             *out = lumyr_socket_sendto(recv, d, dlen, lumyr_str_cstr(&argv[2]), (int)bi_num_i64(argv[3]), 0);
         }
         free(dalloc);
+        (void)sendtoAnchor;
         return 1;
     }
     case BUILTIN_SOCKET_RECVFROM: {

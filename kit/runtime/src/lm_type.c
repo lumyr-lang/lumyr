@@ -552,6 +552,11 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
         Value* box = (Value*)gc_alloc(sizeof(Value), VAL_PTR);
         *box = value;
         *(void**)field_ptr = box;
+        /* 写屏障：增量标记期盒内容变灰；owner 老年代时盒（恒为新生）入 RS */
+        gc_write_barrier(value);
+        Value nv; memset(&nv, 0, sizeof(nv));
+        nv.type = VAL_PTR; nv.str_inline = 0; nv.v.s = (char*)box;
+        gc_remembered_set_check_field(obj.v.struct_ptr, nv);
         return;
     }
 
@@ -585,6 +590,11 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
         char* gc_str = (char*)gc_alloc(len + 1, VAL_STRING);
         memcpy(gc_str, s, len + 1);
         *(char**)field_ptr = gc_str;
+        /* 写屏障：owner 老年代时新串（新生）入 RS */
+        Value nv; memset(&nv, 0, sizeof(nv));
+        nv.type = VAL_STRING; nv.str_inline = 0; nv.v.s = gc_str;
+        gc_write_barrier(nv);
+        gc_remembered_set_check_field(obj.v.struct_ptr, nv);
         return;
     }
     /* 其他指针类型（bigint/decimal/bitdecimal/bytes/容器/类实例等）：
@@ -599,6 +609,11 @@ void lumyr_field_set_trusted(Value obj, const char* field_name, Value value, int
         return;
     }
     *(void**)field_ptr = value.v.struct_ptr;
+    /* 写屏障（与 map/array 写入点同约）：增量标记期新值变灰；
+     * owner 老年代且新值引用新生代时 owner 入 remembered set。
+     * 直接复用 value 的运行时类型标签（比字段声明类型更精确）。 */
+    gc_write_barrier(value);
+    gc_remembered_set_check_field(obj.v.struct_ptr, value);
 }
 
 /* ==================== 类型判断 ==================== */
